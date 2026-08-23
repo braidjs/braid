@@ -101,7 +101,7 @@ graph TD
         RemoteJS --- RemoteState
     end
 
-    RemoteJS -.-> |Proxy Facade: Syncs DOM & Events| Shadow
+    RemoteJS -.->|Proxy Facade: Syncs DOM & Events| Shadow
 ```
 
 ![Braid demo application running Angular, React, and Web Component microfrontends on one page inside Shadow Roots and hidden iframe realms](assets/mfes.png)

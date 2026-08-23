@@ -14,20 +14,20 @@ graph TD
     end
     
     subgraph AngularIntegration [Angular Integration]
-        D[@braidlabs/angular-router] --> |Recovers from Stale Chunks| E[SkewRecoveryService]
-        F[@braidlabs/angular-data] --> |Normalized Store & Outbox| G[EntityStore]
-        H[@braidlabs/angular-workflow] --> |Durable Flows| I[WorkflowRuntime]
+        D["@braidlabs/angular-router"] -->|Recovers from Stale Chunks| E[SkewRecoveryService]
+        F["@braidlabs/angular-data"] -->|Normalized Store & Outbox| G[EntityStore]
+        H["@braidlabs/angular-workflow"] -->|Durable Flows| I[WorkflowRuntime]
     end
     
     subgraph CorePrimitives [Core Primitives]
-        J[@braidlabs/skew]
-        J --> |Versioned Envelopes| K[Schemas & Migrations]
+        J["@braidlabs/skew"]
+        J -->|Versioned Envelopes| K[Schemas & Migrations]
     end
     
-    E -.-> |Depends on| J
-    G -.-> |Depends on| J
-    I -.-> |Depends on| J
-    E -.-> |Reads| C
+    E -.->|Depends on| J
+    G -.->|Depends on| J
+    I -.->|Depends on| J
+    E -.->|Reads| C
 ```
 
 **Narrative:**
