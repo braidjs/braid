@@ -62,6 +62,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Refuse unpublishable output
+        # npm pack never runs prepublishOnly; only publish does. This is the check that would
+        # have caught the full-compilation-mode Angular libraries before the first dry run did.
+        run: node tools/release/check-publishable.mjs
+
       - name: Publish to npm
         run: npx nx release publish --tag "${{ inputs.tag }}" ${{ inputs.dry-run && '--dry-run' || '' }}
         env:

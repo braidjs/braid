@@ -63,3 +63,9 @@ jobs:
               @braidlabs/*) echo "── $dir" && (cd "$dir" && npm pack --dry-run) ;;
             esac
           done
+
+      - name: Refuse unpublishable output
+        # `npm pack` above does not run prepublishOnly, so it cannot see the script ngc injects
+        # for full-compilation-mode Angular libraries. This can, and it fails the PR instead of
+        # the release.
+        run: node tools/release/check-publishable.mjs
