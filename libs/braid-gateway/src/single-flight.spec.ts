@@ -156,7 +156,16 @@ describe('gateway fragment coalescing', () => {
     expect(bodies.every((body) => body.includes('3 unread'))).toBe(true);
   });
 
-  it('does not coalesce across different sessions', async () => {
+  /**
+   * The key is computed from the request that is actually **sent**, not the one received — so
+   * what it must contain follows from what the endpoint can actually see.
+   *
+   * Since credentials are no longer forwarded by default, two signed-in callers produce a
+   * byte-identical fragment request, and sharing one response is correct rather than a leak. The
+   * moment a host forwards credentials, or adds a per-caller header of its own, the requests
+   * differ again and so must the key.
+   */
+  it('coalesces across sessions when the endpoint cannot see the session', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response('<p>panel</p>', { headers: { 'content-type': 'text/html' } }));
@@ -176,7 +185,83 @@ describe('gateway fragment coalescing', () => {
 
     const calls = fetchMock.mock.calls.length;
     fetchMock.mockRestore();
+    expect(calls).toBe(1);
+  });
+
+  it('does not coalesce across sessions once credentials are forwarded', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('<p>panel</p>', { headers: { 'content-type': 'text/html' } }));
+
+    const gateway = createGateway({
+      registry: [{ id: 'notifications', endpoint: 'https://notify.test', bound: false, src: '/panel', pierce: ['/*'] }],
+      coalesceFragmentFetches: true,
+      forwardCredentials: true,
+    });
+
+    const render = (sid: string) =>
+      gateway.handle(
+        new Request('https://shell.test/page', { headers: { 'sec-fetch-dest': 'document', cookie: `sid=${sid}` } }),
+        async () => shell('<fragment-slot name="notifications"></fragment-slot>'),
+      );
+
+    await Promise.all([render('alice'), render('bob')]);
+
+    const calls = fetchMock.mock.calls.length;
+    fetchMock.mockRestore();
     expect(calls).toBe(2);
+  });
+
+  it('does not coalesce across callers given different gateway-added headers', async () => {
+    // The leak this closes: a function-form `additionalHeaders` varies per caller, so a key that
+    // ignored it would serve one caller a fragment rendered against another's identity.
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('<p>panel</p>', { headers: { 'content-type': 'text/html' } }));
+
+    const gateway = createGateway({
+      registry: [{ id: 'notifications', endpoint: 'https://notify.test', bound: false, src: '/panel', pierce: ['/*'] }],
+      coalesceFragmentFetches: true,
+      additionalHeaders: (request) => ({
+        'x-braid-identity': `assertion-for-${request.headers.get('x-user') ?? 'anon'}`,
+      }),
+    });
+
+    const render = (user: string) =>
+      gateway.handle(
+        new Request('https://shell.test/page', { headers: { 'sec-fetch-dest': 'document', 'x-user': user } }),
+        async () => shell('<fragment-slot name="notifications"></fragment-slot>'),
+      );
+
+    await Promise.all([render('alice'), render('bob')]);
+
+    const calls = fetchMock.mock.calls.length;
+    fetchMock.mockRestore();
+    expect(calls).toBe(2);
+  });
+
+  it('still coalesces when a gateway-added header is the same for everyone', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('<p>panel</p>', { headers: { 'content-type': 'text/html' } }));
+
+    const gateway = createGateway({
+      registry: [{ id: 'notifications', endpoint: 'https://notify.test', bound: false, src: '/panel', pierce: ['/*'] }],
+      coalesceFragmentFetches: true,
+      additionalHeaders: { 'x-tenant': 'acme' },
+    });
+
+    const render = () =>
+      gateway.handle(
+        new Request('https://shell.test/page', { headers: { 'sec-fetch-dest': 'document' } }),
+        async () => shell('<fragment-slot name="notifications"></fragment-slot>'),
+      );
+
+    await Promise.all([render(), render()]);
+
+    const calls = fetchMock.mock.calls.length;
+    fetchMock.mockRestore();
+    expect(calls).toBe(1);
   });
 
   // A gated fragment's response follows an authorization decision made per request; sharing the

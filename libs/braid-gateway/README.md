@@ -406,11 +406,16 @@ wants; nothing outlives the request that started it. No TTL, no invalidation, no
 no dependence on which instance a request lands on — which is what makes it safe by default on ECS
 or any horizontally scaled deployment.
 
-Two requests share a fetch only when their `cookie`, `authorization`, `user-agent`, and negotiation
-headers match exactly, and a fragment declaring `access` rules is never shared at all. So this helps
-anonymous and shared-identity traffic and does nothing for personalized fragments — two signed-in
-users never share a flight. That is correct rather than a limitation: sharing a render across
-identities is a data leak wearing a performance feature's clothes.
+The key is computed from the request that is actually **sent**, so it contains exactly what the
+endpoint can see: `user-agent`, the negotiation headers, any header the gateway itself added via
+`additionalHeaders`, and — when `forwardCredentials` is on — `cookie` and `authorization`. A
+fragment declaring `access` rules is never shared at all.
+
+Because credentials are not forwarded by default, two signed-in users produce a byte-identical
+fragment request and *do* share a flight, which is correct: the endpoint cannot tell them apart.
+Turn on `forwardCredentials`, or add a per-caller header, and they stop sharing again. Sharing a
+render across identities the endpoint *can* distinguish is a data leak wearing a performance
+feature's clothes, so anything that varies by caller has to be in the key.
 
 For an endpoint that varies on something the gateway cannot see — a tenant or feature-flag header —
 opt out on the manifest with `coalesce: false`.
@@ -450,8 +455,16 @@ through.
 Defaults worth knowing: `x-forwarded-proto`/`x-forwarded-host` are **overwritten** from the real
 request (opt into passthrough with `trustForwardedHeaders` only behind a proxy you control); an
 endpoint's path is a boundary, so `endpoint: 'https://internal/apps/billing/'` cannot be used to
-reach the rest of that origin; and every request header — including `Cookie` — is forwarded to
-fragment endpoints, so treat a manifest entry as granting that endpoint the user's session.
+reach the rest of that origin; and the caller's `Cookie` and `Authorization` are **not** forwarded
+to fragment endpoints.
+
+That last one is the trust boundary between a shell and the fragments it composes. Those headers
+authenticate the caller to *the shell's* origin, and a fragment endpoint is frequently a different
+team and often a different company — forwarding them would let every fragment backend act as that
+user against the shell. A fragment that needs to know who is asking should be given something
+scoped to it: a per-request assertion via `additionalHeaders`, or a token exchanged for the
+fragment's own audience. `forwardCredentials: true` restores the old behaviour, and is only
+appropriate when every endpoint in the registry sits inside the same trust boundary as the shell.
 
 Not yet implemented from the architecture's security section: allow-listed manifest origins and
 signed manifests. Until those land, treat the registry as trusted configuration.

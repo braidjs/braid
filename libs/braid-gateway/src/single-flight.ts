@@ -92,9 +92,19 @@ export function createSingleFlight(): SingleFlight {
  * What this cannot see is an endpoint varying on something unusual: a tenant header, a
  * feature-flag header, anything bespoke. Those set `coalesce: false` on the manifest.
  *
+ * `extraHeaders` closes that gap for headers the *gateway itself* adds per request — an identity
+ * assertion from a function-form `additionalHeaders`, most importantly. Those vary by caller and
+ * are invisible to everything above, so leaving them out of the key would hand one caller a
+ * fragment rendered for another. Names, not values: the values are read off the request that is
+ * actually being sent.
+ *
  * Returns null when the request must not be shared at all.
  */
-export function singleFlightKey(request: Request, url: string): string | null {
+export function singleFlightKey(
+  request: Request,
+  url: string,
+  extraHeaders: readonly string[] = [],
+): string | null {
   // Only safe methods. A POST is an action, and two identical actions are still two actions.
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
 
@@ -111,5 +121,7 @@ export function singleFlightKey(request: Request, url: string): string | null {
     request.headers.get('accept-language') ?? '',
     request.headers.get('accept') ?? '',
     request.headers.get('user-agent') ?? '',
+    // Sorted, so the key does not depend on the order a host happened to build its object in.
+    ...[...extraHeaders].sort().map((name) => `${name}=${request.headers.get(name) ?? ''}`),
   ].join('\n');
 }
