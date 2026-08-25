@@ -35,6 +35,36 @@ Adds a new fragment entry to `braid.config.json` with port and piercing route op
 npx braid add billing --port 4201 --pierce "/billing/*"
 ```
 
+### `braid detangle`
+Analyzes an existing Module Federation Nx workspace, maps remotes to Braid fragments, detects shared singletons/guards, and automates migration to Braid:
+
+```bash
+# Report only (safe, writes nothing)
+npx braid detangle
+
+# Preview the generated braid.config.json
+npx braid detangle --diff
+
+# Generate braid.config.json, scaffold gateway app, and apply safe shell codemods
+npx braid detangle --write --gateway --shell-edits
+```
+
+#### Flags for `braid detangle`
+
+| Flag | Description |
+| :--- | :--- |
+| *(none)* | Dry-run report only (detects shell, remotes, routes, and shared state). |
+| `--shell <project>` | Explicitly specify host shell project name if multiple exist. |
+| `--diff` | Display the `braid.config.json` that would be generated. |
+| `--write` | Write `braid.config.json` (refuses on dirty git tree or blocking findings). |
+| `--gateway` | With `--write`, scaffold the gateway application (new files only). |
+| `--shell-edits` | With `--write`, apply safe codemods to host shell (e.g. `provideBraid()`, client hydration). |
+| `--force` | Override git safety refusals and replace existing configs. |
+| `--remove-mf` | Check whether Module Federation config can be safely removed. |
+| `--port <n>` | Port for the composed gateway application (default: `4000`). |
+
+> For a full migration guide from Webpack/Rspack Module Federation, see **[From Module Federation](../braid-from-module-federation.md)**.
+
 ---
 
 ## Configuration (`braid.config.json`)
