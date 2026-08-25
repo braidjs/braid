@@ -27,6 +27,45 @@ export interface FragmentManifest {
   adapter?: string;
   /** Contract version for contract-mode fragments (unused by the compat adapter). */
   contractVersion?: string;
+  /**
+   * What this fragment requires of a host, and what it provides back.
+   *
+   * Compared at the boundary handshake, before any state crosses. Recorded here rather than taken
+   * only from the fragment's own ACCEPT because the registry is host-side configuration: on the
+   * untrusted tier a fragment stating its own requirements could state them away.
+   *
+   * ```jsonc
+   * "contract": {
+   *   "version": "2.1.0",
+   *   "requires": { "host": ">=1.4.0", "context": { "cart": 2 } },
+   *   "provides": { "events": ["checkout:complete"] }
+   * }
+   * ```
+   */
+  contract?: {
+    version: string;
+    requires?: { host?: string; context?: Record<string, number> };
+    provides?: { events?: string[]; actions?: string[] };
+  };
+  /**
+   * What this fragment is allowed to do. Host-owned: never describable by the fragment itself,
+   * because a grant a fragment can widen is not a grant.
+   *
+   * ```jsonc
+   * "capabilities": {
+   *   "context": { "read": ["user", "cart"] },
+   *   "sandbox": ["allow-popups"],
+   *   "permissions": ["clipboard-write"]
+   * }
+   * ```
+   */
+  capabilities?: {
+    context?: { read?: string[]; write?: string[] };
+    sandbox?: string[];
+    permissions?: string[];
+    network?: string[];
+    storage?: 'partitioned' | 'shared';
+  };
   /** Module entry for contract-mode fragments (unused by the compat adapter). */
   entry?: string;
   /**

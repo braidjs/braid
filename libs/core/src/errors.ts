@@ -10,7 +10,11 @@ export type BraidErrorStage =
   | 'realm-boot' // creating or verifying the fragment's realm failed
   | 'adapter-resolution' // the manifest-declared adapter is not available in this client
   | 'adapter-mount' // the adapter failed while mounting the fragment
-  | 'context-version'; // a context value's schema version could not be bridged
+  | 'context-version' // a context value's schema version could not be bridged
+  | 'boundary' // a message across the fragment boundary failed, timed out, or arrived closed
+  | 'handshake' // host and fragment could not agree on terms at connect time
+  | 'teardown' // a fragment did not close cleanly within its deadline
+  | 'contract'; // host and fragment declared terms that do not meet
 
 export interface BraidErrorInit {
   fragmentId: string;

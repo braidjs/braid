@@ -41,6 +41,15 @@ export interface AdapterBootContext {
   /** Whether the fragment's navigation is bound to the host window's navigation. */
   bound: boolean;
   env: FragmentEnv;
+  /**
+   * The entry module, when the host supplies it directly rather than through the gateway.
+   *
+   * Gateway-composed fragments carry their entry on the realm stub, stamped from the manifest, and
+   * an adapter reads it from `realm.adapterOptions`. A gateway-free contract fragment has no stub —
+   * that is the point — so the host declares the entry in markup and it arrives here instead.
+   * Adapters that need an entry should prefer this and fall back to the stub.
+   */
+  entry?: string;
   /** Aborts when the fragment is being torn down. */
   signal: AbortSignal;
 }

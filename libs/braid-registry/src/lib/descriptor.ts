@@ -34,6 +34,19 @@ export interface FragmentDescriptor {
    * elsewhere".
    */
   contexts?: Record<string, number>;
+  /**
+   * What this app requires of a host, and what it provides back — the self-reported half of the
+   * boundary contract.
+   *
+   * Describable, because a lie here hurts only the liar: an app that overstates what it requires
+   * refuses to mount on hosts that would have served it fine. It cannot claim access it was not
+   * granted, which is why `pierce` is not describable and this is.
+   */
+  contract?: {
+    version: string;
+    requires?: { host?: string; context?: Record<string, number> };
+    provides?: { events?: string[]; actions?: string[] };
+  };
 }
 
 /** Where a fragment publishes its descriptor, relative to its endpoint. */
@@ -55,6 +68,7 @@ const DESCRIBABLE_FIELDS = [
   'element',
   'contractVersion',
   'events',
+  'contract',
 ] as const;
 
 type DescribableField = (typeof DESCRIBABLE_FIELDS)[number];

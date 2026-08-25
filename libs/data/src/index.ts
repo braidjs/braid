@@ -40,6 +40,8 @@ export type {
 } from './lib/query.js';
 
 export { drainOutbox } from './lib/flush.js';
+export { flushOnClosing, trackDirty } from './lib/closing.js';
+export type { ClosingEnv, FlushOnClosingOptions } from './lib/closing.js';
 export type { DrainOptions, FlushResult, MutationRunner } from './lib/flush.js';
 
 export { createInvalidator, sharedInvalidator, resetSharedInvalidators } from './lib/invalidation.js';

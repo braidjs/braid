@@ -7,7 +7,29 @@
  * realm and shadow DOM subtree.
  */
 
+import type { HostContract } from './weave/contract.js';
+import type { FragmentCapabilities } from './weave/capabilities.js';
+
 export interface BraidOptions {
+  /**
+   * What this host offers fragments, as a contract they can require a range of.
+   *
+   * Optional, and its absence means "no contract declared" rather than "version 0" — a host that
+   * declares nothing composes every fragment that requires nothing, which is every fragment that
+   * exists today.
+   */
+  contract?: HostContract;
+
+  /**
+   * Per-fragment capability grants, by fragment id.
+   *
+   * The registry is the usual source — the gateway stamps a trusted fragment's capabilities onto
+   * its realm stub — but the untrusted tier has no gateway, so a host composing cross-origin
+   * fragments declares them here instead. Both sources are host-controlled, which is the invariant
+   * that matters; where both speak, the registry wins.
+   */
+  capabilities?: Record<string, FragmentCapabilities>;
+
   /**
    * Enables development-mode diagnostics: unaudited-API warnings from the compat document
    * facade, boundary-bypass reports, and verbose boot logging. Defaults to false.
@@ -32,6 +54,8 @@ export interface BraidOptions {
 
 interface ResolvedBraidConfig {
   dev: boolean;
+  contract?: HostContract;
+  capabilities?: Record<string, FragmentCapabilities>;
   onHostNavigation?: (notify: () => void) => void;
 }
 
@@ -42,6 +66,12 @@ const config: ResolvedBraidConfig = {
 export function setBraidConfig(options: BraidOptions = {}): void {
   if (options.dev !== undefined) {
     config.dev = options.dev;
+  }
+  if (options.contract) {
+    config.contract = options.contract;
+  }
+  if (options.capabilities) {
+    config.capabilities = options.capabilities;
   }
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;

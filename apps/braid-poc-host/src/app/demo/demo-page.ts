@@ -1,6 +1,7 @@
 import { Component, inject, signal, viewChild } from '@angular/core';
 import { DATA_OPTIONS, OUTBOX_COLLECTION, OutboxService } from '@braidlabs/angular-data';
 import { DemoComposition } from './composition-panels';
+import { DemoContract } from './contract-panel';
 import { DemoData } from './data-panels';
 import { DemoDurability } from './durability-panels';
 
@@ -17,7 +18,7 @@ import { DemoDurability } from './durability-panels';
 @Component({
   selector: 'demo-page',
   standalone: true,
-  imports: [DemoComposition, DemoData, DemoDurability],
+  imports: [DemoComposition, DemoContract, DemoData, DemoDurability],
   template: `
     <div class="intro">
       <h1>What this actually does</h1>
@@ -37,6 +38,7 @@ import { DemoDurability } from './durability-panels';
     </div>
 
     <demo-composition />
+    <demo-contract />
     <demo-data />
     <demo-durability />
 

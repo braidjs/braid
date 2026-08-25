@@ -43,16 +43,12 @@ export default withMermaid(
       nav: [
         { text: 'Getting started', link: '/getting-started' },
         { text: 'Explained', link: '/braid-explained' },
-        { text: 'Tutorials', link: '/tutorials/' },
+        { text: 'End-to-End Tutorial', link: '/tutorial/' },
+        { text: 'Packages', link: '/packages/' },
+        { text: 'Feature Deep Dives', link: '/tutorials/' },
         { text: 'Talk deck', link: '/braid-deck.html', target: '_blank' },
       ],
 
-      /**
-       * Ordered as the project is: composition first, because that is what Braid is; then the
-       * version skew independently deployed apps produce; then the state layer that holds what
-       * they disagree about. The tutorials are numbered to match, so the sidebar and the
-       * filenames never tell a reader two different stories about where to start.
-       */
       sidebar: [
         {
           text: 'Start here',
@@ -62,16 +58,74 @@ export default withMermaid(
           ],
         },
         {
-          text: 'Composition',
+          text: 'Progressive Tutorial',
           items: [
-            { text: 'Architecture', link: '/braid-architecture' },
-            { text: 'From Module Federation', link: '/braid-from-module-federation' },
-            { text: 'Without the gateway', link: '/braid-without-gateway' },
-            { text: 'The POC', link: '/braid-poc' },
+            { text: 'Overview & Roadmap', link: '/tutorial/' },
+            { text: '1 · Monorepo & Two Apps', link: '/tutorial/01-monorepo-setup' },
+            { text: '2 · Gateway & Manifest', link: '/tutorial/02-gateway-and-manifest' },
+            { text: '3 · Mounting & Isolation', link: '/tutorial/03-mounting-and-isolation' },
+            { text: '4 · Props, Events & Context', link: '/tutorial/04-props-and-events' },
+            { text: '5 · Versioned Local Data', link: '/tutorial/05-versioned-data-skew' },
+            { text: '6 · Schema Migrations', link: '/tutorial/06-schema-migrations' },
+            { text: '7 · Production Hardening', link: '/tutorial/07-production-hardening' },
           ],
         },
         {
-          text: 'Running it',
+          text: 'Packages & API Reference',
+          items: [
+            { text: 'Packages Overview', link: '/packages/' },
+            {
+              text: 'Core & Gateway',
+              items: [
+                { text: '@braidlabs/core', link: '/packages/core' },
+                { text: '@braidlabs/gateway', link: '/packages/gateway' },
+                { text: '@braidlabs/cli', link: '/packages/cli' },
+                { text: '@braidlabs/registry', link: '/packages/registry' },
+                { text: '@braidlabs/sw', link: '/packages/sw' },
+                { text: '@braidlabs/console', link: '/packages/console' },
+              ],
+            },
+            {
+              text: 'Framework Bindings',
+              items: [
+                { text: '@braidlabs/react', link: '/packages/react' },
+                { text: '@braidlabs/angular', link: '/packages/angular' },
+              ],
+            },
+            {
+              text: 'Data, Contract & Skew',
+              items: [
+                { text: '@braidlabs/skew', link: '/packages/skew' },
+                { text: '@braidlabs/data', link: '/packages/data' },
+                { text: '@braidlabs/contract', link: '/packages/contract' },
+                { text: '@braidlabs/build', link: '/packages/build' },
+                { text: '@braidlabs/studio', link: '/packages/studio' },
+              ],
+            },
+            {
+              text: 'Angular Skew Suite',
+              items: [
+                { text: '@braidlabs/angular-core', link: '/packages/angular-core' },
+                { text: '@braidlabs/angular-data', link: '/packages/angular-data' },
+                { text: '@braidlabs/angular-router', link: '/packages/angular-router' },
+                { text: '@braidlabs/angular-workflow', link: '/packages/angular-workflow' },
+              ],
+            },
+          ],
+        },
+        {
+          text: 'Composition & Architecture',
+          items: [
+            { text: 'Architecture', link: '/braid-architecture' },
+            { text: 'Trust tiers', link: '/braid-boundary' },
+            { text: 'From Module Federation', link: '/braid-from-module-federation' },
+            { text: 'Without the gateway', link: '/braid-without-gateway' },
+            { text: 'The POC', link: '/braid-poc' },
+            { text: 'Architecture Diagrams', link: '/architecture' },
+          ],
+        },
+        {
+          text: 'Running in Production',
           items: [
             { text: 'CDN and deployment', link: '/braid-cdn' },
             { text: 'Failure modes', link: '/braid-failure-modes' },
@@ -79,21 +133,17 @@ export default withMermaid(
           ],
         },
         {
-          text: 'Tutorials',
+          text: 'Feature Deep Dives',
           items: [
-            { text: 'Overview', link: '/tutorials/' },
-            { text: '1 \u00b7 Compose without colliding', link: '/tutorials/01-braid' },
-            { text: '2 \u00b7 Version the data', link: '/tutorials/02-skew' },
-            { text: '3 \u00b7 Name your build', link: '/tutorials/03-build' },
-            { text: '4 \u00b7 Client storage', link: '/tutorials/04-data-storage' },
-            { text: '5 \u00b7 Angular stores', link: '/tutorials/05-angular-core' },
-            { text: '6 \u00b7 Angular data', link: '/tutorials/06-angular-data' },
-            { text: '7 \u00b7 Storefront, end to end', link: '/tutorials/07-storefront' },
+            { text: 'Deep Dives Overview', link: '/tutorials/' },
+            { text: '1 · Compose without colliding', link: '/tutorials/01-braid' },
+            { text: '2 · Version the data', link: '/tutorials/02-skew' },
+            { text: '3 · Name your build', link: '/tutorials/03-build' },
+            { text: '4 · Client storage', link: '/tutorials/04-data-storage' },
+            { text: '5 · Angular stores', link: '/tutorials/05-angular-core' },
+            { text: '6 · Angular data', link: '/tutorials/06-angular-data' },
+            { text: '7 · Storefront, end to end', link: '/tutorials/07-storefront' },
           ],
-        },
-        {
-          text: 'Reference',
-          items: [{ text: 'Architecture diagrams', link: '/architecture' }],
         },
       ],
 

@@ -6,6 +6,7 @@
  * billing → http://localhost:4501  Angular SPA          (compat adapter)
  * reviews → http://localhost:4502  React 19 app         (compat adapter)
  * rating  → http://localhost:4503  a custom element     (contract custom-element adapter)
+ * contract→ http://localhost:4506  a contract fragment  (no gateway route — mounted from markup)
  * notifs  → http://localhost:4505  Angular SSR app      (unbound — its own server, its own render)
  *
  * The registry console is served by the host itself at /__braid/console — same origin as the
@@ -32,6 +33,12 @@ const FRAGMENTS = [
   { label: 'billing', dir: 'dist/apps/braid-poc-remote/browser', port: 4501, spa: true },
   { label: 'reviews', dir: 'dist/apps/braid-poc-react-remote', port: 4502, spa: true },
   { label: 'rating', dir: 'dist/apps/braid-poc-widget', port: 4503, spa: false },
+  /**
+   * The contract fragment. `cors` rather than `spa`, and that difference is the whole point: it is
+   * the only fragment the browser fetches *directly* instead of through the gateway, so it is the
+   * only one that needs the header. No registry entry, no `/__braid/frag/` route.
+   */
+  { label: 'contract', dir: 'dist/apps/braid-poc-contract', port: 4506, cors: true },
 ];
 
 // Clean up any stale processes from earlier runs holding our ports
@@ -104,7 +111,7 @@ await runToCompletion('npx', ['nx', 'build-app', 'braid-console']);
 const children = FRAGMENTS.map((fragment) =>
   runServer(
     'tools/braid-poc/serve-static.mjs',
-    [fragment.dir, String(fragment.port), ...(fragment.spa ? ['--spa'] : [])],
+    [fragment.dir, String(fragment.port), ...(fragment.spa ? ['--spa'] : []), ...(fragment.cors ? ['--cors'] : [])],
     fragment.port,
   ),
 );

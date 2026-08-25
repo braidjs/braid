@@ -1,3 +1,5 @@
+import type { CloseReason, CloseSummary } from '../weave/closing.js';
+
 /**
  * `FragmentEnv` — the contract object graph a fragment sees instead of patched globals.
  *
@@ -54,6 +56,24 @@ export interface FragmentEnv {
   onPropsChanged(listener: (props: Readonly<Record<string, unknown>>) => void): () => void;
   /** Fragment → host event channel, surfaced as `braid:event` on the slot element. */
   emit(type: string, detail?: unknown): void;
-  /** Fires on unmount — wire everything to it. */
+  /**
+   * Registers work to run *before* `signal` aborts: flush an outbox, persist a draft, release a
+   * lock. Return `{ flushed, dropped }` to report what happened; the host aggregates across
+   * handlers and surfaces the totals.
+   *
+   * Bounded by the host's close deadline. A handler that has not settled by then does not stop the
+   * teardown — it is reported as unconfirmed, because a page the user is trying to leave must be
+   * able to leave.
+   */
+  onClosing(handler: (reason: CloseReason) => void | Partial<CloseSummary> | Promise<void | Partial<CloseSummary>>): () => void;
+  /**
+   * Declares that the fragment holds unsaved work, or clears the declaration with `null`.
+   *
+   * Pushed as it changes rather than asked for at close time, so a host can answer "will this lose
+   * data?" synchronously — which is the only way to answer it inside a `beforeunload` handler.
+   * Braid never installs that handler itself; the host opts in via `slot.dirty`.
+   */
+  setDirty(reason: string | null): void;
+  /** Fires on unmount, after every `onClosing` handler has settled or the deadline has passed. */
   readonly signal: AbortSignal;
 }

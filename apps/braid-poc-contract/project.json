@@ -1,0 +1,16 @@
+{
+  "name": "braid-poc-contract",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/braid-poc-contract/src",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/braid-poc-contract"],
+      "options": {
+        "command": "npx esbuild apps/braid-poc-contract/src/main.ts --bundle --format=esm --tsconfig=tsconfig.base.json --outfile=dist/apps/braid-poc-contract/main.js"
+      }
+    }
+  }
+}

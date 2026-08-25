@@ -1,16 +1,23 @@
 import { EnvLocation, FragmentEnv } from './fragment-env.js';
-import { braidContext } from '../context/context-bus.js';
+import { BoundaryChannel } from '../weave/channel.js';
+import { createContextMirror } from '../weave/context-bridge.js';
+import { OpenPayload, answerHandshake } from '../weave/handshake.js';
+import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload } from '../weave/messages.js';
+import { createClosingCoordinator } from '../weave/closing.js';
 
 export interface CreateEnvOptions {
   contentRoot: HTMLElement;
   shadowRoot: ShadowRoot;
   routeUrl: string;
-  /** Reads the slot's current props. */
-  getProps(): Readonly<Record<string, unknown>>;
-  /** Registers a props-change listener; returns an unsubscribe function. */
-  onPropsChanged(listener: (props: Readonly<Record<string, unknown>>) => void): () => void;
-  /** Fragment → host event dispatch (surfaced as `braid:event` on the slot element). */
-  emit(type: string, detail?: unknown): void;
+  /**
+   * The fragment end of the boundary channel.
+   *
+   * Everything that used to cross as a host-realm closure — context reads, props, events — now
+   * crosses as a message on this channel. On the trusted tier both ends live in the host realm and
+   * the backing dispatches directly, so this costs a microtask and no serialization; on the
+   * untrusted tier the same code runs over a `MessagePort` without knowing the difference.
+   */
+  channel: BoundaryChannel;
   signal: AbortSignal;
   /** Names this fragment in context-version errors. */
   fragmentId?: string;
@@ -36,22 +43,50 @@ function parseEnvLocation(routeUrl: string): EnvLocation {
 }
 
 /**
- * Builds the FragmentEnv for a fragment instance.
+ * Builds the FragmentEnv for a fragment instance, and answers the host's handshake on its behalf.
  *
  * Compat fragments never consume the env — the compat adapter installs the full illusion
  * instead — but the runtime constructs one uniformly so the adapter interface is the same
  * for every adapter, and contract adapters can land later without touching the slot.
+ *
+ * Returns the env alongside the promise that settles at OPEN. The env is usable before then: its
+ * context mirror is simply empty, which is the same thing a fragment sees today when it reads a key
+ * nobody has published.
  */
-export function createFragmentEnv(options: CreateEnvOptions): FragmentEnv {
-  const { contentRoot, shadowRoot, routeUrl, signal } = options;
+export function createFragmentEnv(options: CreateEnvOptions): {
+  env: FragmentEnv;
+  opened: Promise<OpenPayload>;
+} {
+  const { contentRoot, shadowRoot, routeUrl, signal, channel } = options;
 
   let location = parseEnvLocation(routeUrl);
   const historyListeners = new Set<(location: EnvLocation) => void>();
 
-  /** The version this fragment declared for a key, and the name to blame if it is unreachable. */
-  const contextOptions = (key: string) => ({
-    ...(options.contextVersions?.[key] === undefined ? {} : { as: options.contextVersions[key] }),
-    ...(options.fragmentId === undefined ? {} : { fragmentId: options.fragmentId }),
+  let props: Readonly<Record<string, unknown>> = {};
+  const propsListeners = new Set<(props: Readonly<Record<string, unknown>>) => void>();
+
+  const context = createContextMirror(channel);
+  const closing = createClosingCoordinator(channel);
+
+  channel.on(PROPS_CHANGED, (payload) => {
+    props = ((payload ?? {}) as PropsChangedPayload).props ?? {};
+    for (const listener of [...propsListeners]) {
+      try {
+        listener(props);
+      } catch (error) {
+        console.error(`braid: a props listener threw`, error);
+      }
+    }
+  });
+
+  const opened = answerHandshake({
+    channel,
+    ...(options.contextVersions === undefined ? {} : { contextVersions: options.contextVersions }),
+    onOpen(open) {
+      context.seed(open);
+      props = open.props ?? {};
+      for (const listener of [...propsListeners]) listener(props);
+    },
   });
 
   const applyNavigation = (url: string, state: unknown, replace: boolean) => {
@@ -65,7 +100,7 @@ export function createFragmentEnv(options: CreateEnvOptions): FragmentEnv {
     historyListeners.forEach((listener) => listener(location));
   };
 
-  return {
+  const env: FragmentEnv = {
     contractVersion: '1.0',
     root: contentRoot,
     document: {
@@ -103,18 +138,24 @@ export function createFragmentEnv(options: CreateEnvOptions): FragmentEnv {
       },
     },
     context: {
-      get: (key) => braidContext.get(key, contextOptions(key)),
+      get: (key) => context.get(key),
       subscribe: (key, listener, subscribeOptions) =>
-        braidContext.subscribe(key, listener, {
-          ...contextOptions(key),
-          signal: subscribeOptions?.signal ?? signal,
-        }),
+        context.subscribe(key, listener, { signal: subscribeOptions?.signal ?? signal }),
     },
     get props() {
-      return options.getProps();
+      return props;
     },
-    onPropsChanged: options.onPropsChanged,
-    emit: options.emit,
+    onPropsChanged(listener) {
+      propsListeners.add(listener);
+      const unsubscribe = () => propsListeners.delete(listener);
+      signal.addEventListener('abort', unsubscribe, { once: true });
+      return unsubscribe;
+    },
+    emit: (type, detail) => channel.send(FRAGMENT_EVENT, { type, detail }),
+    onClosing: closing.onClosing,
+    setDirty: closing.setDirty,
     signal,
   };
+
+  return { env, opened };
 }

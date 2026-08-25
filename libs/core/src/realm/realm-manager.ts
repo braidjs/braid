@@ -22,8 +22,9 @@ import {
  *   fragment's route-url illusion is restored via `replaceState` once the iframe loads.
  * - `contract-blob` — boots from a runtime-authored `blob:` URL; zero interaction with the
  *   joint session history. Not shipped in this build (compat-only).
- * - `sandbox` — a real sandboxed cross-origin iframe for the untrusted tier. Not shipped in
- *   this build.
+ * - `sandbox` — a real sandboxed cross-origin iframe for the untrusted tier. Created by
+ *   `createSandboxRealm()` rather than here, because a cross-origin frame cannot satisfy
+ *   `RealmHandle` — see that module's header.
  */
 export type RealmKind = 'contract-blob' | 'compat-http' | 'sandbox';
 
@@ -47,6 +48,15 @@ export interface RealmInit {
    * ship different majors of the same dependency without a shared resolution namespace.
    */
   importMap?: RealmImportMap;
+  /**
+   * The realm document's `<base>`, overriding the gateway namespace.
+   *
+   * This one option is what makes contract mode gateway-free. A compat realm's relative URLs must
+   * resolve into `/__braid/frag/:id/…` because the gateway is proxying them; a contract fragment
+   * fetches from its own origin directly, so its base is simply its own entry's directory and no
+   * host-origin namespace has to exist.
+   */
+  baseHref?: string;
 }
 
 export interface RealmHandle {
@@ -79,10 +89,16 @@ export async function createRealm(kind: RealmKind, init: RealmInit): Promise<Rea
     case 'contract-blob':
       return createContractBlobRealm(init);
     case 'sandbox':
-      throw new BraidError('the sandbox realm kind (untrusted tier) is not available in this build', {
+      /**
+       * Not a failure any more — a redirection. The untrusted tier is built, but it is not a
+       * `RealmHandle`: `window`, `document` and `evaluate()` are same-origin capabilities that a
+       * cross-origin frame cannot offer, and faking them is the illusion that tier exists to
+       * refuse. See `createSandboxRealm`.
+       */
+      throw new BraidError('untrusted fragments are not created through createRealm()', {
         fragmentId: init.fragmentId,
         stage: 'realm-boot',
-        fixHint: 'this build ships the trusted tier only — trusted realms are namespace isolation, not a security boundary',
+        fixHint: 'mount it as <fragment-slot trust="untrusted" src="https://…">, or call createSandboxRealm() directly',
       });
     default:
       throw new BraidError(`unknown realm kind "${kind}"`, {
@@ -111,7 +127,7 @@ async function createContractBlobRealm(init: RealmInit): Promise<RealmHandle> {
 
   // The base href must be absolute: a blob: URL has an opaque path, so a root-relative href
   // has nothing meaningful to resolve against.
-  const baseHref = new URL(braidFragmentUrl(fragmentId, '/'), location.origin).href;
+  const baseHref = init.baseHref ?? new URL(braidFragmentUrl(fragmentId, '/'), location.origin).href;
 
   const realmDocumentHtml =
     `<!doctype html><meta charset="utf-8"><title>Braid realm: ${escapeHtml(fragmentId)}</title>` +

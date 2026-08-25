@@ -5,7 +5,7 @@
  * `/__braid/frag/<id>/*` here with the prefix stripped, so this server sees exactly the paths it
  * would serve if you opened it directly.
  *
- *   node tools/braid-poc/serve-static.mjs <dist-dir> <port> [--spa]
+ *   node tools/braid-poc/serve-static.mjs <dist-dir> <port> [--spa] [--cors]
  */
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -13,12 +13,22 @@ import { extname, join, normalize, resolve } from 'node:path';
 
 const [dir, port, ...flags] = process.argv.slice(2);
 if (!dir || !port) {
-  console.error('usage: serve-static.mjs <dist-dir> <port> [--spa]');
+  console.error('usage: serve-static.mjs <dist-dir> <port> [--spa] [--cors]');
   process.exit(1);
 }
 
 const ROOT = resolve(process.cwd(), dir);
 const SPA = flags.includes('--spa');
+/**
+ * `--cors` is for the contract fragment, and only for it.
+ *
+ * Every other fragment here is proxied through the gateway, so the browser sees it as same-origin
+ * and no CORS is involved. A contract fragment has no gateway route by design — the client imports
+ * its entry module straight from this origin into a `blob:` realm — and a cross-origin module import
+ * needs the header. That the flag is needed *only* here is the clearest single sign of how different
+ * the two paths are.
+ */
+const CORS = flags.includes('--cors');
 
 const MIME = {
   '.html': 'text/html;charset=utf-8',
@@ -44,6 +54,7 @@ createServer(async (req, res) => {
   try {
     const body = await readFile(filePath);
     res.setHeader('content-type', MIME[extname(filePath)] ?? 'application/octet-stream');
+    if (CORS) res.setHeader('access-control-allow-origin', '*');
     // unhashed filenames in a demo: never let a browser hold a stale copy
     res.setHeader('cache-control', 'no-store');
     res.end(body);

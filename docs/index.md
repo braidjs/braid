@@ -23,6 +23,8 @@ features:
     details: The gateway fetches the shell and every fragment in parallel and splices them as they stream. curl the page and the content is already there — for SSR and SPA fragments alike.
   - title: Zero code changes
     details: The compat adapter gives an unmodified Angular or React app a convincing document, window, location and history, all wired to its own shadow root and route.
+  - title: Two trust tiers, described honestly
+    details: The default tier is namespace isolation, not a security boundary. When code must be contained rather than merely tidy, the untrusted tier puts a real cross-origin boundary under the same protocol.
   - title: The failure modes are published
     details: What goes wrong in practice, by symptom, with causes and fixes. Read it before debugging anything.
 ---

@@ -157,7 +157,7 @@ Fragments register with the gateway through structured JSON manifests (loaded fr
 
 `<fragment-slot>` supports two trust tiers with a consistent component API:
 - **Trusted Tier (`trust="trusted"`):** High-performance realm isolation with direct DOM projection into shadow roots.
-- **Untrusted Tier (`trust="untrusted"`):** Standard cross-origin sandboxed iframes for untrusted third-party widgets, with progressive enhancement via `credentialless` where supported.
+- **Untrusted Tier (`trust="untrusted"`):** Standard cross-origin sandboxed iframes for untrusted third-party widgets, with progressive enhancement via `credentialless` where supported. **Shipped.** Its DOM stays in its own document — none of the trusted tier's shared-document benefits apply across it. See [Trust tiers](./braid-boundary.md).
 
 ### 7. Owned Streaming HTML Rewriter
 
@@ -408,4 +408,4 @@ flowchart TD
 | **Phase 0** | Validate blob-URL realms across Chromium, WebKit, and Firefox; build Angular/React DI mount probes. |
 | **Phase 1** | Contract path end-to-end: React and vanilla adapters, core gateway, registry loader, and `braid dev`. |
 | **Phase 2** | Compat adapter with full WebIDL audit manifest; Angular and Vue adapters; conformance test kit. |
-| **Phase 3** | Untrusted sandbox tier; Context Bus schema migration integration; production demo apps. |
+| **Phase 3** | ~~Untrusted sandbox tier~~ (shipped); Context Bus schema migration integration; per-fragment capability grants; production demo apps. |
