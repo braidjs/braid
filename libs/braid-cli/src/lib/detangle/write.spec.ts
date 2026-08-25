@@ -167,3 +167,20 @@ describe('previewWrite()', () => {
     expect(await previewWrite(root, plan())).toBe('');
   });
 });
+
+describe('the written config is one braid dev accepts', () => {
+  it('round-trips through the real config loader', async () => {
+    await applyPlan({ workspaceRoot: root, plan: plan(), force: false });
+
+    // The plan's phase-2 deliverable is "braid dev runs the result", and this is the seam where
+    // that either holds or does not: detangle writes the file, and `loadConfig` is what `braid dev`
+    // reads it with. Asserting the JSON shape by hand would test the assertion, not the contract.
+    const { loadConfig } = await import('../config.js');
+    const config = await loadConfig(join(root, 'braid.config.json'));
+
+    expect(config.shell.url).toBe('http://localhost:4200');
+    expect(config.fragments).toHaveLength(1);
+    expect(config.fragments[0]?.endpoint).toBe('http://localhost:4201');
+    expect(config.fragments[0]?.id).toBe('billing');
+  });
+});

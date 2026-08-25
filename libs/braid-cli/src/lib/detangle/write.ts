@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
-import { access, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { DetanglePlan, toBraidConfig } from './plan.js';
+import { scaffoldGatewayApp } from './gateway.js';
+import { ShellEdit, applyShellEdits } from './shell.js';
 
 const run = promisify(execFile);
 
@@ -19,6 +21,14 @@ const run = promisify(execFile);
  *
  * Each is overridable with `--force`, and each says which flag would override it. A refusal that
  * does not name its own escape hatch is just an obstacle.
+ *
+ * **What gets written, in increasing order of how much it can hurt.** The order is the safety
+ * argument, not a preference:
+ *
+ * 1. `braid.config.json` — a file nobody wrote.
+ * 2. The gateway app — **only new files**, and never over an existing directory.
+ * 3. Shell edits — the only writes that touch a file a human wrote, and the only ones limited to
+ *    cases where the exact "before" can be located. See `shell.ts`.
  */
 
 export interface WriteResult {
@@ -32,6 +42,12 @@ export interface WriteOptions {
   force: boolean;
   /** Port for the composed application. */
   port?: number;
+  /** Scaffold the gateway app when the shell has no server of its own. */
+  gateway?: boolean;
+  /** Apply the automatable shell edits. Manual ones are always left alone. */
+  shell?: boolean;
+  /** The shell edits to apply, from `planShellTransform`. */
+  shellEdits?: ShellEdit[];
 }
 
 export class DetangleRefusal extends Error {
@@ -74,6 +90,35 @@ export async function applyPlan(options: WriteOptions): Promise<WriteResult> {
     const config = toBraidConfig(plan, options.port ?? 4000);
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     written.push('braid.config.json');
+  }
+
+  if (options.gateway && plan.gateway === 'scaffold') {
+    const scaffold = scaffoldGatewayApp(plan);
+    const appRoot = Object.keys(scaffold.files)[0]?.split('/').slice(0, 2).join('/') ?? '';
+
+    /**
+     * Refused wholesale rather than merged file by file.
+     *
+     * A half-written gateway app — a new `main.ts` beside somebody's existing `project.json` — is
+     * harder to reason about than either writing all of it or none of it, and it is the state a
+     * developer is least equipped to untangle because they did not choose it.
+     */
+    if ((await exists(join(workspaceRoot, appRoot))) && !force) {
+      skipped.push({ path: `${appRoot}/`, reason: 'already exists — use --force to replace it' });
+    } else {
+      for (const [path, contents] of Object.entries(scaffold.files)) {
+        const full = join(workspaceRoot, path);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, contents);
+        written.push(path);
+      }
+    }
+  }
+
+  if (options.shell && options.shellEdits) {
+    const applied = await applyShellEdits(workspaceRoot, options.shellEdits);
+    written.push(...applied.written);
+    skipped.push(...applied.skipped);
   }
 
   return { written, skipped };

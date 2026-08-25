@@ -4,6 +4,7 @@ import { DetanglePlan, Finding, buildPlan, toBraidConfig } from './plan.js';
 import { DetangleRefusal, applyPlan, isGitRepository, previewWrite } from './write.js';
 import { findMiddlewareInsertion, scaffoldGatewayApp } from './gateway.js';
 import { detectFramework, planShellTransform } from './shell.js';
+import { checkRemoveModuleFederation, findDeepImports, validateFragmentEndpoints } from './validate.js';
 
 export { buildPlan, toBraidConfig } from './plan.js';
 export type { DetanglePlan, PlannedFragment, Finding } from './plan.js';
@@ -15,6 +16,7 @@ export { scaffoldGatewayApp, findMiddlewareInsertion } from './gateway.js';
 export type { GatewayScaffold, MiddlewareInsertion } from './gateway.js';
 export { planShellTransform, detectFramework } from './shell.js';
 export type { ShellTransform, ShellEdit } from './shell.js';
+export { validateFragmentEndpoints, checkRemoveModuleFederation, findDeepImports } from './validate.js';
 
 const BOLD = '\u001b[1m';
 const DIM = '\u001b[2m';
@@ -68,6 +70,15 @@ export async function detangle(argv: string[]): Promise<number> {
     ...(options.shell === undefined ? {} : { requestedShell: options.shell }),
   });
 
+  /**
+   * Checks that need the whole workspace, folded in before the report is rendered so that a
+   * blocking one actually blocks `--write` rather than merely printing after the verdict line.
+   */
+  plan.findings.push(...validateFragmentEndpoints(plan, projects));
+  if (options.removeMf) plan.findings.push(...checkRemoveModuleFederation(plan, projects));
+  plan.findings.push(...(await deepImportFindings(workspaceRoot, plan, shellGuess)));
+  plan.writable = !plan.findings.some((finding) => finding.level === 'block');
+
   process.stdout.write(render(plan, projects.length));
 
   /**
@@ -77,15 +88,16 @@ export async function detangle(argv: string[]): Promise<number> {
    * described rather than applied, which is the plan's rule for anything that edits code somebody
    * wrote — and it is why the report is the product.
    */
+  let shellEdits: Awaited<ReturnType<typeof planShellTransform>> | undefined;
   if (plan.shell) {
     const framework = await detectFramework(workspaceRoot, plan.shell.root);
-    const shellWork = await planShellTransform(workspaceRoot, plan, framework);
+    shellEdits = await planShellTransform(workspaceRoot, plan, framework);
     const gateway =
       plan.gateway === 'existing-server'
         ? await findMiddlewareInsertion(workspaceRoot, plan.shell.root)
         : undefined;
 
-    process.stdout.write(renderRemainingWork(shellWork, gateway, plan, framework));
+    process.stdout.write(renderRemainingWork(shellEdits, gateway, plan, framework));
   }
 
   if (options.diff) {
@@ -114,6 +126,14 @@ export async function detangle(argv: string[]): Promise<number> {
       plan,
       force: options.force,
       ...(options.port === undefined ? {} : { port: options.port }),
+      /**
+       * Opt-in, and separately. `--write` alone stays the conservative thing it has always been:
+       * one file nobody wrote. Scaffolding an app and editing a shell are each a step further from
+       * that, so each is asked for by name rather than inherited from one flag.
+       */
+      gateway: options.gateway,
+      shell: options.shellEdits,
+      ...(shellEdits ? { shellEdits: shellEdits.edits } : {}),
     });
 
     for (const path of result.written) process.stdout.write(`  wrote  ${path}\n`);
@@ -121,15 +141,21 @@ export async function detangle(argv: string[]): Promise<number> {
     process.stdout.write(`\n${DIM}  Next: braid dev${RESET}\n\n`);
 
     /**
-     * Phases 3-5 are not built, and the command says so at the point a user would otherwise assume
-     * otherwise. `--write` emitting only the config is a complete, useful step — `braid dev` runs
-     * the result — but a developer who reads "wrote braid.config.json" and expects their shell's
-     * templates to have been converted has been misled by omission.
+     * What was *not* done is stated at the point a user would otherwise assume it was. A developer
+     * who reads "wrote braid.config.json" and believes their shell's routes were converted has been
+     * misled by omission, and the omission is the part they will not think to check.
      */
-    process.stdout.write(
-      `${DIM}  Not done for you yet: the shell's slots and routes, and the gateway server.\n` +
-        `  See docs/plans/braid-detangle-plan.md, phases 3-5.${RESET}\n\n`,
-    );
+    const remaining: string[] = [];
+    if (!options.gateway && plan.gateway === 'scaffold') remaining.push('the gateway app (--gateway)');
+    if (!options.shellEdits) remaining.push("the shell's runtime import, hydration, and routes (--shell)");
+    if (options.shellEdits) {
+      const manual = (shellEdits?.edits ?? []).filter((edit) => edit.kind === 'manual').length;
+      if (manual > 0) remaining.push(`${manual} shell edit${manual === 1 ? '' : 's'} left manual — see above`);
+    }
+
+    if (remaining.length > 0) {
+      process.stdout.write(`${DIM}  Not done: ${remaining.join('; ')}.${RESET}\n\n`);
+    }
     return 0;
   } catch (error) {
     if (error instanceof DetangleRefusal) {
@@ -150,6 +176,9 @@ const USAGE = `braid detangle — convert a Module Federation workspace to Braid
       --diff              show the braid.config.json that --write would produce
       --write             write it. Refuses on a dirty git tree or a blocking finding
       --force             override those refusals, and replace an existing config
+      --remove-mf         check whether the federation config can be stripped (reports only)
+      --gateway           with --write, also scaffold the gateway app (new files only)
+      --shell-edits       with --write, also apply the shell edits that can be applied safely
 
   The default writes nothing.
 `;
@@ -161,11 +190,14 @@ interface Options {
   write: boolean;
   diff: boolean;
   force: boolean;
+  removeMf: boolean;
+  gateway: boolean;
+  shellEdits: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { write: false, diff: false, force: false, help: false };
+  const options: Options = { write: false, diff: false, force: false, removeMf: false, gateway: false, shellEdits: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--shell') options.shell = argv[++i];
@@ -174,6 +206,9 @@ function parseArgs(argv: string[]): Options {
     else if (arg === '--write') options.write = true;
     else if (arg === '--diff') options.diff = true;
     else if (arg === '--force') options.force = true;
+    else if (arg === '--remove-mf') options.removeMf = true;
+    else if (arg === '--gateway') options.gateway = true;
+    else if (arg === '--shell-edits') options.shellEdits = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
   }
   return options;
@@ -266,6 +301,33 @@ function pad(value: string, width: number): string {
 /** Wraps already-padded plain text in a colour, so width and colour never interact. */
 function dim(value: string): string {
   return `${DIM}${value}${RESET}`;
+}
+
+/** Deep imports across a remote boundary, which have no Braid equivalent. */
+async function deepImportFindings(
+  workspaceRoot: string,
+  plan: DetanglePlan,
+  shell: { root: string; mf?: { remotes: Array<{ name: string }> } } | undefined,
+): Promise<Finding[]> {
+  if (!shell || !plan.shell) return [];
+  const remoteNames = (shell.mf?.remotes ?? []).map((remote) => remote.name);
+  if (remoteNames.length === 0) return [];
+
+  const { readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const findings: Finding[] = [];
+
+  // Only the files a mount was already found in: a full re-walk to find imports would double the
+  // scan cost for a check that is, in practice, about the same handful of files.
+  const files = new Set(plan.fragments.map((fragment) => fragment.from).filter((file): file is string => Boolean(file)));
+  for (const file of files) {
+    try {
+      findings.push(...findDeepImports(await readFile(join(workspaceRoot, file), 'utf-8'), file, remoteNames));
+    } catch {
+      // A file named in a mount that cannot be read is already reported elsewhere.
+    }
+  }
+  return findings;
 }
 
 /**

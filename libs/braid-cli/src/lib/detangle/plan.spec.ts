@@ -264,3 +264,27 @@ describe('piercePatterns()', () => {
     expect(piercePatterns('/billing/')).toEqual(['/billing', '/billing/*']);
   });
 });
+
+describe('report consistency', () => {
+  it('records the call site even when the route path could not be read', () => {
+    const plan = buildPlan({
+      projects: [
+        project('shell', { ...shellMf(['notifications']), port: 4200 }),
+        project('notifications', { port: 4203 }),
+      ],
+      mounts: [
+        {
+          remote: 'notifications',
+          kind: 'unbound',
+          file: 'apps/shell/src/app/header.ts',
+          uncertain: 'route path is not a string literal nearby',
+        },
+      ],
+    });
+
+    // Previously `from` was read off the *routed* mount only, so this reported "no call site found"
+    // in one section while naming header.ts in another. Two parts of one report disagreeing about a
+    // fact is worse than either being wrong alone.
+    expect(plan.fragments[0]?.from).toBe('apps/shell/src/app/header.ts');
+  });
+});

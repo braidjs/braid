@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Detangle fixture — shell</title>
+  </head>
+  <body>
+    <h1>Shell</h1>
+    <!--
+      After detangle, this is where the billing remote lands. The gateway pierces the fragment's
+      markup into this element in the first response, so the composed document contains it before
+      any JavaScript runs — which is what the boot test asserts.
+    -->
+    <fragment-slot name="billing"></fragment-slot>
+  </body>
+</html>

@@ -84,7 +84,15 @@ export function buildPlan(input: BuildPlanInput): DetanglePlan {
       ...(project?.port === undefined ? {} : { port: project.port }),
       ...(project?.port === undefined ? {} : { endpoint: `http://localhost:${project.port}` }),
       ...(project?.serveCommand ? { serveCommand: project.serveCommand } : {}),
-      ...(routed?.file ? { from: routed.file } : {}),
+      /**
+       * The call site, from *any* mount rather than only a routed one.
+       *
+       * Reading it off `routed` meant a remote whose path could not be parsed reported "no call
+       * site found" in the shell section while the findings section, two lines above, named the
+       * exact file it was found in. Two parts of one report disagreeing about a fact is worse than
+       * either being wrong alone — it makes the whole output untrustworthy.
+       */
+      ...(routed?.file ?? mounts[0]?.file ? { from: routed?.file ?? mounts[0]!.file } : {}),
     };
 
     if (!bound) fragment.src = routed?.path ?? '/';

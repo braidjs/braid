@@ -2,3 +2,8 @@
 # contain sample package.json files (skill eval outputs) that Nx's project
 # discovery would otherwise try — and fail — to register as projects.
 skills
+
+# The `braid detangle` fixture: a real Module Federation workspace, committed so CI can convert
+# it and boot the result. Its project.json files are detangle's *input* — without this, Nx would
+# adopt three fake applications into this workspace's own graph.
+tools/detangle-fixture

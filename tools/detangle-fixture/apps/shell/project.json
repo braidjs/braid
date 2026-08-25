@@ -1,0 +1,1 @@
+{ "name": "shell", "targets": { "serve": { "options": { "port": 4200 } } } }
