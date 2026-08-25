@@ -1,0 +1,7 @@
+{
+  "startCommand": "npm start",
+  "installDependencies": true,
+  "env": {
+    "NODE_VERSION": "24"
+  }
+}

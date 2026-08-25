@@ -1,0 +1,7 @@
+{
+  "startCommand": "npm run braid:demo",
+  "installDependencies": true,
+  "env": {
+    "NODE_VERSION": "24"
+  }
+}

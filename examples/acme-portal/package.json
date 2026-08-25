@@ -1,0 +1,16 @@
+{
+  "name": "acme-portal-demo",
+  "version": "1.0.0",
+  "description": "Interactive Braid Microfrontend Tutorial Demo",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@braidlabs/core": "^0.1.1",
+    "@braidlabs/gateway": "^0.1.1",
+    "@braidlabs/skew": "^0.1.1",
+    "@braidlabs/data": "^0.1.1",
+    "express": "^4.21.2"
+  }
+}

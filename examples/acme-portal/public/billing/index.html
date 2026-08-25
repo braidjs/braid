@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Billing Fragment</title>
+  <style>
+    .billing-root { font-family: system-ui, sans-serif; }
+    .billing-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e4e4e7; padding-bottom: 0.75rem; margin-bottom: 1rem; }
+    .billing-header h3 { margin: 0; font-size: 1.1rem; color: #09090b; }
+    .tag { background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th { text-align: left; background: #f4f4f5; padding: 8px 12px; font-size: 0.85rem; color: #71717a; }
+    td { padding: 10px 12px; border-bottom: 1px solid #f4f4f5; font-size: 0.9rem; }
+    .status-badge { padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .status-pending { background: #fef9c3; color: #854d0e; }
+    .status-paid { background: #dcfce7; color: #166534; }
+    .btn-pay { background: #2563eb; color: white; border: none; padding: 5px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: 500; cursor: pointer; }
+    .btn-pay:hover { background: #1d4ed8; }
+  </style>
+</head>
+<body>
+  <div class="billing-root">
+    <div class="billing-header">
+      <h3>Invoices & Subscriptions</h3>
+      <span class="tag">React 19 Remote App</span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Invoice #</th>
+          <th>Amount</th>
+          <th>Due Date</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="invoice-rows">
+        <tr>
+          <td><strong>INV-2026-001</strong></td>
+          <td>$450.00</td>
+          <td>Sep 01, 2026</td>
+          <td><span id="badge-1" class="status-badge status-pending">Pending</span></td>
+          <td><button id="btn-1" class="btn-pay" onclick="payInvoice('INV-2026-001', 450.00, 'btn-1', 'badge-1')">Pay Now</button></td>
+        </tr>
+        <tr>
+          <td><strong>INV-2026-002</strong></td>
+          <td>$1,200.00</td>
+          <td>Sep 15, 2026</td>
+          <td><span id="badge-2" class="status-badge status-pending">Pending</span></td>
+          <td><button id="btn-2" class="btn-pay" onclick="payInvoice('INV-2026-002', 1200.00, 'btn-2', 'badge-2')">Pay Now</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    function payInvoice(id, amount, btnId, badgeId) {
+      const badge = document.getElementById(badgeId);
+      const btn = document.getElementById(btnId);
+
+      badge.textContent = 'Paid';
+      badge.className = 'status-badge status-paid';
+      btn.style.display = 'none';
+
+      // Emit event through the Braid DOM Facade
+      window.dispatchEvent(
+        new CustomEvent('invoice:paid', {
+          detail: { invoiceId: id, amount: amount, timestamp: Date.now() },
+          bubbles: true,
+        })
+      );
+    }
+  </script>
+</body>
+</html>

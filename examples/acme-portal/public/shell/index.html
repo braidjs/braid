@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acme Enterprise Portal (Host)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #fafafa; color: #18181b; }
+    header { background: #18181b; color: white; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.2rem; font-weight: 600; }
+    nav { display: flex; gap: 1rem; }
+    nav a { color: #a1a1aa; text-decoration: none; font-size: 0.95rem; }
+    nav a:hover, nav a.active { color: white; font-weight: 600; }
+    main { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: white; border-radius: 8px; border: 1px solid #e4e4e7; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .badge { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500; }
+    .banner { margin-bottom: 1.5rem; padding: 1rem; background: #ecfdf5; border: 1px solid #10b981; border-radius: 6px; color: #065f46; display: none; }
+  </style>
+  <!-- Load Braid Client Runtime -->
+  <script type="module">
+    import { initBraid } from 'https://esm.sh/@braidlabs/core@0.1.1';
+    initBraid();
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Acme Enterprise Portal <span class="badge">Angular Shell</span></h1>
+    <nav>
+      <a href="/" class="active">Dashboard</a>
+      <a href="/billing">Billing & Invoices</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="payment-banner" class="banner"></div>
+
+    <div class="card">
+      <h2>Composed Application Page</h2>
+      <p style="color: #71717a;">The component below is an independently deployed React microfrontend running inside an isolated Braid realm with Declarative Shadow DOM.</p>
+      
+      <!-- Braid Custom Element Slot -->
+      <fragment-slot name="billing" trust="trusted"></fragment-slot>
+    </div>
+  </main>
+
+  <script>
+    const slot = document.querySelector('fragment-slot');
+    const banner = document.getElementById('payment-banner');
+
+    slot.addEventListener('braid:event', (e) => {
+      if (e.detail && e.detail.type === 'invoice:paid') {
+        banner.style.display = 'block';
+        banner.textContent = `🎉 [Host received event] Invoice ${e.detail.detail.invoiceId} successfully paid ($${e.detail.detail.amount})!`;
+      }
+    });
+
+    slot.addEventListener('braid:ready', () => {
+      console.log('✅ Billing fragment ready and mounted inside Shadow Root.');
+    });
+  </script>
+</body>
+</html>

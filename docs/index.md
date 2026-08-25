@@ -10,8 +10,11 @@ hero:
       text: Get started
       link: /getting-started
     - theme: alt
-      text: Braid, explained
-      link: /braid-explained
+      text: Tutorial
+      link: /tutorial/
+    - theme: alt
+      text: Try in StackBlitz
+      link: https://stackblitz.com/github/braidjs/braid/tree/main/examples/acme-portal
     - theme: alt
       text: View on GitHub
       link: https://github.com/braidjs/braid

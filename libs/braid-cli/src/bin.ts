@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { add, dev, init } from './lib/commands.js';
+import { detangle } from './lib/detangle/index.js';
 import { registry } from './lib/registry-commands.js';
 
 const USAGE = `braid — compose independently deployed frontends
@@ -10,6 +11,9 @@ const USAGE = `braid — compose independently deployed frontends
       --endpoint <url>              where the fragment is served
       --port <n>                    dev port (implies http://localhost:<n>)
       --pierce <pattern>            page routes to server-render it into (repeatable)
+  braid detangle [options]        read a Module Federation workspace, report what Braid would do
+      --shell <project>             the host to convert (inferred when unambiguous)
+      --cwd <path>                  workspace root (defaults to the current directory)
   braid registry <subcommand>     validate, diff, or publish the registry
       validate                      check the local registry for conflicts
       diff --against <ref>          compare local config to a published snapshot
@@ -18,7 +22,7 @@ const USAGE = `braid — compose independently deployed frontends
 
 const [command, ...argv] = process.argv.slice(2);
 
-const commands: Record<string, (argv: string[]) => Promise<number>> = { dev, init, add, registry };
+const commands: Record<string, (argv: string[]) => Promise<number>> = { dev, init, add, detangle, registry };
 const run = command ? commands[command] : undefined;
 
 if (!run) {

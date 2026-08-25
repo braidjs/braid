@@ -2,6 +2,11 @@
 
 Welcome to the end-to-end Braid tutorial. In this guide, you will build a complete, production-ready microfrontend system from a blank slate.
 
+> [!TIP]
+> **Prefer an interactive sandbox?** You can run and explore the completed tutorial project directly in your browser with zero local setup:
+> 
+> [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/braidjs/braid/tree/main/examples/acme-portal)
+
 ---
 
 ## What You Will Build
