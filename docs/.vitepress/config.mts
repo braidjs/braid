@@ -43,9 +43,8 @@ export default withMermaid(
       nav: [
         { text: 'Getting started', link: '/getting-started' },
         { text: 'Explained', link: '/braid-explained' },
-        { text: 'End-to-End Tutorial', link: '/tutorial/' },
+        { text: 'Tutorial', link: '/tutorial/' },
         { text: 'Packages', link: '/packages/' },
-        { text: 'Feature Deep Dives', link: '/tutorials/' },
         { text: 'Talk deck', link: '/braid-deck.html', target: '_blank' },
       ],
 
