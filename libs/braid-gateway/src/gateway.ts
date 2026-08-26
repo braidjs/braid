@@ -49,8 +49,29 @@ export interface GatewayOptions {
   registry: RegistrySource;
   /** 'development' enables verbose error bodies; defaults to 'development'. */
   mode?: 'production' | 'development';
-  /** Additional headers set on every request forwarded to a fragment endpoint. */
-  additionalHeaders?: Record<string, string>;
+  /**
+   * Additional headers set on every request forwarded to a fragment endpoint.
+   *
+   * A function is called once per fragment request with the *incoming* request, for headers that
+   * describe the current caller — a signed identity assertion, a trace id, a tenant id. A plain
+   * object is read once at construction, so anything per-request has to be the function form.
+   */
+  additionalHeaders?: Record<string, string> | ((request: Request) => Record<string, string>);
+  /**
+   * Forward the caller's `Cookie` and `Authorization` headers to fragment endpoints.
+   *
+   * **Off by default, deliberately.** A fragment endpoint is a URL from the registry — frequently
+   * a different team, often a different company, sometimes a different network. `Cookie` and
+   * `Authorization` authenticate the caller to *the shell's* origin, so forwarding them hands
+   * every fragment backend the ability to act as that user against it. That is the whole trust
+   * boundary between a host and the fragments it composes.
+   *
+   * A fragment that needs to identify the caller should be given something scoped to it: an
+   * assertion minted per request via {@link GatewayOptions.additionalHeaders}, or a token
+   * exchanged for the fragment's own audience. Turn this on only when every endpoint in the
+   * registry is inside the same trust boundary as the shell.
+   */
+  forwardCredentials?: boolean;
   /**
    * Publishes a paginated listing of the fragments this gateway serves, for shells that build
    * their UI from the registry instead of hard-coding slot names.
@@ -236,6 +257,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const mode = options.mode ?? 'development';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
   const additionalHeaders = options.additionalHeaders ?? {};
+  const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
+    ? additionalHeaders
+    : () => additionalHeaders;
+  const forwardCredentials = options.forwardCredentials ?? false;
   const trustForwardedHeaders = options.trustForwardedHeaders ?? false;
   const serviceWorker = options.serviceWorker
     ? (options.serviceWorker === true ? {} : options.serviceWorker)
@@ -559,6 +584,15 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     const fragmentRequest = new Request(fragmentRequestUrl, request);
 
+    // `new Request(url, request)` copies every header, including the caller's credentials.
+    // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
+    // different origin by construction — so they are removed unless the host has said its whole
+    // registry is inside one trust boundary. See `forwardCredentials`.
+    if (!forwardCredentials) {
+      fragmentRequest.headers.delete('cookie');
+      fragmentRequest.headers.delete('authorization');
+    }
+
     // Tell the fragment endpoint the protocol and host the *user* reached us on.
     //
     // These are overwritten, not forwarded: an incoming x-forwarded-host is client-controlled,
@@ -573,8 +607,15 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       (trustForwardedHeaders && request.headers.get('x-forwarded-host')) || requestUrl.host,
     );
 
-    for (const [name, value] of Object.entries(additionalHeaders)) {
+    // After the credential strip, so a host can deliberately supply its own `authorization` for
+    // a fragment; before the protocol headers below, which are the gateway's to state.
+    // Captured, because these names go into the coalescing key below: a function-form
+    // `additionalHeaders` varies per caller, and a key blind to it would share one caller's
+    // fragment render with another.
+    const extraHeaderNames: string[] = [];
+    for (const [name, value] of Object.entries(resolveAdditionalHeaders(request))) {
       fragmentRequest.headers.set(name, value);
+      extraHeaderNames.push(name);
     }
 
     // the endpoint serves an embedded fragment, not a full document
@@ -630,7 +671,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       // one across two callers would share that decision with it.
       const key =
         singleFlight && fragment.coalesce !== false && !hasAccessRules(fragment)
-          ? singleFlightKey(fragmentRequest, fragmentRequestUrl.href)
+          ? singleFlightKey(fragmentRequest, fragmentRequestUrl.href, extraHeaderNames)
           : null;
 
       const response = key
