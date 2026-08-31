@@ -57,3 +57,7 @@ __screenshots__/
 # VitePress build output
 docs/.vitepress/dist
 docs/.vitepress/cache
+.claude/.goal-turns
+.claude/.goal-pause
+.claude/current-goal.md
+.claude/goal-archive/
