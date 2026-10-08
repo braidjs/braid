@@ -168,6 +168,23 @@ that returns markup already prepared for the host's DOM. The client does this au
 fetching `/__braid/frag/:id/…` instead gives you the fragment's raw HTML, which is not safe to
 insert.
 
+### A fragment fails to load with a CORS error, or a "redirected" `fragment-fetch` error
+
+**Symptom.** The slot shows `fragment-fetch: the fragment redirected "/__braid/doc/…"`. On older
+versions it was worse: a CORS error on a `/__braid/doc/…` request, or a login page's markup rendered
+inside the slot, and nothing in the error mentioned a redirect.
+
+**Cause.** The fragment's endpoint answered its document request with a 3xx — almost always because
+the request was unauthenticated and it redirected to a login page. The gateway passes redirects
+through untouched, and the client fetches the document rather than navigating to it. Following the
+redirect leaves the fragment's namespace: cross-origin it fails as an opaque CORS error that hides
+the real status, and a relative `Location` resolves against the host's origin and returns the wrong
+page with a 200.
+
+**Fix.** Make the fragment render an unauthenticated state itself, or answer 401/403 directly,
+instead of redirecting its document. The redirect's target is not readable from the browser; the
+request's response in DevTools → Network shows it.
+
 ### One fragment's storage stops opening after another deploys
 
 **Symptom.** A fragment that worked yesterday can no longer read or write anything. Its errors name
