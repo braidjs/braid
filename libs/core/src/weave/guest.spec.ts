@@ -111,7 +111,10 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
   }
 
   const [session] = await Promise.all([connecting, handshaking]);
-  live.push(session);
+  live.push(() => {
+    session.disconnect();
+    controller.abort();
+  });
   markMounted();
 
   return {
@@ -138,17 +141,20 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 /**
- * Every session `connect()` opened, disconnected after each test.
+ * Both ends of every session `connect()` opened, torn down after each test.
  *
  * The host-side `dispose()` aborts only the host's controller; the guest's beats run on real timers
  * until its own session disconnects. Left running, they outlive the jsdom environment and fire into
  * a torn-down `document` — and a test that throws before its own `dispose()` would leak them too.
  */
-const live: GuestSession[] = [];
+const live: Array<() => void> = [];
 
-afterEach(() => {
-  for (const session of live.splice(0)) session.disconnect();
+afterEach(async () => {
+  for (const teardown of live.splice(0)) teardown();
   braidContext.clear();
+  // The guest's opening beat is a one-shot timer that disconnecting does not cancel; let it run
+  // while `document` still exists rather than after the environment is gone.
+  await settle();
 });
 
 describe('origin pinning', () => {
