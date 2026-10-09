@@ -140,6 +140,17 @@ describe('prepareFragmentHtml()', () => {
         expect(output).not.toMatch(/javascript:|vbscript:|data:|blob:/i);
       });
 
+      it.each([
+        ['srcdoc', `<iframe srcdoc="<p>x</p>" srcdoc="<b>y</b>"></iframe>`],
+        ['src', `<iframe src="vbscript:a" src="vbscript:b"></iframe>`],
+        ['src in another case', `<iframe src="vbscript:a" SRC="vbscript:b"></iframe>`],
+      ])('removes a repeated %s, not just its first occurrence', async (_, html) => {
+        const output = await prepare(html);
+
+        expect(output).not.toMatch(/srcdoc=|vbscript:/i);
+        expect(output).toContain('data-braid-blocked=');
+      });
+
       it('lists every attribute it removed from one tag', async () => {
         const output = await prepare(`<iframe src="javascript:alert(1)" srcdoc="<p>x</p>" title="t"></iframe>`);
 

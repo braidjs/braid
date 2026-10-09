@@ -250,9 +250,22 @@ function blockInlineFrameDocuments(tag: StartTag): void {
 
 /** Whether a frame URL names a document to fetch (or none), rather than carrying one inline. */
 function loadsDocumentByUrl(rawUrl: string): boolean {
-  const url = rawUrl.trim().toLowerCase();
+  const url = asUrlParserReadsIt(rawUrl).toLowerCase();
   const scheme = /^([a-z][a-z0-9+.-]*):/.exec(url)?.[1];
   return scheme === undefined || scheme === 'http' || scheme === 'https' || url === 'about:blank';
+}
+
+/**
+ * A URL as the WHATWG URL parser sees it before reading a scheme: tabs and newlines removed
+ * anywhere, C0 controls and spaces trimmed from both ends. `String#trim` models neither.
+ */
+function asUrlParserReadsIt(rawUrl: string): string {
+  const url = rawUrl.replace(/[\t\n\r]/g, '');
+  let start = 0;
+  let end = url.length;
+  while (start < end && url.charCodeAt(start) <= 0x20) start++;
+  while (end > start && url.charCodeAt(end - 1) <= 0x20) end--;
+  return url.slice(start, end);
 }
 
 /** Rewrites a tag's subresource URLs into the fragment's namespace. */

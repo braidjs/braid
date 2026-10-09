@@ -375,16 +375,16 @@ those routes and nothing at the edge may strip it. Braid URLs themselves
 ### Fragment code runs in the host's JavaScript context
 
 This should not happen: the gateway strips inline `on*` handlers, neutralizes every `<script>`,
-defangs `<meta http-equiv="refresh">`, and strips inline frame documents, so no markup a fragment sends can execute in the host
-realm or navigate the host page.
+defangs `<meta http-equiv="refresh">`, and strips inline frame documents, so no markup a fragment
+sends can execute in the host realm or navigate the host page.
 
-**What is still yours to own.** `javascript:` URLs on links and form `action`s are not
-neutralized because they require a user to click, and a trusted fragment is allowed to navigate a
-page the user clicks through. (On frames they run on parse, so there the gateway removes them —
-along with `iframe[srcdoc]` and `data:`/`blob:` frame URLs — and marks the tag
-`data-braid-blocked`.) And the trusted tier is *namespace isolation, not a security boundary*: fragments are
-same-origin and share the host's cookies and storage. Treat a manifest entry as granting that
-endpoint the user's session.
+**What is still yours to own.** `javascript:` URLs on links and form `action`s are not neutralized
+because they require a user to click, and a trusted fragment is allowed to navigate a page the
+user clicks through. (On frames they run on parse, so there the gateway removes them — along with
+`iframe[srcdoc]` and `data:`/`blob:` frame URLs — and marks the tag `data-braid-blocked`.) And the
+trusted tier is *namespace isolation, not a security boundary*: fragments are same-origin and
+share the host's cookies and storage. Treat a manifest entry as granting that endpoint the user's
+session.
 
 ### A fragment endpoint reaches further than its manifest says
 

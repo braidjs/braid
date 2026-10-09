@@ -522,8 +522,10 @@ whose targets are restricted to the host's origin, the fragment's own endpoint, 
 `<meta http-equiv="refresh">` is defanged, and frames whose document the markup carries inline
 lose it: `iframe[srcdoc]`, and any `iframe`/`embed`/`object` URL other than `http(s):`, a path, or
 `about:blank` (so `javascript:`, `data:`, `blob:`). Those run on parse with the host's origin, no
-click needed; each removal is named on the tag in `data-braid-blocked`. Fragment code runs in the
-fragment's realm or not at all.
+click needed; each removal is named on the tag in `data-braid-blocked`. The rule is
+deliberately blunt — it also removes a sandboxed `srcdoc` and a `data:` PDF or SVG in an
+`object` — so serve such content from a URL instead. Fragment code runs in the fragment's realm
+or not at all.
 
 Deliberately not neutralized, because they require a user to click rather than executing on
 parse: `javascript:` URLs on links (`a`, `area`) and form `action`s. A trusted fragment can

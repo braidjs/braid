@@ -456,9 +456,18 @@ function scanToken(text: string, start: number): Token | null {
       continue;
     }
 
+    // Attribute names end where the HTML tokenizer ends them — at `/` too, which separates
+    // attributes — and a leading `=` is the name's first character, not a separator. A name split
+    // differently here than in the browser is an attribute the transforms never see.
     const attributeNameStart = index;
-    while (index < length && !isWhitespace(text[index]) && text[index] !== '=' && text[index] !== '>') {
-      if (text[index] === '/' && text[index + 1] === '>') break;
+    if (text[index] === '=') index++;
+    while (
+      index < length &&
+      !isWhitespace(text[index]) &&
+      text[index] !== '=' &&
+      text[index] !== '>' &&
+      text[index] !== '/'
+    ) {
       index++;
     }
     if (index >= length) return null;
@@ -496,7 +505,12 @@ function scanToken(text: string, start: number): Token | null {
       index = cursor;
     }
 
-    attributes.push({ name: rawName.toLowerCase(), rawName, value });
+    // The browser keeps the first of a repeated attribute and drops the rest, so the same goes
+    // here: otherwise removing the first would promote a second the transforms never looked at.
+    const attributeName = rawName.toLowerCase();
+    if (!attributes.some((attribute) => attribute.name === attributeName)) {
+      attributes.push({ name: attributeName, rawName, value });
+    }
   }
 }
 
