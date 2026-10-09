@@ -169,6 +169,23 @@ export interface FragmentManifest {
    * holding a deep link but kept out of listings.
    */
   access?: FragmentAccess;
+
+  /**
+   * What happens when the fragment answers its document request with a redirect — almost always an
+   * unauthenticated request being sent to a login page.
+   *
+   * - `'error'` (default) — the client reports a named `fragment-fetch` error. A browser hides where
+   *   a redirect it was told not to follow was going, so nothing more is possible without an opt-in.
+   * - `'navigate'` — the gateway hands the target to the client, which navigates the whole page
+   *   there, exactly as the shell would have done had the redirect hit the top-level request.
+   *
+   * Opt-in because it lets the fragment's endpoint move the top-level page. The target must be on
+   * the host's origin, inside the fragment's own endpoint path, or on an origin listed in the
+   * gateway's `redirectOrigins`; anything else is refused. It only works end to end once the
+   * fragment can see who the user is (`forwardCredentials` or `additionalHeaders`) — otherwise it
+   * redirects again on the way back, and the client stops after one round trip.
+   */
+  redirect?: 'error' | 'navigate';
 }
 
 export interface FragmentAccess {
@@ -269,6 +286,13 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     console.warn(
       `braid-gateway: fragment "${manifest.id}" declares bound: false without a src, so it will be ` +
         `fetched at each page's own path — declare the path its content lives at, e.g. src: "/panel"`,
+    );
+  }
+
+  if (manifest.redirect !== undefined && manifest.redirect !== 'error' && manifest.redirect !== 'navigate') {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" declares redirect: "${String(manifest.redirect)}" — ` +
+        `use "error" or "navigate"`,
     );
   }
 

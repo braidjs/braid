@@ -1,5 +1,10 @@
 import { BraidError } from '../errors.js';
-import { braidDocumentUrl, BRAID_FRAGMENT_ID_HEADER } from '../protocol.js';
+import {
+  braidDocumentUrl,
+  BRAID_FRAGMENT_ID_HEADER,
+  BRAID_REDIRECT_LOCATION_HEADER,
+  BRAID_RETURN_URL_HEADER,
+} from '../protocol.js';
 import { createRealm } from '../realm/realm-manager.js';
 import { contractAdapter } from '../adapters/contract-adapter.js';
 import { resolveAdapter } from '../adapters/adapter.js';
@@ -441,7 +446,19 @@ export class FragmentSlot extends HTMLElement {
       // fail as a named error, and an undeclared adapter resolves to the default (compat).
       const adapter = resolveAdapter(realm.manifestAdapter, fragmentId);
 
-      if (!htmlResult.ok && adapter.needsDocument !== false) throw htmlResult.error;
+      if (!htmlResult.ok && adapter.needsDocument !== false) {
+        // The fragment sent the user somewhere else — a login, almost always — and the gateway has
+        // said the host allows following it. The slot stays `loading`: the page is about to be
+        // replaced, and flashing an error or a fallback in the meantime would only be noise.
+        if (htmlResult.error instanceof FragmentRedirectError) {
+          // a slot that was removed or rebooted while the realm was loading must not move the page
+          if (signal.aborted) return;
+          const refusal = followFragmentRedirect(htmlResult.error, browserRedirectDeps());
+          if (!refusal) return;
+          throw refusal;
+        }
+        throw htmlResult.error;
+      }
       const html = htmlResult.ok ? htmlResult.html : null;
 
       // An adapter that builds its own UI never reads a document; one painted for it is taken down
@@ -914,9 +931,11 @@ function redactedLocation(location: string | null, base: string): string | null 
  *
  * A browser hands back an `opaqueredirect` for `redirect: 'manual'` (status 0, no readable
  * `Location`); other runtimes expose the real 3xx, so the target is named when it can be read.
- */
-/**
- * The fragment's document, and whether it arrived as HTML — which, through the gateway, is the one
+ *
+ * A fragment that opted in to `redirect: 'navigate'` is the exception: the gateway answers with a
+ * `409` carrying the target, which becomes a {@link FragmentRedirectError} for the slot to follow.
+ *
+ * Resolves with the document and whether it arrived as HTML — which, through the gateway, is the one
  * kind of document it prepares (scripts inert, handlers stripped). Anything else is not safe to put
  * on screen ahead of the adapter.
  */
@@ -939,6 +958,9 @@ export async function fetchFragmentHtml(
       headers: {
         accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         [BRAID_FRAGMENT_ID_HEADER]: fragmentId,
+        // Where a login should send the user back to. Sent on every document fetch, because
+        // whether the fragment will redirect is not known until it answers.
+        ...(typeof location === 'undefined' ? {} : { [BRAID_RETURN_URL_HEADER]: location.href }),
       },
       redirect: 'manual',
       signal,
@@ -969,6 +991,15 @@ export async function fetchFragmentHtml(
     );
   }
 
+  // The gateway's answer for a fragment that opted in to `redirect: 'navigate'`: a 409 that carries
+  // where the fragment wanted to go. A 409 without the header is an ordinary failure, and the header
+  // on any other status is ignored — a fragment can set headers too, and only this pair is the
+  // gateway speaking.
+  if (response.status === 409) {
+    const target = response.headers.get(BRAID_REDIRECT_LOCATION_HEADER);
+    if (target) throw new FragmentRedirectError(fragmentId, target, documentUrl);
+  }
+
   if (!response.ok) {
     throw new BraidError(`the gateway responded with HTTP ${response.status} for "${documentUrl}"`, {
       fragmentId,
@@ -982,4 +1013,125 @@ export async function fetchFragmentHtml(
 
   const isHtml = response.headers.get('content-type')?.toLowerCase().includes('text/html') ?? false;
   return { html: await response.text(), isHtml };
+}
+
+/**
+ * The gateway relayed a redirect from the fragment and vouched for its target. Carries the full
+ * target; the message does not, because a login's query string is where its tokens live and an
+ * error message ends up in the console and in the `braid:error` event.
+ */
+export class FragmentRedirectError extends BraidError {
+  readonly target: string;
+
+  constructor(fragmentId: string, target: string, documentUrl: string) {
+    super(`the fragment redirected "${documentUrl}" to "${redactedLocation(target, documentUrl)}"`, {
+      fragmentId,
+      stage: 'fragment-fetch',
+      fixHint:
+        `the redirect was not followed. ` +
+        `Check the Network tab for the redirect's target`,
+    });
+    this.name = 'FragmentRedirectError';
+    this.target = target;
+  }
+}
+
+/** How long a second redirect from the same fragment is treated as a loop rather than a new one. */
+export const REDIRECT_LOOP_WINDOW_MS = 30_000;
+
+export interface RedirectDeps {
+  /** Navigates the top-level page. */
+  assign(url: string): void;
+  /** `sessionStorage`, as a thunk: merely reaching for it throws in some privacy modes. */
+  storage(): Pick<Storage, 'getItem' | 'setItem'>;
+  now(): number;
+  /** What a relative target is relative to. */
+  baseHref: string;
+  /**
+   * Fragments whose redirect this page is already following. Two slots for one fragment hear the
+   * same redirect in the same tick; the second is not a loop, it is the same navigation.
+   */
+  inFlight: Set<string>;
+}
+
+const redirectsInFlight = new Set<string>();
+
+/** The real thing, for the browser. Kept out of `followFragmentRedirect` so that is testable. */
+function browserRedirectDeps(): RedirectDeps {
+  return {
+    assign: (url) => location.assign(url),
+    storage: () => sessionStorage,
+    now: () => Date.now(),
+    baseHref: location.href,
+    inFlight: redirectsInFlight,
+  };
+}
+
+/**
+ * Sends the page where the fragment's redirect asked, once.
+ *
+ * @returns `null` when the page is navigating, or the error to report when it is not.
+ *
+ * Two things stop it. The scheme must be http(s) — the gateway already checks, and this is the one
+ * line between a `javascript:` URL and `location.assign`. And a fragment that redirects again
+ * within {@link REDIRECT_LOOP_WINDOW_MS} is a loop: login succeeded, the user came back, and the
+ * fragment still cannot tell who they are. A page reload loses all in-memory state, so the only
+ * thing that can remember the last redirect is `sessionStorage`; if that is unavailable, the answer
+ * is no — an unbounded loop is worse than an error.
+ */
+export function followFragmentRedirect(error: FragmentRedirectError, deps: RedirectDeps): BraidError | null {
+  const { fragmentId } = error;
+  if (deps.inFlight.has(fragmentId)) return null;
+
+  const refuse = (message: string, fixHint: string): BraidError =>
+    new BraidError(message, { fragmentId, stage: 'fragment-fetch', fixHint, cause: error });
+
+  let url: URL;
+  try {
+    url = new URL(error.target, deps.baseHref);
+  } catch {
+    return refuse('the fragment redirected to a URL that cannot be parsed', `check the gateway logs for fragment "${fragmentId}"`);
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return refuse(
+      `the fragment redirected to a "${url.protocol}" URL, which is not followed`,
+      `check the gateway logs for fragment "${fragmentId}"`,
+    );
+  }
+  // A path the gateway vouched for is a path on this origin. If it resolves anywhere else — a
+  // protocol-relative `//host` is the way — something upstream is wrong, and following it would be
+  // an open redirect.
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(error.target) && url.origin !== new URL(deps.baseHref).origin) {
+    return refuse(
+      'the fragment redirected to a path that resolves to another origin, which is not followed',
+      `check the gateway logs for fragment "${fragmentId}"`,
+    );
+  }
+
+  const key = `braid:redirect:${fragmentId}`;
+  try {
+    const storage = deps.storage();
+    const last = Number(storage.getItem(key));
+    const now = deps.now();
+    const age = now - last;
+    // a stamp from the future (a clock that moved) is stale, not a reason to refuse for the tab's lifetime
+    if (last > 0 && age >= 0 && age < REDIRECT_LOOP_WINDOW_MS) {
+      return refuse(
+        `fragment "${fragmentId}" redirected again straight after the last redirect, so it was not followed`,
+        `the fragment cannot see who the user is after login, so it keeps redirecting: forward their ` +
+          `identity to it with forwardCredentials or additionalHeaders on the gateway`,
+      );
+    }
+    storage.setItem(key, String(now));
+  } catch {
+    return refuse(
+      `the fragment redirected to "${redactedLocation(error.target, deps.baseHref)}", but there is no way to ` +
+        `stop a redirect loop here (sessionStorage is unavailable), so it was not followed`,
+      'allow sessionStorage for this page, or handle authentication inside the fragment',
+    );
+  }
+
+  deps.inFlight.add(fragmentId);
+  deps.assign(url.href);
+  return null;
 }

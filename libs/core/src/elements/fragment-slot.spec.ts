@@ -5,8 +5,12 @@ import {
   ensureFallbackSlot,
   fetchFragmentHtml,
   findPiercedContentRoot,
+  FragmentRedirectError,
   FragmentSlot,
+  REDIRECT_LOOP_WINDOW_MS,
+  followFragmentRedirect,
   slotStateFor,
+  type RedirectDeps,
 } from './fragment-slot.js';
 
 /** Builds the shadow root shape the gateway pierces into a slot. */
@@ -195,5 +199,151 @@ describe('fetchFragmentHtml()', () => {
 
     expect(error.message).toContain('HTTP 404');
     expect(error.fixHint).toContain('register a manifest');
+  });
+
+  describe('when the gateway relays a redirect', () => {
+    const relayed = (headers: Record<string, string>, status = 409) => new Response(null, { status, headers });
+
+    it('turns a 409 with the gateway header into a FragmentRedirectError, keeping the query out of the message', async () => {
+      stubFetch(relayed({ 'x-braid-redirect-location': 'https://login.example.com/authorize?token=secret' }));
+
+      const error = await failure(fetchFragmentHtml('goals', routeUrl, new AbortController().signal));
+
+      expect(error).toBeInstanceOf(FragmentRedirectError);
+      expect((error as FragmentRedirectError).target).toBe('https://login.example.com/authorize?token=secret');
+      expect(error.stage).toBe('fragment-fetch');
+      expect(error.message).toContain('https://login.example.com/authorize');
+      expect(error.message).not.toContain('secret');
+    });
+
+    it('treats a 409 without the header as the ordinary failure it is, and ignores the header on any other status', async () => {
+      stubFetch(relayed({}));
+      const plain = await failure(fetchFragmentHtml('goals', routeUrl, new AbortController().signal));
+      expect(plain).not.toBeInstanceOf(FragmentRedirectError);
+      expect(plain.message).toContain('HTTP 409');
+
+      stubFetch(
+        new Response('<h1>hi</h1>', { status: 200, headers: { 'x-braid-redirect-location': 'https://evil.example' } }),
+      );
+      await expect(fetchFragmentHtml('goals', routeUrl, new AbortController().signal)).resolves.toMatchObject({ html: '<h1>hi</h1>' });
+    });
+
+    it('tells the gateway which page the user is on, so a login can send them back to it', async () => {
+      const fetchMock = stubFetch(new Response('ok'));
+
+      await fetchFragmentHtml('goals', routeUrl, new AbortController().signal);
+
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect((init.headers as Record<string, string>)['x-braid-return-url']).toBe(location.href);
+    });
+  });
+});
+
+describe('followFragmentRedirect()', () => {
+  const redirect = (target = 'https://login.example.com/authorize?next=a') =>
+    new FragmentRedirectError('goals', target, '/__braid/doc/goals/x');
+
+  /** Dependencies with an in-memory sessionStorage, so a "page load" is a new call with the same store. */
+  function deps(overrides: Partial<RedirectDeps> = {}, store = new Map<string, string>()) {
+    const assign = vi.fn();
+    const value: RedirectDeps = {
+      assign,
+      storage: () => ({ getItem: (key) => store.get(key) ?? null, setItem: (key, v) => void store.set(key, v) }),
+      now: () => 1_000_000,
+      baseHref: 'https://host.example/goals',
+      inFlight: new Set<string>(),
+      ...overrides,
+    };
+    return { value, assign, store };
+  }
+
+  it('navigates the page to the target, once', () => {
+    const { value, assign } = deps();
+
+    expect(followFragmentRedirect(redirect(), value)).toBeNull();
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith('https://login.example.com/authorize?next=a');
+  });
+
+  it('resolves a host-relative target against the page', () => {
+    const { value, assign } = deps();
+
+    followFragmentRedirect(redirect('/login?next=%2Fgoals'), value);
+
+    expect(assign).toHaveBeenCalledWith('https://host.example/login?next=%2Fgoals');
+  });
+
+  it.each(['javascript:alert(1)', 'data:text/html,x'])('refuses %s', (target) => {
+    const { value, assign } = deps();
+
+    const refusal = followFragmentRedirect(redirect(target), value);
+
+    expect(refusal).toBeInstanceOf(BraidError);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('stops a loop: a second redirect straight after the first is an error that names the fix', () => {
+    const store = new Map<string, string>();
+    const first = deps({}, store);
+    expect(followFragmentRedirect(redirect(), first.value)).toBeNull();
+
+    const second = deps({ now: () => 1_000_000 + REDIRECT_LOOP_WINDOW_MS - 1 }, store);
+    const refusal = followFragmentRedirect(redirect(), second.value);
+
+    expect(second.assign).not.toHaveBeenCalled();
+    expect(refusal?.fixHint).toContain('forwardCredentials');
+  });
+
+  it('allows a redirect again once the window has passed, and tracks fragments separately', () => {
+    const store = new Map<string, string>();
+    followFragmentRedirect(redirect(), deps({}, store).value);
+
+    const later = deps({ now: () => 1_000_000 + REDIRECT_LOOP_WINDOW_MS }, store);
+    expect(followFragmentRedirect(redirect(), later.value)).toBeNull();
+    expect(later.assign).toHaveBeenCalledTimes(1);
+
+    const other = deps({}, store);
+    expect(followFragmentRedirect(new FragmentRedirectError('billing', 'https://login.example.com/', '/x'), other.value)).toBeNull();
+  });
+
+  it('fails closed when sessionStorage is unavailable', () => {
+    const { value, assign } = deps({
+      storage: () => {
+        throw new DOMException('denied', 'SecurityError');
+      },
+    });
+
+    const refusal = followFragmentRedirect(redirect(), value);
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(refusal?.message).toContain('sessionStorage');
+  });
+
+  it('refuses a path that resolves to another origin, whatever the gateway said', () => {
+    // `//evil.net` is a perfectly good path to a URL parser and a perfectly good host to a reader
+    for (const target of ['//evil.net/x', '/\\evil.net/x']) {
+      const { value, assign } = deps();
+
+      expect(followFragmentRedirect(redirect(target), value)).toBeInstanceOf(BraidError);
+      expect(assign).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not treat a second slot hearing the same redirect as a loop', () => {
+    const shared = deps();
+
+    expect(followFragmentRedirect(redirect(), shared.value)).toBeNull();
+    expect(followFragmentRedirect(redirect(), shared.value)).toBeNull();
+
+    expect(shared.assign).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a stamp from the future block a fragment for good', () => {
+    const store = new Map([['braid:redirect:goals', String(1_000_000 + 10 * REDIRECT_LOOP_WINDOW_MS)]]);
+    const { value, assign } = deps({}, store);
+
+    expect(followFragmentRedirect(redirect(), value)).toBeNull();
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 });

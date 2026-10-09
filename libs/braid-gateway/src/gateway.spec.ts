@@ -239,3 +239,207 @@ describe('toWebMiddleware()', () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe('redirect: navigate', () => {
+  const documentUrl = 'https://example.com/__braid/doc/billing/invoices?page=2';
+
+  /** A gateway whose fragment endpoint answers every request with `upstream`. */
+  function gatewayAnswering(
+    upstream: () => Response,
+    manifest: Record<string, unknown> = { redirect: 'navigate' },
+    options: Record<string, unknown> = {},
+  ) {
+    const endpoint = vi.fn(async () => upstream());
+    return {
+      endpoint,
+      gateway: createGateway({
+        registry: [{ id: 'billing', endpoint: endpoint as unknown as typeof fetch, ...manifest }],
+        additionalHeaders: { 'x-identity': 'signed' },
+        ...options,
+      }),
+    };
+  }
+
+  const redirectTo = (location: string, init: ResponseInit = {}) => () =>
+    new Response(null, { status: 302, ...init, headers: { location, ...(init.headers as Record<string, string>) } });
+
+  it('answers a fragment document redirect with a 409 carrying the target, never a 3xx', async () => {
+    const { gateway } = gatewayAnswering(redirectTo('/login?next=%2Fx', { headers: { etag: '"a"', vary: 'cookie' } }));
+
+    const response = (await gateway.handle(new Request(documentUrl)))!;
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('x-braid-redirect-location')).toBe('/login?next=%2Fx');
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('x-braid-fragment-id')).toBe('billing');
+    // nothing of the upstream redirect's own representation leaks through
+    expect(response.headers.get('etag')).toBeNull();
+    expect(response.headers.get('vary')).toBeNull();
+  });
+
+  it('keeps the cookies the redirect set, which a login needs when the user comes back', async () => {
+    const upstream = () => {
+      const response = new Response(null, { status: 302, headers: { location: '/login' } });
+      response.headers.append('set-cookie', 'oidc_state=abc; Path=/; HttpOnly');
+      response.headers.append('set-cookie', 'oidc_nonce=def; Path=/; HttpOnly');
+      return response;
+    };
+    const { gateway } = gatewayAnswering(upstream);
+
+    const response = (await gateway.handle(new Request(documentUrl)))!;
+
+    expect(response.headers.getSetCookie()).toEqual(['oidc_state=abc; Path=/; HttpOnly', 'oidc_nonce=def; Path=/; HttpOnly']);
+  });
+
+  it('allows an origin listed in redirectOrigins and refuses everything else with a 502', async () => {
+    const listed = gatewayAnswering(redirectTo('https://sso.vendor.com/authorize?x=1'), undefined, {
+      redirectOrigins: ['https://*.vendor.com'],
+    });
+    expect((await listed.gateway.handle(new Request(documentUrl)))!.headers.get('x-braid-redirect-location')).toBe(
+      'https://sso.vendor.com/authorize?x=1',
+    );
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      for (const location of ['javascript:alert(1)', 'data:text/html,x', 'https://evil.net/x?token=secret']) {
+        const { gateway } = gatewayAnswering(redirectTo(location), undefined, { mode: 'production' });
+        const response = (await gateway.handle(new Request(documentUrl)))!;
+
+        expect(response.status).toBe(502);
+        expect(response.headers.get('x-braid-redirect-location')).toBeNull();
+        expect(await response.text()).not.toContain('secret');
+      }
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('secret');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('points a login return URL at the page the client says it is on', async () => {
+    const { gateway } = gatewayAnswering(
+      redirectTo('/login?next=https%3A%2F%2Fexample.com%2Finvoices%3Fpage%3D2'),
+    );
+
+    const response = (await gateway.handle(
+      new Request(documentUrl, { headers: { 'x-braid-return-url': 'https://example.com/billing/invoices?tab=open' } }),
+    ))!;
+
+    const target = new URL(response.headers.get('x-braid-redirect-location')!, 'https://example.com');
+    expect(target.pathname).toBe('/login');
+    expect(target.searchParams.get('next')).toBe('https://example.com/billing/invoices?tab=open');
+  });
+
+  it('leaves everything else exactly as it was', async () => {
+    // not opted in: the redirect passes through untouched
+    const plain = gatewayAnswering(redirectTo('/login'), {});
+    const passed = (await plain.gateway.handle(new Request(documentUrl)))!;
+    expect(passed.status).toBe(302);
+    expect(passed.headers.get('location')).toBe('/login');
+
+    // opted in, but only the document namespace is rewritten: assets keep their redirects
+    const opted = gatewayAnswering(redirectTo('/cdn/app.js'));
+    const asset = (await opted.gateway.handle(new Request('https://example.com/__braid/frag/billing/app.js')))!;
+    expect(asset.status).toBe(302);
+    expect(asset.headers.get('location')).toBe('/cdn/app.js');
+
+    // a 304 is not a redirect
+    const notModified = gatewayAnswering(() => new Response(null, { status: 304 }));
+    expect((await notModified.gateway.handle(new Request(documentUrl)))!.status).toBe(304);
+  });
+
+  it('strips an x-braid-redirect-location a fragment tries to send itself', async () => {
+    const forged = () => new Response('<p>hi</p>', { status: 200, headers: { 'content-type': 'text/html', 'x-braid-redirect-location': 'https://evil.net' } });
+
+    for (const manifest of [{}, { redirect: 'navigate' }]) {
+      const { gateway } = gatewayAnswering(forged, manifest);
+      const response = (await gateway.handle(new Request(documentUrl)))!;
+      expect(response.status).toBe(200);
+      expect(response.headers.get('x-braid-redirect-location')).toBeNull();
+    }
+  });
+
+  it('warns once when a fragment opts in but nothing carries the user identity to it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      createGateway({ registry: [{ id: 'a', endpoint: 'https://a.internal', redirect: 'navigate' }] });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('forwardCredentials'));
+
+      warn.mockClear();
+      createGateway({ registry: [{ id: 'a', endpoint: 'https://a.internal', redirect: 'navigate' }], forwardCredentials: true });
+      createGateway({ registry: [{ id: 'a', endpoint: 'https://a.internal' }] });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('rejects an unknown redirect mode and a malformed redirectOrigins at construction', () => {
+    expect(() => createGateway({ registry: [{ id: 'a', endpoint: 'https://a.internal', redirect: 'follow' as never }] })).toThrow(/redirect/);
+    expect(() => createGateway({ registry: [], redirectOrigins: ['not-an-origin'] })).toThrow(/redirectOrigins/);
+  });
+
+  it('does not forward the page the user is on to the fragment endpoint, which could hold a token in its hash', async () => {
+    const { gateway, endpoint } = gatewayAnswering(() => new Response('ok'));
+
+    await gateway.handle(
+      new Request(documentUrl, { headers: { 'x-braid-return-url': 'https://example.com/cb#access_token=TOK' } }),
+    );
+
+    expect((endpoint.mock.calls[0] as unknown as [Request])[0].headers.get('x-braid-return-url')).toBeNull();
+  });
+
+  it('never shares one login redirect, and the cookies carrying its state, between two callers', async () => {
+    let calls = 0;
+    const upstream = () => {
+      calls += 1;
+      const response = new Response(null, { status: 302, headers: { location: '/login' } });
+      response.headers.append('set-cookie', `oidc_state=${calls}; Path=/`);
+      return response;
+    };
+    const { gateway } = gatewayAnswering(upstream);
+
+    const [a, b] = await Promise.all([gateway.handle(new Request(documentUrl)), gateway.handle(new Request(documentUrl))]);
+
+    expect(calls).toBe(2);
+    expect(a!.headers.getSetCookie()).not.toEqual(b!.headers.getSetCookie());
+  });
+
+  it('is not held up by another request sharing a fetch that never reads its body', async () => {
+    // a tee branch's cancel() only settles when its sibling does — so nothing here may wait on it
+    const { gateway } = gatewayAnswering(redirectTo('/login'));
+
+    const [redirect] = await Promise.all([
+      gateway.handle(new Request(documentUrl)),
+      gateway.handle(new Request('https://example.com/__braid/frag/billing/x')),
+    ]);
+
+    expect(redirect!.status).toBe(409);
+  });
+
+  it('strips a forged header on the fragment namespace too, and warns on first use for a loader registry', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const endpoint = vi.fn(
+        async () => new Response('x', { headers: { 'x-braid-redirect-location': 'https://evil.net' } }),
+      );
+      const gateway = createGateway({
+        registry: async () => [{ id: 'billing', endpoint: endpoint as unknown as typeof fetch, redirect: 'navigate' as const }],
+      });
+
+      const asset = (await gateway.handle(new Request('https://example.com/__braid/frag/billing/app.js')))!;
+      expect(asset.headers.get('x-braid-redirect-location')).toBeNull();
+
+      // a loader registry cannot be inspected at construction, so the warning waits for a redirect
+      expect(warn).not.toHaveBeenCalled();
+      const redirecting = createGateway({
+        registry: async () => [{ id: 'billing', endpoint: (async () => new Response(null, { status: 302, headers: { location: '/login' } })) as unknown as typeof fetch, redirect: 'navigate' as const }],
+      });
+      await redirecting.handle(new Request(documentUrl));
+      await redirecting.handle(new Request(documentUrl));
+      expect(warn.mock.calls.filter(([message]) => String(message).includes('forwardCredentials'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
