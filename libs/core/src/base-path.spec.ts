@@ -34,9 +34,8 @@ describe('client basePath', () => {
     });
 
     expect(fetched[0]).toBe('/manage/__braid/doc/goals/manage/goals/accounts/123?x=1');
-    expect(document.querySelector('iframe')!.getAttribute('src')).toBe(
-      '/manage/__braid/realm/goals/manage/goals/accounts/123?x=1',
-    );
+    // one stub per fragment, whatever the route; its <base> is pointed at the route after load
+    expect(document.querySelector('iframe')!.getAttribute('src')).toBe('/manage/__braid/realm/goals/');
   });
 
   it('rejects a basePath that is not an absolute path', () => {
