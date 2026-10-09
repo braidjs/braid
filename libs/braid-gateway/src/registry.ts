@@ -255,10 +255,11 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
   if (!manifest.endpoint) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" is missing its endpoint`);
   }
-  if (manifest.documentPath !== undefined && !manifest.documentPath.startsWith('/')) {
+  if (manifest.documentPath !== undefined && !isPlainPath(manifest.documentPath)) {
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" has documentPath "${manifest.documentPath}" — it must be ` +
-        `a path on the fragment's endpoint, starting with "/", e.g. documentPath: "/index.html"`,
+        `a plain path on the fragment's endpoint, e.g. documentPath: "/index.html" (no "//", "\\", ` +
+        `dot segments, query, or fragment)`,
     );
   }
 
@@ -278,6 +279,14 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     fallback: manifest.fallback ?? 'placeholder',
     bound: manifest.bound ?? true,
   };
+}
+
+/**
+ * An absolute path that means the same thing however it is joined onto an endpoint: one leading
+ * slash, no backslashes (which URL parsers treat as slashes), no dot segments, no query or hash.
+ */
+function isPlainPath(path: string): boolean {
+  return /^\/(?!\/)[^?#\\]*$/.test(path) && !path.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
 /** A fragment's `pierce` pattern, compiled for matching. */

@@ -415,7 +415,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           return forwardToFragment(
             request,
             requestUrl,
-            fragment.documentPath ?? `${route.pathname}${requestUrl.search}`,
+            // an unbound slot already asks for its `src` here, which wins exactly as it does in piercing
+            (fragment.bound !== false && fragment.documentPath) || `${route.pathname}${requestUrl.search}`,
             fragment,
             { prepare: true },
           );
@@ -1088,7 +1089,11 @@ export function resolveEndpointUrl(endpoint: string, strippedUrl: URL, fragmentI
   const endpointUrl = new URL(endpoint);
   const basePath = endpointUrl.pathname.endsWith('/') ? endpointUrl.pathname.slice(0, -1) : endpointUrl.pathname;
 
-  const resolved = new URL(`${basePath}${strippedUrl.pathname}${strippedUrl.search}`, endpointUrl.origin);
+  // Assigned, never parsed: as a string, a path starting `//` is a protocol-relative URL naming
+  // another host, and a pathless endpoint would put nothing in front of it.
+  const resolved = new URL(endpointUrl.origin);
+  resolved.pathname = `${basePath}${strippedUrl.pathname}`;
+  resolved.search = strippedUrl.search;
 
   if (basePath && resolved.pathname !== basePath && !resolved.pathname.startsWith(`${basePath}/`)) {
     throw new EndpointScopeError(

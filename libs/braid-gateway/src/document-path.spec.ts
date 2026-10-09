@@ -12,7 +12,7 @@ import { Registry } from './registry.js';
  * Against a real HTTP origin, so the assertions are about the requests a CDN would actually see.
  */
 
-const BASE = '/aj1-advised-journey-goals-webapp';
+const BASE = '/goals-webapp';
 const INDEX_HTML = `<!doctype html><html><head><script type="module" src="./main.js"></script></head><body><h1>Goals</h1></body></html>`;
 const SHELL_HTML = `<html><head></head><body><fragment-slot name="goals"></fragment-slot></body></html>`;
 
@@ -107,9 +107,29 @@ describe('manifest documentPath', () => {
     expect(origin.requests).toEqual([]);
   });
 
-  it('rejects a documentPath that is not an absolute path on the endpoint', () => {
-    expect(() => new Registry([{ id: 'goals', endpoint: 'https://cdn.example/', documentPath: 'index.html' }])).toThrow(
-      /documentPath/,
+  it('rejects a documentPath that is not a plain absolute path on the endpoint', () => {
+    for (const documentPath of ['index.html', '//evil.example/x', '/.//evil.example/x', '/a/../b', '/\\evil', '/i?x', '/i#x']) {
+      expect(() => new Registry([{ id: 'goals', endpoint: 'https://cdn.example/', documentPath }]), documentPath).toThrow(
+        /documentPath/,
+      );
+    }
+  });
+
+  it('gives way to src for an unbound fragment, on both the document route and piercing', async () => {
+    const origin = await staticOrigin();
+    const gateway = createGateway({
+      registry: [
+        { id: 'goals', endpoint: origin.url, pierce: ['/goals/*'], bound: false, src: '/index.html', documentPath: '/main.js' },
+      ],
+    });
+
+    // an unbound slot asks for its src through the document route
+    await gateway.handle(new Request('https://dash.example/__braid/doc/goals/index.html'));
+    await gateway.handle(
+      new Request('https://dash.example/goals/accounts/123', { headers: { 'sec-fetch-dest': 'document' } }),
+      async () => new Response(SHELL_HTML, { headers: { 'content-type': 'text/html' } }),
     );
+
+    expect(origin.requests).toEqual([`${BASE}/index.html`, `${BASE}/index.html`]);
   });
 });
