@@ -115,10 +115,21 @@ const SRCSET_ATTRIBUTES = new Set(['srcset']);
  */
 export function prepareFragmentHtml(
   body: ReadableStream<Uint8Array>,
-  options: { fragmentId: string; basePath?: string },
+  options: {
+    fragmentId: string;
+    basePath?: string;
+    /** Called with each script the fragment will load from its own namespace, for prefetch hints. */
+    onScript?: (script: ScriptHint) => void;
+  },
 ): ReadableStream<Uint8Array> {
   // every subresource is re-rooted under this: the fragment's namespace, at the gateway's mount
   const fragmentRoot = braidFragmentUrl(options.fragmentId, '', '', options.basePath);
+
+  // Only the fragment's own scripts: a hint for any other url would have the host page fetch
+  // whatever a fragment names, and it would warm nothing the realm is going to ask for.
+  const hint = (href: string | null, crossorigin: string | null) => {
+    if (href?.startsWith(`${fragmentRoot}/`)) options.onScript?.({ href, crossorigin });
+  };
 
   // The fragment's own <base href>, which its subresource URLs resolve against. It appears in
   // <head> before anything that references it, so tracking it as the stream passes is enough.
@@ -150,6 +161,13 @@ export function prepareFragmentHtml(
       script: {
         element(tag) {
           const type = tag.getAttribute('type');
+          // after the wildcard handler, so this is the namespaced url the realm will request
+          // module scripts are fetched in CORS mode whether or not they say so; `nomodule` ones never
+          // are, by any browser that runs modules
+          const crossorigin = tag.getAttribute('crossorigin');
+          if (!tag.attributeNames.includes('nomodule')) {
+            hint(tag.getAttribute('src'), type === 'module' ? (crossorigin ?? '') : crossorigin);
+          }
           if (type) tag.setAttribute('data-script-type', type);
           tag.setAttribute('type', 'inert');
         },
@@ -157,6 +175,10 @@ export function prepareFragmentHtml(
       link: {
         element(tag) {
           const rel = tag.getAttribute('rel');
+          const href = tag.getAttribute('href');
+          const crossorigin = tag.getAttribute('crossorigin');
+          if (rel === 'modulepreload') hint(href, crossorigin ?? '');
+          if (rel === 'preload' && tag.getAttribute('as') === 'script') hint(href, crossorigin);
           if (rel === 'preload' || rel === 'prefetch' || rel === 'modulepreload') {
             tag.setAttribute('rel', `inert-${rel}`);
           }
@@ -231,6 +253,39 @@ function rewriteSrcset(value: string, fragmentRoot: string, baseHref: string): s
   return changed ? rewritten.join(',') : null;
 }
 
+/** A script a fragment will load, for a preload hint in the host document. */
+export interface ScriptHint {
+  href: string;
+  /**
+   * The CORS mode the realm will fetch it in: null for none, `''` for anonymous, or the explicit
+   * value. The hint has to match or the HTTP cache will not answer the realm's request with it.
+   */
+  crossorigin: string | null;
+}
+
+/**
+ * Prefetch hints for a pierced fragment's scripts, emitted in its shadow root after its content —
+ * where the list is complete, and outside the `<braid-document>` the fragment sees as its own.
+ *
+ * A pierced fragment's scripts are inert until the client boots it, which means after the host's
+ * own JavaScript has loaded, the realm has booted, and the handshake has run. These start the
+ * downloads while the rest of the page is still parsing. The realm is a separate document, so it
+ * benefits through the HTTP cache: cacheable assets (content-hashed bundles, normally) gain a round
+ * trip or more.
+ *
+ * `prefetch`, not `preload`: the host document never uses these itself, so a preload is reported
+ * as unused on every page, and it is fetched at high priority mid-body, ahead of the shell's own
+ * images. A prefetch is idle-priority and silent, and measured the same gain.
+ */
+export function scriptPrefetchHints(scripts: readonly ScriptHint[]): string {
+  return [...new Map(scripts.map((script) => [script.href, script])).values()]
+    .map(({ href, crossorigin }) => {
+      const cors = crossorigin === null ? '' : crossorigin ? ` crossorigin="${escapeAttribute(crossorigin)}"` : ' crossorigin';
+      return `<link rel="prefetch" href="${escapeAttribute(href)}"${cors}>`;
+    })
+    .join('');
+}
+
 export interface PierceTarget {
   fragmentId: string;
   /**
@@ -241,6 +296,11 @@ export interface PierceTarget {
   content: ReadableStream<Uint8Array> | null;
   /** Set as `data-braid-fallback` on the slot when content is omitted, for skeleton styling. */
   fallbackReason?: string;
+  /**
+   * Markup emitted in the shadow root after `<braid-document>`, once `content` has been fully streamed (and so after
+   * anything collected while streaming it is known). Used for {@link scriptPrefetchHints}.
+   */
+  after?: () => string;
   /**
    * The path the manifest says this fragment's content lives at, for unbound fragments.
    *
@@ -259,7 +319,7 @@ export interface PierceTarget {
  * fragment's slot (or, for a shell with no slot, the end of `<body>`).
  */
 export interface PendingPierceTarget extends Pick<PierceTarget, 'fragmentId' | 'src'> {
-  settled: Promise<Pick<PierceTarget, 'content' | 'fallbackReason'>>;
+  settled: Promise<Pick<PierceTarget, 'content' | 'fallbackReason' | 'after'>>;
 }
 
 export interface PierceOptions {
@@ -311,7 +371,9 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
     BRAID_FRAGMENT_STYLES,
     '<braid-document>',
     target.content ?? '',
-    '</braid-document></template>',
+    '</braid-document>',
+    ...(target.after ? [lazyText(target.after)] : []),
+    '</template>',
   ];
 
   /** A slot element the gateway creates because the shell didn't mark one up. */
@@ -398,6 +460,24 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
       tag.prepend(part);
     }
   }
+}
+
+/**
+ * A stream whose text is computed when it is first read, not when it is built — so it can describe
+ * what the injections before it streamed. A zero high-water mark is what keeps `pull` from running
+ * eagerly at construction.
+ */
+function lazyText(text: () => string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const value = text();
+        if (value) controller.enqueue(new TextEncoder().encode(value));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
 }
 
 function escapeAttribute(value: string): string {

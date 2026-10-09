@@ -34,6 +34,8 @@ import {
   pierceShellHtml,
   PierceTarget,
   prepareFragmentHtml,
+  ScriptHint,
+  scriptPrefetchHints,
 } from './rewriter/transforms.js';
 
 /**
@@ -900,11 +902,19 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     function pierceContent(
       fragment: ResolvedFragmentManifest,
       result: FragmentFetchResult,
-    ): Pick<PierceTarget, 'content' | 'fallbackReason'> {
+    ): Pick<PierceTarget, 'content' | 'fallbackReason' | 'after'> {
       const failed = !result.ok || !result.response.ok || !result.response.body;
 
       if (!failed) {
-        return { content: prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id, basePath }) };
+        const scripts: ScriptHint[] = [];
+        return {
+          content: prepareFragmentHtml(result.response.body!, {
+            fragmentId: fragment.id,
+            basePath,
+            onScript: (script) => scripts.push(script),
+          }),
+          after: () => scriptPrefetchHints(scripts),
+        };
       }
 
       const detail = !result.ok
