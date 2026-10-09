@@ -27,7 +27,9 @@ element. In Angular use `provideBraid()` instead — it does this and wires the 
 | `reload()` | tear down and boot again from the network |
 
 Events: `braid:ready`, `braid:error` (detail names the stage and a fix hint), `braid:event`
-(fragment → host).
+(fragment → host). `braid:ready` means the fragment's code has run — not that its images, or a
+compat fragment's window `load`, have finished; content a fragment renders in `onload` may arrive
+after it.
 
 ## How a fragment boots
 
