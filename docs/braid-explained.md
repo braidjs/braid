@@ -359,16 +359,18 @@ pierced — a client-side navigation, say — it fetches the fragment's document
 In parallel with step 4, the slot creates the hidden iframe and points it at the **realm stub**:
 
 ```
-GET /__braid/realm/billing/billing/invoices
+GET /__braid/realm/billing/
 ```
 
 The stub is a nearly empty HTML document. It carries three things that matter: the Braid protocol
-version, the adapter name from the fragment's manifest, and a `<base href="/__braid/frag/billing/…">`
-so that every relative URL the fragment's code later requests resolves into billing's own asset
-namespace rather than the host's.
+version, the adapter name from the fragment's manifest, and a `<base>` into billing's own asset
+namespace, so that every relative URL the fragment's code later requests resolves there rather than
+against the host.
 
-That path repeats itself because it is two things: `/__braid/realm/billing/` (whose realm) followed
-by `/billing/invoices` (which route it should appear to be on).
+It is one URL per fragment, whatever the route, so it caches as one resource. Once it loads, the
+slot points its `<base>` at the route (`/__braid/frag/billing/billing/invoices`) and moves the
+iframe's URL to `/billing/invoices` — which route the fragment should appear to be on — before any of
+the fragment's code runs.
 
 ### Step 6 — the adapter takes over
 
@@ -411,7 +413,7 @@ Each path segment after it names _what kind_ of thing you are asking for, then _
 
 | URL                              | Who asks                 | When                                         | What comes back                                                                                                                                                                                                                            |
 | -------------------------------- | ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/__braid/realm/:id/:route`      | the slot, in the browser | every fragment boot                          | A tiny HTML stub for the hidden iframe: protocol version, adapter name, and a `<base>` pointing into the fragment's asset namespace. Cacheable for an hour and varies on nothing.                                                          |
+| `/__braid/realm/:id/`            | the slot, in the browser | every fragment boot                          | A tiny HTML stub for the hidden iframe: protocol version, adapter name, and a `<base>` pointing into the fragment's asset namespace. One URL per fragment, cacheable for an hour, varies on nothing.                                       |
 | `/__braid/doc/:id/:route`        | the slot, in the browser | only when the page was **not** pierced       | The fragment's HTML, already prepared for the host's DOM: singletons renamed, scripts made inert, subresource URLs re-rooted. Identical to what piercing injects. `204 No Content` for fragments that ship a script instead of a document. |
 | `/__braid/frag/:id/*`            | the fragment's own code  | constantly, after boot                       | Whatever the fragment's server returns, forwarded verbatim with the prefix stripped — JS, CSS, images, API calls, WebSocket upgrades.                                                                                                      |
 | `/__braid/registry`              | anyone (opt-in)          | when a shell builds its UI from the registry | A paginated JSON list of fragments, filtered by who is asking. Off unless configured: a registry describes internal topology.                                                                                                              |
