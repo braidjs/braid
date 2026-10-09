@@ -91,6 +91,23 @@ const SUBRESOURCE_ATTRIBUTES: Record<string, readonly string[]> = {
 const SRCSET_ATTRIBUTES = new Set(['srcset']);
 
 /**
+ * The attribute each frame-like element loads a document from.
+ *
+ * A frame's document is a realm of its own, but a `javascript:` URL — or an `iframe[srcdoc]` —
+ * gives it the *host's* origin, with markup the fragment wrote: it runs on parse, before any
+ * client code, and `parent` is the host page. Verified executing for `iframe` on both the pierced
+ * and the client-boot paths; Chromium does not run `javascript:` in `embed`/`object`, which are
+ * covered anyway rather than trusting that to hold in every engine. `data:` and `blob:` are refused
+ * alongside it: no served markup has a use for a `blob:` URL, and a document inlined in a `data:`
+ * URL is the same markup-as-code shape.
+ */
+const FRAME_SOURCE_ATTRIBUTES: Record<string, string> = {
+  embed: 'src',
+  iframe: 'src',
+  object: 'data',
+};
+
+/**
  * Prepares a fragment's HTML for life inside the host page:
  *
  * - the doctype is stripped (a nested doctype makes some parsers choke, and it materializes
@@ -101,17 +118,20 @@ const SRCSET_ATTRIBUTES = new Set(['srcset']);
  *   it cannot execute in the host's JS context — the client activates it in the fragment's realm;
  * - script preload/prefetch/modulepreload links become `rel="inert-*"` so they don't trigger a
  *   duplicate load in the host context;
- * - inline event handler attributes are removed, and `<meta http-equiv="refresh">` is defanged.
+ * - inline event handler attributes are removed, and `<meta http-equiv="refresh">` is defanged;
+ * - frames whose document the markup supplies inline — `iframe[srcdoc]`, or a `javascript:`,
+ *   `data:` or `blob:` URL on `iframe`/`embed`/`object` — lose that attribute.
  *
- * This is the server half of the born-inert invariant, and the last two rules are what make the
+ * This is the server half of the born-inert invariant, and the last three rules are what make the
  * invariant true rather than merely true-of-`<script>`: **no markup a fragment sends can execute
- * JavaScript in the host realm or navigate the host page.** Both were verified executing in the
- * host realm before this transform existed.
+ * JavaScript in the host realm or navigate the host page.** Each was verified executing with the
+ * host's origin before this transform handled it. Whatever is removed is named in a
+ * `data-braid-blocked` attribute on the tag, so a fragment that loses something can see why.
  *
- * Still not neutralized, because they require user interaction rather than executing on parse:
- * `javascript:` URLs and form `action`s. Those remain within the trusted tier's stated model —
- * a trusted fragment can navigate the page a user clicks through — and are called out in the
- * security section of the README.
+ * Still not neutralized, because they require a user to click rather than executing on parse:
+ * `javascript:` URLs on links (`a[href]`, `area[href]`) and form `action`s. Those remain within the
+ * trusted tier's stated model — a trusted fragment can navigate the page a user clicks through —
+ * and are called out in the security section of the README.
  */
 export function prepareFragmentHtml(
   body: ReadableStream<Uint8Array>,
@@ -145,6 +165,7 @@ export function prepareFragmentHtml(
               tag.removeAttribute(attributeName);
             }
           }
+          blockInlineFrameDocuments(tag);
           rewriteSubresourceUrls(tag, fragmentRoot, fragmentBaseHref);
         },
       },
@@ -195,6 +216,42 @@ export function prepareFragmentHtml(
       },
     },
   });
+}
+
+/**
+ * Removes a frame's document when the markup supplies it inline instead of naming one to load,
+ * marking the tag with what was removed.
+ *
+ * An allowlist, not a `javascript:` check: the rewriter decodes only a handful of entities, and
+ * a tag nothing rewrites passes through byte for byte for the browser to decode in full. A value
+ * with no scheme is left to {@link namespaceUrl}, which re-roots it as a path — and re-escapes
+ * it, so an entity-spelled scheme (`&#106;avascript:`) comes out as a harmless same-origin path.
+ */
+function blockInlineFrameDocuments(tag: StartTag): void {
+  const sourceAttribute = FRAME_SOURCE_ATTRIBUTES[tag.tagName];
+  if (!sourceAttribute) return;
+
+  const blocked: string[] = [];
+
+  const source = tag.getAttribute(sourceAttribute);
+  if (source !== null && !loadsDocumentByUrl(source)) {
+    tag.removeAttribute(sourceAttribute);
+    blocked.push(sourceAttribute);
+  }
+
+  if (tag.tagName === 'iframe' && tag.getAttribute('srcdoc') !== null) {
+    tag.removeAttribute('srcdoc');
+    blocked.push('srcdoc');
+  }
+
+  if (blocked.length) tag.setAttribute('data-braid-blocked', blocked.join(' '));
+}
+
+/** Whether a frame URL names a document to fetch (or none), rather than carrying one inline. */
+function loadsDocumentByUrl(rawUrl: string): boolean {
+  const url = rawUrl.trim().toLowerCase();
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(url)?.[1];
+  return scheme === undefined || scheme === 'http' || scheme === 'https' || url === 'about:blank';
 }
 
 /** Rewrites a tag's subresource URLs into the fragment's namespace. */
