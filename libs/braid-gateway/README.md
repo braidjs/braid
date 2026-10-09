@@ -524,8 +524,10 @@ lose it: `iframe[srcdoc]`, and any `iframe`/`embed`/`object` URL other than `htt
 `about:blank` (so `javascript:`, `data:`, `blob:`). Those run on parse with the host's origin, no
 click needed; each removal is named on the tag in `data-braid-blocked`. The rule is
 deliberately blunt — it also removes a sandboxed `srcdoc` and a `data:` PDF or SVG in an
-`object` — so serve such content from a URL instead. Fragment code runs in the fragment's realm
-or not at all.
+`object` — so serve such content from a URL instead. A frame that loads a document from the
+fragment's own namespace (`<iframe src="widget.html">`) is left alone: it runs the fragment's
+code with the host's origin, which its realm already does. The full list, the trade-offs and the
+workarounds: [What the gateway does to fragment markup](../../docs/braid-fragment-markup.md).
 
 Deliberately not neutralized, because they require a user to click rather than executing on
 parse: `javascript:` URLs on links (`a`, `area`) and form `action`s. A trusted fragment can

@@ -167,7 +167,8 @@ user clicks through. (On frames they run on parse, so there the gateway removes 
 `iframe[srcdoc]` and `data:`/`blob:` frame URLs — and marks the tag `data-braid-blocked`.) And the
 trusted tier is *namespace isolation, not a security boundary*: fragments are same-origin and
 share the host's cookies and storage. Treat a manifest entry as granting that endpoint the user's
-session.
+session. What the gateway strips from fragment markup, what that costs, and what it deliberately
+leaves alone: [What the gateway does to fragment markup](../../../docs/braid-fragment-markup.md).
 
 ### A fragment endpoint reaches further than its manifest says
 

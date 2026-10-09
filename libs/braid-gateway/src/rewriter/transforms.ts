@@ -123,10 +123,14 @@ const FRAME_SOURCE_ATTRIBUTES: Record<string, string> = {
  *   `data:` or `blob:` URL on `iframe`/`embed`/`object` — lose that attribute.
  *
  * This is the server half of the born-inert invariant, and the last three rules are what make the
- * invariant true rather than merely true-of-`<script>`: **no markup a fragment sends can execute
- * JavaScript in the host realm or navigate the host page.** Each was verified executing with the
- * host's origin before this transform handled it. Whatever is removed is named in a
- * `data-braid-blocked` attribute on the tag, so a fragment that loses something can see why.
+ * invariant true rather than merely true-of-`<script>`: **no code a fragment's markup carries
+ * inline can execute outside the fragment's realm or navigate the host page.** Each was verified
+ * executing with the host's origin before this transform handled it. Whatever is removed is named
+ * in a `data-braid-blocked` attribute on the tag, so a fragment that loses something can see why.
+ *
+ * A frame that *loads* a document from the fragment's namespace is not inline code and is left
+ * alone: it runs the fragment's own code with the host's origin, as its realm already does. That
+ * is the trusted tier's model, not a gap in this transform — see docs/braid-fragment-markup.md.
  *
  * Still not neutralized, because they require a user to click rather than executing on parse:
  * `javascript:` URLs on links (`a[href]`, `area[href]`) and form `action`s. Those remain within the

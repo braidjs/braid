@@ -2,9 +2,9 @@
 
 A trusted fragment's HTML ends up in the host page's document: pierced into the shell's first
 response, or fetched from `/__braid/doc/` and inserted by the client. Before it gets there, the
-gateway prepares it, so that **no markup a fragment sends runs code outside the fragment's realm or
-navigates the host page.** Fragment code runs where Braid manages it — with the compat patches, the
-lifecycle, and the teardown — or not at all.
+gateway prepares it, so that **no code a fragment's markup carries inline runs outside the fragment's
+realm or navigates the host page.** Inline code runs where Braid manages it — with the compat
+patches, the lifecycle, and the teardown — or not at all.
 
 That is a rule about *where* fragment code runs, not a security boundary. A trusted fragment already
 holds the user's session; see [Trust tiers](./braid-boundary.md). The untrusted tier is a
