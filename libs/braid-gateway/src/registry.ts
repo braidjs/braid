@@ -99,6 +99,15 @@ export interface FragmentManifest {
    * 404 on every page the widget appears on.
    */
   src?: string;
+  /**
+   * Where a bound fragment's document lives, as a path on its own endpoint (`/index.html`).
+   *
+   * For a single-page app on a static origin — a bucket behind a CDN — that has one document and
+   * 404s every route. Without it, a deep link asks that origin for `/accounts/123`. The fragment's
+   * router still sees the page's real route; only the request for its document changes. Assets
+   * are unaffected and are always fetched at their own paths.
+   */
+  documentPath?: string;
   /** Typed event surface for hosts. Reserved; not enforced by this build. */
   events?: Record<string, { detail: string }>;
   /** Per-fragment budget for endpoint fetches, in milliseconds. */
@@ -245,6 +254,12 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
   }
   if (!manifest.endpoint) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" is missing its endpoint`);
+  }
+  if (manifest.documentPath !== undefined && !manifest.documentPath.startsWith('/')) {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" has documentPath "${manifest.documentPath}" — it must be ` +
+        `a path on the fragment's endpoint, starting with "/", e.g. documentPath: "/index.html"`,
+    );
   }
 
   // Warned rather than thrown: the fragment still composes, at the page path, which is wrong in a

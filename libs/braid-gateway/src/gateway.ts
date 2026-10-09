@@ -412,14 +412,20 @@ export function createGateway(options: GatewayOptions): BraidGateway {
             });
           }
 
-          return forwardToFragment(request, requestUrl, route.pathname, fragment, { prepare: true });
+          return forwardToFragment(
+            request,
+            requestUrl,
+            fragment.documentPath ?? `${route.pathname}${requestUrl.search}`,
+            fragment,
+            { prepare: true },
+          );
 
         /**
          * The fragment's own endpoint — assets, data, anything it serves — forwarded with the
          * prefix stripped so the endpoint sees the paths it would serve standalone.
          */
         case 'fragment':
-          return forwardToFragment(request, requestUrl, route.pathname, fragment);
+          return forwardToFragment(request, requestUrl, `${route.pathname}${requestUrl.search}`, fragment);
       }
     },
 
@@ -485,11 +491,12 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   async function forwardToFragment(
     request: Request,
     requestUrl: URL,
-    strippedPathname: string,
+    /** The path on the fragment's own endpoint, query included. */
+    path: string,
     fragment: ResolvedFragmentManifest,
     options: { prepare?: boolean } = {},
   ): Promise<Response> {
-    const result = await fetchFragment(request, requestUrl, `${strippedPathname}${requestUrl.search}`, fragment);
+    const result = await fetchFragment(request, requestUrl, path, fragment);
 
     if (!result.ok && result.outOfScope) {
       console.warn(String(result.error));
@@ -886,6 +893,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // appending the page's query would give the widget a different cache key on every page it
     // appears on while changing nothing about what it renders.
     if (fragment.bound === false && fragment.src) return fragment.src;
+    // verbatim for the same reason: a static origin has one document whatever the route
+    if (fragment.documentPath) return fragment.documentPath;
     return `${requestUrl.pathname}${requestUrl.search}`;
   }
 

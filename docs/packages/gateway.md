@@ -119,6 +119,8 @@ interface FragmentManifest {
   adapter?: 'compat' | 'custom-element';
   /** URL patterns on the host that should server-pierce this fragment. */
   pierce?: string[];
+  /** Fixed path of the fragment's document on its endpoint, for SPAs on static origins (e.g. '/index.html'). */
+  documentPath?: string;
   /** Upstream timeout in milliseconds before triggering fallback (default: 1500). */
   timeoutMs?: number;
   /** Fallback strategy when upstream fails: 'placeholder' | 'omit' | 'error-html'. */
