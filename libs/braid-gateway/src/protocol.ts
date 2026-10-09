@@ -59,6 +59,19 @@ export const BRAID_ADAPTER_OPTIONS_META = 'braid-adapter-options';
 /** Response/request header carrying a fragment id for diagnostics. */
 export const BRAID_FRAGMENT_ID_HEADER = 'x-braid-fragment-id';
 
+/**
+ * Response header on a `409` from the document namespace: where the fragment tried to send the
+ * request. A browser hides the target of a redirect it was told not to follow, so the gateway
+ * carries it here instead — only for fragments that opt in with `redirect: 'navigate'`.
+ */
+export const BRAID_REDIRECT_LOCATION_HEADER = 'x-braid-redirect-location';
+
+/**
+ * Request header on a document fetch: the page the fragment is being shown on. The gateway uses it
+ * to point a login's return URL at that page instead of at the fragment's own document URL.
+ */
+export const BRAID_RETURN_URL_HEADER = 'x-braid-return-url';
+
 /** What a braid-namespaced URL addresses. */
 export type BraidRouteKind =
   /** The fragment's own endpoint: assets, data, anything it serves. Forwarded verbatim. */

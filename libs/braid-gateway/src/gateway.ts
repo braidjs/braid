@@ -4,6 +4,8 @@ import {
   BRAID_FRAGMENT_ID_HEADER,
   BRAID_PROTOCOL_META,
   BRAID_PROTOCOL_VERSION,
+  BRAID_REDIRECT_LOCATION_HEADER,
+  BRAID_RETURN_URL_HEADER,
   braidFragmentUrl,
   parseBraidPathname,
   BRAID_SERVICE_WORKER_PATH,
@@ -22,6 +24,12 @@ import {
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
+import {
+  parseOriginRules,
+  resolveRedirectTarget,
+  resolveReturnUrl,
+  rewriteReturnUrls,
+} from './redirect.js';
 import {
   parseVitalsBeacon,
   vitalsCollectorScript,
@@ -43,6 +51,9 @@ import { cspNonceOf, pierceShellHtml, PierceTarget, prepareFragmentHtml } from '
  *
  * Everything else passes through to the shell untouched.
  */
+
+/** The statuses a fragment answers with when it wants the request to go somewhere else. 304 is not one. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 export interface GatewayOptions {
   /** The fragment registry: inline manifests, a JSON URL, or an async loader. */
@@ -194,6 +205,16 @@ export interface GatewayOptions {
    * on an origin it does not own.
    */
   serviceWorker?: boolean | ServiceWorkerOptions;
+  /**
+   * Origins a fragment with `redirect: 'navigate'` may send the page to, beyond the host's own
+   * origin and the fragment's own endpoint path — typically an identity provider.
+   *
+   * Exact origins (`https://login.example.com`) or a subdomain wildcard (`https://*.example.com`,
+   * which matches `a.example.com` and `a.b.example.com` but not `example.com` itself). A redirect to
+   * anywhere else is refused with a 502 rather than followed: it ends up as a top-level navigation,
+   * and the fragment's endpoint should not be able to choose where the whole page goes.
+   */
+  redirectOrigins?: string[];
 }
 
 export interface ServiceWorkerOptions {
@@ -282,6 +303,27 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         }),
       )
     : null;
+  const allowedRedirectOrigins = parseOriginRules(options.redirectOrigins ?? []);
+  const warnedNoIdentity = new Set<string>();
+
+  /**
+   * A fragment that redirects when it cannot tell who the user is will redirect again after the
+   * login sends them back, unless something carries their identity to it. Credentials are stripped
+   * by default, so say so up front rather than let the first user find out.
+   */
+  function warnIfNoIdentity(manifest: { id: string; redirect?: string }): void {
+    if (manifest.redirect !== 'navigate' || forwardCredentials || options.additionalHeaders) return;
+    if (warnedNoIdentity.has(manifest.id)) return;
+    warnedNoIdentity.add(manifest.id);
+    console.warn(
+      `braid-gateway: fragment "${manifest.id}" declares redirect: "navigate" but nothing forwards the ` +
+        `user's identity to it (forwardCredentials or additionalHeaders). A fragment that redirects ` +
+        `because it cannot see who the user is will redirect again after login; the client stops after ` +
+        `one round trip and reports an error.`,
+    );
+  }
+  if (Array.isArray(options.registry)) options.registry.forEach(warnIfNoIdentity);
+
   const vitalsEnabled = telemetry?.webVitals === true;
   let telemetryBroken = false;
 
@@ -515,6 +557,19 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     }
 
     /**
+     * A fragment that opted in with `redirect: 'navigate'` and answered its document request with a
+     * redirect. The browser cannot be handed that redirect — a fetch told not to follow it hides
+     * where it was going, and one that follows it dies as a CORS error — so the target travels in
+     * a header on a 409 the client can read.
+     *
+     * 409 and not a 3xx, which the browser would turn straight back into an opaque redirect, and
+     * not a 2xx, which an older client would render as an empty fragment without a word.
+     */
+    if (options.prepare && fragment.redirect === 'navigate' && REDIRECT_STATUSES.has(result.response.status)) {
+      return navigateResponse(request, requestUrl, fragment, result);
+    }
+
+    /**
      * A fragment *document* gets exactly the preparation pierced content gets. Without it the
      * same fragment would behave differently depending on whether it was server-rendered into
      * the page or fetched by the slot — its relative asset URLs would resolve against the host
@@ -535,6 +590,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       (result.response.status >= 100 && result.response.status < 200);
 
     const forwarded = new Response(isNullBody ? null : body, result.response);
+    // this header means "the gateway verified this target"; a fragment does not get to send it
+    forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
     forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
       // the body was transformed, so any length the endpoint declared no longer describes it
@@ -543,8 +600,88 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     return forwarded;
   }
 
+  /**
+   * Releases a response nobody is going to read, without waiting for it.
+   *
+   * Not awaited: a coalesced response is one branch of a tee, and a tee branch's `cancel()` settles
+   * only when its sibling is cancelled or finishes — a sibling that never reads would stall this
+   * request for good.
+   */
+  function discardBody(response: Response): void {
+    response.body?.cancel().catch(() => undefined);
+  }
+
+  /**
+   * The 409 the client turns into a navigation, or a 502 when the target is not one the host allows.
+   */
+  async function navigateResponse(
+    request: Request,
+    requestUrl: URL,
+    fragment: ResolvedFragmentManifest,
+    result: Extract<FragmentFetchResult, { ok: true }>,
+  ): Promise<Response> {
+    const upstream = result.response;
+    const location = upstream.headers.get('location');
+    warnIfNoIdentity(fragment);
+
+    const resolution = location
+      ? resolveRedirectTarget({
+          location,
+          fragmentRequestUrl: result.fragmentRequestUrl,
+          endpoint: typeof fragment.endpoint === 'string' ? fragment.endpoint : undefined,
+          requestUrl,
+          allowedOrigins: allowedRedirectOrigins,
+        })
+      : ({ ok: false, reason: 'it sent a redirect with no Location' } as const);
+
+    if (!resolution.ok) {
+      discardBody(upstream);
+      // origin and path only, in the log and the body: the query is where a login keeps its tokens
+      console.warn(`braid-gateway: refused a redirect from fragment "${fragment.id}": ${resolution.reason}`);
+      return htmlResponse(
+        mode === 'development'
+          ? `<p>braid-gateway: refused a redirect from fragment "${escapeHtml(fragment.id)}": ${escapeHtml(resolution.reason)}.<br>` +
+              `Add the origin to the gateway's redirectOrigins to allow it.</p>`
+          : '<p>There was a problem fulfilling your request.</p>',
+        502,
+        { [BRAID_FRAGMENT_ID_HEADER]: fragment.id },
+      );
+    }
+
+    const returnUrl = resolveReturnUrl(
+      requestUrl,
+      request.headers.get(BRAID_RETURN_URL_HEADER),
+      request.headers.get('referer'),
+    );
+    const target = rewriteReturnUrls(resolution.target, returnUrl, {
+      fragmentRequestUrl: result.fragmentRequestUrl,
+      strippedUrl: result.strippedUrl,
+      requestUrl,
+    });
+
+    // A fresh set of headers, not the upstream's: its etag, content-type and the rest describe a
+    // redirect the browser never sees. Cookies are the exception — a login that sets state before
+    // redirecting (an OIDC nonce) breaks if the browser never receives it.
+    const headers = new Headers({
+      [BRAID_REDIRECT_LOCATION_HEADER]: target,
+      [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
+      'cache-control': 'no-store',
+    });
+    for (const cookie of upstream.headers.getSetCookie()) headers.append('set-cookie', cookie);
+
+    discardBody(upstream);
+    return new Response(null, { status: 409, headers });
+  }
+
   type FragmentFetchResult =
-    | { ok: true; response: Response }
+    | {
+        ok: true;
+        response: Response;
+        /** What the endpoint was asked for — what a relative `Location` in its answer is relative to. */
+        fragmentRequestUrl: URL;
+        /** The namespace-stripped URL: the path the fragment sees, on the host's origin. */
+        strippedUrl: URL;
+      }
     | { ok: false; error: unknown; timedOut: boolean; outOfScope?: boolean };
 
   /**
@@ -638,6 +775,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       fragmentRequest.headers.delete('referer');
     }
 
+    // The page the user is on is for the gateway's redirect handling alone. It can carry a URL hash —
+    // an OAuth fragment, a token — and a fragment endpoint is not inside the user's trust boundary.
+    fragmentRequest.headers.delete(BRAID_RETURN_URL_HEADER);
+
     // a document request carries validators for the *shell*; they mean nothing to the fragment
     fragmentRequest.headers.delete('if-none-match');
     fragmentRequest.headers.delete('if-modified-since');
@@ -670,7 +811,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       // depends on an authorization decision this layer has already made per-request, and sharing
       // one across two callers would share that decision with it.
       const key =
-        singleFlight && fragment.coalesce !== false && !hasAccessRules(fragment)
+        singleFlight && fragment.coalesce !== false && !hasAccessRules(fragment) && fragment.redirect !== 'navigate'
           ? singleFlightKey(fragmentRequest, fragmentRequestUrl.href, extraHeaderNames)
           : null;
 
@@ -695,7 +836,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         durationMs: performance.now() - startedAt,
         at: Date.now(),
       });
-      return { ok: true, response };
+      return { ok: true, response, fragmentRequestUrl, strippedUrl };
     } catch (error) {
       breaker?.failed(fragment.id);
       emit({

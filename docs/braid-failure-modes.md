@@ -181,9 +181,31 @@ redirect leaves the fragment's namespace: cross-origin it fails as an opaque COR
 the real status, and a relative `Location` resolves against the host's origin and returns the wrong
 page with a 200.
 
-**Fix.** Make the fragment render an unauthenticated state itself, or answer 401/403 directly,
-instead of redirecting its document. The redirect's target is not readable from the browser; the
-request's response in DevTools → Network shows it.
+**Fix.** Either make the fragment render an unauthenticated state (or answer 401/403) instead of
+redirecting its document, or opt in to following the redirect with `redirect: 'navigate'` on its
+manifest — then the gateway hands the target to the client, which navigates the page there. The
+target must be on the host's origin, inside the fragment's endpoint path, or in the gateway's
+`redirectOrigins` (exact origins, or `https://*.example.com`); anything else is refused with a 502 and
+a log line naming the origin and path. Without `redirect: 'navigate'` the redirect's target is not
+readable from the browser; the request's response in DevTools → Network shows it.
+
+### A fragment's login redirects over and over, or stops with "redirected again"
+
+**Symptom.** With `redirect: 'navigate'`, the user logs in, comes back, and is sent to the login
+again; or the slot shows `fragment "…" redirected again straight after the last redirect, so it was
+not followed`.
+
+**Cause.** The fragment redirects because it cannot tell who the user is — and the gateway does not
+forward the caller's `Cookie` or `Authorization` to fragment endpoints unless told to. After login the
+fragment still sees an anonymous request. The client stops the loop after one round trip (30 seconds,
+per fragment, remembered in `sessionStorage`) rather than reloading forever.
+
+**Fix.** Give the fragment the user's identity: `forwardCredentials: true` when every endpoint is inside
+the shell's trust boundary, otherwise a signed per-request assertion via `additionalHeaders`. The gateway
+warns when a fragment opts in with neither (at startup for an inline registry, on the first redirect
+otherwise). A return URL that lands on the wrong page is a
+`?next=` the gateway could not recognise: only a parameter whose whole value is the fragment's own URL is
+rewritten to the page the user was on.
 
 ### One fragment's storage stops opening after another deploys
 

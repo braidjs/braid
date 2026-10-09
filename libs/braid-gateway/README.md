@@ -141,7 +141,9 @@ runs at most once per request.
   request inside the fragment's namespace. Version mismatches fail in the client as named errors
   — no title-check heuristics.
 - **Fragment documents** (`/__braid/doc/:id/*`): the fragment's HTML prepared for the host page's
-  DOM — exactly what piercing injects, for the client-boot path.
+  DOM — exactly what piercing injects, for the client-boot path. A fragment's redirect here is
+  reported as an error, or — for a fragment that opts in — followed as a page navigation; see
+  [Login redirects](#login-redirects-opt-in).
 - **Fragment assets/data** (`/__braid/frag/:id/*`): forwarded to the endpoint with the prefix
   stripped, so endpoints see the same paths they serve standalone. Redirects pass through
   unfollowed; each fragment gets a manifest-declared timeout budget.
@@ -210,6 +212,58 @@ wrong body to the next caller. `Vary` is how the origin says which headers matte
 advisory, and many CDNs honor it only for `Accept-Encoding`. Since only *page* URLs vary now,
 and page URLs are usually personalized and uncacheable anyway, the practical advice is simply:
 don't edge-cache pierced pages. See [CDN setup](../../docs/braid-cdn.md).
+
+## Login redirects (opt-in)
+
+A fragment that needs a login answers its document request with a redirect. A browser fetch cannot
+act on that: followed, it dies as a CORS error; told not to follow, it hides where the redirect was
+going. So by default the client reports a named `fragment-fetch` error, and the redirect goes nowhere.
+
+A fragment can opt in to having the page follow it instead:
+
+```ts
+createGateway({
+  registry: [{ id: 'goals', endpoint: 'https://goals.internal/', redirect: 'navigate' }],
+  redirectOrigins: ['https://login.example.com', 'https://*.example.com'],
+  additionalHeaders: (request) => ({ 'x-user': signedIdentityFor(request) }), // see below
+});
+```
+
+For that fragment's `/__braid/doc/` requests the gateway answers a redirect with a `409` carrying the
+target in `x-braid-redirect-location` (never a 3xx, which the browser would hide again), and the
+client navigates the whole page there — what the shell would have done had the redirect hit the
+top-level request. Nothing else changes: other fragments, and the `/__braid/frag/` namespace, keep
+passing redirects through.
+
+**Where it may go.** The target is chosen by the fragment's endpoint and becomes a top-level
+navigation, so it is checked, and anything else is refused with a `502`:
+
+| Target | Result |
+| --- | --- |
+| A path on the host's own origin (including `/__braid/…`, for a login that is itself a fragment) | followed as a host path |
+| A path inside the fragment's own endpoint (`/apps/goals/login` for `https://goals.internal/apps/goals/`) | mapped to the same path on the host (`/login`) |
+| An origin in `redirectOrigins` — exact (`https://login.example.com`) or a subdomain wildcard (`https://*.example.com`, which does not match `example.com` itself) | followed as given |
+| `javascript:`, `data:`, any other scheme, any other origin | refused |
+
+**Return URLs.** A fragment builds `?next=` from the URL it saw, which is its own and means nothing to
+the user. A query parameter whose whole value is that URL (its path, on the fragment's origin or
+the host's; the query is ignored) is pointed at the page the user was on, taken from the
+`x-braid-return-url` header the client sends (the `Referer` header is the fallback, and only a page on
+the gateway's origin is ever used). The header is read by the gateway and not forwarded to the
+fragment, because a page URL can carry a token in its hash. Other parameters keep their exact bytes. Not
+rewritten: a return URL buried inside another parameter's value (an OAuth `state`, say), and a
+parameter equal to the fragment's bare root `/`, which is usually an OAuth `redirect_uri`.
+
+**Concurrent requests are not coalesced** for a fragment that opts in: a redirect's cookies carry the
+login's state and nonce, and sharing one with another caller would share those too.
+
+**The loop.** The gateway strips the caller's cookies by default, so a fragment that redirects
+because it cannot see who the user is will redirect again after login sends them back — forever. The
+client follows a given fragment's redirect at most once per 30 seconds (remembered in
+`sessionStorage`; if that is unavailable it does not follow at all) and reports an error instead.
+It only works end to end once the fragment can see the user: `forwardCredentials`, or a per-caller
+header via `additionalHeaders`. The gateway warns when a fragment opts in and neither is set — at startup for an inline registry, on the
+first redirect for a URL or loader registry.
 
 ## Discovery endpoint (optional)
 
@@ -444,7 +498,9 @@ gets unstamped markup, which is correct for all three.
 The trusted tier is **namespace isolation, not a security boundary**: fragments are same-origin
 with the host and share its cookies, storage, and DOM reachability. What the gateway does
 guarantee is that nothing a fragment sends can execute JavaScript in the *host realm* or
-navigate the host page — scripts are neutralized, inline `on*` handlers are stripped, and
+navigate the host page — with one opt-in exception, [login redirects](#login-redirects-opt-in),
+whose targets are restricted to the host's origin, the fragment's own endpoint, and
+`redirectOrigins` — scripts are neutralized, inline `on*` handlers are stripped, and
 `<meta http-equiv="refresh">` is defanged. Fragment code runs in the fragment's realm or not at
 all.
 
