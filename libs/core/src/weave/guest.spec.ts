@@ -42,6 +42,7 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
   const fragmentId = 'analytics';
   const instance = 'instance-1';
   const controller = new AbortController();
+  live.push(() => controller.abort());
   const signal = controller.signal;
   const transport = new MessageChannel();
 
@@ -65,6 +66,8 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
 
   // The guest attaches its window listener synchronously, so the connect offer can follow at once.
   const connecting = connectToBraidHost({ hostOrigin: HOST_ORIGIN, beatIntervalMs: 50 });
+  // Registered as soon as the guest connects, so a handshake that then fails cannot strand it.
+  void connecting.then((session) => live.push(() => session.disconnect()), () => undefined);
 
   window.dispatchEvent(
     new MessageEvent('message', {
@@ -111,10 +114,6 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
   }
 
   const [session] = await Promise.all([connecting, handshaking]);
-  live.push(() => {
-    session.disconnect();
-    controller.abort();
-  });
   markMounted();
 
   return {
@@ -143,17 +142,18 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 /**
  * Both ends of every session `connect()` opened, torn down after each test.
  *
- * The host-side `dispose()` aborts only the host's controller; the guest's beats run on real timers
- * until its own session disconnects. Left running, they outlive the jsdom environment and fire into
- * a torn-down `document` — and a test that throws before its own `dispose()` would leak them too.
+ * The host-side `dispose()` aborts only the host's controller; the guest's beat interval runs on
+ * real timers until its own session disconnects. Left running, it outlives the jsdom environment
+ * and fires into a torn-down `document` — and a test that throws before its own `dispose()` would
+ * leak it too.
  */
 const live: Array<() => void> = [];
 
 afterEach(async () => {
   for (const teardown of live.splice(0)) teardown();
   braidContext.clear();
-  // The guest's opening beat is a one-shot timer that disconnecting does not cancel; let it run
-  // while `document` still exists rather than after the environment is gone.
+  // The guest's one-shot beats (the opening one, and one per visibility change) are timers that
+  // disconnecting does not cancel; let them run while `document` still exists.
   await settle();
 });
 
@@ -199,14 +199,16 @@ describe('origin pinning', () => {
 
     const connecting = connectToBraidHost({ hostOrigin: HOST_ORIGIN, timeoutMs: 60 }).catch(() => undefined);
 
-    // Announced after the listener is attached, so the load-event and script-evaluation orderings
-    // both converge.
-    expect(posted).toHaveBeenCalledWith({ braid: SANDBOX_READY, v: 1 }, HOST_ORIGIN);
-    Object.defineProperty(window, 'parent', { value: { postMessage: original }, configurable: true });
-
-    // Waited out, not abandoned: a connector still listening would accept the next test's connect
-    // offer, take its port, and start beats that no test owns.
-    await connecting;
+    try {
+      // Announced after the listener is attached, so the load-event and script-evaluation orderings
+      // both converge.
+      expect(posted).toHaveBeenCalledWith({ braid: SANDBOX_READY, v: 1 }, HOST_ORIGIN);
+    } finally {
+      Object.defineProperty(window, 'parent', { value: { postMessage: original }, configurable: true });
+      // Waited out, not abandoned: a connector still listening accepts the next test's connect
+      // offer, takes its port, and starts a beat interval that no test owns.
+      await connecting;
+    }
   });
 
   it('fails with a named error when nobody offers a connection', async () => {
