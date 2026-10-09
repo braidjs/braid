@@ -99,6 +99,15 @@ export interface FragmentManifest {
    * 404 on every page the widget appears on.
    */
   src?: string;
+  /**
+   * Where a bound fragment's document lives, as a path on its own endpoint (`/index.html`).
+   *
+   * For a single-page app on a static origin — a bucket behind a CDN — that has one document and
+   * 404s every route. Without it, a deep link asks that origin for `/accounts/123`. The fragment's
+   * router still sees the page's real route; only the request for its document changes. Assets
+   * are unaffected and are always fetched at their own paths.
+   */
+  documentPath?: string;
   /** Typed event surface for hosts. Reserved; not enforced by this build. */
   events?: Record<string, { detail: string }>;
   /** Per-fragment budget for endpoint fetches, in milliseconds. */
@@ -246,6 +255,13 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
   if (!manifest.endpoint) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" is missing its endpoint`);
   }
+  if (manifest.documentPath !== undefined && !isPlainPath(manifest.documentPath)) {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" has documentPath "${manifest.documentPath}" — it must be ` +
+        `a plain path on the fragment's endpoint, e.g. documentPath: "/index.html" (no "//", "\\", ` +
+        `dot segments, query, or fragment)`,
+    );
+  }
 
   // Warned rather than thrown: the fragment still composes, at the page path, which is wrong in a
   // way that shows up as an empty widget rather than as an error anyone can trace back to here.
@@ -263,6 +279,14 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     fallback: manifest.fallback ?? 'placeholder',
     bound: manifest.bound ?? true,
   };
+}
+
+/**
+ * An absolute path that means the same thing however it is joined onto an endpoint: one leading
+ * slash, no backslashes (which URL parsers treat as slashes), no dot segments, no query or hash.
+ */
+function isPlainPath(path: string): boolean {
+  return /^\/(?!\/)[^?#\\]*$/.test(path) && !path.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
 /** A fragment's `pierce` pattern, compiled for matching. */

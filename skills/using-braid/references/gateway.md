@@ -39,6 +39,10 @@ run the same library as an edge worker or reverse proxy in front of it.
 `adapter` defaults to `compat`. An endpoint **path** is a boundary: `https://internal/apps/billing/`
 cannot be used to reach the rest of that origin.
 
+An SPA on a static origin (a bucket behind a CDN) has one document and 404s every route. Declare
+`"documentPath": "/index.html"` and the gateway fetches that document for every page route, deep
+links included; assets are still fetched at their own paths.
+
 A fragment that is a **web component** declares the adapter and what to load, and serves no
 document at all (the gateway answers its document request with `204`):
 
