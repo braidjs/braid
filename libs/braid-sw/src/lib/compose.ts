@@ -52,27 +52,32 @@ const SNAPSHOT_CACHE = 'braid-snapshot';
  *
  * ```js
  * const compose = braidNavigationHandler({ snapshotUrl: '/__braid/registry/pinned.json' });
+ * self.addEventListener('activate', (event) => event.waitUntil(self.registration.navigationPreload?.enable()));
  * self.addEventListener('fetch', (event) => {
- *   const handled = compose(event.request);
+ *   const handled = compose(event.request, event.preloadResponse);
  *   if (handled) event.respondWith(handled);
  * });
  * ```
+ *
+ * Passing `preloadResponse` (with navigation preload enabled) means a navigation's request starts
+ * while the worker is still booting, rather than after.
  */
 export function braidNavigationHandler(
   options: OfflineCompositionOptions,
-): (request: Request) => Promise<Response> | null {
+): (request: Request, preloadResponse?: Promise<Response | undefined>) => Promise<Response> | null {
   const cachePrefix = options.cachePrefix ?? DEFAULT_CACHE_PREFIX;
   const cacheStorage = options.caches ?? (globalThis as { caches?: CacheStorage }).caches;
   const networkFetch = options.fetch ?? globalThis.fetch;
 
-  return (request: Request) => {
+  return (request, preloadResponse) => {
     if (request.method !== 'GET' || !isNavigation(request)) return null;
-    return handle(request);
+    return handle(request, preloadResponse);
   };
 
-  async function handle(request: Request): Promise<Response> {
+  async function handle(request: Request, preloadResponse?: Promise<Response | undefined>): Promise<Response> {
     try {
-      const response = await networkFetch(request);
+      // The browser already started this request while the worker booted, when preload is on.
+      const response = (await preloadResponse) ?? (await networkFetch(request));
       // Kept for the next outage rather than awaited: the user is waiting on this navigation, and
       // refreshing the parts is work for a future load.
       void refresh(request).catch(() => undefined);
