@@ -1,5 +1,5 @@
 import { BraidError } from '../errors.js';
-import { isDevMode } from '../config.js';
+import { getBraidConfig, isDevMode } from '../config.js';
 import {
   BRAID_ADAPTER_META,
   BRAID_ADAPTER_OPTIONS_META,
@@ -127,7 +127,8 @@ async function createContractBlobRealm(init: RealmInit): Promise<RealmHandle> {
 
   // The base href must be absolute: a blob: URL has an opaque path, so a root-relative href
   // has nothing meaningful to resolve against.
-  const baseHref = init.baseHref ?? new URL(braidFragmentUrl(fragmentId, '/'), location.origin).href;
+  const baseHref =
+    init.baseHref ?? new URL(braidFragmentUrl(fragmentId, '/', '', getBraidConfig().basePath), location.origin).href;
 
   const realmDocumentHtml =
     `<!doctype html><meta charset="utf-8"><title>Braid realm: ${escapeHtml(fragmentId)}</title>` +
@@ -361,7 +362,7 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
   const iframe = document.createElement('iframe');
   iframe.hidden = true;
   // the realm stub has its own namespace, so the fragment's asset URLs carry no header variance
-  iframe.src = braidRealmUrl(fragmentId, routeSrcUrl.pathname, routeSrcUrl.search);
+  iframe.src = braidRealmUrl(fragmentId, routeSrcUrl.pathname, routeSrcUrl.search, getBraidConfig().basePath);
   iframe.name = `braid:${fragmentId}`;
 
   const { promise: loaded, resolve: resolveLoaded, reject: rejectLoaded } = Promise.withResolvers<void>();
@@ -454,7 +455,8 @@ function verifyRealmStub(iframe: HTMLIFrameElement, fragmentId: string): void {
         stage: 'realm-boot',
         fixHint: protocol
           ? 'upgrade @braidlabs/core and @braidlabs/gateway to the same package version'
-          : `ensure the braid gateway is mounted in front of this app and has a manifest registered for fragment id "${fragmentId}"`,
+          : `ensure the braid gateway is mounted in front of this app and has a manifest registered for fragment id "${fragmentId}", ` +
+            `and that initBraid({ basePath }) matches the gateway's basePath`,
       },
     );
   }

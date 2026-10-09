@@ -30,6 +30,10 @@ npm install @braidlabs/gateway
 | `/__braid/realm/:id/*` | Realm boot stubs | Serves minimal HTML stub to initialize hidden iframe runtimes. |
 | `/__braid/doc/:id/*` | Prepared DOM payload | Serves rewritten, script-inert HTML for dynamic injection. |
 
+A host mounted under a path it shares a domain with sets `createGateway({ basePath: '/manage' })`
+and `initBraid({ basePath: '/manage' })`; the namespaces then live at `/manage/__braid/…` and the
+root is left alone. Not yet combinable with `serviceWorker`, `discovery`, or `telemetry.webVitals`.
+
 ---
 
 ## Usage

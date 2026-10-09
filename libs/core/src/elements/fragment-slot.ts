@@ -863,7 +863,12 @@ export class FragmentSlot extends HTMLElement {
 
   async #fetchFragmentHtml(fragmentId: string, routeSrcUrl: URL, signal: AbortSignal): Promise<string> {
     // the document namespace: the gateway prepares this exactly as it prepares pierced content
-    const documentUrl = braidDocumentUrl(fragmentId, routeSrcUrl.pathname, routeSrcUrl.search);
+    const documentUrl = braidDocumentUrl(
+      fragmentId,
+      routeSrcUrl.pathname,
+      routeSrcUrl.search,
+      getBraidConfig().basePath,
+    );
 
     let response: Response;
     try {
