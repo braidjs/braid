@@ -68,20 +68,24 @@ export const compatAdapter: InstalledAdapter = {
     contentRoot.dispatchEvent(new Event('readystatechange', { bubbles: false, cancelable: false }));
     contentRoot.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true, cancelable: false }));
 
-    // In order to fire the window load event we need to wait for all the images to load. By now
-    // all styles and scripts have loaded, so images are the main kind of resource to wait for.
-    await allImagesLoaded(contentRoot);
+    // The window load event waits for the fragment's images, as a standalone document's would. By
+    // now all styles and scripts have loaded, so images are the main kind of resource to wait for.
+    //
+    // Not awaited: boot is done once the fragment's code has run, and the slot reports ready on
+    // boot. Holding that for every image — a hero banner, or a lazy one that may never load —
+    // delays readiness for something the fragment observes on its own timeline anyway.
+    void imagesSettled(contentRoot).then(() => {
+      // Wrap the event into a task so we don't execute too early in case there are no images.
+      setTimeout(() => {
+        if (signal.aborted) return;
+        fragmentShadowRoot[compatMetadataSymbol].documentReadyState = 'complete';
+        contentRoot.dispatchEvent(new Event('readystatechange', { bubbles: false, cancelable: false }));
+        realm.window.dispatchEvent(new Event('load', { bubbles: false, cancelable: false }));
 
-    // Wrap the event into a task so we don't execute too early in case there are no images.
-    setTimeout(() => {
-      if (signal.aborted) return;
-      fragmentShadowRoot[compatMetadataSymbol].documentReadyState = 'complete';
-      contentRoot.dispatchEvent(new Event('readystatechange', { bubbles: false, cancelable: false }));
-      realm.window.dispatchEvent(new Event('load', { bubbles: false, cancelable: false }));
-
-      if (isDevMode()) {
-        console.debug(`[braid:${fragmentId}] compat fragment loaded`, { shadowRoot: fragmentShadowRoot });
-      }
+        if (isDevMode()) {
+          console.debug(`[braid:${fragmentId}] compat fragment loaded`, { shadowRoot: fragmentShadowRoot });
+        }
+      });
     });
   },
 };
@@ -113,10 +117,13 @@ export function parseFragmentContent(html: string, mainDocument: Document): HTML
 }
 
 /**
- * Returns a promise resolving when all images in the fragment's DOM have loaded (or errored).
+ * Resolves once every image that holds a document's load event has loaded or failed.
+ *
+ * Lazy images are skipped, as browsers skip them: one below the fold does not load until it is
+ * scrolled to, and waiting for it would mean the fragment's load event never fires.
  */
-function allImagesLoaded(contentRoot: HTMLElement): Promise<void> {
-  const images = contentRoot.querySelectorAll('img');
+export function imagesSettled(contentRoot: HTMLElement): Promise<void> {
+  const images = contentRoot.querySelectorAll<HTMLImageElement>('img:not([loading="lazy" i])');
   if (images.length === 0) {
     return Promise.resolve();
   }
