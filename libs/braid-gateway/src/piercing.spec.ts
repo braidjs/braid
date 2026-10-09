@@ -153,6 +153,40 @@ describe('prepareFragmentHtml()', () => {
         expect(output).toMatch(/<iframe src="\/__braid\/frag\/billing\/&amp;#106;avascript:alert\(1\)">/);
       });
 
+      it('removes upper-case tag and attribute names, which the parser treats as lower-case', async () => {
+        const output = await prepare(
+          `<IFRAME SRCDOC="<p>x</p>"></IFRAME><IFRAME SRC="javascript:alert(1)"></IFRAME><OBJECT DATA="data:text/html,x"></OBJECT>`,
+        );
+
+        expect(output).not.toMatch(/srcdoc=|javascript:|data:text/i);
+        expect(output.match(/data-braid-blocked="/g)).toHaveLength(3);
+      });
+
+      it.each([
+        ['an unquoted srcdoc', `<iframe srcdoc=<p>x</p>></iframe>`],
+        ['an unquoted javascript: src', `<iframe src=javascript:alert(1)></iframe>`],
+        ['a single-quoted srcdoc', `<iframe srcdoc='<p>x</p>'></iframe>`],
+        ['a valueless srcdoc', `<iframe srcdoc src="https://maps.example/"></iframe>`],
+      ])('removes %s', async (_, html) => {
+        const output = await prepare(html);
+
+        expect(output).not.toMatch(/srcdoc=|javascript:/i);
+        expect(output).toContain('data-braid-blocked=');
+      });
+
+      it.each([
+        ['an embedded newline', 'java\nscript:alert(1)'],
+        ['an embedded tab', 'java\tscript:alert(1)'],
+        ['a leading control character', '\u0001javascript:alert(1)'],
+      ])('leaves no scheme a browser would run behind %s', async (_, value) => {
+        const output = await prepare(`<iframe src="${value}"></iframe>`);
+
+        // the URL parser would strip the control characters and read a scheme; the rewriter must
+        // already have made the value a same-origin path, or removed it
+        expect(output).not.toMatch(/javascript|script:/i);
+        expect(output).toMatch(/<iframe (src="\/__braid\/frag\/billing|data-braid-blocked=)/);
+      });
+
       it('leaves frames that load a real document alone', async () => {
         const output = await prepare(
           `<iframe src="https://maps.example/embed"></iframe><iframe src="//cdn.example/x"></iframe>` +
@@ -354,6 +388,22 @@ describe('gateway piercing', () => {
     expect(body).toContain('<script type="inert">go()</script>');
     expect(response!.headers.get('x-braid-fragment-id')).toBe('billing');
     expect(response!.headers.get('vary')).toContain('sec-fetch-dest');
+  });
+
+  it('composes a fragment with no frame whose document the markup supplies', async () => {
+    const gateway = pierceGateway({
+      endpoint: (async () =>
+        htmlResponse(
+          `<body><iframe srcdoc="<script>parent.x()</script>"></iframe><iframe src="javascript:parent.x()"></iframe><p>ok</p></body>`,
+        )) as unknown as typeof fetch,
+    });
+    const shell = async () => htmlResponse(`<html><body><fragment-slot name="billing"></fragment-slot></body></html>`);
+
+    const body = await (await gateway.handle(documentRequest('/billing/invoices'), shell))!.text();
+
+    expect(body).toContain('<p>ok</p>');
+    expect(body).not.toMatch(/srcdoc=|javascript:/i);
+    expect(body.match(/data-braid-blocked=/g)).toHaveLength(2);
   });
 
   it('passes through document requests that match no pierce pattern', async () => {

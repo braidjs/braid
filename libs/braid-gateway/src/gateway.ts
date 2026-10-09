@@ -635,13 +635,15 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       result.response.status === 304 ||
       (result.response.status >= 100 && result.response.status < 200);
 
-    const prepare = options.prepare && !isNullBody && result.response.body !== null;
+    const upstreamBody = isNullBody ? null : result.response.body;
+    const prepare = Boolean(options.prepare && upstreamBody);
 
-    const body = prepare
-      ? prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id, basePath })
-      : result.response.body;
+    const body =
+      options.prepare && upstreamBody
+        ? prepareFragmentHtml(upstreamBody, { fragmentId: fragment.id, basePath })
+        : upstreamBody;
 
-    const forwarded = new Response(isNullBody ? null : body, result.response);
+    const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
     forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);

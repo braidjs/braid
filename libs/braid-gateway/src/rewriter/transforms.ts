@@ -239,7 +239,8 @@ function blockInlineFrameDocuments(tag: StartTag): void {
     blocked.push(sourceAttribute);
   }
 
-  if (tag.tagName === 'iframe' && tag.getAttribute('srcdoc') !== null) {
+  // by name, not value: a valueless `srcdoc` reads as null, and still overrides `src`
+  if (tag.tagName === 'iframe' && tag.attributeNames.includes('srcdoc')) {
     tag.removeAttribute('srcdoc');
     blocked.push('srcdoc');
   }
