@@ -111,6 +111,7 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
   }
 
   const [session] = await Promise.all([connecting, handshaking]);
+  live.push(session);
   markMounted();
 
   return {
@@ -136,7 +137,19 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
-afterEach(() => braidContext.clear());
+/**
+ * Every session `connect()` opened, disconnected after each test.
+ *
+ * The host-side `dispose()` aborts only the host's controller; the guest's beats run on real timers
+ * until its own session disconnects. Left running, they outlive the jsdom environment and fire into
+ * a torn-down `document` — and a test that throws before its own `dispose()` would leak them too.
+ */
+const live: GuestSession[] = [];
+
+afterEach(() => {
+  for (const session of live.splice(0)) session.disconnect();
+  braidContext.clear();
+});
 
 describe('origin pinning', () => {
   it('ignores a connect offer from any origin but the pinned host', async () => {
@@ -173,17 +186,21 @@ describe('origin pinning', () => {
     await expect(connecting).rejects.toThrow(BraidError);
   });
 
-  it('announces readiness so a host that gave up waiting can offer again', () => {
+  it('announces readiness so a host that gave up waiting can offer again', async () => {
     const posted = vi.fn();
     const original = window.parent.postMessage;
     Object.defineProperty(window, 'parent', { value: { postMessage: posted }, configurable: true });
 
-    void connectToBraidHost({ hostOrigin: HOST_ORIGIN, timeoutMs: 60 }).catch(() => undefined);
+    const connecting = connectToBraidHost({ hostOrigin: HOST_ORIGIN, timeoutMs: 60 }).catch(() => undefined);
 
     // Announced after the listener is attached, so the load-event and script-evaluation orderings
     // both converge.
     expect(posted).toHaveBeenCalledWith({ braid: SANDBOX_READY, v: 1 }, HOST_ORIGIN);
     Object.defineProperty(window, 'parent', { value: { postMessage: original }, configurable: true });
+
+    // Waited out, not abandoned: a connector still listening would accept the next test's connect
+    // offer, take its port, and start beats that no test owns.
+    await connecting;
   });
 
   it('fails with a named error when nobody offers a connection', async () => {
@@ -241,11 +258,12 @@ describe('an untrusted session', () => {
 
   it('beats, so the host reaches healthy', async () => {
     const connected = await connect({ watchLiveness: true });
-    await settle();
 
     // Beats scheduled on the guest's *own* document — stronger evidence than the trusted tier can
     // offer, where the beat comes from a hidden frame rather than from the application itself.
-    expect(connected.states).toContain('healthy');
+    // Waited for rather than slept on: under load the opening beat's timer and a fixed sleep can
+    // fire in the same turn, before the port has delivered the beat.
+    await vi.waitFor(() => expect(connected.states).toContain('healthy'));
     connected.dispose();
   });
 
