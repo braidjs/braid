@@ -94,6 +94,8 @@ describe('gateway basePath', () => {
     const plain = await stub({});
     expect(await stub({ basePath: '' })).toBe(plain);
     expect(await stub({ basePath: '/' })).toBe(plain);
+    const plainDoc = await stub({}, '/__braid/doc/goals/x');
+    expect(await stub({ basePath: '' }, '/__braid/doc/goals/x')).toBe(plainDoc);
     expect(await stub({ basePath: '/manage/' }, '/manage/__braid/realm/goals/x')).toBe(
       await stub({ basePath: '/manage' }, '/manage/__braid/realm/goals/x'),
     );
@@ -102,6 +104,8 @@ describe('gateway basePath', () => {
   it('rejects a basePath that is not an absolute path', () => {
     expect(() => gateway({ basePath: 'manage' })).toThrow(/basePath/);
     expect(() => gateway({ basePath: '/manage?x' })).toThrow(/basePath/);
+    expect(() => gateway({ basePath: '/café' })).toThrow(/basePath/);
+    expect(() => gateway({ basePath: '/a/../b' })).toThrow(/basePath/);
   });
 
   it('refuses the features that do not support a basePath yet, rather than serving them at the root', () => {

@@ -10,6 +10,7 @@ describe('client basePath', () => {
   afterEach(() => {
     setBraidConfig({ basePath: '' });
     document.body.replaceChildren();
+    history.replaceState(null, '', '/');
     vi.unstubAllGlobals();
   });
 
@@ -40,5 +41,8 @@ describe('client basePath', () => {
 
   it('rejects a basePath that is not an absolute path', () => {
     expect(() => initBraid({ basePath: 'manage' })).toThrow(/basePath/);
+    // one the URL parser would rewrite could never match a parsed request path
+    expect(() => initBraid({ basePath: '/café' })).toThrow(/basePath/);
+    expect(() => initBraid({ basePath: '/a/./b' })).toThrow(/basePath/);
   });
 });

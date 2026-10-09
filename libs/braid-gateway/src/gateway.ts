@@ -1107,11 +1107,14 @@ function isDocumentRequest(request: Request): boolean {
 /**
  * `basePath` as the URL builders want it: empty, or `/a/b` with no trailing slash. Anything that
  * is not a plain absolute path throws, because the mistake would otherwise show up as a gateway
- * that silently answers nothing.
+ * that silently answers nothing. That includes a path the URL parser would rewrite (`/café`, a dot
+ * segment): request pathnames arrive parsed, so it could never match one.
+ *
+ * Kept in sync with the client's copy in `@braidlabs/core`'s config.
  */
 function normalizeBasePath(basePath: string | undefined): string {
   const trimmed = (basePath ?? '').replace(/\/+$/, '');
-  if (trimmed && !/^(\/[^/?#\s]+)+$/.test(trimmed)) {
+  if (trimmed && (!/^(\/[^/?#\s]+)+$/.test(trimmed) || new URL(trimmed, 'http://braid.invalid').pathname !== trimmed)) {
     throw new Error(`braid-gateway: basePath "${basePath}" must be an absolute path such as "/manage"`);
   }
   return trimmed;
@@ -1192,7 +1195,12 @@ function adapterOptionsMeta(fragment: ResolvedFragmentManifest, basePath: string
   if (fragment.entry) {
     options['entry'] = /^[a-z][a-z0-9+.-]*:|^\/\//i.test(fragment.entry)
       ? fragment.entry
-      : braidFragmentUrl(fragment.id, fragment.entry.startsWith('/') ? fragment.entry : `/${fragment.entry}`, '', basePath);
+      : braidFragmentUrl(
+          fragment.id,
+          fragment.entry.startsWith('/') ? fragment.entry : `/${fragment.entry}`,
+          '',
+          basePath,
+        );
   }
   if (fragment.element) options['element'] = fragment.element;
   if (fragment.events) options['events'] = Object.keys(fragment.events);

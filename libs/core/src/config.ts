@@ -86,9 +86,11 @@ export function setBraidConfig(options: BraidOptions = {}): void {
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;
   }
+  // Kept in sync with the gateway's normalizeBasePath: a path the URL parser would rewrite (`/café`,
+  // a dot segment) could never match the parsed pathnames the gateway compares it to.
   if (options.basePath !== undefined) {
     const basePath = options.basePath.replace(/\/+$/, '');
-    if (basePath && !/^(\/[^/?#\s]+)+$/.test(basePath)) {
+    if (basePath && (!/^(\/[^/?#\s]+)+$/.test(basePath) || new URL(basePath, 'http://braid.invalid').pathname !== basePath)) {
       throw new Error(`braid: basePath "${options.basePath}" must be an absolute path such as "/manage"`);
     }
     config.basePath = basePath;

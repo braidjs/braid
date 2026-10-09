@@ -141,7 +141,9 @@ runs at most once per request.
   request inside the fragment's namespace. Version mismatches fail in the client as named errors
   — no title-check heuristics.
 - **Fragment documents** (`/__braid/doc/:id/*`): the fragment's HTML prepared for the host page's
-  DOM — exactly what piercing injects, for the client-boot path.
+  DOM — exactly what piercing injects, for the client-boot path. Fetched at the page's route,
+  unless the manifest declares `documentPath` (`/index.html`) for an SPA on a static origin that
+  404s every route.
 - **Fragment assets/data** (`/__braid/frag/:id/*`): forwarded to the endpoint with the prefix
   stripped, so endpoints see the same paths they serve standalone. Redirects pass through
   unfollowed; each fragment gets a manifest-declared timeout budget.

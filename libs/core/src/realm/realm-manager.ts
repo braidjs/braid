@@ -127,7 +127,8 @@ async function createContractBlobRealm(init: RealmInit): Promise<RealmHandle> {
 
   // The base href must be absolute: a blob: URL has an opaque path, so a root-relative href
   // has nothing meaningful to resolve against.
-  const baseHref = init.baseHref ?? new URL(braidFragmentUrl(fragmentId, '/', '', getBraidConfig().basePath), location.origin).href;
+  const baseHref =
+    init.baseHref ?? new URL(braidFragmentUrl(fragmentId, '/', '', getBraidConfig().basePath), location.origin).href;
 
   const realmDocumentHtml =
     `<!doctype html><meta charset="utf-8"><title>Braid realm: ${escapeHtml(fragmentId)}</title>` +
