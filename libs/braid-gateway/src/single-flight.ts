@@ -121,6 +121,10 @@ export function singleFlightKey(
     request.headers.get('accept-language') ?? '',
     request.headers.get('accept') ?? '',
     request.headers.get('user-agent') ?? '',
+    // A conditional request may be answered with a bodyless 304, which is no answer at all to a
+    // caller who asked for the body.
+    request.headers.get('if-none-match') ?? '',
+    request.headers.get('if-modified-since') ?? '',
     // Sorted, so the key does not depend on the order a host happened to build its object in.
     ...[...extraHeaders].sort().map((name) => `${name}=${request.headers.get(name) ?? ''}`),
   ].join('\n');

@@ -530,7 +530,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     fragment: ResolvedFragmentManifest,
     options: { prepare?: boolean } = {},
   ): Promise<Response> {
-    const result = await fetchFragment(request, requestUrl, path, fragment);
+    const result = await fetchFragment(request, requestUrl, path, fragment, 'namespace', !options.prepare);
 
     if (!result.ok && result.outOfScope) {
       console.warn(String(result.error));
@@ -600,6 +600,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     fragment: ResolvedFragmentManifest,
     /** What this fetch is for. Only used to label telemetry. */
     phase: 'pierce' | 'namespace' = 'namespace',
+    /**
+     * The endpoint's response reaches the browser untouched, so the browser's validators describe
+     * it and a 304 can pass straight through. Only a namespace asset qualifies.
+     */
+    passthrough = false,
   ): Promise<FragmentFetchResult> {
     const { endpoint } = fragment;
 
@@ -679,9 +684,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       fragmentRequest.headers.delete('referer');
     }
 
-    // a document request carries validators for the *shell*; they mean nothing to the fragment
-    fragmentRequest.headers.delete('if-none-match');
-    fragmentRequest.headers.delete('if-modified-since');
+    // Anything else is a transformation of the endpoint's body — a prepared document, or a page
+    // whose validators are the *shell's* — and the endpoint's 304 would vouch for bytes the
+    // browser never received.
+    if (!passthrough) {
+      fragmentRequest.headers.delete('if-none-match');
+      fragmentRequest.headers.delete('if-modified-since');
+    }
 
     // per-fragment timeout budget from the manifest
     const timeoutSignal = AbortSignal.timeout(fragment.timeoutMs);
