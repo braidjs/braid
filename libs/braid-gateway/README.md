@@ -515,16 +515,24 @@ gets unstamped markup, which is correct for all three.
 
 The trusted tier is **namespace isolation, not a security boundary**: fragments are same-origin
 with the host and share its cookies, storage, and DOM reachability. What the gateway does
-guarantee is that nothing a fragment sends can execute JavaScript in the *host realm* or
-navigate the host page — with one opt-in exception, [login redirects](#login-redirects-opt-in),
+guarantee is that no code a fragment's markup carries inline can execute outside the fragment's
+realm or navigate the host page — with one opt-in exception, [login redirects](#login-redirects-opt-in),
 whose targets are restricted to the host's origin, the fragment's own endpoint, and
-`redirectOrigins` — scripts are neutralized, inline `on*` handlers are stripped, and
-`<meta http-equiv="refresh">` is defanged. Fragment code runs in the fragment's realm or not at
-all.
+`redirectOrigins` — scripts are neutralized, inline `on*` handlers are stripped,
+`<meta http-equiv="refresh">` is defanged, and frames whose document the markup carries inline
+lose it: `iframe[srcdoc]`, and any `iframe`/`embed`/`object` URL other than `http(s):`, a path, or
+`about:blank` (so `javascript:`, `data:`, `blob:`). `srcdoc` and `javascript:` run on parse with
+the host's origin, no click needed; `data:` and `blob:` are refused alongside them as the same
+markup-as-document shape. Each removal is named on the tag in `data-braid-blocked`. The rule is
+deliberately blunt — it also removes a sandboxed `srcdoc` and a `data:` PDF or SVG in an
+`object` — so serve such content from a URL instead. A frame that loads a document from the
+fragment's own namespace (`<iframe src="widget.html">`) is left alone: it runs the fragment's
+code with the host's origin, which its realm already does. The full list, the trade-offs and the
+workarounds: [What the gateway does to fragment markup](../../docs/braid-fragment-markup.md).
 
-Deliberately not neutralized, because they require a user to act rather than executing on parse:
-`javascript:` URLs and form `action`s. A trusted fragment can navigate a page the user clicks
-through.
+Deliberately not neutralized, because they require a user to click rather than executing on
+parse: `javascript:` URLs on links (`a`, `area`) and form `action`s. A trusted fragment can
+navigate a page the user clicks through.
 
 Defaults worth knowing: `x-forwarded-proto`/`x-forwarded-host` are **overwritten** from the real
 request (opt into passthrough with `trustForwardedHeaders` only behind a proxy you control); an

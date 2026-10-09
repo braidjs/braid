@@ -110,6 +110,113 @@ describe('prepareFragmentHtml()', () => {
       expect(output.match(/<script type="inert"/g)).toHaveLength(3);
       expect(output).not.toMatch(/<script>/);
     });
+
+    describe('frames whose content comes from the markup itself', () => {
+      const prepare = (html: string) =>
+        collect(prepareFragmentHtml(streamOf(html), { fragmentId: 'billing' }));
+
+      it('removes iframe srcdoc, which runs its scripts with the host origin on parse', async () => {
+        const output = await prepare(`<iframe srcdoc="<script>parent.document.body.innerHTML=''</script>"></iframe>`);
+
+        expect(output).toBe('<iframe data-braid-blocked="srcdoc"></iframe>');
+      });
+
+      it.each([
+        ['iframe', 'src', 'javascript:parent.alert(1)'],
+        ['iframe', 'src', '  JaVaScRiPt:parent.alert(1)'],
+        ['iframe', 'src', '\tjavascript:parent.alert(1)'],
+        ['iframe', 'src', 'vbscript:msgbox(1)'],
+        ['iframe', 'src', 'data:text/html,<script>alert(1)</script>'],
+        ['iframe', 'src', 'blob:https://host.example/0b1c'],
+        ['embed', 'src', 'javascript:parent.alert(1)'],
+        ['embed', 'src', 'data:text/html,<script>alert(1)</script>'],
+        ['object', 'data', 'javascript:parent.alert(1)'],
+        ['object', 'data', 'data:text/html,<script>alert(1)</script>'],
+        ['object', 'data', 'blob:https://host.example/0b1c'],
+      ])('removes <%s %s="%s">', async (tagName, attributeName, value) => {
+        const output = await prepare(`<${tagName} ${attributeName}="${value.replaceAll('<', '&lt;')}"></${tagName}>`);
+
+        expect(output).toContain(`<${tagName} data-braid-blocked="${attributeName}">`);
+        expect(output).not.toMatch(/javascript:|vbscript:|data:|blob:/i);
+      });
+
+      it.each([
+        ['srcdoc', `<iframe srcdoc="<p>x</p>" srcdoc="<b>y</b>"></iframe>`],
+        ['src', `<iframe src="vbscript:a" src="vbscript:b"></iframe>`],
+        ['src in another case', `<iframe src="vbscript:a" SRC="vbscript:b"></iframe>`],
+      ])('removes a repeated %s, not just its first occurrence', async (_, html) => {
+        const output = await prepare(html);
+
+        expect(output).not.toMatch(/srcdoc=|vbscript:/i);
+        expect(output).toContain('data-braid-blocked=');
+      });
+
+      it('lists every attribute it removed from one tag', async () => {
+        const output = await prepare(`<iframe src="javascript:alert(1)" srcdoc="<p>x</p>" title="t"></iframe>`);
+
+        expect(output).toContain('<iframe title="t" data-braid-blocked="src srcdoc">');
+      });
+
+      it('defangs an entity-encoded scheme by namespacing it as a path', async () => {
+        const output = await prepare(`<iframe src="&#106;avascript:alert(1)"></iframe>`);
+
+        // the browser would decode `&#106;` to `j`; namespaced, it is a harmless same-origin path
+        expect(output).toMatch(/<iframe src="\/__braid\/frag\/billing\/&amp;#106;avascript:alert\(1\)">/);
+      });
+
+      it('removes upper-case tag and attribute names, which the parser treats as lower-case', async () => {
+        const output = await prepare(
+          `<IFRAME SRCDOC="<p>x</p>"></IFRAME><IFRAME SRC="javascript:alert(1)"></IFRAME><OBJECT DATA="data:text/html,x"></OBJECT>`,
+        );
+
+        expect(output).not.toMatch(/srcdoc=|javascript:|data:text/i);
+        expect(output.match(/data-braid-blocked="/g)).toHaveLength(3);
+      });
+
+      it.each([
+        ['an unquoted srcdoc', `<iframe srcdoc=<p>x</p>></iframe>`],
+        ['an unquoted javascript: src', `<iframe src=javascript:alert(1)></iframe>`],
+        ['a single-quoted srcdoc', `<iframe srcdoc='<p>x</p>'></iframe>`],
+        ['a valueless srcdoc', `<iframe srcdoc src="https://maps.example/"></iframe>`],
+      ])('removes %s', async (_, html) => {
+        const output = await prepare(html);
+
+        expect(output).not.toMatch(/srcdoc=|javascript:/i);
+        expect(output).toContain('data-braid-blocked=');
+      });
+
+      it.each([
+        ['an embedded newline', 'java\nscript:alert(1)'],
+        ['an embedded tab', 'java\tscript:alert(1)'],
+        ['a leading control character', '\u0001javascript:alert(1)'],
+      ])('leaves no scheme a browser would run behind %s', async (_, value) => {
+        const output = await prepare(`<iframe src="${value}"></iframe>`);
+
+        // the URL parser would strip the control characters and read a scheme; the rewriter must
+        // already have made the value a same-origin path, or removed it
+        expect(output).not.toMatch(/javascript|script:/i);
+        expect(output).toMatch(/<iframe (src="\/__braid\/frag\/billing|data-braid-blocked=)/);
+      });
+
+      it('leaves frames that load a real document alone', async () => {
+        const output = await prepare(
+          `<iframe src="https://maps.example/embed"></iframe><iframe src="//cdn.example/x"></iframe>` +
+            `<iframe src="about:blank"></iframe><iframe src="#top"></iframe>` +
+            `<embed src="http://media.example/a.swf"><object data="https://docs.example/a.pdf"></object>` +
+            `<iframe src="widget.html"></iframe><img src="data:image/gif;base64,R0lGOD">`,
+        );
+
+        expect(output).not.toContain('data-braid-blocked');
+        expect(output).toContain('<iframe src="https://maps.example/embed">');
+        expect(output).toContain('<iframe src="//cdn.example/x">');
+        expect(output).toContain('<iframe src="about:blank">');
+        expect(output).toContain('<iframe src="#top">');
+        expect(output).toContain('<embed src="http://media.example/a.swf">');
+        expect(output).toContain('<object data="https://docs.example/a.pdf">');
+        expect(output).toContain('<iframe src="/__braid/frag/billing/widget.html">');
+        expect(output).toContain('<img src="data:image/gif;base64,R0lGOD">');
+      });
+    });
   });
 
   describe('subresource URLs', () => {
@@ -292,6 +399,22 @@ describe('gateway piercing', () => {
     expect(body).toContain('<script type="inert">go()</script>');
     expect(response!.headers.get('x-braid-fragment-id')).toBe('billing');
     expect(response!.headers.get('vary')).toContain('sec-fetch-dest');
+  });
+
+  it('composes a fragment with no frame whose document the markup supplies', async () => {
+    const gateway = pierceGateway({
+      endpoint: (async () =>
+        htmlResponse(
+          `<body><iframe srcdoc="<script>parent.x()</script>"></iframe><iframe src="javascript:parent.x()"></iframe><p>ok</p></body>`,
+        )) as unknown as typeof fetch,
+    });
+    const shell = async () => htmlResponse(`<html><body><fragment-slot name="billing"></fragment-slot></body></html>`);
+
+    const body = await (await gateway.handle(documentRequest('/billing/invoices'), shell))!.text();
+
+    expect(body).toContain('<p>ok</p>');
+    expect(body).not.toMatch(/srcdoc=|javascript:/i);
+    expect(body.match(/data-braid-blocked=/g)).toHaveLength(2);
   });
 
   it('passes through document requests that match no pierce pattern', async () => {

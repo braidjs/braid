@@ -146,6 +146,39 @@ describe('rewriteHtmlStream — attributes', () => {
 
     expect(output).toBe(`<script TYPE="inert"></SCRIPT>`);
   });
+
+  /** The attribute names a handler sees for one start tag, after a no-op rewrite. */
+  async function attributeNamesOf(markup: string): Promise<string[][]> {
+    const seen: string[][] = [];
+    await rewriteBothWays(markup, () => ({
+      handlers: { div: { element: (tag) => void seen.push(tag.attributeNames) } },
+    }));
+    // rewriteBothWays runs the handlers twice; both runs must agree
+    expect(seen[1]).toEqual(seen[0]);
+    return seen.slice(0, 1);
+  }
+
+  it('splits attribute names where the HTML tokenizer does', async () => {
+    // `/` separates attributes, and a leading `=` starts a name rather than ending one
+    expect(await attributeNamesOf(`<div a/b="1" =c=2 d/>`)).toEqual([['a', 'b', '=c', 'd']]);
+  });
+
+  it('keeps the first of a repeated attribute, as the browser does', async () => {
+    const output = await rewriteBothWays(`<div id="first" ID="second" title="t">`, () => ({
+      handlers: {
+        div: {
+          element(tag) {
+            expect(tag.getAttribute('id')).toBe('first');
+            tag.removeAttribute('id');
+            // with the first gone there is no second to promote
+            expect(tag.getAttribute('id')).toBeNull();
+          },
+        },
+      },
+    }));
+
+    expect(output).toBe(`<div title="t">`);
+  });
 });
 
 describe('rewriteHtmlStream — raw text elements', () => {

@@ -623,28 +623,33 @@ export function createGateway(options: GatewayOptions): BraidGateway {
      * same fragment would behave differently depending on whether it was server-rendered into
      * the page or fetched by the slot — its relative asset URLs would resolve against the host
      * page, and its scripts would arrive live in the host realm.
+     *
+     * Whatever the endpoint says the body is. The client parses a document response as html no
+     * matter its label, so a body skipped for being "not html" — `text/plain`, or no content-type
+     * at all — would reach the host page's DOM with its `onerror` handlers live. Preparing it
+     * makes it html, and the label says so: the rewriter emits utf-8.
      */
-    const prepare =
-      options.prepare && result.response.headers.get('content-type')?.toLowerCase().includes('text/html');
-
-    const body =
-      prepare && result.response.body
-        ? prepareFragmentHtml(result.response.body, { fragmentId: fragment.id, basePath })
-        : result.response.body;
-
     const isNullBody =
       result.response.status === 204 ||
       result.response.status === 205 ||
       result.response.status === 304 ||
       (result.response.status >= 100 && result.response.status < 200);
 
-    const forwarded = new Response(isNullBody ? null : body, result.response);
+    const upstreamBody = isNullBody ? null : result.response.body;
+    const prepare = Boolean(options.prepare && upstreamBody);
+
+    const body =
+      prepare && upstreamBody ? prepareFragmentHtml(upstreamBody, { fragmentId: fragment.id, basePath }) : upstreamBody;
+
+    const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
     forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
-      // the body was transformed, so any length the endpoint declared no longer describes it
+      // the body was transformed, so any length/encoding the endpoint declared no longer describes it
       forwarded.headers.delete('content-length');
+      forwarded.headers.delete('content-encoding');
+      forwarded.headers.set('content-type', 'text/html; charset=utf-8');
     }
     return forwarded;
   }

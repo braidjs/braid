@@ -443,3 +443,58 @@ describe('redirect: navigate', () => {
     }
   });
 });
+
+describe('the document namespace', () => {
+  const PLAIN = `<p>hi</p><img src="x" onerror="parent.alert(1)"><script>alert(2)</script>`;
+
+  function gatewayAnswering(upstream: () => Response) {
+    return createGateway({
+      registry: [{ id: 'billing', endpoint: (async () => upstream()) as unknown as typeof fetch }],
+    });
+  }
+
+  it.each([
+    ['text/plain', { 'content-type': 'text/plain', 'content-length': String(PLAIN.length) }],
+    ['no content-type', {}],
+  ])('prepares a document served as %s, which the client would otherwise insert unprepared', async (_, headers) => {
+    const gateway = gatewayAnswering(() => {
+      const response = new Response(PLAIN, { headers });
+      if (!('content-type' in headers)) response.headers.delete('content-type');
+      return response;
+    });
+
+    const response = (await gateway.handle(new Request('https://example.com/__braid/doc/billing/invoices')))!;
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('content-length')).toBeNull();
+    const html = await response.text();
+    expect(html).not.toContain('onerror');
+    expect(html).toContain('<script type="inert">');
+  });
+
+  it('prepares the body of a non-2xx document response too', async () => {
+    const gateway = gatewayAnswering(
+      () => new Response(PLAIN, { status: 500, headers: { 'content-type': 'text/plain' } }),
+    );
+
+    const response = (await gateway.handle(new Request('https://example.com/__braid/doc/billing/invoices')))!;
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    const html = await response.text();
+    expect(html).not.toContain('onerror');
+    expect(html).toContain('<script type="inert">');
+  });
+
+  it('still answers an entry fragment with an empty 204', async () => {
+    const gateway = createGateway({
+      registry: [{ id: 'widget', endpoint: 'https://widget.internal', adapter: 'custom-element', entry: '/w.js', element: 'x-w' }],
+    });
+
+    const response = (await gateway.handle(new Request('https://example.com/__braid/doc/widget/')))!;
+
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+  });
+});
