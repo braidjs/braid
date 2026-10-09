@@ -518,13 +518,16 @@ with the host and share its cookies, storage, and DOM reachability. What the gat
 guarantee is that nothing a fragment sends can execute JavaScript in the *host realm* or
 navigate the host page — with one opt-in exception, [login redirects](#login-redirects-opt-in),
 whose targets are restricted to the host's origin, the fragment's own endpoint, and
-`redirectOrigins` — scripts are neutralized, inline `on*` handlers are stripped, and
-`<meta http-equiv="refresh">` is defanged. Fragment code runs in the fragment's realm or not at
-all.
+`redirectOrigins` — scripts are neutralized, inline `on*` handlers are stripped,
+`<meta http-equiv="refresh">` is defanged, and frames whose document the markup carries inline
+lose it: `iframe[srcdoc]`, and any `iframe`/`embed`/`object` URL other than `http(s):`, a path, or
+`about:blank` (so `javascript:`, `data:`, `blob:`). Those run on parse with the host's origin, no
+click needed; each removal is named on the tag in `data-braid-blocked`. Fragment code runs in the
+fragment's realm or not at all.
 
-Deliberately not neutralized, because they require a user to act rather than executing on parse:
-`javascript:` URLs and form `action`s. A trusted fragment can navigate a page the user clicks
-through.
+Deliberately not neutralized, because they require a user to click rather than executing on
+parse: `javascript:` URLs on links (`a`, `area`) and form `action`s. A trusted fragment can
+navigate a page the user clicks through.
 
 Defaults worth knowing: `x-forwarded-proto`/`x-forwarded-host` are **overwritten** from the real
 request (opt into passthrough with `trustForwardedHeaders` only behind a proxy you control); an
