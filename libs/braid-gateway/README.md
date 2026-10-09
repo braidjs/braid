@@ -141,9 +141,10 @@ runs at most once per request.
   request inside the fragment's namespace. Version mismatches fail in the client as named errors
   — no title-check heuristics.
 - **Fragment documents** (`/__braid/doc/:id/*`): the fragment's HTML prepared for the host page's
-  DOM — exactly what piercing injects, for the client-boot path. A fragment's redirect here is
-  reported as an error, or — for a fragment that opts in — followed as a page navigation; see
-  [Login redirects](#login-redirects-opt-in).
+  DOM — exactly what piercing injects, for the client-boot path. Fetched at the page's route,
+  unless the manifest declares `documentPath` (`/index.html`) for an SPA on a static origin that
+  404s every route. A fragment's redirect here is reported as an error, or — for a fragment that
+  opts in — followed as a page navigation; see [Login redirects](#login-redirects-opt-in).
 - **Fragment assets/data** (`/__braid/frag/:id/*`): forwarded to the endpoint with the prefix
   stripped, so endpoints see the same paths they serve standalone. Redirects pass through
   unfollowed; each fragment gets a manifest-declared timeout budget.
@@ -189,6 +190,20 @@ browser, and most CDNs ignore `Vary` on anything but `Accept-Encoding`.
 
 **No braid URL varies on a request header.** Point a CDN at them and they cache correctly with
 no configuration at all.
+
+### Mounting under a path
+
+A host that shares its domain and does not own the root — `/manage/` behind a load balancer —
+moves the namespaces under its mount. Set the same `basePath` on both sides:
+
+```ts
+createGateway({ registry, basePath: '/manage' }); // serves /manage/__braid/{frag,realm,doc}/…
+initBraid({ basePath: '/manage' });               // host page: requests them there
+```
+
+The gateway then leaves root `/__braid/*` alone. Page URLs are unaffected: `pierce` patterns still
+match the full pathname (`/manage/goals/*`). `serviceWorker`, `discovery`, and
+`telemetry.webVitals` do not support a `basePath` yet, and combining them with one throws.
 
 ### The one thing that does vary
 

@@ -316,7 +316,9 @@ namespaced path returns HTML instead of the asset. Or the fragment's HTML was in
 being prepared, leaving relative script URLs to resolve against the realm's route directory.
 
 **Prevention.** Serve the fragment endpoint with a history fallback, and let the gateway prepare
-every fragment document. A fragment's scripts always execute in its realm — never in the host —
+every fragment document. An endpoint that cannot have one — a static bucket behind a CDN — can
+declare `documentPath: "/index.html"` in its manifest instead, and the gateway fetches that one
+document for every route. A fragment's scripts always execute in its realm — never in the host —
 so a script that "does nothing" is usually a URL problem, not an execution problem.
 
 ### The realm fails to boot with a named `realm-boot` error

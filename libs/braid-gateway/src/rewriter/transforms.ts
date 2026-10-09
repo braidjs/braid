@@ -1,4 +1,4 @@
-import { BRAID_FRAGMENT_PREFIX } from '../protocol.js';
+import { braidFragmentUrl } from '../protocol.js';
 import { concatStreams, Injection, rewriteHtmlStream, StartTag } from './html-rewrite-stream.js';
 
 /**
@@ -115,9 +115,10 @@ const SRCSET_ATTRIBUTES = new Set(['srcset']);
  */
 export function prepareFragmentHtml(
   body: ReadableStream<Uint8Array>,
-  options: { fragmentId: string },
+  options: { fragmentId: string; basePath?: string },
 ): ReadableStream<Uint8Array> {
-  const { fragmentId } = options;
+  // every subresource is re-rooted under this: the fragment's namespace, at the gateway's mount
+  const fragmentRoot = braidFragmentUrl(options.fragmentId, '', '', options.basePath);
 
   // The fragment's own <base href>, which its subresource URLs resolve against. It appears in
   // <head> before anything that references it, so tracking it as the stream passes is enough.
@@ -133,7 +134,7 @@ export function prepareFragmentHtml(
               tag.removeAttribute(attributeName);
             }
           }
-          rewriteSubresourceUrls(tag, fragmentId, fragmentBaseHref);
+          rewriteSubresourceUrls(tag, fragmentRoot, fragmentBaseHref);
         },
       },
       base: {
@@ -175,7 +176,7 @@ export function prepareFragmentHtml(
 }
 
 /** Rewrites a tag's subresource URLs into the fragment's namespace. */
-function rewriteSubresourceUrls(tag: StartTag, fragmentId: string, baseHref: string): void {
+function rewriteSubresourceUrls(tag: StartTag, fragmentRoot: string, baseHref: string): void {
   const attributes = SUBRESOURCE_ATTRIBUTES[tag.tagName];
   if (!attributes) return;
 
@@ -184,8 +185,8 @@ function rewriteSubresourceUrls(tag: StartTag, fragmentId: string, baseHref: str
     if (!value) continue;
 
     const rewritten = SRCSET_ATTRIBUTES.has(attributeName)
-      ? rewriteSrcset(value, fragmentId, baseHref)
-      : namespaceUrl(value, fragmentId, baseHref);
+      ? rewriteSrcset(value, fragmentRoot, baseHref)
+      : namespaceUrl(value, fragmentRoot, baseHref);
 
     if (rewritten !== null) {
       tag.setAttribute(attributeName, rewritten);
@@ -199,7 +200,7 @@ function rewriteSubresourceUrls(tag: StartTag, fragmentId: string, baseHref: str
  * Left alone: anything with a scheme (`https:`, `data:`, `blob:`), protocol-relative URLs, and
  * pure fragment identifiers — none of those are the fragment's own subresources.
  */
-function namespaceUrl(rawUrl: string, fragmentId: string, baseHref: string): string | null {
+function namespaceUrl(rawUrl: string, fragmentRoot: string, baseHref: string): string | null {
   const url = rawUrl.trim();
   if (!url || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) {
     return null;
@@ -207,11 +208,11 @@ function namespaceUrl(rawUrl: string, fragmentId: string, baseHref: string): str
 
   // resolve exactly as the browser would have in the fragment's own document, then re-root it
   const resolved = new URL(url, `http://braid.invalid${baseHref.startsWith('/') ? baseHref : `/${baseHref}`}`);
-  return `${BRAID_FRAGMENT_PREFIX}${encodeURIComponent(fragmentId)}${resolved.pathname}${resolved.search}${resolved.hash}`;
+  return `${fragmentRoot}${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
 /** Rewrites each candidate in a `srcset`, preserving its density/width descriptors. */
-function rewriteSrcset(value: string, fragmentId: string, baseHref: string): string | null {
+function rewriteSrcset(value: string, fragmentRoot: string, baseHref: string): string | null {
   const candidates = value.split(',');
   let changed = false;
 
@@ -220,7 +221,7 @@ function rewriteSrcset(value: string, fragmentId: string, baseHref: string): str
     if (!match) return candidate;
 
     const [, leading, url, descriptor] = match;
-    const namespaced = namespaceUrl(url, fragmentId, baseHref);
+    const namespaced = namespaceUrl(url, fragmentRoot, baseHref);
     if (namespaced === null) return candidate;
 
     changed = true;

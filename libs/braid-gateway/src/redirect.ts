@@ -142,7 +142,8 @@ export function resolveReturnUrl(
     if (!candidate) continue;
     try {
       const url = new URL(candidate);
-      if (url.origin === requestUrl.origin && !url.pathname.startsWith('/__braid/')) return url;
+      // a braid URL is not a page — wherever the gateway is mounted (`/manage/__braid/…` with a basePath)
+      if (url.origin === requestUrl.origin && !/(^|\/)__braid\//.test(url.pathname)) return url;
     } catch {
       // try the next one
     }

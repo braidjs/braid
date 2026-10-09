@@ -177,6 +177,24 @@ describe('gateway namespace routing', () => {
         /outside its endpoint path/,
       );
     });
+
+    it("never leaves the endpoint's origin for a path that starts with //", async () => {
+      // `//host/x` is a protocol-relative URL to a parser: joined onto a pathless endpoint as a
+      // string, it would name another host entirely (169.254.169.254 being the classic one)
+      const escaping = new URL('https://example.com/');
+      escaping.pathname = '//169.254.169.254/latest';
+
+      expect(resolveEndpointUrl('https://internal.example/', escaping, 'billing').href).toBe(
+        'https://internal.example//169.254.169.254/latest',
+      );
+
+      // the upgrade path assigns the pathname as-is, so it is where this was reachable
+      const gateway = createGateway({ registry: [{ id: 'billing', endpoint: 'https://internal.example/' }] });
+      const upgrade = await gateway.resolveUpgrade(
+        new Request('https://example.com/__braid/frag/billing//169.254.169.254/latest'),
+      );
+      expect(upgrade?.target.origin).toBe('https://internal.example');
+    });
   });
 
   it('turns an exceeded timeout budget into a named 504', async () => {

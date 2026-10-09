@@ -121,6 +121,8 @@ describe('resolveReturnUrl()', () => {
     expect(resolveReturnUrl(requestUrl, null, 'https://example.com/r')?.href).toBe('https://example.com/r');
     expect(resolveReturnUrl(requestUrl, 'https://evil.net/a', null)).toBeNull();
     expect(resolveReturnUrl(requestUrl, 'https://example.com/__braid/doc/x', null)).toBeNull();
+    // and still not when the gateway is mounted under a basePath
+    expect(resolveReturnUrl(requestUrl, 'https://example.com/manage/__braid/doc/x', null)).toBeNull();
     expect(resolveReturnUrl(requestUrl, 'not a url', null)).toBeNull();
   });
 });
