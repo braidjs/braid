@@ -67,6 +67,7 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
     addEventListener(type: string, listener: (event: ExtendableFetchEvent) => void): void;
     skipWaiting?: () => Promise<void>;
     clients?: { claim(): Promise<void> };
+    registration?: { navigationPreload?: { enable(): Promise<void>; disable(): Promise<void> } };
   };
 
   const reports: ReportQueue | null = options.reports
@@ -103,8 +104,17 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
     );
   });
 
+  const navigate = options.offline ? braidNavigationHandler({ ...options, ...options.offline }) : null;
+
   scope.addEventListener('activate', (event) => {
     const work: Promise<unknown>[] = [];
+    // A worker that handles navigations sits in front of every one of them, so without this each
+    // navigation waits for the worker to boot before its request even starts. Preload starts the
+    // request alongside the boot. Only when this worker handles navigations: preload is a cost —
+    // a duplicate request — for a worker that would let them pass, and the setting outlives the
+    // worker that set it, so one deployed without `offline` turns it back off.
+    const preload = scope.registration?.navigationPreload;
+    if (preload) work.push((navigate ? preload.enable() : preload.disable()).catch(() => undefined));
     if (options.precache?.length) work.push(pruneFragmentCaches(options.precache, options));
     if (options.claimClients && scope.clients) work.push(scope.clients.claim());
     // Background Sync is Chromium-only, so every activation also flushes opportunistically. A
@@ -124,11 +134,9 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
     });
   }
 
-  const navigate = options.offline ? braidNavigationHandler({ ...options, ...options.offline }) : null;
-
   scope.addEventListener('fetch', (event) => {
     // Assets first: they are the overwhelming majority, and a navigation is never one.
-    const handled = handler(event.request) ?? navigate?.(event.request);
+    const handled = handler(event.request) ?? navigate?.(event.request, event.preloadResponse);
     if (handled) event.respondWith?.(handled);
   });
 
@@ -158,4 +166,6 @@ interface ExtendableFetchEvent {
   source?: { postMessage?(message: unknown): void } | null;
   respondWith?(response: Promise<Response> | Response): void;
   waitUntil?(promise: Promise<unknown>): void;
+  /** The navigation's preloaded response, when navigation preload is enabled. */
+  preloadResponse?: Promise<Response | undefined>;
 }
