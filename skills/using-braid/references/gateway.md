@@ -22,6 +22,12 @@ export default toFetchHandler(gateway, toWebHandler(app));
 Mount it **first**, so it sees requests before the app does. For a legacy app you cannot modify,
 run the same library as an edge worker or reverse proxy in front of it.
 
+A host that shares its domain and only owns a path (`/manage/` behind a load balancer) sets the
+same `basePath` on both sides — `createGateway({ registry, basePath: '/manage' })` and
+`initBraid({ basePath: '/manage' })` — and the namespaces move to `/manage/__braid/…`. `pierce`
+patterns still match full page paths. `serviceWorker`, `discovery` and `telemetry.webVitals` don't
+support a `basePath` yet; combining them throws.
+
 ## Manifests
 
 ```jsonc

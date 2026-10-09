@@ -50,10 +50,19 @@ export interface BraidOptions {
    * no adapter.
    */
   onHostNavigation?: (notify: () => void) => void;
+
+  /**
+   * The path the Braid gateway is mounted under (`/manage`), when the host shares its domain and
+   * does not own the root. Must match the gateway's `basePath`: the client fetches realm stubs and
+   * fragment documents from `/manage/__braid/…`. Call `initBraid` before any slot connects.
+   */
+  basePath?: string;
 }
 
 interface ResolvedBraidConfig {
   dev: boolean;
+  /** Empty, or an absolute path with no trailing slash. */
+  basePath: string;
   contract?: HostContract;
   capabilities?: Record<string, FragmentCapabilities>;
   onHostNavigation?: (notify: () => void) => void;
@@ -61,6 +70,7 @@ interface ResolvedBraidConfig {
 
 const config: ResolvedBraidConfig = {
   dev: false,
+  basePath: '',
 };
 
 export function setBraidConfig(options: BraidOptions = {}): void {
@@ -75,6 +85,15 @@ export function setBraidConfig(options: BraidOptions = {}): void {
   }
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;
+  }
+  // Kept in sync with the gateway's normalizeBasePath: a path the URL parser would rewrite (`/café`,
+  // a dot segment) could never match the parsed pathnames the gateway compares it to.
+  if (options.basePath !== undefined) {
+    const basePath = options.basePath.replace(/\/+$/, '');
+    if (basePath && (!/^(\/[^/?#\s]+)+$/.test(basePath) || new URL(basePath, 'http://braid.invalid').pathname !== basePath)) {
+      throw new Error(`braid: basePath "${options.basePath}" must be an absolute path such as "/manage"`);
+    }
+    config.basePath = basePath;
   }
 }
 

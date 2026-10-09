@@ -108,6 +108,8 @@ Registers the `<fragment-slot>` custom element and sets up global runtime observ
 interface InitBraidOptions {
   /** Callback to wire host router navigation events to fragments. */
   onHostNavigation?: (notify: () => void) => void;
+  /** The gateway's mount when the host does not own the domain root ('/manage'); must match the gateway's basePath. */
+  basePath?: string;
   /** Base URL for gateway requests (default: current origin). */
   gatewayBaseUrl?: string;
   /** Global timeout in milliseconds before triggering slot fallbacks. */
