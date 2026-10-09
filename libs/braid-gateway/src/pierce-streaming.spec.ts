@@ -87,3 +87,43 @@ describe('pierce streaming', () => {
     expect(await response.text()).toContain('responded with HTTP 503');
   });
 });
+
+describe('pierced script prefetch hints', () => {
+  it('prefetches the fragment’s own scripts, in the CORS mode the realm will use', async () => {
+    const gateway = pierceGateway(
+      Promise.resolve(
+        new Response(
+          `<html><head><link rel="modulepreload" href="/chunk.js"><script type="module" src="/main.js"></script>` +
+            `<script src="/legacy.js"></script><script type="module" src="/main.js"></script>` +
+            `<script src="/creds.js" crossorigin="use-credentials"></script>` +
+            `<script nomodule src="/polyfills.js"></script>` +
+            `<script src="https://cdn.elsewhere.example/lib.js"></script></head>` +
+            `<body><h2>Invoices</h2><script>inline()</script></body></html>`,
+          { headers: { 'content-type': 'text/html' } },
+        ),
+      ),
+    );
+
+    const html = await (await gateway.handle(navigation, shell))!.text();
+
+    // inside the shadow root, after the fragment's document: the slot's light DOM stays the host's
+    expect(html.slice(html.indexOf('</braid-document>'), html.indexOf('</fragment-slot>'))).toBe(
+      '</braid-document>' +
+        '<link rel="prefetch" href="/__braid/frag/billing/chunk.js" crossorigin>' +
+        '<link rel="prefetch" href="/__braid/frag/billing/main.js" crossorigin>' +
+        '<link rel="prefetch" href="/__braid/frag/billing/legacy.js">' +
+        '<link rel="prefetch" href="/__braid/frag/billing/creds.js" crossorigin="use-credentials">' +
+        '</template>',
+    );
+    // and nothing live inside the shadow root: the fragment's own copies stay inert
+    expect(html).toContain('<link rel="inert-modulepreload" href="/__braid/frag/billing/chunk.js">');
+  });
+
+  it('adds none for a fragment that fell back', async () => {
+    const gateway = pierceGateway(Promise.resolve(new Response('nope', { status: 503 })));
+
+    const html = await (await gateway.handle(navigation, shell))!.text();
+
+    expect(html).not.toContain('rel="prefetch"');
+  });
+});
