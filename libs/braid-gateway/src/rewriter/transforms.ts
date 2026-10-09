@@ -122,11 +122,13 @@ const FRAME_SOURCE_ATTRIBUTES: Record<string, string> = {
  * - frames whose document the markup supplies inline — `iframe[srcdoc]`, or a `javascript:`,
  *   `data:` or `blob:` URL on `iframe`/`embed`/`object` — lose that attribute.
  *
- * This is the server half of the born-inert invariant, and the last three rules are what make the
- * invariant true rather than merely true-of-`<script>`: **no code a fragment's markup carries
- * inline can execute outside the fragment's realm or navigate the host page.** Each was verified
- * executing with the host's origin before this transform handled it. Whatever is removed is named
- * in a `data-braid-blocked` attribute on the tag, so a fragment that loses something can see why.
+ * This is the server half of the born-inert invariant, and the handler, meta-refresh and frame
+ * rules are what make the invariant true rather than merely true-of-`<script>`: **no code a
+ * fragment's markup carries inline can execute outside the fragment's realm or navigate the host
+ * page.** Handlers, meta refresh, `srcdoc` and `javascript:` frames were each verified taking
+ * effect in the host page before this transform handled them; `data:` and `blob:` frames are
+ * refused alongside them (see {@link FRAME_SOURCE_ATTRIBUTES}). Whatever is removed is named in a
+ * `data-braid-blocked` attribute on the tag, so a fragment that loses something can see why.
  *
  * A frame that *loads* a document from the fragment's namespace is not inline code and is left
  * alone: it runs the fragment's own code with the host's origin, as its realm already does. That

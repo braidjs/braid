@@ -19,14 +19,16 @@ cross-origin iframe, and the gateway never touches its markup.
 | `onclick`, `onerror`, any `on*` attribute | removed | compiled into a function in the host realm |
 | `<meta http-equiv="refresh">` | `http-equiv` removed | navigates the whole host page |
 | `<iframe srcdoc>` | removed | the frame's document runs on parse with the host's origin |
-| `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept | the same: the markup carries the document inline |
-| relative subresource URLs (`img[src]`, `link[href]`, …) | re-rooted under `/__braid/frag/<id>/` | they would otherwise resolve against the host page |
+| `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept | a `javascript:` frame runs on parse with the host's origin; `data:` and `blob:` are refused alongside it as the same shape — a document the markup carries inline |
+| relative and root-relative subresource URLs (`img[src]`, `link[href]`, …) | resolved against the fragment's `<base href>`, then re-rooted under `/__braid/frag/<id>/` (behind the gateway's `basePath`, if it has one) | they would otherwise resolve against the host page |
 
-Whenever a frame loses an attribute, the tag is marked with what was removed:
+Whenever a frame loses an attribute, and when a meta refresh is defanged, the tag is marked with
+what was removed:
 
 ```html
 <iframe title="Preview" data-braid-blocked="srcdoc"></iframe>
 <object type="application/pdf" data-braid-blocked="data"></object>
+<meta content="0;url=/elsewhere" data-braid-blocked="meta-refresh">
 ```
 
 If something a fragment renders standalone is missing when composed, look for `data-braid-blocked`
@@ -42,7 +44,7 @@ that decision would have to be right in every engine. So some harmless markup go
 | --- | --- | --- |
 | `<iframe sandbox srcdoc="…">` without `allow-same-origin` | the frame gets an opaque origin | serve the document from a URL in the fragment's namespace (`<iframe sandbox src="preview.html">`) |
 | `<object data="data:application/pdf;…">`, `<embed src="data:image/svg+xml;…">` | `data:` documents get an opaque origin in current browsers | serve the file from a URL; for an SVG, `<img src>` or inline `<svg>` |
-| `blob:` URLs on frames | — | none needed: a `blob:` URL means nothing outside the page that created it, so served markup has no use for one. Frames that the fragment's code creates at runtime are not affected. |
+| `blob:` URLs on frames | — | none needed: a `blob:` URL means nothing outside the page that created it, so served markup has no use for one |
 
 Only markup the gateway serves is prepared. Frames that the fragment's own code creates in the
 browser are never touched by this rule.
@@ -56,7 +58,7 @@ in the [untrusted tier](./braid-boundary.md#choosing).
 need a user to click, and a trusted fragment is allowed to navigate a page the user clicks through.
 
 **Frame documents from the fragment's own namespace.** `<iframe src="widget.html">` becomes
-`/__braid/frag/<id>/widget.html`. Whatever the fragment's origin serves there loads in a nested
+`/__braid/frag/<id>/widget.html` (resolved against the fragment's `<base href>`). Whatever the fragment's origin serves there loads in a nested
 frame with the host's origin, unprepared, and its scripts can reach `top`. That is deliberate.
 The fragment's realm is already a same-origin iframe running its code, and the namespace serves that
 same HTML to any link or `window.open` anyway. So the frame gives the fragment nothing new. The
