@@ -39,6 +39,30 @@ describe('createSingleFlight', () => {
     expect(await second.text()).toBe('shared payload');
   });
 
+  // A tee buffers whichever branch lags; a fetch nobody joined has no second reader to wait for.
+  it('hands a lone caller the response itself, untee\'d', async () => {
+    const flight = createSingleFlight();
+    const response = new Response('solo');
+
+    expect(await flight.run('k', async () => response)).toBe(response);
+    expect(await response.text()).toBe('solo');
+  });
+
+  it('still shares with a caller who joins after the fetch settles but before it is collected', async () => {
+    const flight = createSingleFlight();
+    const gate = deferred();
+    const fetcher = vi.fn(() => gate.promise);
+
+    const first = flight.run('k', fetcher);
+    // settled, but the starter's continuation has not run yet, so the entry is still joinable
+    gate.resolve(new Response('late'));
+    const second = flight.run('k', fetcher);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await (await first).text()).toBe('late');
+    expect(await (await second).text()).toBe('late');
+  });
+
   it('does not share different keys', async () => {
     const flight = createSingleFlight();
     const fetcher = vi.fn(async () => new Response('x'));

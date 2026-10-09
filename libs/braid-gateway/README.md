@@ -169,7 +169,10 @@ one created before `</body>`.
 Fragment HTML is transformed on the way through: the doctype is stripped, `<html>/<head>/<body>`
 become `braid-html/braid-head/braid-body` (start *and* end tags), scripts are neutralized to
 `type="inert"`, and script preload links become `rel="inert-*"`. Fragment scripts are therefore
-never live in the host realm, not even between parsing and activation.
+never live in the host realm, not even between parsing and activation. The gateway does add
+`<link rel="prefetch">` hints for the fragment's own scripts (inside its shadow root, never inside
+its document) so their downloads start before the client boots it; a prefetch fetches into the
+HTTP cache and never executes anything.
 
 If a fragment can't be server-rendered, the page still renders and the slot is left for the
 client runtime to fill — a transient SSR failure self-heals rather than becoming a visible

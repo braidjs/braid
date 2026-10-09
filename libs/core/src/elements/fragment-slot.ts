@@ -8,6 +8,7 @@ import {
 import { createRealm } from '../realm/realm-manager.js';
 import { contractAdapter } from '../adapters/contract-adapter.js';
 import { resolveAdapter } from '../adapters/adapter.js';
+import { parseFragmentContent } from '../adapters/compat-adapter.js';
 import { createFragmentEnv } from '../env/create-env.js';
 import { getBraidConfig, isDevMode } from '../config.js';
 import { braidContext } from '../context/context-bus.js';
@@ -413,11 +414,29 @@ export class FragmentSlot extends HTMLElement {
        * an adapter that builds its own UI from an entry module (a lone custom element, say) has
        * no document to fetch, and must not be reported as broken for not serving one.
        */
+      /**
+       * Painted as soon as it arrives, without waiting for the realm.
+       *
+       * The gateway prepared it exactly as it prepares pierced content — scripts inert, urls
+       * re-rooted — so it is safe on screen before anything runs, and from here on it *is* pierced
+       * content: already in the DOM, activated in place by the adapter. Realm boot is a round trip
+       * plus a handshake, and the user has nothing to look at in the meantime otherwise.
+       */
+      let painted = false;
+      const paint = (html: string, isHtml: boolean) => {
+        if (signal.aborted || !isHtml || !html.trim()) return;
+        contentRoot.appendChild(parseFragmentContent(html, document));
+        painted = true;
+      };
+
       const [htmlResult, realm] = await Promise.all([
         piercedContentRoot
           ? Promise.resolve({ ok: true as const, html: null })
           : fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
-              (html) => ({ ok: true as const, html }),
+              ({ html, isHtml }) => {
+                paint(html, isHtml);
+                return { ok: true as const, html };
+              },
               (error: unknown) => ({ ok: false as const, error }),
             ),
         createRealm('compat-http', { fragmentId, routeUrl, bound, signal }),
@@ -441,6 +460,13 @@ export class FragmentSlot extends HTMLElement {
         throw htmlResult.error;
       }
       const html = htmlResult.ok ? htmlResult.html : null;
+
+      // An adapter that builds its own UI never reads a document; one painted for it is taken down
+      // rather than left under whatever the adapter mounts.
+      if (painted && adapter.needsDocument === false) {
+        contentRoot.replaceChildren();
+        painted = false;
+      }
 
       /**
        * The boundary channel for this instance.
@@ -531,8 +557,9 @@ export class FragmentSlot extends HTMLElement {
         shadowRoot,
         contentRoot,
         realm,
-        html,
-        pierced: Boolean(piercedContentRoot),
+        // painted content is in the DOM already, which is all `pierced` tells the adapter
+        html: painted ? null : html,
+        pierced: Boolean(piercedContentRoot) || painted,
         routeUrl,
         bound,
         env,
@@ -904,8 +931,19 @@ function redactedLocation(location: string | null, base: string): string | null 
  *
  * A browser hands back an `opaqueredirect` for `redirect: 'manual'` (status 0, no readable
  * `Location`); other runtimes expose the real 3xx, so the target is named when it can be read.
+ *
+ * A fragment that opted in to `redirect: 'navigate'` is the exception: the gateway answers with a
+ * `409` carrying the target, which becomes a {@link FragmentRedirectError} for the slot to follow.
+ *
+ * Resolves with the document and whether it arrived as HTML — which, through the gateway, is the one
+ * kind of document it prepares (scripts inert, handlers stripped). Anything else is not safe to put
+ * on screen ahead of the adapter.
  */
-export async function fetchFragmentHtml(fragmentId: string, routeSrcUrl: URL, signal: AbortSignal): Promise<string> {
+export async function fetchFragmentHtml(
+  fragmentId: string,
+  routeSrcUrl: URL,
+  signal: AbortSignal,
+): Promise<{ html: string; isHtml: boolean }> {
   // the document namespace: the gateway prepares this exactly as it prepares pierced content
   const documentUrl = braidDocumentUrl(
     fragmentId,
@@ -973,7 +1011,8 @@ export async function fetchFragmentHtml(fragmentId: string, routeSrcUrl: URL, si
     });
   }
 
-  return response.text();
+  const isHtml = response.headers.get('content-type')?.toLowerCase().includes('text/html') ?? false;
+  return { html: await response.text(), isHtml };
 }
 
 /**

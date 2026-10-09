@@ -28,6 +28,10 @@ export interface AdapterBootContext {
   /**
    * The fragment's HTML, fetched from the gateway namespace, or null when {@link pierced} —
    * a pierced fragment's content is already in `contentRoot`, put there by the parser.
+   *
+   * A client-fetched document is usually in `contentRoot` already too, painted the moment it
+   * arrived, and then arrives here as `pierced` with `html: null`. Adapters should treat `pierced`
+   * as "the content is in place", not as "the server rendered it".
    */
   html: string | null;
   /**

@@ -115,6 +115,83 @@ describe('setupBraidWorker', () => {
     worker.restore();
   });
 
+  describe('navigation preload', () => {
+    const offline = { snapshotUrl: '/__braid/registry/pinned.json' };
+
+    it('is enabled on activation when the worker handles navigations, so they need not wait for it to boot', async () => {
+      const worker = scope();
+      const enable = vi.fn(async () => undefined);
+      (globalThis as Record<string, unknown>)['registration'] = { navigationPreload: { enable } };
+
+      setupBraidWorker({ fetch: vi.fn(), offline });
+      const waited: Promise<unknown>[] = [];
+      worker.dispatch('activate', { waitUntil: (promise: Promise<unknown>) => waited.push(promise) });
+      await Promise.all(waited);
+
+      expect(enable).toHaveBeenCalledOnce();
+      delete (globalThis as Record<string, unknown>)['registration'];
+      worker.restore();
+    });
+
+    it('is turned off by a worker that never touches navigations, since an earlier one may have left it on', async () => {
+      const worker = scope();
+      const enable = vi.fn(async () => undefined);
+      const disable = vi.fn(async () => undefined);
+      (globalThis as Record<string, unknown>)['registration'] = { navigationPreload: { enable, disable } };
+
+      setupBraidWorker({ fetch: vi.fn() });
+      worker.dispatch('activate', { waitUntil: () => undefined });
+
+      expect(enable).not.toHaveBeenCalled();
+      expect(disable).toHaveBeenCalledOnce();
+      delete (globalThis as Record<string, unknown>)['registration'];
+      worker.restore();
+    });
+
+    it('answers a navigation with the preloaded response instead of fetching it again', async () => {
+      const worker = scope();
+      const fetched: string[] = [];
+      setupBraidWorker({
+        caches: undefined,
+        offline,
+        fetch: vi.fn(async (input: RequestInfo | URL) => {
+          fetched.push(input instanceof Request ? input.url : String(input));
+          return new Response('network');
+        }),
+      });
+
+      const preloaded = new Response('preloaded');
+      let answered: Promise<Response> | Response | undefined;
+      worker.dispatch('fetch', {
+        request: new Request('https://shop.example/billing', { headers: { accept: 'text/html' } }),
+        preloadResponse: Promise.resolve(preloaded),
+        respondWith: (response: Promise<Response> | Response) => (answered = response),
+        waitUntil: () => undefined,
+      });
+
+      expect(await answered).toBe(preloaded);
+      expect(fetched).not.toContain('https://shop.example/billing');
+      worker.restore();
+    });
+
+    it('falls back to its usual path when the preload fails', async () => {
+      const worker = scope();
+      setupBraidWorker({ caches: undefined, offline, fetch: vi.fn(async () => new Response('network')) });
+
+      let answered: Promise<Response> | Response | undefined;
+      worker.dispatch('fetch', {
+        request: new Request('https://shop.example/billing', { headers: { accept: 'text/html' } }),
+        preloadResponse: Promise.reject(new TypeError('Failed to fetch')),
+        respondWith: (response: Promise<Response> | Response) => (answered = response),
+        waitUntil: () => undefined,
+      });
+
+      // no cache to compose from here, so the navigation's own error surfaces, as it would offline
+      await expect(answered).rejects.toThrow('Failed to fetch');
+      worker.restore();
+    });
+  });
+
   it('does not claim open pages unless asked', async () => {
     const worker = scope();
     const claim = vi.fn(async () => undefined);

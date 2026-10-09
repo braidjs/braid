@@ -361,8 +361,11 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
    */
   const iframe = document.createElement('iframe');
   iframe.hidden = true;
-  // the realm stub has its own namespace, so the fragment's asset URLs carry no header variance
-  iframe.src = braidRealmUrl(fragmentId, routeSrcUrl.pathname, routeSrcUrl.search, getBraidConfig().basePath);
+  // The realm stub has its own namespace, so the fragment's asset URLs carry no header variance.
+  // One stub per fragment, whatever the route: its only route-dependent part is `<base>`, which is
+  // set below. A stub per route and query was a cold request on every new page or `?utm=` — and a
+  // URL no precache could name in advance.
+  iframe.src = braidRealmUrl(fragmentId, '/', '', getBraidConfig().basePath);
   iframe.name = `braid:${fragmentId}`;
 
   const { promise: loaded, resolve: resolveLoaded, reject: rejectLoaded } = Promise.withResolvers<void>();
@@ -393,6 +396,10 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
 
     try {
       verifyRealmStub(iframe, fragmentId);
+      pointStubAtRoute(
+        iframe.contentDocument!,
+        braidFragmentUrl(fragmentId, routeSrcUrl.pathname, '', getBraidConfig().basePath),
+      );
       // Restore the fragment's route-url illusion: the iframe was loaded from the gateway
       // namespace, but the fragment's JS context must observe the route url as its location.
       // The stub's <base> element is unaffected by replaceState and keeps relative url
@@ -424,6 +431,21 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
   init.signal.addEventListener('abort', () => handle.dispose(), { once: true });
 
   return handle;
+}
+
+/**
+ * Points a realm stub's relative urls at the route's directory in the fragment namespace, exactly
+ * as a stub fetched at the route would have. Nothing in the stub has resolved a url yet, so this is
+ * indistinguishable from the gateway having written it. A stub without a `<base>` — a hand-rolled
+ * one, say — gets one, rather than resolving everything against the stub's own url.
+ */
+export function pointStubAtRoute(stubDocument: Document, href: string): void {
+  let base = stubDocument.querySelector('base');
+  if (!base) {
+    base = stubDocument.createElement('base');
+    stubDocument.head.append(base);
+  }
+  base.setAttribute('href', href);
 }
 
 /**

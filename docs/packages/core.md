@@ -129,6 +129,8 @@ DOM Properties and methods on the custom element:
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
 
 ### Events Dispatched by `<fragment-slot>`
-- `braid:ready`: Dispatched when the fragment has completed booting.
+- `braid:ready`: Dispatched when the fragment has completed booting — its code has run. It does not
+  wait for the fragment's images or its window `load` event, which fires later inside the realm; a
+  host that needs the fragment fully loaded should have the fragment say so with an event.
 - `braid:error`: Dispatched if fragment fails to fetch or throws during boot.
 - `braid:event`: Dispatched when a fragment emits a custom event to the host.

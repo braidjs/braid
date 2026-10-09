@@ -52,9 +52,10 @@ named `BraidError { stage: 'realm-boot' }` telling you the gateway is not mounte
 If you genuinely cannot use the library, this is the contract — but you are reimplementing the
 gateway, and the protocol version is checked, so you inherit the maintenance:
 
-1. `GET /__braid/realm/:id/<route>` → an HTML stub containing
+1. `GET /__braid/realm/:id/` → an HTML stub containing
    `<meta name="braid-protocol" content="2">`, `<meta name="braid-adapter" content="compat">`,
-   and `<base href="/__braid/frag/:id/<route>">`.
+   and a `<base>` (the client points it at `/__braid/frag/:id/<route>` once the stub loads). Older
+   clients request `/__braid/realm/:id/<route>` and expect that `<base>` from the server.
 2. `GET /__braid/doc/:id/<route>` → the fragment's HTML, with `<html>`/`<head>`/`<body>` renamed
    to `braid-*`, every `<script>` neutralized to `type="inert"` with the real type in
    `data-script-type`, inline `on*` handlers stripped, and subresource URLs re-rooted into

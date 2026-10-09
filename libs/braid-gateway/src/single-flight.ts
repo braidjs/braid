@@ -28,25 +28,34 @@ export interface SingleFlight {
 }
 
 export function createSingleFlight(): SingleFlight {
-  const inflight = new Map<string, Promise<Response>>();
+  const inflight = new Map<string, { flight: Promise<Response>; joiners: number }>();
 
   return {
     async run(key, fetcher) {
       const existing = inflight.get(key);
-      if (existing) return (await existing).clone();
+      if (existing) {
+        // counted synchronously, so the starter knows before it hands out a body whether anyone
+        // else will need one
+        existing.joiners++;
+        return (await existing.flight).clone();
+      }
 
-      const flight = fetcher();
-      inflight.set(key, flight);
+      const entry = { flight: fetcher(), joiners: 0 };
+      inflight.set(key, entry);
 
       let response: Response;
       try {
-        response = await flight;
+        response = await entry.flight;
       } finally {
         // Removed as soon as it settles: a request arriving after this point must start its own
         // fetch rather than join a completed one, which is what keeps this a coalescer and not a
         // cache with an accidental TTL.
         inflight.delete(key);
       }
+
+      // Nobody joined, and nobody can now: the response is this caller's alone. Most fetches end
+      // here, and a clone would tee every byte of them for a second reader that does not exist.
+      if (entry.joiners === 0) return response;
 
       const mine = response.clone();
 
@@ -121,6 +130,10 @@ export function singleFlightKey(
     request.headers.get('accept-language') ?? '',
     request.headers.get('accept') ?? '',
     request.headers.get('user-agent') ?? '',
+    // A conditional request may be answered with a bodyless 304, which is no answer at all to a
+    // caller who asked for the body.
+    request.headers.get('if-none-match') ?? '',
+    request.headers.get('if-modified-since') ?? '',
     // Sorted, so the key does not depend on the order a host happened to build its object in.
     ...[...extraHeaders].sort().map((name) => `${name}=${request.headers.get(name) ?? ''}`),
   ].join('\n');
