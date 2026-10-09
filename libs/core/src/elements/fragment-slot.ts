@@ -411,7 +411,7 @@ export class FragmentSlot extends HTMLElement {
       const [htmlResult, realm] = await Promise.all([
         piercedContentRoot
           ? Promise.resolve({ ok: true as const, html: null })
-          : this.#fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
+          : fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
               (html) => ({ ok: true as const, html }),
               (error: unknown) => ({ ok: false as const, error }),
             ),
@@ -860,48 +860,89 @@ export class FragmentSlot extends HTMLElement {
     const value = this.getAttribute('allow');
     return value ? value.split(/;/).map((entry) => entry.trim()).filter(Boolean) : undefined;
   }
+}
 
-  async #fetchFragmentHtml(fragmentId: string, routeSrcUrl: URL, signal: AbortSignal): Promise<string> {
-    // the document namespace: the gateway prepares this exactly as it prepares pierced content
-    const documentUrl = braidDocumentUrl(
+/**
+ * A redirect target for an error message: origin and path only. The query string is where login
+ * redirects carry tokens and return-urls, and an error message ends up in the console and in the
+ * `braid:error` event.
+ */
+function redactedLocation(location: string | null, base: string): string | null {
+  if (!location) return null;
+  try {
+    const url = new URL(location, new URL(base, 'http://localhost'));
+    return `${url.origin === 'http://localhost' ? '' : url.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches the fragment's document from the gateway's document namespace.
+ *
+ * Redirects are refused rather than followed. Followed, a cross-origin one (an auth redirect to an
+ * identity provider, say) dies as an opaque CORS error that hides the status that caused it, and a
+ * relative one resolves against the gateway's origin — outside the namespace — so the shell's or a
+ * login page's html would be injected as the fragment's document without any error at all.
+ *
+ * A browser hands back an `opaqueredirect` for `redirect: 'manual'` (status 0, no readable
+ * `Location`); other runtimes expose the real 3xx, so the target is named when it can be read.
+ */
+export async function fetchFragmentHtml(fragmentId: string, routeSrcUrl: URL, signal: AbortSignal): Promise<string> {
+  // the document namespace: the gateway prepares this exactly as it prepares pierced content
+  const documentUrl = braidDocumentUrl(
+    fragmentId,
+    routeSrcUrl.pathname,
+    routeSrcUrl.search,
+    getBraidConfig().basePath,
+  );
+
+  let response: Response;
+  try {
+    response = await fetch(documentUrl, {
+      headers: {
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        [BRAID_FRAGMENT_ID_HEADER]: fragmentId,
+      },
+      redirect: 'manual',
+      signal,
+    });
+  } catch (error) {
+    throw new BraidError(`fetching the fragment's html from "${documentUrl}" failed`, {
       fragmentId,
-      routeSrcUrl.pathname,
-      routeSrcUrl.search,
-      getBraidConfig().basePath,
-    );
+      stage: 'fragment-fetch',
+      cause: error,
+      fixHint: 'ensure the braid gateway is mounted in front of this app and reachable from the browser',
+    });
+  }
 
-    let response: Response;
-    try {
-      response = await fetch(documentUrl, {
-        headers: {
-          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          [BRAID_FRAGMENT_ID_HEADER]: fragmentId,
-        },
-        signal,
-      });
-    } catch (error) {
-      throw new BraidError(`fetching the fragment's html from "${documentUrl}" failed`, {
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400 && response.status !== 304)) {
+    const location = redactedLocation(response.headers.get('location'), documentUrl);
+    throw new BraidError(
+      `the fragment redirected "${documentUrl}"` +
+        (response.status > 0 ? ` with HTTP ${response.status}` : '') +
+        (location ? ` to "${location}"` : ' (the target is not visible to the browser)'),
+      {
         fragmentId,
         stage: 'fragment-fetch',
-        cause: error,
-        fixHint: 'ensure the braid gateway is mounted in front of this app and reachable from the browser',
-      });
-    }
-
-    if (!response.ok) {
-      throw new BraidError(
-        `the gateway responded with HTTP ${response.status} for "${documentUrl}"`,
-        {
-          fragmentId,
-          stage: 'fragment-fetch',
-          fixHint:
-            response.status === 404
-              ? `register a manifest for fragment id "${fragmentId}" in the gateway registry`
-              : `check the gateway logs for fragment id "${fragmentId}"`,
-        },
-      );
-    }
-
-    return response.text();
+        fixHint:
+          `a fragment's document must not redirect — it is fetched, not navigated to. Usually the request is ` +
+          `missing authentication and the fragment is sending it to a login page: handle auth inside ` +
+          `fragment "${fragmentId}" instead of redirecting, and check the Network tab for the redirect's target`,
+      },
+    );
   }
+
+  if (!response.ok) {
+    throw new BraidError(`the gateway responded with HTTP ${response.status} for "${documentUrl}"`, {
+      fragmentId,
+      stage: 'fragment-fetch',
+      fixHint:
+        response.status === 404
+          ? `register a manifest for fragment id "${fragmentId}" in the gateway registry`
+          : `check the gateway logs for fragment id "${fragmentId}"`,
+    });
+  }
+
+  return response.text();
 }
