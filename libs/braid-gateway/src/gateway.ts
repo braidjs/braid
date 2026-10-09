@@ -28,7 +28,13 @@ import {
   type TelemetryEvent,
   type TelemetryOptions,
 } from './telemetry.js';
-import { cspNonceOf, pierceShellHtml, PierceTarget, prepareFragmentHtml } from './rewriter/transforms.js';
+import {
+  cspNonceOf,
+  PendingPierceTarget,
+  pierceShellHtml,
+  PierceTarget,
+  prepareFragmentHtml,
+} from './rewriter/transforms.js';
 
 /**
  * Gateway core: fetch-native, platform-neutral origin-front middleware.
@@ -828,6 +834,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    * The shell and all matching fragments are fetched concurrently, and the fragments' HTML is
    * interleaved into the shell's stream as it arrives — so a fragment never serializes behind
    * the shell, and the page paints with fragments already present.
+   *
+   * Nor does the shell serialize behind a fragment: the response starts as soon as the *shell*
+   * answers, and each fragment is waited for only when the stream reaches its slot. The shell's
+   * `<head>` — its stylesheets and scripts — never waits on the slowest fragment's endpoint.
    */
   async function pierceDocument(
     request: Request,
@@ -836,13 +846,31 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     matches: ResolvedFragmentManifest[],
   ): Promise<Response | null> {
     const pagePath = `${requestUrl.pathname}${requestUrl.search}`;
-    const [shellResponse, ...fragmentResults] = await Promise.all([
-      next(),
+    // Started before the shell is awaited, so every fetch is in flight at once. Never rejects: a
+    // failure is a result, handled at the slot. (`fetchFragment` can still throw before its own
+    // error handling — a header hook that throws, say — and nothing may await these until much
+    // later, so that is caught here rather than left as an unhandled rejection.)
+    const fragmentResults: Promise<FragmentFetchResult>[] = matches.map((fragment) =>
       // A bound fragment renders the page's own route, so the endpoint gets the page path. An
       // unbound one is chrome: its content lives at one fixed path, and asking a notifications
       // endpoint for `/billing/invoices` is a question it has no answer to.
-      ...matches.map((fragment) => fetchFragment(request, requestUrl, fragmentPath(fragment, requestUrl), fragment, 'pierce')),
-    ]);
+      fetchFragment(request, requestUrl, fragmentPath(fragment, requestUrl), fragment, 'pierce').catch(
+        (error: unknown) => ({ ok: false, error, timedOut: false }),
+      ),
+    );
+    const cancelFragmentBodies = () => {
+      for (const pending of fragmentResults) {
+        void pending.then((result) => (result.ok ? result.response.body?.cancel() : undefined)).catch(() => undefined);
+      }
+    };
+
+    let shellResponse: Response;
+    try {
+      shellResponse = await next();
+    } catch (error) {
+      cancelFragmentBodies();
+      throw error;
+    }
 
     const isShellNullBody =
       shellResponse.status === 204 ||
@@ -856,23 +884,27 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const isHtml = shell.headers.get('content-type')?.toLowerCase().includes('text/html');
 
     if (!shell.ok || !isHtml || !shell.body) {
-      // nothing to pierce into: hand the shell back untouched and cancel the fragment bodies
-      await Promise.all(
-        fragmentResults.map((result) => (result.ok ? result.response.body?.cancel() : undefined)),
-      );
+      // nothing to pierce into: hand the shell back untouched, and cancel the fragment bodies as
+      // they arrive rather than making the shell wait for them
+      cancelFragmentBodies();
       return shell;
     }
 
-    const targets: PierceTarget[] = matches.map((fragment, index) => {
-      const result = fragmentResults[index];
+    const targets: PendingPierceTarget[] = matches.map((fragment, index) => ({
+      fragmentId: fragment.id,
+      ...(fragment.src === undefined ? {} : { src: fragment.src }),
+      settled: fragmentResults[index].then((result) => pierceContent(fragment, result)),
+    }));
+
+    /** What a fragment's fetch puts into its slot: its prepared content, or its fallback. */
+    function pierceContent(
+      fragment: ResolvedFragmentManifest,
+      result: FragmentFetchResult,
+    ): Pick<PierceTarget, 'content' | 'fallbackReason'> {
       const failed = !result.ok || !result.response.ok || !result.response.body;
 
       if (!failed) {
-        return {
-          fragmentId: fragment.id,
-          content: prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id, basePath }),
-          ...(fragment.src === undefined ? {} : { src: fragment.src }),
-        };
+        return { content: prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id, basePath }) };
       }
 
       const detail = !result.ok
@@ -887,7 +919,6 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       // pierce degrades to the client-side boot path rather than to a broken page
       if (fragment.fallback === 'error-html') {
         return {
-          fragmentId: fragment.id,
           content: stringStream(
             mode === 'development'
               ? `<braid-html><braid-body><p>braid-gateway: ${escapeHtml(detail)}</p></braid-body></braid-html>`
@@ -897,11 +928,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       }
 
       return {
-        fragmentId: fragment.id,
         content: null,
         ...(fragment.fallback === 'placeholder' ? { fallbackReason: 'placeholder' } : {}),
       };
-    });
+    }
 
     const pierced = new Response(
       pierceShellHtml({

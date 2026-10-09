@@ -240,8 +240,9 @@ close to the user only after that hop is short.
 
 ### Two things to get right wherever you deploy
 
-**Keep the fragment hop short.** Every pierced page costs one fetch per fragment, in parallel, and
-the page waits for the slowest. A gateway at the edge with fragments in one distant region is
+**Keep the fragment hop short.** Every pierced page costs one fetch per fragment, in parallel. The
+shell starts streaming as soon as it responds, but the bytes after each slot wait for that slot's
+fragment, so a slow fragment still holds back everything below it. A gateway at the edge with fragments in one distant region is
 slower than a gateway sitting next to its fragments. Optimise the inner hop first.
 
 **Give per-instance state somewhere to live.** The circuit breaker and the fetch coalescer are both

@@ -125,10 +125,11 @@ describe('manifest documentPath', () => {
 
     // an unbound slot asks for its src through the document route
     await gateway.handle(new Request('https://dash.example/__braid/doc/goals/index.html'));
-    await gateway.handle(
+    const pierced = await gateway.handle(
       new Request('https://dash.example/goals/accounts/123', { headers: { 'sec-fetch-dest': 'document' } }),
       async () => new Response(SHELL_HTML, { headers: { 'content-type': 'text/html' } }),
     );
+    await pierced!.text();
 
     expect(origin.requests).toEqual([`${BASE}/index.html`, `${BASE}/index.html`]);
   });
