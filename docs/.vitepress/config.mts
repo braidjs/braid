@@ -117,6 +117,7 @@ export default withMermaid(
           items: [
             { text: 'Architecture', link: '/braid-architecture' },
             { text: 'Trust tiers', link: '/braid-boundary' },
+            { text: 'Fragment markup', link: '/braid-fragment-markup' },
             { text: 'From Module Federation', link: '/braid-from-module-federation' },
             { text: 'Without the gateway', link: '/braid-without-gateway' },
             { text: 'The POC', link: '/braid-poc' },
