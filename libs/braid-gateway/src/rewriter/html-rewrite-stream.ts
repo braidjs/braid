@@ -48,9 +48,14 @@ export interface EndTag {
   before(content: Injection): void;
 }
 
+/**
+ * A handler may return a promise, and the stream waits on it at that tag — everything before the
+ * tag has already been emitted. That is how a pierced slot waits for its fragment without holding
+ * back the shell ahead of it. Handlers that return nothing cost nothing extra.
+ */
 export interface ElementHandler {
-  element?(tag: StartTag): void;
-  endTag?(tag: EndTag): void;
+  element?(tag: StartTag): void | Promise<void>;
+  endTag?(tag: EndTag): void | Promise<void>;
 }
 
 export interface RewriteOptions {
@@ -66,7 +71,7 @@ export interface RewriteOptions {
    * Emitted once the input ends. Used as the safety net for injections anchored to an end tag
    * that never arrives — `</body>` is optional in HTML and frequently omitted.
    */
-  onEnd?(): Injection | undefined;
+  onEnd?(): Injection | undefined | Promise<Injection | undefined>;
 }
 
 /**
@@ -154,7 +159,7 @@ async function* rewrite(
     reader.releaseLock();
   }
 
-  const trailing = options.onEnd?.();
+  const trailing = await options.onEnd?.();
   if (trailing !== undefined) {
     yield* emit(trailing);
   }
@@ -308,7 +313,10 @@ async function* rewrite(
     };
 
     for (const element of elementHandlers) {
-      element(tag);
+      // awaited only when it is a promise: this runs for every element of every document, and an
+      // unconditional await would be a microtask per tag
+      const pending = element(tag);
+      if (pending) await pending;
     }
 
     if (name !== originalName && !token.selfClosing && !VOID_ELEMENTS.has(originalName)) {
@@ -345,12 +353,13 @@ async function* rewrite(
     }
 
     const before: Injection[] = [];
-    handler.endTag({
+    const pending = handler.endTag({
       tagName: token.name,
       before(content: Injection) {
         before.push(content);
       },
     });
+    if (pending) await pending;
 
     for (const content of before) {
       yield* emit(content);
