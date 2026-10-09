@@ -194,6 +194,19 @@ export interface GatewayOptions {
    * on an origin it does not own.
    */
   serviceWorker?: boolean | ServiceWorkerOptions;
+  /**
+   * The path this gateway is mounted under, for a host that shares its domain and does not own the
+   * root (`/manage`). The reserved namespaces move under it — `/manage/__braid/frag/…` — and the
+   * gateway stops answering them at the root. Pass the same value to `initBraid({ basePath })` in
+   * the host page.
+   *
+   * Only the namespaces move. Page URLs are untouched: `pierce` patterns still match the full
+   * pathname, and bound fragments are still fetched at it.
+   *
+   * Not yet supported together with `serviceWorker`, `discovery`, or `telemetry.webVitals`, which
+   * would otherwise keep serving at the root; combining them throws.
+   */
+  basePath?: string;
 }
 
 export interface ServiceWorkerOptions {
@@ -283,7 +296,27 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       )
     : null;
   const vitalsEnabled = telemetry?.webVitals === true;
+  const basePath = normalizeBasePath(options.basePath);
+  if (basePath) {
+    const unsupported = [
+      serviceWorker && 'serviceWorker',
+      options.discovery && 'discovery',
+      vitalsEnabled && 'telemetry.webVitals',
+    ].filter(Boolean);
+    if (unsupported.length) {
+      throw new Error(
+        `braid-gateway: basePath "${basePath}" is not supported together with ${unsupported.join(', ')} yet — ` +
+          `they would still be served at the root of the origin`,
+      );
+    }
+  }
   let telemetryBroken = false;
+
+  /** The namespace route of a request under this gateway's mount, or null when it is not one. */
+  function braidRoute(pathname: string) {
+    if (!basePath) return parseBraidPathname(pathname);
+    return pathname.startsWith(`${basePath}/`) ? parseBraidPathname(pathname.slice(basePath.length)) : null;
+  }
 
   /**
    * Emits a telemetry event, and survives a sink that throws.
@@ -340,7 +373,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         return handleVitalsBeacon(request);
       }
 
-      const route = parseBraidPathname(requestUrl.pathname);
+      const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
         return next ? handleShellRequest(request, requestUrl, next) : null;
@@ -384,8 +417,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
             `<!doctype html><title>Braid realm</title>` +
               `<meta name="${BRAID_PROTOCOL_META}" content="${BRAID_PROTOCOL_VERSION}">` +
               `<meta name="${BRAID_ADAPTER_META}" content="${escapeHtml(fragment.adapter)}">` +
-              adapterOptionsMeta(fragment) +
-              `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname))}">`,
+              adapterOptionsMeta(fragment, basePath) +
+              `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`,
             200,
             {
               [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
@@ -432,7 +465,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null> {
       const requestUrl = new URL(request.url);
-      const route = parseBraidPathname(requestUrl.pathname);
+      const route = braidRoute(requestUrl.pathname);
 
       // only the fragment namespace carries live sockets; stubs and documents are plain GETs
       if (!route || route.kind !== 'fragment') return null;
@@ -533,7 +566,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     const body =
       prepare && result.response.body
-        ? prepareFragmentHtml(result.response.body, { fragmentId: fragment.id })
+        ? prepareFragmentHtml(result.response.body, { fragmentId: fragment.id, basePath })
         : result.response.body;
 
     const isNullBody =
@@ -828,7 +861,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       if (!failed) {
         return {
           fragmentId: fragment.id,
-          content: prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id }),
+          content: prepareFragmentHtml(result.response.body!, { fragmentId: fragment.id, basePath }),
           ...(fragment.src === undefined ? {} : { src: fragment.src }),
         };
       }
@@ -1072,6 +1105,19 @@ function isDocumentRequest(request: Request): boolean {
 }
 
 /**
+ * `basePath` as the URL builders want it: empty, or `/a/b` with no trailing slash. Anything that
+ * is not a plain absolute path throws, because the mistake would otherwise show up as a gateway
+ * that silently answers nothing.
+ */
+function normalizeBasePath(basePath: string | undefined): string {
+  const trimmed = (basePath ?? '').replace(/\/+$/, '');
+  if (trimmed && !/^(\/[^/?#\s]+)+$/.test(trimmed)) {
+    throw new Error(`braid-gateway: basePath "${basePath}" must be an absolute path such as "/manage"`);
+  }
+  return trimmed;
+}
+
+/**
  * Resolves a namespace-stripped request against a fragment's endpoint, **within the endpoint's
  * own path**.
  *
@@ -1137,7 +1183,7 @@ function stringStream(content: string): ReadableStream<Uint8Array> {
  * Only fields that mean something to *some* adapter travel here — the runtime itself never reads
  * them. Emitted only when there is something to say, so a compat fragment's stub is unchanged.
  */
-function adapterOptionsMeta(fragment: ResolvedFragmentManifest): string {
+function adapterOptionsMeta(fragment: ResolvedFragmentManifest, basePath: string): string {
   const options: Record<string, unknown> = {};
 
   // `entry` is a path on the fragment's *own* origin, so it is re-rooted into the fragment's
@@ -1146,7 +1192,7 @@ function adapterOptionsMeta(fragment: ResolvedFragmentManifest): string {
   if (fragment.entry) {
     options['entry'] = /^[a-z][a-z0-9+.-]*:|^\/\//i.test(fragment.entry)
       ? fragment.entry
-      : braidFragmentUrl(fragment.id, fragment.entry.startsWith('/') ? fragment.entry : `/${fragment.entry}`);
+      : braidFragmentUrl(fragment.id, fragment.entry.startsWith('/') ? fragment.entry : `/${fragment.entry}`, '', basePath);
   }
   if (fragment.element) options['element'] = fragment.element;
   if (fragment.events) options['events'] = Object.keys(fragment.events);

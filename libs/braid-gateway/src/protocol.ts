@@ -112,7 +112,12 @@ export function parseNamespacePathname(pathname: string): { fragmentId: string; 
   return route && route.kind === 'fragment' ? { fragmentId: route.fragmentId, pathname: route.pathname } : null;
 }
 
-/** Builds a URL in the fragment's asset namespace. */
-export function braidFragmentUrl(fragmentId: string, pathname: string, search = ''): string {
-  return `${BRAID_FRAGMENT_PREFIX}${encodeURIComponent(fragmentId)}${pathname}${search}`;
+/**
+ * Builds a URL in the fragment's asset namespace.
+ *
+ * `basePath` is the gateway's mount (`/manage`), already normalized: empty, or a path with no
+ * trailing slash.
+ */
+export function braidFragmentUrl(fragmentId: string, pathname: string, search = '', basePath = ''): string {
+  return `${basePath}${BRAID_FRAGMENT_PREFIX}${encodeURIComponent(fragmentId)}${pathname}${search}`;
 }

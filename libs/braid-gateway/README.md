@@ -188,6 +188,20 @@ browser, and most CDNs ignore `Vary` on anything but `Accept-Encoding`.
 **No braid URL varies on a request header.** Point a CDN at them and they cache correctly with
 no configuration at all.
 
+### Mounting under a path
+
+A host that shares its domain and does not own the root — `/manage/` behind a load balancer —
+moves the namespaces under its mount. Set the same `basePath` on both sides:
+
+```ts
+createGateway({ registry, basePath: '/manage' }); // serves /manage/__braid/{frag,realm,doc}/…
+initBraid({ basePath: '/manage' });               // host page: requests them there
+```
+
+The gateway then leaves root `/__braid/*` alone. Page URLs are unaffected: `pierce` patterns still
+match the full pathname (`/manage/goals/*`). `serviceWorker`, `discovery`, and
+`telemetry.webVitals` do not support a `basePath` yet, and combining them with one throws.
+
 ### The one thing that does vary
 
 | Header | URL | Response changes to | Why |
