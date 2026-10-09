@@ -10,5 +10,5 @@
     "moduleResolution": "nodenext"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+  "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/*.helpers.ts"]
 }

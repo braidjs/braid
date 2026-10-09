@@ -246,10 +246,13 @@ export interface BraidGateway {
    * addressed through the fragment namespace, so the gateway has to say where they go — the
    * socket plumbing itself belongs to the platform binding.
    *
-   * @returns the endpoint URL to dial, or null when the request is not a fragment upgrade, the
-   *          fragment is unknown, or the caller may not load it.
+   * @returns the endpoint URL to dial and the headers to send it, or null when the request is not
+   *          a fragment upgrade, the fragment is unknown, or the caller may not load it. The
+   *          headers follow the same credential rule as fragment fetches: no `cookie` or
+   *          `authorization` unless {@link GatewayOptions.forwardCredentials}, then
+   *          {@link GatewayOptions.additionalHeaders}. The binding sets `host` itself.
    */
-  resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null>;
+  resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL; headers: Headers } | null>;
 }
 
 export function createGateway(options: GatewayOptions): BraidGateway {
@@ -430,7 +433,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       }
     },
 
-    async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null> {
+    async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL; headers: Headers } | null> {
       const requestUrl = new URL(request.url);
       const route = parseBraidPathname(requestUrl.pathname);
 
@@ -449,11 +452,25 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       const strippedUrl = new URL(requestUrl);
       strippedUrl.pathname = route.pathname;
 
+      let target: URL;
       try {
-        return { fragmentId: fragment.id, target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id) };
+        target = resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id);
       } catch {
         return null;
       }
+
+      // A socket crosses the same trust boundary as a fetch, so the same credential rule as
+      // fetchFragment: strip, then additionalHeaders, so a host can supply its own authorization.
+      const headers = new Headers(request.headers);
+      if (!forwardCredentials) {
+        headers.delete('cookie');
+        headers.delete('authorization');
+      }
+      for (const [name, value] of Object.entries(resolveAdditionalHeaders(request))) {
+        headers.set(name, value);
+      }
+
+      return { fragmentId: fragment.id, target, headers };
     },
   };
 

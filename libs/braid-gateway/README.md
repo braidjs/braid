@@ -456,7 +456,7 @@ Defaults worth knowing: `x-forwarded-proto`/`x-forwarded-host` are **overwritten
 request (opt into passthrough with `trustForwardedHeaders` only behind a proxy you control); an
 endpoint's path is a boundary, so `endpoint: 'https://internal/apps/billing/'` cannot be used to
 reach the rest of that origin; and the caller's `Cookie` and `Authorization` are **not** forwarded
-to fragment endpoints.
+to fragment endpoints, websocket upgrades included.
 
 That last one is the trust boundary between a shell and the fragments it composes. Those headers
 authenticate the caller to *the shell's* origin, and a fragment endpoint is frequently a different

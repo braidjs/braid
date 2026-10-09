@@ -222,7 +222,7 @@ export function toNodeUpgradeHandler(
         port: target.target.port || (isSecure ? 443 : 80),
         path: `${target.target.pathname}${target.target.search}`,
         method: req.method,
-        headers: { ...req.headers, host: target.target.host },
+        headers: { ...Object.fromEntries(target.headers), host: target.target.host },
       });
 
       upstream.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
