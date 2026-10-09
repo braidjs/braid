@@ -148,7 +148,9 @@ describe('fetchFragmentHtml()', () => {
   it('returns the document and refuses to follow redirects', async () => {
     const fetchMock = stubFetch(new Response('<h1>hi</h1>', { status: 200 }));
 
-    await expect(fetchFragmentHtml('goals', routeUrl, new AbortController().signal)).resolves.toBe('<h1>hi</h1>');
+    await expect(fetchFragmentHtml('goals', routeUrl, new AbortController().signal)).resolves.toMatchObject({
+      html: '<h1>hi</h1>',
+    });
 
     // a followed redirect leaves the namespace: cross-origin it dies as an opaque CORS error, and
     // same-origin it silently injects the shell's or a login page's html as the fragment
