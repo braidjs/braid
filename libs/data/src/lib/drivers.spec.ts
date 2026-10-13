@@ -91,6 +91,21 @@ describe.each(drivers)('%s driver', (_name, make) => {
     expect(await driver.get('notes', 'tenant-a\u0000late')).toBeNull();
   });
 
+  it('starts empty: no highest seq, no record', async () => {
+    const driver = make();
+    expect(await driver.highestSeq('notes')).toBe(0);
+    expect(await driver.get('notes', 'tenant-a\u0000missing')).toBeNull();
+  });
+
+  it('clears a partition in one collection only', async () => {
+    const driver = make();
+    await driver.put('notes', record('tenant-a', 'n1', 1));
+    await driver.put('other', record('tenant-a', 'n2', 2));
+    await driver.clearPartition('notes', 'tenant-a');
+
+    expect(await driver.partitions('other')).toEqual(['tenant-a']);
+  });
+
   it('does not let a caller mutate a stored record through the object it passed', async () => {
     const driver = make();
     const input = record('tenant-a', 'n1', 1);
@@ -169,5 +184,36 @@ describe('session storage driver', () => {
     full = true;
 
     await expect(notes.put({ id: 'n2', partition: 'p', value: { title: 'does not' } })).rejects.toThrow('full');
+  });
+
+  it('skips items under its prefix that are not records, and can still purge', async () => {
+    const storage = fakeStorage();
+    const driver = sessionStorageRecordDriver({ storage });
+    await driver.put('notes', record('tenant-a', 'good', 3));
+    storage.setItem('skew:data:notes\u0000tenant-a\u0000junk', 'not json');
+    storage.setItem('skew:data:notes\u0000tenant-a\u0000null', 'null');
+    storage.setItem('skew:data:notes\u0000tenant-a\u0000str', '"str"');
+
+    expect((await driver.list('notes', 'tenant-a')).map((r) => r.key)).toEqual(['good']);
+    expect(await driver.partitions('notes')).toEqual(['tenant-a']);
+    expect(await driver.highestSeq('notes')).toBe(3);
+
+    await driver.clearPartition('notes', 'tenant-a');
+    expect([...Array(storage.length).keys()].map((i) => storage.key(i))).toEqual([]);
+  });
+
+  it('purges only the partition named, not one it is a prefix of', async () => {
+    const driver = sessionStorageRecordDriver({ storage: fakeStorage() });
+    await driver.put('notes', record('p', 'n1', 1));
+    await driver.put('notes', record('p2', 'n2', 2));
+
+    await driver.clearPartition('notes', 'p');
+
+    expect(await driver.partitions('notes')).toEqual(['p2']);
+  });
+
+  it('refuses a collection name that would collide with another collection', async () => {
+    const driver = sessionStorageRecordDriver({ storage: fakeStorage() });
+    await expect(driver.put('a\u0000b', record('p', 'k', 1))).rejects.toThrow(/cannot contain U\+0000/);
   });
 });

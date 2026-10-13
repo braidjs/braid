@@ -160,6 +160,18 @@ export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStor
     return sequence;
   }
 
+  /**
+   * Tells the hook a write landed. A hook that throws is the hook's problem: the record is already
+   * stored, and failing the write would tell the caller it was not.
+   */
+  function notifyWrite(write: { type: 'put' | 'delete'; partition: string; key: string }): void {
+    try {
+      onWrite?.(write);
+    } catch {
+      // Swallowed for the reason above.
+    }
+  }
+
   function project(record: StoredRecord): ProjectedRecord<T> | null {
     const result = schema.read(record.envelope);
 
@@ -194,7 +206,7 @@ export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStor
         envelope: buildId ? schema.write(value, buildId) : schema.write(value),
         ...(owner === undefined ? {} : { owner }),
       });
-      onWrite?.({ type: 'put', partition, key: id });
+      notifyWrite({ type: 'put', partition, key: id });
       return assigned;
     },
 
@@ -221,7 +233,7 @@ export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStor
 
     async delete(id, partition) {
       await driver.delete(collection, storageKey(partition, id));
-      onWrite?.({ type: 'delete', partition, key: id });
+      notifyWrite({ type: 'delete', partition, key: id });
     },
 
     clearPartition: (partition) => driver.clearPartition(collection, partition),

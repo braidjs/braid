@@ -134,7 +134,8 @@ export interface CollectionState<T> {
  *
  * Read from storage only — it never goes to the network. Something else puts records there (key
  * queries, mutations, a push stream), and this re-reads whenever any of them does, in this client,
- * another client, or another context sharing the invalidator.
+ * another client, or another context sharing the invalidator. Writes made directly to the driver —
+ * `copyPartition`, a tenancy purge — are not seen until the next change that goes through a client.
  */
 export interface CollectionQuery<T> {
   readonly current: CollectionState<T>;
@@ -355,6 +356,7 @@ export function createDataClient(options: DataClientOptions): DataClient {
   const maxAttempts = options.maxAttempts ?? 5;
 
   const watchers = new Set<(change: RecordChange) => void>();
+  let closed = false;
 
   /**
    * Tells this client's watchers what changed, and everyone else that something did.
@@ -363,6 +365,9 @@ export function createDataClient(options: DataClientOptions): DataClient {
    * invalidator, not this client's listeners.
    */
   function changed(change: RecordChange): void {
+    // A write still in flight at `close()` lands after it. Nobody is listening by then, and the
+    // invalidator's channel may already be closed — posting to it throws.
+    if (closed) return;
     for (const watcher of [...watchers]) {
       try {
         watcher(change);
@@ -389,7 +394,8 @@ export function createDataClient(options: DataClientOptions): DataClient {
         // the pair of them, and the query that asked is the only place that can act on it.
         onReadFailure: (id, failure) => void unreadable.set(id, failure.reason),
         // Every write the client makes goes through a store — query fetches, confirmed mutations,
-        // pushed records — so this one hook is the whole feed.
+        // pushed records — so this one hook is the feed for all of them. Writes made straight to
+        // the driver (`copyPartition`, a tenancy purge) bypass it and are not reported.
         onWrite: (write) => changed({ ...write, collection }),
       });
       stores.set(schema as VersionedSchema<unknown>, store);
@@ -559,7 +565,10 @@ export function createDataClient(options: DataClientOptions): DataClient {
         else if (policy === 'raise') conflict = { expected, actual, paths };
       }
 
-      await store.put({ id: definition.key, partition, value: stored });
+      // A confirmed removal deletes. Storing whatever the server answered a DELETE with — often
+      // nothing at all — would leave a record whose value is `undefined` in every collection view.
+      if (definition.removes) await store.delete(definition.key, partition);
+      else await store.put({ id: definition.key, partition, value: stored });
       await outbox.remove(entryId);
 
       if (conflict) conflicts.set(definition.key, conflict as Conflict<unknown>);
@@ -629,6 +638,7 @@ export function createDataClient(options: DataClientOptions): DataClient {
     },
 
     close() {
+      closed = true;
       watchers.clear();
       invalidator.close();
     },
@@ -688,6 +698,9 @@ function createQuery<T>(
       // Reported before returning, so a reader that is behind learns *why* it is about to refetch
       // rather than watching an apparently empty cache go back to the network.
       if (failure) emit({ unreadable: failure });
+      // A record that was here and is not any more was deleted — a confirmed removal, usually.
+      // Said so, rather than left showing the overlay that predicted it.
+      else if (state.status === 'ready') emit({ data: undefined, pending: false, conflict: null });
       return false;
     }
 
@@ -827,23 +840,57 @@ function createCollectionQuery<T>(
   };
 
   /**
-   * Counts reads so only the newest one lands. Two changes in quick succession start two reads, and
-   * nothing makes them finish in order — without this, the older read can overwrite the newer.
+   * Coalesced: at most one read in flight, and at most one more queued behind it.
+   *
+   * A burst of writes — a push stream delivering two hundred records — would otherwise start two
+   * hundred full reads of the partition, each one a scan. Any number of changes during a read are
+   * answered by a single read after it, which sees all of them (and `schedule` below batches the
+   * ones that arrive before a read starts). Reads are therefore also strictly
+   * sequential, so an older result can never land after a newer one.
    */
-  let generation = 0;
+  let reading = false;
+  let again = false;
 
   async function read(): Promise<void> {
-    const mine = ++generation;
+    if (reading) {
+      again = true;
+      return;
+    }
+
+    reading = true;
     try {
-      const data = await store.list(context.partition());
-      if (mine === generation && !controller.signal.aborted) emit({ data, status: 'ready' });
-    } catch (error) {
-      // Reading the partition throws after sign-out; reported as state, as `createQuery` does.
-      if (mine === generation && !controller.signal.aborted) emit({ data: state.data, status: 'error', error });
+      do {
+        again = false;
+        try {
+          const data = await store.list(context.partition());
+          if (!controller.signal.aborted) emit({ data, status: 'ready' });
+        } catch (error) {
+          // Reading the partition throws after sign-out; reported as state, as `createQuery` does.
+          if (!controller.signal.aborted) emit({ data: state.data, status: 'error', error });
+        }
+      } while (again && !controller.signal.aborted);
+    } finally {
+      reading = false;
     }
   }
 
-  context.invalidator.subscribe(() => [context.tag], () => void read(), { signal: controller.signal });
+  /**
+   * Changes are answered a macrotask later rather than at once. The writes in a burst land spread
+   * over many microtasks — each `put` awaits its sequence number and its driver call — so without
+   * the wait each read would finish before the next write arrived, and coalescing would catch
+   * almost nothing. One tick is enough for the burst to land, and short enough not to be seen.
+   */
+  let scheduled = false;
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(() => {
+      scheduled = false;
+      if (!controller.signal.aborted) void read();
+    }, 0);
+  };
+
+  context.invalidator.subscribe(() => [context.tag], schedule, { signal: controller.signal });
   void read();
 
   return {

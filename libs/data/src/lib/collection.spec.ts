@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { versioned } from '@braidlabs/skew';
 import { memoryRecordDriver } from './memory-driver.js';
 import { createRecordStore, type RecordDriver } from './record-store.js';
-import { resetSharedInvalidators } from './invalidation.js';
+import { createInvalidator, resetSharedInvalidators, type BroadcastChannelLike } from './invalidation.js';
 import { createOutbox } from './outbox.js';
 import type { PushSink } from './adapters.js';
 import { createDataClient, type CollectionQuery, type CollectionState, type RecordChange } from './query.js';
@@ -234,5 +234,140 @@ describe('watch', () => {
     expect(heard).not.toHaveBeenCalled();
     notes.close();
     other.close();
+  });
+});
+
+describe('review fixes', () => {
+  it('deletes on a confirmed removal: the feed says delete, the view drops the row, the key query empties', async () => {
+    const { driver, client } = setup();
+    await seed(driver, 'tenant-a', 'n1', 'doomed');
+    const notes = client.collection({ schema: NoteSchema });
+    await until(notes, (s) => s.data?.length === 1);
+    const key = client.query({ key: 'n1', schema: NoteSchema, fetch: async () => ({ id: 'n1', title: 'doomed' }), staleWhileRevalidate: false });
+    await vi.waitFor(() => expect(key.current.status).toBe('ready'));
+    const changes: RecordChange[] = [];
+    client.watch((change) => changes.push(change));
+
+    const outcome = await client.mutate<Note>({
+      key: 'n1',
+      schema: NoteSchema,
+      mutationId: 'note.delete',
+      input: {},
+      patch: {},
+      removes: true,
+      send: async () => undefined,
+    });
+
+    expect(outcome.status).toBe('confirmed');
+    expect(changes).toEqual([{ type: 'delete', collection: 'entities', partition: 'tenant-a', key: 'n1' }]);
+    expect(await until(notes, (s) => s.data?.length === 0)).toMatchObject({ status: 'ready' });
+    await vi.waitFor(() => expect(key.current).toMatchObject({ data: undefined, pending: false }));
+    key.dispose();
+    client.close();
+  });
+
+  it('lets a write that lands after close succeed, even with cross-context invalidation', async () => {
+    const driver = memoryRecordDriver();
+    const client = createDataClient({ driver, partition: () => 'tenant-a', crossContextInvalidation: true });
+    let release!: (value: Note) => void;
+    const query = client.query({
+      key: 'n1',
+      schema: NoteSchema,
+      fetch: () => new Promise<Note>((resolve) => (release = resolve)),
+    });
+    await vi.waitFor(() => expect(release).toBeDefined());
+
+    client.close();
+    release({ id: 'n1', title: 'late' });
+
+    await expect(client.clearPartition()).resolves.toBeUndefined();
+    await flush();
+    expect(query.current.status).not.toBe('error');
+    query.dispose();
+  });
+
+  it('coalesces a burst of writes into a handful of reads', async () => {
+    const driver = memoryRecordDriver();
+    const list = vi.spyOn(driver, 'list');
+    const { client } = setup(driver);
+    const notes = client.collection({ schema: NoteSchema });
+    await until(notes, (s) => s.status === 'ready');
+    let sink!: PushSink;
+    client.connect({ schema: NoteSchema, source: (s) => void (sink = s) });
+    list.mockClear();
+
+    await Promise.all(
+      Array.from({ length: 50 }, (_, i) => sink.receive({ key: `n${i}`, value: { id: `n${i}`, title: `${i}` } })),
+    );
+
+    const state = await until(notes, (s) => s.data?.length === 50);
+    expect(state.status).toBe('ready');
+    expect(list.mock.calls.filter(([collection]) => collection === 'entities').length).toBeLessThanOrEqual(3);
+    client.close();
+  });
+
+  it('stops reading storage once disposed', async () => {
+    const driver = memoryRecordDriver();
+    const list = vi.spyOn(driver, 'list');
+    const { client } = setup(driver);
+    const notes = client.collection({ schema: NoteSchema });
+    await until(notes, (s) => s.status === 'ready');
+
+    notes.dispose();
+    list.mockClear();
+    await client.clearPartition();
+    await flush();
+
+    expect(list).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it('re-reads when a write happens in another context', async () => {
+    // A channel pair standing in for BroadcastChannel between two realms.
+    const listeners: ((event: { data: unknown }) => void)[][] = [[], []];
+    const end = (self: number): BroadcastChannelLike => ({
+      postMessage: (data) => listeners[1 - self].forEach((listener) => listener({ data })),
+      addEventListener: (_type, listener) => void listeners[self].push(listener),
+      close: () => undefined,
+    });
+    const driver = memoryRecordDriver();
+    const reader = createDataClient({ driver, partition: () => 'tenant-a', invalidator: createInvalidator({ partition: 'tenant-a', channel: end(0) }) });
+    const writer = createDataClient({ driver, partition: () => 'tenant-a', invalidator: createInvalidator({ partition: 'tenant-a', channel: end(1) }) });
+    const notes = reader.collection({ schema: NoteSchema });
+    await until(notes, (s) => s.status === 'ready');
+
+    writer.query({ key: 'n1', schema: NoteSchema, fetch: async () => ({ id: 'n1', title: 'from another realm' }) });
+
+    expect(titles(await until(notes, (s) => s.data?.length === 1))).toEqual(['from another realm']);
+    reader.close();
+    writer.close();
+  });
+});
+
+describe('watch, edge cases', () => {
+  it('keeps delivering to other watchers when one throws', async () => {
+    const { client } = setup();
+    const heard = vi.fn();
+    client.watch(() => {
+      throw new Error('bad watcher');
+    });
+    client.watch(heard);
+
+    await client.clearPartition();
+
+    expect(heard).toHaveBeenCalledOnce();
+    client.close();
+  });
+
+  it('reports no clear when the driver could not clear', async () => {
+    const driver = memoryRecordDriver();
+    driver.clearPartition = () => Promise.reject(new Error('blocked'));
+    const { client } = setup(driver);
+    const heard = vi.fn();
+    client.watch(heard);
+
+    await expect(client.clearPartition()).rejects.toThrow('blocked');
+    expect(heard).not.toHaveBeenCalled();
+    client.close();
   });
 });
