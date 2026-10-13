@@ -1,5 +1,5 @@
 import type { SkewFailureReason, VersionedSchema } from '@braidlabs/skew';
-import type { RecordDriver } from './record-store.js';
+import type { ProjectedRecord, RecordDriver } from './record-store.js';
 import { createRecordStore, type RecordStore } from './record-store.js';
 import { sharedInvalidator, type Invalidator } from './invalidation.js';
 import { withLock } from './locks.js';
@@ -101,6 +101,45 @@ export interface QueryDefinition<T> {
    * it.
    */
   staleWhileRevalidate?: boolean;
+}
+
+/**
+ * One change to the client's collection.
+ *
+ * `'clear'` has no key: it is the whole partition going at once, and reporting it as a delete per
+ * record would mean reading every record back just to say it was gone.
+ */
+export interface RecordChange {
+  type: 'put' | 'delete' | 'clear';
+  collection: string;
+  partition: string;
+  /** The caller's id. Absent for `'clear'`. */
+  key?: string;
+}
+
+export interface CollectionQueryDefinition<T> {
+  /** The reader's contract. Records it cannot project are left out, as `RecordStore.list` does. */
+  schema: VersionedSchema<T>;
+}
+
+export interface CollectionState<T> {
+  /** Every readable record in the current partition, in `seq` order. */
+  data: ProjectedRecord<T>[] | undefined;
+  status: QueryStatus;
+  error?: unknown;
+}
+
+/**
+ * A live view of a whole collection in the current partition.
+ *
+ * Read from storage only — it never goes to the network. Something else puts records there (key
+ * queries, mutations, a push stream), and this re-reads whenever any of them does, in this client,
+ * another client, or another context sharing the invalidator.
+ */
+export interface CollectionQuery<T> {
+  readonly current: CollectionState<T>;
+  subscribe(listener: (state: CollectionState<T>) => void): () => void;
+  dispose(): void;
 }
 
 export interface DataClientOptions {
@@ -209,6 +248,21 @@ export interface MutationOutcome<T> {
 export interface DataClient {
   query<T>(definition: QueryDefinition<T>): Query<T>;
   /**
+   * Every record in the current partition, kept current as the collection changes.
+   *
+   * Confirmed records only: optimistic overlays are applied per key by `query`, not here.
+   */
+  collection<T>(definition: CollectionQueryDefinition<T>): CollectionQuery<T>;
+  /**
+   * The change feed for this client's collection: every put, delete and partition clear that goes
+   * through this client, as it lands. Returns a disposer.
+   *
+   * Typed events reach only this client's listeners. Other clients and contexts hear that the
+   * collection changed — their `collection` queries re-read — but not what the change was, because
+   * the invalidation channel carries tags rather than payloads.
+   */
+  watch(listener: (change: RecordChange) => void): () => void;
+  /**
    * Writes: queue, overlay, send, confirm.
    *
    * Optimistic and offline are the same mechanism here rather than two features that must be kept
@@ -261,6 +315,14 @@ function pendingTag(key: string): string {
   return `skew:pending#${key}`;
 }
 
+/**
+ * The tag a collection's changes travel on. Like `pendingTag`, it means "re-read storage", never
+ * "refetch": whatever changed has already been written.
+ */
+function collectionTag(collection: string): string {
+  return `skew:collection#${collection}`;
+}
+
 export function createDataClient(options: DataClientOptions): DataClient {
   const collection = options.collection ?? DEFAULT_COLLECTION;
   // Shared per partition, so a mutation in one application refreshes another's view of the same
@@ -292,6 +354,25 @@ export function createDataClient(options: DataClientOptions): DataClient {
   const runners = new Map<string, { run: MutationRunner; tags?: string[] }>();
   const maxAttempts = options.maxAttempts ?? 5;
 
+  const watchers = new Set<(change: RecordChange) => void>();
+
+  /**
+   * Tells this client's watchers what changed, and everyone else that something did.
+   *
+   * The second half is what keeps another app's collection view current: it shares the
+   * invalidator, not this client's listeners.
+   */
+  function changed(change: RecordChange): void {
+    for (const watcher of [...watchers]) {
+      try {
+        watcher(change);
+      } catch {
+        // One watcher throwing must not keep the change from the others, or from the invalidator.
+      }
+    }
+    invalidator.invalidate(collectionTag(collection));
+  }
+
   /**
    * One store per schema, because the store *is* the projection: the same bytes read through two
    * chains give two different values, which is the point.
@@ -307,6 +388,9 @@ export function createDataClient(options: DataClientOptions): DataClient {
         // Recorded per key rather than thrown: a record this reader cannot project is a fact about
         // the pair of them, and the query that asked is the only place that can act on it.
         onReadFailure: (id, failure) => void unreadable.set(id, failure.reason),
+        // Every write the client makes goes through a store — query fetches, confirmed mutations,
+        // pushed records — so this one hook is the whole feed.
+        onWrite: (write) => changed({ ...write, collection }),
       });
       stores.set(schema as VersionedSchema<unknown>, store);
     }
@@ -401,6 +485,19 @@ export function createDataClient(options: DataClientOptions): DataClient {
         ...(options.onFetch === undefined ? {} : { onFetch: options.onFetch }),
         ...(options.outbox === undefined ? {} : { outbox: options.outbox }),
       });
+    },
+
+    collection<T>(definition: CollectionQueryDefinition<T>): CollectionQuery<T> {
+      return createCollectionQuery(storeFor(definition.schema), {
+        partition: options.partition,
+        invalidator,
+        tag: collectionTag(collection),
+      });
+    },
+
+    watch(listener) {
+      watchers.add(listener);
+      return () => void watchers.delete(listener);
     },
 
     async mutate<T>(definition: MutationDefinition<T>): Promise<MutationOutcome<T>> {
@@ -526,10 +623,13 @@ export function createDataClient(options: DataClientOptions): DataClient {
     },
 
     async clearPartition(partition) {
-      await options.driver.clearPartition(collection, partition ?? options.partition());
+      const target = partition ?? options.partition();
+      await options.driver.clearPartition(collection, target);
+      changed({ type: 'clear', collection, partition: target });
     },
 
     close() {
+      watchers.clear();
       invalidator.close();
     },
   };
@@ -708,6 +808,55 @@ function createQuery<T>(
       controller.abort();
       unsubscribe();
       unsubscribePending();
+      listeners.clear();
+    },
+  };
+}
+
+function createCollectionQuery<T>(
+  store: RecordStore<T>,
+  context: { partition: () => string; invalidator: Invalidator; tag: string },
+): CollectionQuery<T> {
+  const listeners = new Set<(state: CollectionState<T>) => void>();
+  const controller = new AbortController();
+  let state: CollectionState<T> = { data: undefined, status: 'loading' };
+
+  const emit = (next: CollectionState<T>) => {
+    state = next;
+    for (const listener of listeners) listener(state);
+  };
+
+  /**
+   * Counts reads so only the newest one lands. Two changes in quick succession start two reads, and
+   * nothing makes them finish in order — without this, the older read can overwrite the newer.
+   */
+  let generation = 0;
+
+  async function read(): Promise<void> {
+    const mine = ++generation;
+    try {
+      const data = await store.list(context.partition());
+      if (mine === generation && !controller.signal.aborted) emit({ data, status: 'ready' });
+    } catch (error) {
+      // Reading the partition throws after sign-out; reported as state, as `createQuery` does.
+      if (mine === generation && !controller.signal.aborted) emit({ data: state.data, status: 'error', error });
+    }
+  }
+
+  context.invalidator.subscribe(() => [context.tag], () => void read(), { signal: controller.signal });
+  void read();
+
+  return {
+    get current() {
+      return state;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      listener(state);
+      return () => void listeners.delete(listener);
+    },
+    dispose() {
+      controller.abort();
       listeners.clear();
     },
   };
