@@ -1,8 +1,10 @@
 import { IDBFactory, IDBKeyRange as FakeKeyRange } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
+import { versioned } from '@braidlabs/skew';
 import { indexedDbRecordDriver } from './indexeddb-driver.js';
 import { memoryRecordDriver } from './memory-driver.js';
-import type { RecordDriver, StoredRecord } from './record-store.js';
+import { createRecordStore, type RecordDriver, type StoredRecord } from './record-store.js';
+import { sessionStorageRecordDriver } from './session-storage-driver.js';
 
 /**
  * The behavior every `RecordDriver` owes its callers, run against each driver that ships.
@@ -10,6 +12,24 @@ import type { RecordDriver, StoredRecord } from './record-store.js';
  * One table rather than a copy per driver: the point of a driver contract is that the drivers agree,
  * and three hand-maintained copies of it are three chances for them not to.
  */
+
+/** A `Storage` over a Map, so the tests need no DOM. `setItem` can be made to fail. */
+function fakeStorage(setItem?: (key: string, value: string) => void): Storage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (index) => [...items.keys()][index] ?? null,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => {
+      setItem?.(key, value);
+      items.set(key, String(value));
+    },
+    removeItem: (key) => void items.delete(key),
+    clear: () => items.clear(),
+  };
+}
 
 const drivers: [string, () => RecordDriver][] = [
   ['memory', () => memoryRecordDriver()],
@@ -22,6 +42,7 @@ const drivers: [string, () => RecordDriver][] = [
         keyRange: FakeKeyRange as unknown as typeof IDBKeyRange,
       }),
   ],
+  ['sessionStorage', () => sessionStorageRecordDriver({ storage: fakeStorage() })],
 ];
 
 const record = (partition: string, key: string, seq: number): StoredRecord => ({
@@ -77,5 +98,76 @@ describe.each(drivers)('%s driver', (_name, make) => {
     input.seq = 99;
 
     expect((await driver.get('notes', 'tenant-a\u0000n1'))?.seq).toBe(1);
+  });
+});
+
+/** What only the session driver has to get right: storage that is missing, broken or full. */
+const Note = versioned<{ title: string }>('session-spec-note');
+
+describe('session storage driver', () => {
+  it('keeps records across a reload of the driver', async () => {
+    const storage = fakeStorage();
+    const before = createRecordStore({ driver: sessionStorageRecordDriver({ storage }), collection: 'notes', schema: Note });
+    await before.put({ id: 'n1', partition: 'p', value: { title: 'kept' } });
+
+    const after = createRecordStore({ driver: sessionStorageRecordDriver({ storage }), collection: 'notes', schema: Note });
+
+    expect((await after.get('n1', 'p'))?.value).toEqual({ title: 'kept' });
+    expect(await after.put({ id: 'n2', partition: 'p', value: { title: 'next' } })).toBe(2);
+  });
+
+  it('leaves keys it does not own alone', async () => {
+    const storage = fakeStorage();
+    storage.setItem('someone-else', 'theirs');
+    const driver = sessionStorageRecordDriver({ storage });
+    await createRecordStore({ driver, collection: 'notes', schema: Note }).put({ id: 'n1', partition: 'p', value: { title: 'x' } });
+
+    await driver.clearPartition('notes', 'p');
+
+    expect(storage.getItem('someone-else')).toBe('theirs');
+    expect(await driver.partitions('notes')).toEqual([]);
+  });
+
+  it('can be constructed where there is no sessionStorage, and says so on first use', async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        // A sandboxed iframe throws on the lookup itself.
+        throw new DOMException('denied', 'SecurityError');
+      },
+    });
+
+    try {
+      const driver = sessionStorageRecordDriver();
+      await expect(driver.list('notes', 'p')).rejects.toThrow(/sessionStorage is not usable/);
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'sessionStorage', original);
+      else delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
+    }
+  });
+
+  it('rejects when the storage is present but every write fails', async () => {
+    const driver = sessionStorageRecordDriver({
+      storage: fakeStorage(() => {
+        throw new DOMException('private mode', 'QuotaExceededError');
+      }),
+    });
+
+    await expect(driver.highestSeq('notes')).rejects.toThrow(/sessionStorage is not usable/);
+  });
+
+  it('propagates a quota error from a write rather than swallowing it', async () => {
+    let full = false;
+    const driver = sessionStorageRecordDriver({
+      storage: fakeStorage(() => {
+        if (full) throw new DOMException('full', 'QuotaExceededError');
+      }),
+    });
+    const notes = createRecordStore({ driver, collection: 'notes', schema: Note });
+    await notes.put({ id: 'n1', partition: 'p', value: { title: 'fits' } });
+    full = true;
+
+    await expect(notes.put({ id: 'n2', partition: 'p', value: { title: 'does not' } })).rejects.toThrow('full');
   });
 });
