@@ -263,3 +263,47 @@ describe('record store', () => {
     expect((await clients.get('c1', 'p'))?.value.name).toBe('Ada');
   });
 });
+
+describe('partitions and writes', () => {
+  it('lists the partitions holding records, including ones this reader cannot read', async () => {
+    const driver = memoryRecordDriver();
+    await store<ClientV2>(ClientV2Schema, driver).put({
+      id: 'c1',
+      partition: 'tenant-b',
+      value: { id: 'c1', name: 'Ada', household: 'h' },
+    });
+    const older = store<ClientV1>(versioned<ClientV1>('client'), driver);
+    await older.put({ id: 'c2', partition: 'tenant-a', value: { id: 'c2', name: 'Grace' } });
+
+    expect(await older.list('tenant-b')).toEqual([]);
+    expect(await older.partitions()).toEqual(['tenant-a', 'tenant-b']);
+  });
+
+  it('reports each landed put and delete with the caller key', async () => {
+    const onWrite = vi.fn();
+    const clients = createRecordStore<ClientV1>({
+      driver: memoryRecordDriver(),
+      collection: 'clients',
+      schema: ClientV1Schema,
+      onWrite,
+    });
+
+    await clients.put({ id: 'c1', partition: 'p', value: { id: 'c1', name: 'Ada' } });
+    await clients.delete('c1', 'p');
+
+    expect(onWrite.mock.calls).toEqual([
+      [{ type: 'put', partition: 'p', key: 'c1' }],
+      [{ type: 'delete', partition: 'p', key: 'c1' }],
+    ]);
+  });
+
+  it('reports nothing for a write the driver rejected', async () => {
+    const onWrite = vi.fn();
+    const driver = memoryRecordDriver();
+    driver.put = () => Promise.reject(new Error('quota'));
+    const clients = createRecordStore<ClientV1>({ driver, collection: 'clients', schema: ClientV1Schema, onWrite });
+
+    await expect(clients.put({ id: 'c1', partition: 'p', value: { id: 'c1', name: 'Ada' } })).rejects.toThrow('quota');
+    expect(onWrite).not.toHaveBeenCalled();
+  });
+});

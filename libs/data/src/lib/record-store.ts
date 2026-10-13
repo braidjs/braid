@@ -58,6 +58,14 @@ export interface RecordDriver {
   clearPartition(collection: string, partition: string): Promise<void>;
   /** Highest `seq` seen in a collection, so ordering survives a reload. */
   highestSeq(collection: string): Promise<number>;
+  /**
+   * The partitions that hold at least one record in a collection, sorted and without duplicates.
+   *
+   * Only partitions with records: a partition is not a thing that exists on its own, it is a prefix
+   * records happen to share. Once `clearPartition` empties one, it is gone from this list — which is
+   * what lets a sign-out sweep find what is left to purge, and confirm that nothing is.
+   */
+  partitions(collection: string): Promise<string[]>;
 }
 
 export interface RecordStoreOptions<T> {
@@ -72,6 +80,13 @@ export interface RecordStoreOptions<T> {
    * discovered before users report it.
    */
   onReadFailure?: (id: string, failure: Extract<SkewResult<never>, { ok: false }>) => void;
+  /**
+   * Called after a `put` or `delete` lands — never for one the driver rejected.
+   *
+   * What the data client builds its collection feed on. Carries the caller's id rather than the
+   * storage key, for the same reason `onReadFailure` does.
+   */
+  onWrite?: (write: { type: 'put' | 'delete'; partition: string; key: string }) => void;
 }
 
 /** A record as this reader sees it, with the provenance of getting it here. */
@@ -99,6 +114,8 @@ export interface RecordStore<T> {
   list(partition: string): Promise<ProjectedRecord<T>[]>;
   delete(id: string, partition: string): Promise<void>;
   clearPartition(partition: string): Promise<void>;
+  /** Partitions holding at least one record in this collection — readable by this reader or not. */
+  partitions(): Promise<string[]>;
   /**
    * Records that could not be projected to this reader, with why.
    *
@@ -120,7 +137,7 @@ export function storageKey(partition: string, key: string): string {
 }
 
 export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStore<T> {
-  const { driver, collection, schema, buildId, onReadFailure } = options;
+  const { driver, collection, schema, buildId, onReadFailure, onWrite } = options;
 
   // Cached rather than read per write: `highestSeq` is a full scan on some drivers, and ordering
   // only needs to be monotonic within a process — gaps from a concurrent writer are harmless
@@ -177,6 +194,7 @@ export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStor
         envelope: buildId ? schema.write(value, buildId) : schema.write(value),
         ...(owner === undefined ? {} : { owner }),
       });
+      onWrite?.({ type: 'put', partition, key: id });
       return assigned;
     },
 
@@ -201,7 +219,12 @@ export function createRecordStore<T>(options: RecordStoreOptions<T>): RecordStor
       return failures;
     },
 
-    delete: (id, partition) => driver.delete(collection, storageKey(partition, id)),
+    async delete(id, partition) {
+      await driver.delete(collection, storageKey(partition, id));
+      onWrite?.({ type: 'delete', partition, key: id });
+    },
+
     clearPartition: (partition) => driver.clearPartition(collection, partition),
+    partitions: () => driver.partitions(collection),
   };
 }
