@@ -1,5 +1,5 @@
 import type { SkewFailureReason, VersionedSchema } from '@braidlabs/skew';
-import type { RecordDriver } from './record-store.js';
+import type { ProjectedRecord, RecordDriver } from './record-store.js';
 import { createRecordStore, type RecordStore } from './record-store.js';
 import { sharedInvalidator, type Invalidator } from './invalidation.js';
 import { withLock } from './locks.js';
@@ -101,6 +101,46 @@ export interface QueryDefinition<T> {
    * it.
    */
   staleWhileRevalidate?: boolean;
+}
+
+/**
+ * One change to the client's collection.
+ *
+ * `'clear'` has no key: it is the whole partition going at once, and reporting it as a delete per
+ * record would mean reading every record back just to say it was gone.
+ */
+export interface RecordChange {
+  type: 'put' | 'delete' | 'clear';
+  collection: string;
+  partition: string;
+  /** The caller's id. Absent for `'clear'`. */
+  key?: string;
+}
+
+export interface CollectionQueryDefinition<T> {
+  /** The reader's contract. Records it cannot project are left out, as `RecordStore.list` does. */
+  schema: VersionedSchema<T>;
+}
+
+export interface CollectionState<T> {
+  /** Every readable record in the current partition, in `seq` order. */
+  data: ProjectedRecord<T>[] | undefined;
+  status: QueryStatus;
+  error?: unknown;
+}
+
+/**
+ * A live view of a whole collection in the current partition.
+ *
+ * Read from storage only — it never goes to the network. Something else puts records there (key
+ * queries, mutations, a push stream), and this re-reads whenever any of them does, in this client,
+ * another client, or another context sharing the invalidator. Writes made directly to the driver —
+ * `copyPartition`, a tenancy purge — are not seen until the next change that goes through a client.
+ */
+export interface CollectionQuery<T> {
+  readonly current: CollectionState<T>;
+  subscribe(listener: (state: CollectionState<T>) => void): () => void;
+  dispose(): void;
 }
 
 export interface DataClientOptions {
@@ -209,6 +249,21 @@ export interface MutationOutcome<T> {
 export interface DataClient {
   query<T>(definition: QueryDefinition<T>): Query<T>;
   /**
+   * Every record in the current partition, kept current as the collection changes.
+   *
+   * Confirmed records only: optimistic overlays are applied per key by `query`, not here.
+   */
+  collection<T>(definition: CollectionQueryDefinition<T>): CollectionQuery<T>;
+  /**
+   * The change feed for this client's collection: every put, delete and partition clear that goes
+   * through this client, as it lands. Returns a disposer.
+   *
+   * Typed events reach only this client's listeners. Other clients and contexts hear that the
+   * collection changed — their `collection` queries re-read — but not what the change was, because
+   * the invalidation channel carries tags rather than payloads.
+   */
+  watch(listener: (change: RecordChange) => void): () => void;
+  /**
    * Writes: queue, overlay, send, confirm.
    *
    * Optimistic and offline are the same mechanism here rather than two features that must be kept
@@ -261,6 +316,14 @@ function pendingTag(key: string): string {
   return `skew:pending#${key}`;
 }
 
+/**
+ * The tag a collection's changes travel on. Like `pendingTag`, it means "re-read storage", never
+ * "refetch": whatever changed has already been written.
+ */
+function collectionTag(collection: string): string {
+  return `skew:collection#${collection}`;
+}
+
 export function createDataClient(options: DataClientOptions): DataClient {
   const collection = options.collection ?? DEFAULT_COLLECTION;
   // Shared per partition, so a mutation in one application refreshes another's view of the same
@@ -292,6 +355,29 @@ export function createDataClient(options: DataClientOptions): DataClient {
   const runners = new Map<string, { run: MutationRunner; tags?: string[] }>();
   const maxAttempts = options.maxAttempts ?? 5;
 
+  const watchers = new Set<(change: RecordChange) => void>();
+  let closed = false;
+
+  /**
+   * Tells this client's watchers what changed, and everyone else that something did.
+   *
+   * The second half is what keeps another app's collection view current: it shares the
+   * invalidator, not this client's listeners.
+   */
+  function changed(change: RecordChange): void {
+    // A write still in flight at `close()` lands after it. Nobody is listening by then, and the
+    // invalidator's channel may already be closed — posting to it throws.
+    if (closed) return;
+    for (const watcher of [...watchers]) {
+      try {
+        watcher(change);
+      } catch {
+        // One watcher throwing must not keep the change from the others, or from the invalidator.
+      }
+    }
+    invalidator.invalidate(collectionTag(collection));
+  }
+
   /**
    * One store per schema, because the store *is* the projection: the same bytes read through two
    * chains give two different values, which is the point.
@@ -307,6 +393,10 @@ export function createDataClient(options: DataClientOptions): DataClient {
         // Recorded per key rather than thrown: a record this reader cannot project is a fact about
         // the pair of them, and the query that asked is the only place that can act on it.
         onReadFailure: (id, failure) => void unreadable.set(id, failure.reason),
+        // Every write the client makes goes through a store — query fetches, confirmed mutations,
+        // pushed records — so this one hook is the feed for all of them. Writes made straight to
+        // the driver (`copyPartition`, a tenancy purge) bypass it and are not reported.
+        onWrite: (write) => changed({ ...write, collection }),
       });
       stores.set(schema as VersionedSchema<unknown>, store);
     }
@@ -403,6 +493,19 @@ export function createDataClient(options: DataClientOptions): DataClient {
       });
     },
 
+    collection<T>(definition: CollectionQueryDefinition<T>): CollectionQuery<T> {
+      return createCollectionQuery(storeFor(definition.schema), {
+        partition: options.partition,
+        invalidator,
+        tag: collectionTag(collection),
+      });
+    },
+
+    watch(listener) {
+      watchers.add(listener);
+      return () => void watchers.delete(listener);
+    },
+
     async mutate<T>(definition: MutationDefinition<T>): Promise<MutationOutcome<T>> {
       const outbox = options.outbox;
       if (!outbox) {
@@ -462,7 +565,10 @@ export function createDataClient(options: DataClientOptions): DataClient {
         else if (policy === 'raise') conflict = { expected, actual, paths };
       }
 
-      await store.put({ id: definition.key, partition, value: stored });
+      // A confirmed removal deletes. Storing whatever the server answered a DELETE with — often
+      // nothing at all — would leave a record whose value is `undefined` in every collection view.
+      if (definition.removes) await store.delete(definition.key, partition);
+      else await store.put({ id: definition.key, partition, value: stored });
       await outbox.remove(entryId);
 
       if (conflict) conflicts.set(definition.key, conflict as Conflict<unknown>);
@@ -526,10 +632,14 @@ export function createDataClient(options: DataClientOptions): DataClient {
     },
 
     async clearPartition(partition) {
-      await options.driver.clearPartition(collection, partition ?? options.partition());
+      const target = partition ?? options.partition();
+      await options.driver.clearPartition(collection, target);
+      changed({ type: 'clear', collection, partition: target });
     },
 
     close() {
+      closed = true;
+      watchers.clear();
       invalidator.close();
     },
   };
@@ -588,6 +698,9 @@ function createQuery<T>(
       // Reported before returning, so a reader that is behind learns *why* it is about to refetch
       // rather than watching an apparently empty cache go back to the network.
       if (failure) emit({ unreadable: failure });
+      // A record that was here and is not any more was deleted — a confirmed removal, usually.
+      // Said so, rather than left showing the overlay that predicted it.
+      else if (state.status === 'ready') emit({ data: undefined, pending: false, conflict: null });
       return false;
     }
 
@@ -708,6 +821,89 @@ function createQuery<T>(
       controller.abort();
       unsubscribe();
       unsubscribePending();
+      listeners.clear();
+    },
+  };
+}
+
+function createCollectionQuery<T>(
+  store: RecordStore<T>,
+  context: { partition: () => string; invalidator: Invalidator; tag: string },
+): CollectionQuery<T> {
+  const listeners = new Set<(state: CollectionState<T>) => void>();
+  const controller = new AbortController();
+  let state: CollectionState<T> = { data: undefined, status: 'loading' };
+
+  const emit = (next: CollectionState<T>) => {
+    state = next;
+    for (const listener of listeners) listener(state);
+  };
+
+  /**
+   * Coalesced: at most one read in flight, and at most one more queued behind it.
+   *
+   * A burst of writes — a push stream delivering two hundred records — would otherwise start two
+   * hundred full reads of the partition, each one a scan. Any number of changes during a read are
+   * answered by a single read after it, which sees all of them (and `schedule` below batches the
+   * ones that arrive before a read starts). Reads are therefore also strictly
+   * sequential, so an older result can never land after a newer one.
+   */
+  let reading = false;
+  let again = false;
+
+  async function read(): Promise<void> {
+    if (reading) {
+      again = true;
+      return;
+    }
+
+    reading = true;
+    try {
+      do {
+        again = false;
+        try {
+          const data = await store.list(context.partition());
+          if (!controller.signal.aborted) emit({ data, status: 'ready' });
+        } catch (error) {
+          // Reading the partition throws after sign-out; reported as state, as `createQuery` does.
+          if (!controller.signal.aborted) emit({ data: state.data, status: 'error', error });
+        }
+      } while (again && !controller.signal.aborted);
+    } finally {
+      reading = false;
+    }
+  }
+
+  /**
+   * Changes are answered a macrotask later rather than at once. The writes in a burst land spread
+   * over many microtasks — each `put` awaits its sequence number and its driver call — so without
+   * the wait each read would finish before the next write arrived, and coalescing would catch
+   * almost nothing. One tick is enough for the burst to land, and short enough not to be seen.
+   */
+  let scheduled = false;
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(() => {
+      scheduled = false;
+      if (!controller.signal.aborted) void read();
+    }, 0);
+  };
+
+  context.invalidator.subscribe(() => [context.tag], schedule, { signal: controller.signal });
+  void read();
+
+  return {
+    get current() {
+      return state;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      listener(state);
+      return () => void listeners.delete(listener);
+    },
+    dispose() {
+      controller.abort();
       listeners.clear();
     },
   };

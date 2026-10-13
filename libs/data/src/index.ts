@@ -20,6 +20,8 @@ export type {
 export { memoryRecordDriver } from './lib/memory-driver.js';
 export { indexedDbRecordDriver } from './lib/indexeddb-driver.js';
 export type { IndexedDbDriverOptions } from './lib/indexeddb-driver.js';
+export { sessionStorageRecordDriver } from './lib/session-storage-driver.js';
+export type { SessionStorageDriverOptions } from './lib/session-storage-driver.js';
 
 export { withLock, hasCrossContextLocks, outboxFlushLock } from './lib/locks.js';
 export type { LockResult, LockOptions } from './lib/locks.js';
@@ -30,6 +32,10 @@ export type {
   DataClientOptions,
   Query,
   QueryDefinition,
+  CollectionQuery,
+  CollectionQueryDefinition,
+  CollectionState,
+  RecordChange,
   QueryState,
   QueryStatus,
   Conflict,

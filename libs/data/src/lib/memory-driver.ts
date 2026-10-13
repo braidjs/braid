@@ -50,6 +50,10 @@ export function memoryRecordDriver(): RecordDriver {
       }
     },
 
+    async partitions(collection) {
+      return [...new Set([...of(collection).values()].map((record) => record.partition))].sort();
+    },
+
     async highestSeq(collection) {
       let highest = 0;
       for (const record of of(collection).values()) highest = Math.max(highest, record.seq);

@@ -192,6 +192,28 @@ export function indexedDbRecordDriver(options: IndexedDbDriverOptions): RecordDr
       });
     },
 
+    async partitions(collection) {
+      const db = await database();
+      assertDeclared(db, collection);
+      return new Promise<string[]>((resolve, reject) => {
+        const found = new Set<string>();
+        const tx = db.transaction(collection, 'readonly');
+        // A key cursor over the [partition, seq] index: keys only, so no record is deserialized to
+        // learn which partition it belongs to. Every key is still visited — skipping ahead a
+        // partition at a time is possible, but not worth the code until a collection is large
+        // enough for it to show.
+        const cursor = tx.objectStore(collection).index(PARTITION_INDEX).openKeyCursor();
+
+        cursor.onsuccess = () => {
+          const position = cursor.result;
+          if (!position) return resolve([...found].sort());
+          found.add((position.key as [string, number])[0]);
+          position.continue();
+        };
+        cursor.onerror = () => reject(cursor.error ?? new Error('skew-data: could not list partitions'));
+      });
+    },
+
     async highestSeq(collection) {
       const db = await database();
       assertDeclared(db, collection);
