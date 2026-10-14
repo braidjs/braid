@@ -4,6 +4,7 @@
     "outDir": "../../dist/out-tsc",
     "declaration": true,
     "types": [],
+    "target": "ES2022",
     "module": "nodenext",
     "moduleResolution": "nodenext"
   },
