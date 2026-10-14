@@ -1,3 +1,14 @@
+## 0.3.0 (2026-10-14)
+
+### 🩹 Fixes
+
+- **packaging:** declare or stop emitting every import a published package makes ([4060e71](https://github.com/braidjs/braid/commit/4060e71))
+
+### ❤️ Thank You
+
+- Claude
+- Claude Opus 5.5
+
 ## 0.2.0 (2026-10-14)
 
 ### 🚀 Features
