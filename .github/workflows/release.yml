@@ -55,12 +55,26 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Refuse a version npm already has
+        # Run #11 asked for "0.1.1", already on npm: publish skipped every package and still
+        # reported success. An exact version is checked here, before anything is built.
+        run: node tools/release/check-version-unspent.mjs "${{ inputs.specifier }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Version, changelog, and tag
         run: |
           npx nx release version "${{ inputs.specifier }}" ${{ inputs.dry-run && '--dry-run' || '' }}
           npx nx release changelog "${{ inputs.specifier }}" ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse a resolved version npm already has
+        # A bump keyword resolves from the latest v{version} tag; a missing tag would resolve to a
+        # spent version. Checks what the version step actually wrote into dist/.
+        run: node tools/release/check-version-unspent.mjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Refuse unpublishable output
         # npm pack never runs prepublishOnly; only publish does. This is the check that would
