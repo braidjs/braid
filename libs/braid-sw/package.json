@@ -24,6 +24,10 @@
     },
     "./package.json": "./package.json"
   },
+  "peerDependencies": {
+    "@braidlabs/data": "^0.0.1",
+    "@braidlabs/gateway": "^0.0.1"
+  },
   "publishConfig": {
     "access": "public"
   },
