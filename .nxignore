@@ -7,3 +7,7 @@ skills
 # it and boot the result. Its project.json files are detangle's *input* — without this, Nx would
 # adopt three fake applications into this workspace's own graph.
 tools/detangle-fixture
+
+# Isolated install of the dependency scanner (see tools/audit/package.json), not a
+# workspace project.
+tools/audit
