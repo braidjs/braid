@@ -1,0 +1,50 @@
+name: Security
+
+# Scans package-lock.json against OSV and the npm advisory database with
+# cve-lite-cli (OWASP). Fails on any high or critical finding that is not in the
+# committed baseline, .cve-lite/baseline.json — see .cve-lite/README.md for what
+# is in it and why.
+#
+# Deliberately separate from ci.yml: release.yml gates on ci.yml, and the
+# published @braidlabs/* packages carry no vulnerable runtime dependencies, so an
+# advisory published overnight against dev tooling should fail this check, not
+# block a release.
+on:
+  pull_request:
+  # Advisories are published without any change to this repo; a PR-only check
+  # would never notice one landing against a dependency already on main.
+  schedule:
+    - cron: '17 9 * * 1' # Mondays 09:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cve-lite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          # Same Node major as ci.yml and local development — see the note there.
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: tools/audit/package-lock.json
+
+      # No root `npm ci`: the scan reads package-lock.json, not node_modules.
+      # The script installs only the scanner, from its own lockfile in
+      # tools/audit, with install scripts disabled.
+      - name: Audit dependencies
+        # The same command developers run locally, so a red check reproduces
+        # with `npm run audit:cve`.
+        run: npm run audit:cve

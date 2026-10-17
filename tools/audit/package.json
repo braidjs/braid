@@ -1,0 +1,8 @@
+{
+  "name": "@braidlabs/audit-tools",
+  "private": true,
+  "description": "Isolated install of the dependency scanner behind `npm run audit:cve`. Kept out of the root lockfile so its install scripts (better-sqlite3) never run in the ci, docs, or release jobs, only in security.yml.",
+  "devDependencies": {
+    "cve-lite-cli": "1.39.0"
+  }
+}
