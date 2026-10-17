@@ -5,7 +5,7 @@ import { defineConfig } from 'vitepress';
  *
  * VitePress rather than plain Jekyll for two concrete reasons, both measured against these docs:
  * the 43 relative `.md` cross-links resolve correctly because VitePress rewrites them to `.html`
- * at build time (Jekyll serves them as raw downloads), and the mermaid diagrams in four files
+ * at build time (Jekyll serves them as raw downloads), and the mermaid diagrams
  * render (GitHub's repo view draws them natively, GitHub Pages does not).
  *
  * The source keeps its `.md` links either way, so the docs stay readable on github.com.
