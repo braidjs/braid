@@ -1,7 +1,7 @@
 {
   "name": "@braidlabs/console",
   "version": "0.0.1",
-  "description": "A read-only console for a Braid gateway's fragment registry. Mountable React library, or a standalone deployable app.",
+  "description": "A console for a Braid gateway: fragments, shells as data, a composition map, and snapshot history. Mountable React components, or a standalone app with OIDC sign-in.",
   "keywords": [
     "braid",
     "micro-frontends",

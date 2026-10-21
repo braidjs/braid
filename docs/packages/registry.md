@@ -43,7 +43,7 @@ const snapshot = await createSnapshot({
   ],
 });
 
-// Store content-addressed artifact (e.g. hash 'sha256:abc123...')
+// Content-addressed: the id is 'reg_' plus 32 hex chars of a SHA-256 of the content
 await store.put(snapshot);
 console.log(`Published snapshot: ${snapshot.id}`);
 ```
@@ -60,7 +60,7 @@ const store = fileSnapshotStore({ directory: '/var/lib/braid' });
 const gateway = createGateway({
   registry: snapshotRegistry({
     store,
-    pinned: process.env.BRAID_REGISTRY_SNAPSHOT, // e.g. 'sha256:abc123...'
+    pinned: process.env.BRAID_REGISTRY_SNAPSHOT, // e.g. 'reg_bc25abc511812088f248a24bb2b8d78b'
     fallback: 'last-known-good',
   }),
 });
@@ -73,11 +73,91 @@ const gateway = createGateway({
 Inspect changes between two snapshot versions before deployment:
 
 ```ts
-import { diffSnapshots } from '@braidlabs/registry';
+import { diffRegistries } from '@braidlabs/registry';
 
-const diff = diffSnapshots(previousSnapshot, newSnapshot);
+const diff = diffRegistries(previousSnapshot.manifests, newSnapshot.manifests);
 
 console.log('Added fragments:', diff.added);
 console.log('Removed fragments:', diff.removed);
-console.log('Changed routing/piercing:', diff.modified);
+// Each change is labelled by owner: 'gateway' (routing, exposure) or 'app' (labels).
+console.log('Changed:', diff.changed);
 ```
+
+---
+
+## Shells
+
+A shell is the page fragments compose into, kept in the same snapshot: a framework, routes, and per
+route a CSS grid written as ASCII art (`grid-template-areas`), the fragment in each area, and the
+document head.
+
+```ts
+await createSnapshot({
+  manifests,
+  shells: [
+    {
+      id: 'storefront',
+      framework: 'react', // 'react' | 'angular' | 'angular-ssr' | 'vanilla'
+      routes: [
+        {
+          path: '/billing/*',
+          layout: { areas: 'header header\naside main', columns: '280px 1fr' },
+          slots: { header: 'rating', aside: 'reviews', main: 'billing' },
+        },
+      ],
+      head: { title: 'Billing', stylesheets: [{ href: '/assets/theme.css' }] },
+    },
+  ],
+});
+```
+
+`validateRegistry(manifests, { shells })` checks layouts by the browser's rules (rectangular areas,
+equal-width rows), that every slotted fragment is registered, route syntax, and that scripts and
+stylesheets load over `https:` or a root-relative path. A snapshot without shells keeps the id it
+always had.
+
+Today the framework selects the host code the console generates. The gateway still serves the HTML
+your shell app returns; serving shells from the definition is planned.
+
+---
+
+## The write API
+
+```ts
+import { createRegistryApi } from '@braidlabs/registry';
+import { createOidcAuthorizer } from '@braidlabs/registry/oidc';
+
+const api = createRegistryApi({
+  store,
+  ...createOidcAuthorizer({ issuer: 'https://example.okta.com/oauth2/default', audience: 'api://braid-console' }),
+});
+const response = await api.handle(request); // null when the path is not the API's
+```
+
+| Route | Does |
+| :--- | :--- |
+| `GET /head` | the pinned snapshot, shells included |
+| `GET /snapshots`, `GET /snapshots/:id` | history and one snapshot |
+| `GET /permissions` | the caller's `{ read, publish, pin, actor }` |
+| `POST /snapshots` | `{ manifests, shells?, labels?, pin?, baseId? }` → validate, mint, store, pin |
+| `POST /head` | `{ id }` — re-pin. Rollback is this. |
+
+- **Writes need `authorize`.** Without it they are refused. A publish that pins needs both `publish`
+  and `pin`, so a contributor role publishes candidates with `pin: false`.
+- **`identify`** records the verified caller as `labels.publishedBy`, replacing any client value.
+- **`baseId`** makes a stale publish fail with 409 instead of overwriting someone else's.
+- **Omitted `shells` carry HEAD's forward**, so a client that only edits fragments cannot delete
+  every shell by accident; `[]` removes them.
+
+### Okta
+
+`createOidcAuthorizer` verifies bearer tokens against the issuer's JWKS and maps groups and scopes
+to actions through `roleMap` (default: `braid-viewers` → read, `braid-editors` → read, publish,
+pin). It needs the optional peer dependency `jose`.
+
+1. Use a **custom authorization server** (`https://<org>.okta.com/oauth2/default` or your own); the
+   org server's access tokens cannot be verified by third parties.
+2. Add a **`groups` claim to the access token**, filtered to your `braid-*` groups.
+3. For CI, create a service app (client credentials) and a custom scope such as `braid:publish`, and
+   put that scope in `roleMap`. Service tokens have no groups.
+4. Set `audience` to the authorization server's audience (`api://default` unless you changed it).
