@@ -129,6 +129,78 @@ describe('braid registry', () => {
     });
   });
 
+  /**
+   * `--source` reads the registry from a module instead of braid.config, which is how a composed
+   * registry — a `supergraph([...])` — gets validated and published in CI without restating it as
+   * config.
+   */
+  describe('--source', () => {
+    async function writeSource(name: string, body: string): Promise<string> {
+      const path = join(directory, name);
+      await writeFile(path, body);
+      return path;
+    }
+
+    it('validates a module whose default export is an array of manifests', async () => {
+      const source = await writeSource('registry.mjs', `export default ${JSON.stringify(healthy)};`);
+
+      expect(await registry(['validate', '--source', source])).toBe(0);
+      expect(plain(stdout)).toContain('2 fragments, no conflicts');
+    });
+
+    it('publishes from a module whose default export is a registry function', async () => {
+      const source = await writeSource('registry.mjs', `export default async () => (${JSON.stringify(healthy)});`);
+      const fromConfig = await writeConfig(healthy);
+
+      expect(await registry(['publish', '--source', source, '--dry-run'])).toBe(0);
+      const fromSourceOutput = plain(stdout);
+      stdout = '';
+      expect(await registry(['publish', '--config', fromConfig, '--dry-run'])).toBe(0);
+
+      // the same manifests make the same content address, wherever they were read from
+      const id = /reg_[0-9a-f]+/;
+      expect(fromSourceOutput.match(id)?.[0]).toBeDefined();
+      expect(fromSourceOutput.match(id)?.[0]).toBe(plain(stdout).match(id)?.[0]);
+    });
+
+    it('fails a composed registry that two subgraphs both claim a fragment of', async () => {
+      const source = await writeSource(
+        'supergraph.mjs',
+        `import { subgraph, supergraph } from '@braidlabs/registry';
+         export default supergraph([
+           subgraph({ name: 'orders', url: 'https://orders.internal', registry: [{ id: 'cart', endpoint: 'x:' }] }),
+           subgraph({ name: 'checkout', url: 'https://checkout.internal', registry: [{ id: 'cart', endpoint: 'x:' }] }),
+         ]);`,
+      );
+
+      expect(await registry(['publish', '--source', source, '--dry-run'])).toBe(1);
+      expect(stderr).toMatch(/"cart" is claimed by both subgraph "orders" and subgraph "checkout"/);
+    });
+
+    it('fails a source whose registry has validation errors', async () => {
+      const source = await writeSource('registry.mjs', `export default [{ id: 'billing', endpoint: '/relative' }];`);
+
+      expect(await registry(['validate', '--source', source])).toBe(1);
+      expect(plain(stdout)).toContain('not an absolute URL');
+    });
+
+    it('names the module when its default export is not a registry', async () => {
+      const source = await writeSource('registry.mjs', `export default { manifests: [] };`);
+
+      expect(await registry(['validate', '--source', source])).toBe(1);
+      expect(stderr).toContain('registry.mjs');
+      expect(stderr).toContain('default export');
+    });
+
+    it('refuses --source together with --config, rather than picking one', async () => {
+      const source = await writeSource('registry.mjs', `export default [];`);
+      const config = await writeConfig(healthy);
+
+      expect(await registry(['validate', '--source', source, '--config', config])).toBe(1);
+      expect(stderr).toContain('either --source or --config');
+    });
+  });
+
   describe('diff', () => {
     it('reports an unchanged registry as identical', async () => {
       const config = await writeConfig(healthy);
