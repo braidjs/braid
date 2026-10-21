@@ -140,3 +140,91 @@ describe('custom-element adapter', () => {
     await expect(customElementAdapter.boot(ctx)).rejects.toThrow(/did not define a custom element/);
   });
 });
+
+/**
+ * A custom element runs in its own realm too, so without shared globals its analytics land in a
+ * realm-local `dataLayer` exactly as a compat fragment's did. These use a real same-origin iframe
+ * as the realm, because the claim under test is about which window a script's globals resolve to.
+ */
+describe('custom-element adapter and shared globals', () => {
+  const host = window as unknown as Record<string, unknown>;
+
+  function realmContext(sharedGlobals: readonly string[] | undefined, script: string) {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const realmWindow = frame.contentWindow as Window & typeof globalThis;
+    const root = document.createElement('braid-document');
+    document.body.append(root);
+
+    const realm = {
+      kind: 'compat-http',
+      fragmentId: 'rating',
+      window: realmWindow,
+      document: realmWindow.document,
+      manifestAdapter: 'custom-element',
+      adapterOptions: { entry: '/widget.js', element: 'star-rating' },
+      // stands in for the entry module: runs in the realm, defines the element, uses a global
+      evaluate: vi.fn(async () => {
+        const element = realmWindow.document.createElement('script');
+        element.textContent = `customElements.define('star-rating', class extends HTMLElement {}); ${script}`;
+        realmWindow.document.body.append(element);
+      }),
+      evaluateModule: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as RealmHandle;
+
+    const ctx = {
+      fragmentId: 'rating',
+      realm,
+      contentRoot: root,
+      signal: new AbortController().signal,
+      ...(sharedGlobals === undefined ? {} : { sharedGlobals }),
+      env: { root, props: {}, onPropsChanged: () => () => undefined, emit: () => undefined },
+    } as unknown as AdapterBootContext;
+
+    return { ctx, realmWindow, frame, root };
+  }
+
+  /** Everything a fragment could have reached on the host: its own globals and the DOM prototypes. */
+  function hostSurface() {
+    const describe = (target: object) =>
+      Object.entries(Object.getOwnPropertyDescriptors(target)).map(([key, d]) => [key, d.value ?? d.get ?? d.set]);
+    return {
+      window: describe(window),
+      prototypes: [Node, Element, HTMLElement, Document, EventTarget, History].map((type) => describe(type.prototype)),
+    };
+  }
+
+  it("lands the element's analytics push in the host's data layer, and touches nothing else on the host", async () => {
+    const hostDataLayer: unknown[] = [];
+    host.dataLayer = hostDataLayer;
+    const { ctx, realmWindow, frame, root } = realmContext(['dataLayer'], `dataLayer.push({ event: 'rating:ready' });`);
+    const before = hostSurface();
+
+    await customElementAdapter.boot(ctx);
+
+    expect(hostDataLayer).toEqual([{ event: 'rating:ready' }]);
+    expect(Object.getOwnPropertyDescriptor(realmWindow, 'dataLayer')?.get).toBeTypeOf('function');
+    // the accessor lives on the realm; the host's window and prototypes are exactly as they were
+    expect(hostSurface()).toEqual(before);
+    expect(Object.getOwnPropertyDescriptor(window, 'dataLayer')?.value).toBe(hostDataLayer);
+
+    frame.remove();
+    root.remove();
+    delete host.dataLayer;
+  });
+
+  it('shares nothing when the slot passes no list', async () => {
+    host.dataLayer = [];
+    const { ctx, realmWindow, frame, root } = realmContext(undefined, `var dataLayer = [{ event: 'local' }];`);
+
+    await customElementAdapter.boot(ctx);
+
+    expect(host.dataLayer).toEqual([]);
+    expect((realmWindow as unknown as { dataLayer: unknown[] }).dataLayer).toEqual([{ event: 'local' }]);
+
+    frame.remove();
+    root.remove();
+    delete host.dataLayer;
+  });
+});

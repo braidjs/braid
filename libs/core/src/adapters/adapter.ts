@@ -56,8 +56,8 @@ export interface AdapterBootContext {
   entry?: string;
   /**
    * Host globals this fragment shares instead of getting realm-local copies, already resolved
-   * from its capabilities and the host default. Only the compat adapter reads it: sharing needs
-   * a same-origin realm.
+   * from its capabilities and the host default. The compat and custom-element adapters read it:
+   * sharing needs a same-origin realm, and the contract adapter's host API is the contract itself.
    */
   sharedGlobals?: readonly string[];
   /** Aborts when the fragment is being torn down. */
