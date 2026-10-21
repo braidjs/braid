@@ -23,6 +23,14 @@ describe('resolveSharedGlobals()', () => {
     setBraidConfig({ sharedGlobals: ['dataLayer'] });
     expect(resolveSharedGlobals({ sharedGlobals: [] })).toEqual([]);
   });
+
+  it('shares nothing for a malformed grant, rather than a global per character', () => {
+    expect(resolveSharedGlobals({ sharedGlobals: 'dataLayer' as unknown as string[] })).toEqual([]);
+    expect(resolveSharedGlobals({ sharedGlobals: { dataLayer: true } as unknown as string[] })).toEqual([]);
+    expect(resolveSharedGlobals({ sharedGlobals: ['dataLayer', 7, '', null] as unknown as string[] })).toEqual([
+      'dataLayer',
+    ]);
+  });
 });
 
 describe('createContextGate()', () => {

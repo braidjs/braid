@@ -41,8 +41,10 @@ accessor for each named host global. Through it the fragment can read the host's
 replace it**. Braid still installs nothing on the host window. The new thing is a write channel
 into host globals the host named itself. List only globals you would let any trusted fragment
 overwrite, and initialize them on the host first: an object a fragment creates outlives the
-fragment. A fragment's `capabilities.sharedGlobals` narrows the list or opts out with `[]`. The
-untrusted tier ignores it, because there is nothing same-origin to share.
+fragment. A fragment's `capabilities.sharedGlobals` **replaces** the list for that fragment. It can
+narrow the list, opt out with `[]`, or add names `initBraid` never listed. Whoever controls the
+registry therefore controls this, so review manifest changes to `sharedGlobals` the way you review
+host config. The untrusted tier ignores it, because there is nothing same-origin to share.
 
 ## What the untrusted tier is
 

@@ -91,6 +91,10 @@ reads the host's property live and writes it back, bare identifiers included:
   `location`, `document` and constructors.
 - **Objects pushed from a fragment come from another realm,** so host code that checks
   `instanceof Object` on them sees `false`.
+- **The accessor is configurable.** A fragment's `delete window.dataLayer` or
+  `function dataLayer(){}` takes the name back into its own realm.
+- **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
+  reaches browsers on that schedule.
 
 Mounting in HTML:
 

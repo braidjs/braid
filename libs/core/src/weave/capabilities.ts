@@ -118,7 +118,11 @@ export function resolveCapabilities(
  * what that fragment gets, and `[]` is how a fragment with its own analytics stack opts out.
  */
 export function resolveSharedGlobals(capabilities: FragmentCapabilities | undefined): readonly string[] {
-  return capabilities?.sharedGlobals ?? getBraidConfig().sharedGlobals ?? [];
+  const names: unknown = capabilities?.sharedGlobals ?? getBraidConfig().sharedGlobals;
+  // The stub's grant is manifest JSON, cast rather than parsed: a `"sharedGlobals": "dataLayer"`
+  // typo must share nothing, not one host-writing accessor per character.
+  if (!Array.isArray(names)) return [];
+  return names.filter((name): name is string => typeof name === 'string' && name !== '');
 }
 
 /** Reads a capabilities block off a realm stub's adapter options, or off `initBraid` config. */
