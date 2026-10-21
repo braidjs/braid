@@ -218,6 +218,13 @@ describe('parseAreas reserved names', () => {
     expect(parseAreas('__proto__ main').errors).toEqual([expect.stringContaining('"__proto__" is not a valid area name')]);
   });
 
+  it('reads a template pasted from CSS on one line', () => {
+    const parsed = parseAreas('"header header" "nav main"');
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.areas.map((area) => area.name)).toEqual(['header', 'nav', 'main']);
+  });
+
   it('reads CRLF input', () => {
     expect(parseAreas('header header\r\nnav main').errors).toEqual([]);
   });

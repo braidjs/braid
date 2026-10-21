@@ -47,11 +47,15 @@ export interface SearchItem {
 
 const TOKEN = /(-?)(?:([a-zA-Z]+):)?(?:"([^"]*)"|(\S+))/g;
 
-export function parseQuery(input: string): ParsedQuery {
+const DANGLING_KEY = new RegExp(`(^|\\s)-?(?:${QUERY_KEYS.join('|')}):(?=\\s|$)`, 'gi');
+
+export function parseQuery(raw: string): ParsedQuery {
   const terms: QueryTerm[] = [];
   const text: string[] = [];
   const exclude: string[] = [];
-  let structured = false;
+  // `tag:` with nothing after it is a query being typed, not a filter that matches nothing.
+  const input = raw.replace(DANGLING_KEY, '$1');
+  let structured = input !== raw;
 
   for (const match of input.matchAll(TOKEN)) {
     const [raw, minus, key, quoted, bare] = match;

@@ -121,9 +121,10 @@ const EMPTY_CELL = /^\.+$/;
  * unchanged. A run of dots is an empty cell, as in CSS.
  */
 export function parseAreas(text: string): ParsedAreas {
-  const cells = text
-    .split('\n')
-    .map((line) => line.trim().replace(/^["']|["']$/g, '').trim())
+  // CSS also writes the whole template on one line — "a b" "c d" — so quoted groups are rows too.
+  const lines = /^\s*(["'])/.test(text) ? [...text.matchAll(/(["'])([^"']*)\1/g)].map((match) => match[2] ?? '') : text.split('\n');
+  const cells = lines
+    .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => line.split(/\s+/).map((cell) => (EMPTY_CELL.test(cell) ? '.' : cell)));
 

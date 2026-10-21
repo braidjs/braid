@@ -96,6 +96,11 @@ describe('matchQuery', () => {
     expect(ids('is:sparkly')).toEqual([]);
   });
 
+  it('ignores a key with no value yet, rather than hiding every row while it is typed', () => {
+    expect(ids('tag:')).toHaveLength(items.length);
+    expect(ids('type:fragment tag:')).toEqual(['billing', 'payroll', 'rating', 'reviews']);
+  });
+
   it('returns everything for an empty query', () => {
     expect(ids('   ')).toHaveLength(items.length);
     expect(matchQuery(items[0]!, parseQuery(''))).toBe(true);
