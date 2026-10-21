@@ -26,6 +26,9 @@ export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.j
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 
+export { subgraph, supergraph } from './lib/supergraph.js';
+export type { SubgraphOptions, SubgraphSource } from './lib/supergraph.js';
+
 export { fetchDescriptors, mergeDescriptors, DEFAULT_DESCRIPTOR_PATH } from './lib/descriptor.js';
 export type {
   FragmentDescriptor,
