@@ -318,6 +318,7 @@ function vanillaPage(shell: ShellManifest, route: RouteView): GeneratedFile {
       ...cssRule(route, `.${route.stem}`).map((line) => `    ${line}`),
       `  </style>`,
       `  <script type="module">`,
+      `    // A bare specifier: serve this page through your bundler, or map it with an import map.`,
       `    import { initBraid } from '@braidlabs/core';`,
       `    initBraid();`,
       `  </script>`,

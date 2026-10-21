@@ -125,7 +125,12 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                   <tr key={item.id}>
                     <td>
                       <span className="braid-console__mono">{item.id}</span>
-                      {item.id === state.head && <span className="braid-console__badge braid-console__badge--loadable"> HEAD</span>}
+                      {item.id === state.head && (
+                        <>
+                          {' '}
+                          <span className="braid-console__badge braid-console__badge--loadable">HEAD</span>
+                        </>
+                      )}
                     </td>
                     <td>
                       <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
