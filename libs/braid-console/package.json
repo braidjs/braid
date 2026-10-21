@@ -1,7 +1,7 @@
 {
   "name": "@braidlabs/console",
   "version": "0.0.1",
-  "description": "A read-only console for a Braid gateway's fragment registry. Mountable React library, or a standalone deployable app.",
+  "description": "A console for a Braid gateway: fragments, shells as data, a composition map, and snapshot history. Mountable React components, or a standalone app with OIDC sign-in.",
   "keywords": [
     "braid",
     "micro-frontends",
@@ -25,7 +25,8 @@
     "@braidlabs/gateway": "^0.0.1",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
-    "@braidlabs/registry": "^0.0.1"
+    "@braidlabs/registry": "^0.0.1",
+    "oidc-client-ts": "^3.5.0"
   },
   "publishConfig": {
     "access": "public"
@@ -38,5 +39,10 @@
   "homepage": "https://github.com/braidjs/braid#readme",
   "bugs": {
     "url": "https://github.com/braidjs/braid/issues"
+  },
+  "peerDependenciesMeta": {
+    "oidc-client-ts": {
+      "optional": true
+    }
   }
 }

@@ -1,5 +1,12 @@
 import type { DiscoveryEntry, DiscoveryPage, FragmentManifest } from '@braidlabs/gateway';
-import type { DescriptorNote, RegistryDiff, RegistryFinding, SnapshotRef } from '@braidlabs/registry';
+import type {
+  DescriptorNote,
+  RegistryDiff,
+  RegistryFinding,
+  RegistryPermissions,
+  ShellManifest,
+  SnapshotRef,
+} from '@braidlabs/registry';
 
 /**
  * How the console reaches a gateway.
@@ -105,7 +112,14 @@ export const DEFAULT_API_PATH = '/__braid/registry-api';
 
 export interface HeadState {
   id: string | null;
-  snapshot: { id: string; createdAt: string; manifests: FragmentManifest[] } | null;
+  snapshot: {
+    id: string;
+    createdAt: string;
+    manifests: FragmentManifest[];
+    /** Absent when the snapshot has no shells, and from servers that predate them. */
+    shells?: ShellManifest[];
+    labels?: Record<string, string>;
+  } | null;
 }
 
 export interface PublishOutcome {
@@ -133,9 +147,33 @@ export async function listSnapshots(api: ConsoleApi = {}, signal?: AbortSignal):
  */
 export async function publishSnapshot(
   api: ConsoleApi,
-  body: { manifests: FragmentManifest[]; labels?: Record<string, string>; pin?: boolean },
+  body: {
+    manifests: FragmentManifest[];
+    /** Omit to keep HEAD's shells; `[]` removes them. */
+    shells?: ShellManifest[];
+    labels?: Record<string, string>;
+    pin?: boolean;
+    /** The id the draft started from; the server refuses with 409 if HEAD has moved since. */
+    baseId?: string | null;
+  },
 ): Promise<PublishOutcome> {
   return apiRequest<PublishOutcome>(api, '/snapshots', { method: 'POST', body: JSON.stringify(body) });
+}
+
+/**
+ * What the signed-in caller may do, so the UI offers only what will work. The server still
+ * decides every request; this is advice for drawing buttons.
+ *
+ * A server too old to have the endpoint answers 404, and that reads as "everything allowed": the
+ * server will refuse what it refuses, which is the behavior such a server always had.
+ */
+export async function fetchPermissions(api: ConsoleApi = {}, signal?: AbortSignal): Promise<RegistryPermissions> {
+  try {
+    return await apiRequest<RegistryPermissions>(api, '/permissions', { method: 'GET' }, signal);
+  } catch (error) {
+    if (error instanceof RegistryApiError && error.status === 404) return { read: true, publish: true, pin: true, actor: null };
+    throw error;
+  }
 }
 
 /** Re-points HEAD. Rollback is this and nothing else. */

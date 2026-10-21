@@ -26,6 +26,20 @@ export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.j
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 
+export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
+export type {
+  ShellManifest,
+  ShellFramework,
+  ShellRoute,
+  ShellLayout,
+  ShellHead,
+  ShellMeta,
+  ShellScript,
+  ShellStylesheet,
+  GridArea,
+  ParsedAreas,
+} from './lib/shell.js';
+
 export { fetchDescriptors, mergeDescriptors, DEFAULT_DESCRIPTOR_PATH } from './lib/descriptor.js';
 export type {
   FragmentDescriptor,
@@ -62,7 +76,15 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
-export type { RegistryApi, RegistryApiOptions, PublishRequestBody, PublishResult } from './lib/api.js';
+export type {
+  RegistryApi,
+  RegistryApiOptions,
+  PublishRequestBody,
+  PublishResult,
+  RegistryAction,
+  AuthorizeResult,
+  RegistryPermissions,
+} from './lib/api.js';
 export type {
   RegistryFinding,
   FindingCode,

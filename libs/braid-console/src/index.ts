@@ -1,5 +1,5 @@
 /**
- * @braidlabs/console — a read-only view of a Braid gateway's fragment registry.
+ * @braidlabs/console — a console for a Braid gateway's registry: fragments, shells, and history.
  *
  * Two ways to use it, from one package:
  *
@@ -49,6 +49,7 @@ export {
   listSnapshots,
   publishSnapshot,
   pinSnapshot,
+  fetchPermissions,
   RegistryFetchError,
   RegistryApiError,
   DEFAULT_DISCOVERY_PATH,
@@ -56,3 +57,16 @@ export {
 } from './lib/client.js';
 export type { ConsoleApi, RegistryListing, HeadState, PublishOutcome } from './lib/client.js';
 export { CONSOLE_STYLES, ensureStyles } from './lib/styles.js';
+export { ShellsPanel, newShell } from './lib/shells-panel.js';
+export type { ShellsPanelProps } from './lib/shells-panel.js';
+export { HistoryPanel } from './lib/history-panel.js';
+export type { HistoryPanelProps } from './lib/history-panel.js';
+export { EmptyState, emptyKindOf } from './lib/empty-state.js';
+export type { EmptyKind } from './lib/empty-state.js';
+export { shellCode, SHELL_TARGETS, angularPath } from './lib/shell-codegen.js';
+export type { GeneratedFile } from './lib/shell-codegen.js';
+export { parseQuery, matchQuery, filterBy, fragmentItem, shellItem, QUERY_KEYS } from './lib/query.js';
+export type { ParsedQuery, QueryTerm, QueryKey, SearchItem } from './lib/query.js';
+export { tagColor, tagClass, TAG_COLOR_COUNT } from './lib/tags.js';
+export { TagChip } from './lib/tag-chip.js';
+export { tagQuery } from './lib/registry-console.js';

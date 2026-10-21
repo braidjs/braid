@@ -216,8 +216,32 @@ const response = await api.handle(request); // null when the path is not ours
 | `GET /head` | the pinned snapshot |
 | `GET /snapshots` | recent snapshots, newest first |
 | `GET /snapshots/:id` | one snapshot |
+| `GET /permissions` | the caller's own `{ read, publish, pin, actor }`, so a UI offers only what will work |
 | `POST /snapshots` | validate → merge descriptors → mint → store → pin |
 | `POST /head` | re-pin. **This is rollback**, and it is the whole of it |
+
+The publish body is `{ manifests, shells?, labels?, pin?, baseId? }`:
+
+- **`pin`** defaults to true, and a publish that pins is checked for **both** `publish` and `pin`. A
+  role that may only publish sends `pin: false` and leaves a candidate for someone who may pin.
+  **Upgrading:** before this, a default publish asked `authorize` only for `publish` and pinned
+  regardless. A hook that grants a pipeline `publish` but not `pin` now gets 403 for a pinning
+  publish; grant `pin` too, or publish with `pin: false`.
+- **`baseId`** is the snapshot id a draft started from (`null` if nothing was pinned). When sent, a
+  publish is refused with **409** and `{ head }` if HEAD has moved since, so two editors cannot
+  silently overwrite each other. Omit it for last-write-wins, as a pipeline might.
+- **`shells`**: omit to keep HEAD's shells, `[]` to remove them. Carried shells are validated, so
+  deleting a fragment a shell still slots is refused by name rather than publishing a hole.
+
+Malformed JSON is a **400**, and a shell of the wrong shape a **422** naming the field. A write that
+a browser marks `Sec-Fetch-Site: cross-site` is refused, which closes CSRF for an `authorize` hook
+that reads a cookie. `baseId` is checked on arrival and again just before HEAD moves, without a
+lock: two publishes in the same instant can both pass, which only a compare-and-set store closes. `authorize` may return a `Response` — a 401 with `WWW-Authenticate`,
+say — which is sent as-is; `false` is a 403.
+
+**`identify(request)`** names the caller as the server knows them. When present, every publish
+records it as `labels.publishedBy` and discards any client-sent value; without it, labels are
+whatever the client claimed.
 
 **Writes are refused without an `authorize` hook.** There is no permissive default: an
 unauthenticated publish endpoint is remote control of which fragments compose which pages. Reads
@@ -226,9 +250,83 @@ are allowed by default, matching the registry's own public-by-default posture.
 Publishing **re-validates server-side** whatever arrives. A client may validate too — the console
 does, as you type — but that is a convenience for whoever is typing, not the decision.
 
-Drafts are deliberately not server state. Only published snapshots are, which keeps this to five
+Drafts are deliberately not server state. Only published snapshots are, which keeps this to six
 routes and sidesteps multi-editor reconciliation; the cost is that drafts do not follow you between
 devices.
+
+## Shells
+
+A shell is the page fragments compose into, as data: a framework, routes, and per route a layout
+written as CSS `grid-template-areas` — the ASCII art *is* the CSS — with the fragment that fills each
+area, plus the document head (meta, and scripts and stylesheets by URL).
+
+```ts
+const snapshot = await createSnapshot({
+  manifests,
+  shells: [
+    {
+      id: 'storefront',
+      framework: 'react', // 'react' | 'angular' | 'angular-ssr' | 'vanilla'
+      routes: [
+        {
+          path: '/billing/*',
+          layout: { areas: 'header header\naside main', columns: '280px 1fr' },
+          slots: { header: 'rating', aside: 'reviews', main: 'billing' },
+        },
+      ],
+      head: { title: 'Billing', scripts: [{ src: 'https://cdn.example.com/a.js', type: 'module' }] },
+    },
+  ],
+});
+```
+
+`parseAreas(text)` applies the browser's own rules — every area a single rectangle, every row the
+same width, valid identifiers — and `validateRegistry(manifests, { shells })` adds shell findings:
+`duplicate-shell-id`, `invalid-shell-layout`, `invalid-route-path`, `slot-unknown-area`,
+`slot-unknown-fragment` (naming the shell), and `unsafe-shell-url` for anything that is not
+`https:` or root-relative. Inline script is not representable.
+
+Shells are in the content address. A snapshot without them hashes exactly as before shells
+existed, so no existing id changed.
+
+**Today a shell's framework decides the host code the console generates, not what serves the page**:
+the gateway still pierces fragments into whatever HTML its downstream app returns. Serving shells
+from the definition is the next step.
+
+## Signing in with Okta, or any OIDC issuer
+
+`@braidlabs/registry/oidc` turns verified access tokens into `authorize` and `identify`:
+
+```ts
+import { createOidcAuthorizer } from '@braidlabs/registry/oidc'; // needs the optional peer `jose`
+
+const api = createRegistryApi({
+  store,
+  ...createOidcAuthorizer({
+    issuer: 'https://example.okta.com/oauth2/default',
+    audience: 'api://braid-console',
+    roleMap: {
+      'braid-viewers': ['read'],
+      'braid-contributors': ['read', 'publish'], // candidates only
+      'braid-editors': ['read', 'publish', 'pin'],
+    },
+    // For a CI service app's client-credentials token, which has no groups.
+    scopeMap: { 'braid:publish': ['read', 'publish', 'pin'] },
+  }),
+});
+```
+
+Tokens are verified against the issuer's JWKS, found by OIDC discovery (or given as `jwks` for tests
+and air-gapped networks), with asymmetric algorithms only. A missing or invalid token is a 401, a
+role that does not grant the action a 403, an unreachable issuer a 503. `roleMap` matches the
+`groups` claim (or `rolesClaim`); `scopeMap` matches the token's scopes. They are separate because
+a scope is whatever a permitted client asked for: map one only when the issuer's access policy lets
+just the CI client request it, or any signed-in user could ask for it through the console.
+
+For Okta: use a **custom authorization server** (`/oauth2/default` or your own) — the org server's
+access tokens are not verifiable by third parties — and add a **`groups` claim to the access token**,
+not only the ID token. A client-credentials token has no user and therefore no groups; grant it a
+custom scope and map the scope.
 
 ## Fragment descriptors
 
@@ -273,4 +371,4 @@ braid registry diff --against ./snapshots
 ```
 
 See [`@braidlabs/cli`](../braid-cli), and
-[the plan](../../docs/plans/braid-registry-console-plan.md) for where this is going.
+[the console](../braid-console) for a UI over all of it.

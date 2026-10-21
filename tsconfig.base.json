@@ -25,6 +25,7 @@
       "@braidlabs/react": ["./libs/braid-react/src/index.ts"],
       "@braidlabs/registry": ["./libs/braid-registry/src/index.ts"],
       "@braidlabs/registry/node": ["./libs/braid-registry/src/node.ts"],
+      "@braidlabs/registry/oidc": ["./libs/braid-registry/src/oidc.ts"],
       "@braidlabs/sw": ["./libs/braid-sw/src/index.ts"],
       "@braidlabs/gateway": ["./libs/braid-gateway/src/index.ts"],
       "@braidlabs/gateway/node": ["./libs/braid-gateway/src/node.ts"],

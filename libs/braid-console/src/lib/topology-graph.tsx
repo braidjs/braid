@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { DiscoveryEntry } from '@braidlabs/gateway';
+import type { ShellManifest } from '@braidlabs/registry';
 import {
   buildTopology,
   coTenants,
@@ -11,6 +12,8 @@ import {
 
 export interface TopologyGraphProps {
   entries: readonly DiscoveryEntry[];
+  /** Adds a shells column on the left, with the routes they host and the fragments they slot. */
+  shells?: readonly ShellManifest[];
   /** Notified when the selection changes, so a host can drive its own detail pane. */
   onSelect?: (entry: DiscoveryEntry | null) => void;
   /** Asked to show the embed snippet for a fragment. */
@@ -18,7 +21,7 @@ export interface TopologyGraphProps {
 }
 
 /**
- * The composition topology, drawn as three columns: routes → fragments → origins.
+ * The composition topology, drawn as columns: (shells →) routes → fragments → origins.
  *
  * **Laid out, not simulated.** A force-directed graph looks impressive and answers no question: it
  * settles somewhere different every load, so an operator cannot learn its shape, point at it in a
@@ -29,8 +32,8 @@ export interface TopologyGraphProps {
  * Rendered as inline SVG with the console's own custom properties, so it themes with everything
  * else and needs no canvas, no measurement pass, and no resize observer.
  */
-export function TopologyGraph({ entries, onSelect, onEmbed }: TopologyGraphProps) {
-  const topology = useMemo(() => buildTopology(entries), [entries]);
+export function TopologyGraph({ entries, shells, onSelect, onEmbed }: TopologyGraphProps) {
+  const topology = useMemo(() => buildTopology(entries, shells ? { shells } : {}), [entries, shells]);
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
 
@@ -55,10 +58,17 @@ export function TopologyGraph({ entries, onSelect, onEmbed }: TopologyGraphProps
   return (
     <div className="braid-console__graphwrap">
       <div className="braid-console__graphmain">
+        {/* Placed by the same geometry as the columns, so a heading sits over its column however
+            many columns there are. */}
         <div className="braid-console__collabels" aria-hidden="true">
-          <span>Routes</span>
-          <span>Fragments</span>
-          {!topology.originsUnknown && <span>Origins</span>}
+          {columnLabels(topology).map((text, index) => (
+            <span
+              key={text}
+              style={{ left: `${((index * (NODE_W + COL_GAP)) / layout.width) * 100}%`, width: `${(NODE_W / layout.width) * 100}%` }}
+            >
+              {text}
+            </span>
+          ))}
         </div>
 
         <svg
@@ -238,7 +248,7 @@ function TopologyDetail({
 
       {node.kind !== 'fragment' && (
         <div className="braid-console__detailsection">
-          <h4>{node.kind === 'route' ? 'Composes' : 'Serves'}</h4>
+          <h4>{node.kind === 'shell' ? 'Hosts' : node.kind === 'route' ? 'Composes' : 'Serves'}</h4>
           <ul className="braid-console__peerlist">
             {connected.map((id) => (
               <li key={id} className="braid-console__mono">
@@ -294,9 +304,12 @@ export function layoutTopology(topology: Topology): {
   width: number;
   height: number;
 } {
-  const columns: TopologyNode[][] = topology.originsUnknown
-    ? [topology.routes, topology.fragments]
-    : [topology.routes, topology.fragments, topology.origins];
+  const columns: TopologyNode[][] = [
+    ...(topology.shells?.length ? [topology.shells] : []),
+    topology.routes,
+    topology.fragments,
+    ...(topology.originsUnknown ? [] : [topology.origins]),
+  ];
 
   const tallest = Math.max(1, ...columns.map((column) => column.length));
   const height = PAD * 2 + tallest * NODE_H + (tallest - 1) * ROW_GAP;
@@ -339,6 +352,10 @@ export function layoutTopology(topology: Topology): {
   return { nodes: placed, edges, width, height };
 }
 
+function columnLabels(topology: Topology): string[] {
+  return [...(topology.shells?.length ? ['Shells'] : []), 'Routes', 'Fragments', ...(topology.originsUnknown ? [] : ['Origins'])];
+}
+
 function describe(node: TopologyNode, topology: Topology): string {
   if (node.kind === 'fragment') {
     const peers = coTenants(topology, node.id).length;
@@ -346,6 +363,9 @@ function describe(node: TopologyNode, topology: Topology): string {
   }
   if (node.kind === 'route') {
     return `Route ${node.label}, composes ${node.degree} fragment${node.degree === 1 ? '' : 's'}`;
+  }
+  if (node.kind === 'shell') {
+    return `Shell ${node.label}, hosts ${node.degree} route${node.degree === 1 ? '' : 's'}`;
   }
   return `Origin ${node.label}, serves ${node.degree} fragment${node.degree === 1 ? '' : 's'}`;
 }
