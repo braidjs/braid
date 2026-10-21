@@ -54,6 +54,12 @@ export interface AdapterBootContext {
    * Adapters that need an entry should prefer this and fall back to the stub.
    */
   entry?: string;
+  /**
+   * Host globals this fragment shares instead of getting realm-local copies, already resolved
+   * from its capabilities and the host default. Only the compat adapter reads it: sharing needs
+   * a same-origin realm.
+   */
+  sharedGlobals?: readonly string[];
   /** Aborts when the fragment is being torn down. */
   signal: AbortSignal;
 }

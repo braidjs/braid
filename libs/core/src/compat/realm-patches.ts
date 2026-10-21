@@ -10,6 +10,7 @@ import { createFragmentBoundary, FragmentBoundary } from './fragment-boundary.js
 import { makeScriptBornInert } from './born-inert-scripts.js';
 import { navigationBus, ensureHostNavigationSources } from './navigation-bus.js';
 import { createRealmNavigator } from './service-worker.js';
+import { installSharedGlobals } from './shared-globals.js';
 import { RealmHandle } from '../realm/realm-manager.js';
 
 /**
@@ -17,8 +18,9 @@ import { RealmHandle } from '../realm/realm-manager.js';
  * that code running in it behaves as if it were running in the main frame.
  *
  * Everything here patches objects the runtime itself created (the hidden realm iframe) or nodes
- * confined to the fragment's boundary — the host page's globals and prototypes are never
- * touched.
+ * confined to the fragment's boundary — nothing is installed on the host page's globals or
+ * prototypes. The host's `sharedGlobals` are the one deliberate channel back: realm accessors for
+ * host properties the host named itself.
  */
 export interface RealmContext extends FragmentBoundary {
   /**
@@ -36,6 +38,7 @@ export function initializeRealmContext(
   braidDocumentElement: HTMLElement,
   boundNavigation: boolean,
   fragmentAbortController: AbortController,
+  sharedGlobals: readonly string[] = [],
 ): RealmContext {
   assert(realm.window !== null && realm.document !== null, 'attempted to patch the realm before it was ready');
 
@@ -145,6 +148,10 @@ export function initializeRealmContext(
       },
     });
   }
+
+  // Host globals the host chose to share (its analytics data layer, tag manager…). Installed after
+  // the realm's own patches, so a name compat has already claimed is skipped rather than replaced.
+  installSharedGlobals(realmWindow, mainWindow, sharedGlobals, realm.fragmentId);
   // END> WINDOW: MISC PATCHES
 
   /**

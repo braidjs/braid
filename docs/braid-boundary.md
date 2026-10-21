@@ -22,6 +22,7 @@ in language that implies more than it delivers. The correction, stated plainly:
 | Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
 | Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
 | Cookies & storage | **the host's** | its own, partitioned |
+| Host globals | its own realm's, plus any the host lists in `sharedGlobals` | its own |
 | Layout | participates in host layout | a rectangle the host sizes |
 | Accessibility | one tree | nested documents |
 | Overlays | can escape the fragment's box | clipped by the frame |
@@ -32,6 +33,16 @@ in language that implies more than it delivers. The correction, stated plainly:
 
 Everything in the trusted column below "where its DOM lives" is a *consequence* of sharing a
 document. None of it survives a boundary the browser enforces. The untrusted tier gives up all of it.
+
+**Shared globals widen the trusted tier on purpose.** A trusted fragment's JavaScript runs in its
+own realm, so by default its `window.dataLayer` is a private array that no tag manager reads.
+`initBraid({ sharedGlobals: ['dataLayer', '_satellite'] })` gives every trusted fragment an
+accessor for each named host global. Through it the fragment can read the host's value **and
+replace it**. Braid still installs nothing on the host window. The new thing is a write channel
+into host globals the host named itself. List only globals you would let any trusted fragment
+overwrite, and initialize them on the host first: an object a fragment creates outlives the
+fragment. A fragment's `capabilities.sharedGlobals` narrows the list or opts out with `[]`. The
+untrusted tier ignores it, because there is nothing same-origin to share.
 
 ## What the untrusted tier is
 

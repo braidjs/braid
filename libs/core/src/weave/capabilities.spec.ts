@@ -1,8 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setBraidConfig } from '../config.js';
-import { createContextGate, readCapabilities, resolveCapabilities } from './capabilities.js';
+import { createContextGate, readCapabilities, resolveCapabilities, resolveSharedGlobals } from './capabilities.js';
 
-afterEach(() => setBraidConfig({ dev: false }));
+afterEach(() => setBraidConfig({ dev: false, sharedGlobals: [] }));
+
+describe('resolveSharedGlobals()', () => {
+  it('shares nothing when neither the host nor the fragment names a global', () => {
+    expect(resolveSharedGlobals(undefined)).toEqual([]);
+  });
+
+  it("falls back to the host's initBraid default", () => {
+    setBraidConfig({ sharedGlobals: ['dataLayer', '_satellite'] });
+    expect(resolveSharedGlobals({ context: { read: ['user'] } })).toEqual(['dataLayer', '_satellite']);
+  });
+
+  it("replaces the host default with the fragment's own grant", () => {
+    setBraidConfig({ sharedGlobals: ['dataLayer', '_satellite'] });
+    expect(resolveSharedGlobals({ sharedGlobals: ['adobeDataLayer'] })).toEqual(['adobeDataLayer']);
+  });
+
+  it('lets a fragment opt out with an empty grant', () => {
+    setBraidConfig({ sharedGlobals: ['dataLayer'] });
+    expect(resolveSharedGlobals({ sharedGlobals: [] })).toEqual([]);
+  });
+});
 
 describe('createContextGate()', () => {
   it('grants everything when no context grant is declared', () => {

@@ -2,9 +2,10 @@
  * Library-wide configuration for the Braid client runtime, set via `initBraid(options)`.
  *
  * Note there is no host-isolation mode switch: host purity is an invariant, not a mode.
- * Braid never mutates a host-page global or prototype — in any mode, ever. The compat adapter
- * achieves its interception with fragment-boundary techniques confined to each fragment's own
- * realm and shadow DOM subtree.
+ * Braid never installs anything on a host-page global or prototype — in any mode, ever. The compat
+ * adapter achieves its interception with fragment-boundary techniques confined to each fragment's
+ * own realm and shadow DOM subtree. The one channel back is `sharedGlobals`: host globals the host
+ * names itself, which trusted fragments may then read and write.
  */
 
 import type { HostContract } from './weave/contract.js';
@@ -29,6 +30,29 @@ export interface BraidOptions {
    * that matters; where both speak, the registry wins.
    */
   capabilities?: Record<string, FragmentCapabilities>;
+
+  /**
+   * Host globals that trusted fragments share instead of getting a realm-local copy:
+   *
+   * ```ts
+   * initBraid({ sharedGlobals: ['dataLayer', 'adobeDataLayer', '_satellite', 'KAMPYLE'] });
+   * ```
+   *
+   * A compat fragment's JavaScript runs in its own realm, so without this its
+   * `window.dataLayer.push(…)` lands in an array no tag manager is watching, and the usual "fix" is
+   * a second copy of the vendor script. Each name here becomes a realm-window accessor that reads
+   * and writes the host's property, live.
+   *
+   * **This lets fragments write host globals** — the names you list, and nothing else. Prefer that
+   * the host initializes each one (an object a fragment creates outlives the fragment), and note
+   * that a fragment's own `<script src>` for the vendor still runs unless it checks first
+   * (`if (!window._satellite)`).
+   *
+   * Trusted (same-origin compat) fragments only; the untrusted tier ignores it. A fragment's
+   * `capabilities.sharedGlobals` replaces this default, and `[]` opts it out. Names the fragment's
+   * realm already defines (`location`, `document`, constructors…) are skipped.
+   */
+  sharedGlobals?: string[];
 
   /**
    * Enables development-mode diagnostics: unaudited-API warnings from the compat document
@@ -65,6 +89,7 @@ interface ResolvedBraidConfig {
   basePath: string;
   contract?: HostContract;
   capabilities?: Record<string, FragmentCapabilities>;
+  sharedGlobals?: string[];
   onHostNavigation?: (notify: () => void) => void;
 }
 
@@ -82,6 +107,9 @@ export function setBraidConfig(options: BraidOptions = {}): void {
   }
   if (options.capabilities) {
     config.capabilities = options.capabilities;
+  }
+  if (options.sharedGlobals) {
+    config.sharedGlobals = options.sharedGlobals;
   }
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;
