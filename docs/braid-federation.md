@@ -16,6 +16,7 @@ createGateway({
       name: 'orders',
       url: 'https://orders.internal.example.com', // the team gateway, basePath included
       registry: 'https://orders.internal.example.com/braid-registry.json', // any registry source
+      routes: ['/orders', '/refunds'], // the pages this team may pierce into
     }),
   ]),
   forwardCredentials: true, // only if team fragments need the user's identity, see "Credentials"
@@ -76,10 +77,22 @@ For `GET /orders/42`:
 4. Asset requests take the same path. A request for `/__braid/frag/orders/assets/app.js` on the org
    goes to the team gateway, which sends `/assets/app.js` to the origin.
 
-Everything else on the manifest is the team's to declare, and arrives as written: `pierce`, `bound`,
-`src`, `documentPath`, `access`, `capabilities`, `entry`. Paths on the endpoint still resolve,
-because the team gateway strips its namespace first. Function endpoints and private-network
-endpoints in the team's registry are fine, since the org never sees them.
+Routing and loading are the team's to declare, and arrive as written: `pierce`, `bound`, `src`,
+`documentPath`, `access`, `redirect`, `adapter`, `element`. Paths on the endpoint still resolve,
+because the team gateway strips its namespace first. Function and private-network endpoints in the
+team's registry are fine for page and asset requests, since the org never sees them (WebSockets are
+the exception, see Caveats).
+
+A team's registry is partly trusted input to the org gateway, so `subgraph()` also enforces three
+limits:
+
+| Field | Rule | Why |
+| --- | --- | --- |
+| `pierce` | must stay inside the subgraph's `routes`. Without `routes`, only whole-site claims (`/`, `/*`, a leading parameter) fail | a pierce pattern decides which org pages the team's HTML lands in, and with `forwardCredentials`, which pages send the user's cookies to the team |
+| `capabilities` | the team's are dropped. The org grants them per fragment with `subgraph({ capabilities: { orders: {…} } })` | capabilities are host-owned, and a grant the grantee can write is not a grant |
+| `entry` | must be a path on the endpoint, not an absolute or protocol-relative URL | module code is then served through the org gateway, like everything else, and pinned by a snapshot |
+
+A violation fails composition and names the subgraph and the fragment.
 
 ## What each side does
 
@@ -101,6 +114,8 @@ its shell (see Layout).
   owners: `fragment id "cart" is claimed by both subgraph "orders" and subgraph "checkout"`. A
   gateway that silently kept one would serve one team's fragment where another team expected its
   own.
+- **Subgraph limits.** A pierce pattern outside the subgraph's `routes`, or an absolute `entry`,
+  fails composition (see the table above).
 - **Validation errors.** Any other `validateRegistry` error also fails composition, for example an
   invalid id or an invalid pierce pattern.
 - **Warnings.** Warnings are logged and composition proceeds. The common one is `pierce-overlap`,
@@ -114,8 +129,9 @@ The gateway strips `cookie` and `authorization` from every fragment fetch unless
 - **Gated fragments need `forwardCredentials`.** A team fragment with `access` rules needs it on the
   org gateway. Without it, the team gateway sees every user as anonymous and refuses. That is
   fail-closed, but it is probably not what you want.
-- **It applies to every endpoint.** `forwardCredentials` covers the whole registry. Turn it on only
-  when every endpoint in the graph should receive the user's cookies.
+- **It applies to every endpoint.** `forwardCredentials` covers the whole registry. Every subgraph
+  then receives the user's org cookies on every page it pierces, which is why `routes` matters. Turn
+  it on only when every team in the graph should receive them.
 
 `access` rules are copied as data, so the org gateway also enforces them at its edge (it needs a
 `principal` resolver that understands the same identity). The team gateway stays authoritative:
@@ -123,9 +139,11 @@ even a caller the org lets through is checked again by the team.
 
 ## Availability: compose ahead of time in production
 
-`supergraph()` loads every source when the gateway first needs its registry. If one team's registry
-is unreachable at that moment, the org registry fails, and it keeps failing until that team
-recovers, because the gateway does not cache a failed load.
+`supergraph()` loads every source when the gateway first needs its registry, and concurrent requests
+share that one load. If a team's registry is unreachable, the load fails after the subgraph's
+`timeoutMs` (5 seconds by default). The gateway does not cache a failed load, so until that team
+recovers, every request that needs the registry waits out the timeout and then fails. That includes
+org pages that have nothing to do with the team.
 
 So in production, compose at build or deploy time and serve a snapshot:
 
@@ -159,9 +177,22 @@ own. Register it as `bound: false` with a `src`, and give it a slot.
   of the org gateway and cache `/__braid/frag/*` there (see [CDN and deployment](/braid-cdn)).
 - **`x-forwarded-host` is the org's on the first hop only.** The team gateway overwrites it unless it
   sets `trustForwardedHeaders`. Team fragments that build absolute URLs from it see the team's host.
-- **Relative redirects.** A fragment using `redirect: 'navigate'` that answers with a relative
-  `Location` resolves against the team gateway's origin. Allow that origin in the org's
-  `redirectOrigins`, or redirect with absolute URLs.
+- **Redirects mostly do not survive federation.** With `redirect: 'navigate'`, the org resolves a
+  fragment's `Location` against the team gateway's URL. A host-relative `Location: /login` becomes
+  `https://orders.internal/login`, which is outside the fragment's endpoint and not the org origin,
+  so the org refuses it. Don't add the team's internal host to `redirectOrigins` to fix this: that
+  sends browsers to a private hostname. What works is a path-relative `Location` that stays inside
+  the fragment (`login`, no leading slash), or an absolute redirect to a public identity provider
+  listed in the org's `redirectOrigins`.
+- **WebSockets.** An upgrade crosses both gateways only if the team's server wires
+  `toNodeUpgradeHandler` and the fragment's team endpoint is a URL, not a function. Upgrades
+  forward `cookie` and `authorization` whatever `forwardCredentials` says.
+- **Absolute URLs in fragment HTML.** An absolute `entry` is refused at composition. Absolute URLs
+  that point at the team's private origin inside the HTML itself still break in the browser, just as
+  they would standalone.
+- **One timeout budget, two hops.** The org copies each fragment's `timeoutMs`, so the team hop and
+  the org's own timer race on the same budget. Give the team gateway the shorter timeout, so a slow
+  origin fails there with the team's fallback.
 - **No loop guard.** A team manifest whose endpoint points back at the org gateway's
   `/__braid/frag/` recurses until the fragment timeout. Composition never produces this; only hand
   configuration can.
