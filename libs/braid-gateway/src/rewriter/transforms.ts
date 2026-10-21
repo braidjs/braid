@@ -441,8 +441,11 @@ export interface PierceOptions {
  * in registration order, that no earlier named slot has claimed, and is given that fragment's
  * name. That lets a shell that composes many teams' routes declare one place for "whatever this
  * page is" instead of a slot per fragment id. The stream cannot look ahead, so a named slot
- * *after* the outlet is too late for a fragment the outlet already took; that is warned about,
- * not guessed at. Unbound widgets never fill an outlet: they have a `src` and a place of their own.
+ * *after* the outlet is too late for a fragment the outlet already took: it is unnamed and marked
+ * `data-braid-in-outlet`, so the client does not boot a second copy, and the gateway warns. Unbound
+ * widgets never fill an outlet: they have a `src` and a place of their own. Neither does an
+ * untrusted or contract slot. Each further outlet takes the next routed match. The rewriter does
+ * not track `<template>`, so an outlet inside one claims a fragment like any other.
  */
 export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Array> {
   const { shell, headScript, nonce } = options;
@@ -509,6 +512,8 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
 
           // a bare `outlet` has no value, so ask whether it is present rather than what it says
           if (!name && tag.attributeNames.includes('outlet')) {
+            // an untrusted or contract slot never takes pierced content, so it cannot be an outlet
+            if (tag.getAttribute('trust') === 'untrusted' || tag.getAttribute('adapter') === 'contract') return;
             const routed = [...pending.values()].find((target) => target.bound);
             if (!routed) return;
             pending.delete(routed.fragmentId);
@@ -522,10 +527,13 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
           // synchronous unless this slot is one being pierced: only those wait
           if (!unsettled) {
             if (name && inOutlet.has(name)) {
+              // Unnamed so the client leaves it alone: two instances of one routed fragment would be
+              // two routers on one URL. The attribute says where the fragment went instead.
+              tag.removeAttribute('name');
+              tag.setAttribute('data-braid-in-outlet', name);
               console.warn(
                 `braid-gateway: a <fragment-slot name="${name}"> comes after the outlet that already ` +
-                  `holds "${name}", so it stays empty and the client will boot the fragment a second ` +
-                  `time — move the named slot before the outlet, or remove it`,
+                  `holds "${name}", so it is left empty — move the named slot before the outlet, or remove it`,
               );
             }
             return;

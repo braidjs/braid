@@ -375,6 +375,29 @@ describe('<fragment-slot outlet>', () => {
     host.remove();
   });
 
+  it('stays idle when the gateway neutralised it as a duplicate of the outlet', async () => {
+    const { errors, host } = await mount('<fragment-slot data-braid-in-outlet="orders"></fragment-slot>');
+
+    expect(errors).toEqual([]);
+    host.remove();
+  });
+
+  it('boots exactly once when it is given a name', async () => {
+    const { slot, host } = await mount('<fragment-slot outlet></fragment-slot>');
+    const loads: string[] = [];
+    slot.addEventListener('braid:state', (event) => {
+      const { state } = (event as CustomEvent<{ state: string }>).detail;
+      if (state === 'loading') loads.push(state);
+    });
+
+    slot.setAttribute('name', 'orders');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(loads).toHaveLength(1);
+    expect(slot.state).not.toBe('idle');
+    host.remove();
+  });
+
   it('is still an error for an ordinary slot with no name', async () => {
     const { errors, host } = await mount('<fragment-slot></fragment-slot>');
 

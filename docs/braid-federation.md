@@ -181,8 +181,13 @@ the slot after it, so a new subgraph's routes need no change to the org shell. T
   no earlier named slot claimed. Unbound widgets never fill an outlet, because they have a `src`
   and a slot of their own.
 - **Named slots.** A named slot *before* the outlet wins its fragment. One *after* it is too late,
-  because the gateway streams the page and cannot look ahead. The gateway warns, and that slot
-  stays empty.
+  because the gateway streams the page and cannot look ahead. The gateway unnames that slot (it
+  gets `data-braid-in-outlet="<id>"` instead), so the client does not boot a second copy, and it
+  warns. Put named slots before the outlet.
+- **More than one.** Each further outlet takes the next routed match. An outlet marked
+  `trust="untrusted"` or `adapter="contract"` is never filled.
+- **Inside `<template>`.** The gateway does not look inside templates, so an outlet in a
+  `<template>` claims a fragment like a live one. Keep the outlet in the page's live markup.
 - **No match.** When no routed fragment matches the page, the outlet is left as written, and the
   client leaves a nameless outlet alone.
 - **Full page loads only.** The outlet is filled on a full page load. A client-side navigation from

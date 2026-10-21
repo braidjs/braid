@@ -240,8 +240,9 @@ export class FragmentSlot extends HTMLElement {
       return;
     }
     // An outlet the gateway did not fill has no fragment yet: the page is simply not one of the
-    // routed ones. It boots when it is given a name (see attributeChangedCallback).
-    if (!this.name && this.hasAttribute('outlet')) {
+    // routed ones. It boots when it is given a name (see attributeChangedCallback). A slot the
+    // gateway unnamed because an outlet already holds its fragment stays idle for the same reason.
+    if (!this.name && (this.hasAttribute('outlet') || this.hasAttribute('data-braid-in-outlet'))) {
       return;
     }
     this.#bootScheduled = true;

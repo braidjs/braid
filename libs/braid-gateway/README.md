@@ -170,7 +170,8 @@ A shell can instead mark one `<fragment-slot outlet>`. It takes the page's route
 the first in registration order that no earlier named slot claimed, and is named after it. A shell
 that composes many routes then needs one slot rather than one per fragment id. Unbound widgets
 never fill an outlet. A named slot after the outlet is too late for a fragment the outlet already
-took, and the gateway warns. The outlet is filled on full page loads only.
+took, so the gateway unnames it (`data-braid-in-outlet`) and warns, rather than let the client boot
+a second copy. The outlet is filled on full page loads only.
 
 Fragment HTML is transformed on the way through: the doctype is stripped, `<html>/<head>/<body>`
 become `braid-html/braid-head/braid-body` (start *and* end tags), scripts are neutralized to

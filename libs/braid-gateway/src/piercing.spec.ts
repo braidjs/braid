@@ -424,7 +424,7 @@ describe('route outlet', () => {
     expect(body.match(/<h1>orders<\/h1>/g)).toHaveLength(1);
   });
 
-  it('warns when a named slot after the outlet asks for the fragment the outlet already took', async () => {
+  it('neutralises a named slot after the outlet that asks for the fragment the outlet already took', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const shell = async () =>
       page(`<main><fragment-slot outlet></fragment-slot></main><footer><fragment-slot name="orders"></fragment-slot></footer>`);
@@ -432,8 +432,39 @@ describe('route outlet', () => {
     const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
 
     expect(body.match(/<h1>orders<\/h1>/g)).toHaveLength(1);
+    // unnamed, so the client does not boot a second copy of what the outlet holds
+    expect(body).toContain('<footer><fragment-slot data-braid-in-outlet="orders"></fragment-slot></footer>');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('outlet'));
     warn.mockRestore();
+  });
+
+  it('puts exactly one shadow root inside the outlet', async () => {
+    const shell = async () => page(`<main><fragment-slot outlet></fragment-slot></main>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+    const outlet = body.slice(body.indexOf('<main>'), body.indexOf('</main>'));
+
+    expect(outlet.match(/shadowrootmode="open"/g)).toHaveLength(1);
+  });
+
+  it('leaves the outlet as written when nothing on the page matched', async () => {
+    const gateway = createGateway({ registry: [{ id: 'orders', endpoint: app('orders'), pierce: ['/orders/*'] }] });
+    const shell = vi.fn(async () => page(`<main><fragment-slot outlet></fragment-slot></main>`));
+
+    const response = await gateway.handle(documentRequest('/about'), shell);
+
+    // no pierce match at all: the gateway steps aside and the shell answers unchanged
+    expect(response).toBeNull();
+  });
+
+  it('does not fill an outlet that declares a tier the gateway does not pierce for', async () => {
+    for (const attributes of ['trust="untrusted"', 'adapter="contract"']) {
+      const shell = async () => page(`<main><fragment-slot outlet ${attributes}></fragment-slot></main>`);
+
+      const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+
+      expect(body).toContain(`<main><fragment-slot outlet ${attributes}></fragment-slot></main>`);
+    }
   });
 });
 
