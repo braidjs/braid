@@ -65,6 +65,8 @@ export interface FragmentManifest {
     permissions?: string[];
     network?: string[];
     storage?: 'partitioned' | 'shared';
+    /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */
+    sharedGlobals?: string[];
   };
   /** Module entry for contract-mode fragments (unused by the compat adapter). */
   entry?: string;

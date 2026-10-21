@@ -67,6 +67,12 @@ confined to the fragment's own realm and boundary:
 **The host page is never patched.** Verify with
 `Node.prototype.appendChild.toString().includes('[native code]')`.
 
+**Shared host globals.** If a fragment's analytics "do nothing" when composed, the cause is its
+realm-local `dataLayer`/`_satellite`. The fix is `initBraid({ sharedGlobals: ['dataLayer', …] })`,
+not a second copy of the vendor script. It is trusted tier only, and per-fragment
+`capabilities.sharedGlobals` replaces it, with `[]` opting out. Fragments can then write those host
+globals.
+
 ## The custom-element adapter
 
 For a fragment that already *is* a web component. No emulation, no fragment document — the

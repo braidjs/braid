@@ -22,7 +22,7 @@ export const compatAdapter: InstalledAdapter = {
   realmKind: 'compat-http',
 
   async boot(ctx: AdapterBootContext): Promise<void> {
-    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, signal } = ctx;
+    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, sharedGlobals, signal } = ctx;
 
     const fragmentShadowRoot = Object.assign(shadowRoot, {
       [compatMetadataSymbol]: { documentReadyState: 'loading' as DocumentReadyState },
@@ -53,6 +53,7 @@ export const compatAdapter: InstalledAdapter = {
       contentRoot,
       bound,
       fragmentAbortController,
+      sharedGlobals ?? [],
     );
 
     // Now activate the fragment's scripts, in document order, in the realm's JS context.

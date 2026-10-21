@@ -23,7 +23,12 @@ import { CloseReason, DIRTY, DirtyPayload, closeAndDispose } from '../weave/clos
 import { negotiateContract } from '../weave/contract.js';
 import { createSandboxRealm } from '../realm/sandbox-realm.js';
 import { createPortBacking } from '../weave/port-backing.js';
-import { FragmentCapabilities, readCapabilities, resolveCapabilities } from '../weave/capabilities.js';
+import {
+  FragmentCapabilities,
+  readCapabilities,
+  resolveCapabilities,
+  resolveSharedGlobals,
+} from '../weave/capabilities.js';
 
 /**
  * What the slot reports about its fragment.
@@ -563,6 +568,7 @@ export class FragmentSlot extends HTMLElement {
         routeUrl,
         bound,
         env,
+        sharedGlobals: resolveSharedGlobals(capabilities),
         signal,
       });
 
