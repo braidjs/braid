@@ -158,6 +158,8 @@ pin). It needs the optional peer dependency `jose`.
 1. Use a **custom authorization server** (`https://<org>.okta.com/oauth2/default` or your own); the
    org server's access tokens cannot be verified by third parties.
 2. Add a **`groups` claim to the access token**, filtered to your `braid-*` groups.
-3. For CI, create a service app (client credentials) and a custom scope such as `braid:publish`, and
-   put that scope in `roleMap`. Service tokens have no groups.
+3. For CI, create a service app (client credentials) and a custom scope such as `braid:publish`, put
+   that scope in `scopeMap` (not `roleMap`), and restrict the scope to the service app in the
+   authorization server's access policy. Service tokens have no groups, and a scope any client may
+   request is a scope any signed-in user may hold.
 4. Set `audience` to the authorization server's audience (`api://default` unless you changed it).

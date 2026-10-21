@@ -73,6 +73,9 @@ export interface PublishRequestBody {
    *
    * When sent, a publish is refused with 409 if HEAD has moved since, so two editors cannot
    * silently overwrite each other. Omit it to publish last-write-wins, as a pipeline might.
+   *
+   * The check is made on arrival and again just before HEAD moves, without a lock: two publishes
+   * landing within the same moment can still both pass. A store with compare-and-set would close it.
    */
   baseId?: string | null;
 }
@@ -108,6 +111,13 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       if (!url.pathname.startsWith(basePath)) return null;
 
       const route = url.pathname.slice(basePath.length) || '/';
+
+      // A browser marks a request another site made with Sec-Fetch-Site: cross-site. Refusing those
+      // writes closes CSRF for an `authorize` hook that reads a cookie; bearer tokens are immune
+      // anyway, and clients that are not browsers do not send the header.
+      if (request.method === 'POST' && request.headers.get('sec-fetch-site') === 'cross-site') {
+        return json({ error: 'cross-site writes are refused' }, 403);
+      }
 
       try {
         if (request.method === 'GET' && route === '/snapshots') return await listSnapshots(request, url);
@@ -221,6 +231,17 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       ...(labels ? { labels } : {}),
     });
     await store.put(snapshot);
+
+    // Checked again just before moving HEAD: descriptor probes above can take seconds, and another
+    // publish may have pinned meanwhile. The snapshot stays stored either way — it is immutable and
+    // unpinned, so harmless. This narrows the window to two store calls; it does not close it,
+    // which needs a compare-and-set in the store.
+    if (shouldPin && body.baseId !== undefined) {
+      const current = (await store.head?.()) ?? null;
+      if (current !== previousId) {
+        return json({ error: `HEAD moved to ${current ?? 'nothing'} while publishing — reload before publishing`, head: current }, 409);
+      }
+    }
 
     if (shouldPin) await store.setHead?.(snapshot.id);
 

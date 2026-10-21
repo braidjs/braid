@@ -386,4 +386,51 @@ describe('registry write API', () => {
       expect((await api.handle(post('/snapshots', { manifests, shells: {} })))?.status).toBe(400);
     });
   });
+
+  describe('ordering and cross-site writes', () => {
+    it('refuses an unauthorized publish before reading its body', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: (_request, action) => action === 'read' });
+
+      const response = await api.handle(new Request(`${BASE}/snapshots`, { method: 'POST', body: '{bad' }));
+
+      expect(response?.status).toBe(403);
+    });
+
+    it('refuses a stale publish without probing or storing anything', async () => {
+      const store = memorySnapshotStore();
+      const probe = vi.fn(async () => new Response('{}', { status: 404 }));
+      const api = createRegistryApi({ store, authorize: allow, fetchDescriptors: true, fetch: probe as unknown as typeof fetch });
+
+      const response = await api.handle(post('/snapshots', { manifests, baseId: 'reg_stale' }));
+
+      expect(response?.status).toBe(409);
+      expect(probe).not.toHaveBeenCalled();
+      expect(await store.list({ limit: 10 })).toEqual([]);
+    });
+
+    it('refuses to pin when HEAD moved while the publish was in flight', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      const first = await (await api.handle(post('/snapshots', { manifests })))!.json();
+      // Someone else pins between this publish's first check and its write.
+      const other = await createSnapshot({ manifests: [{ id: 'other', endpoint: 'https://o.internal' }] });
+      await store.put(other);
+      const head = store.head!.bind(store);
+      let calls = 0;
+      store.head = async () => (++calls === 1 ? head() : other.id);
+
+      const response = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'r', endpoint: 'https://r.internal' }], baseId: first.snapshot.id }));
+
+      expect(response?.status).toBe(409);
+      expect((await response!.json()).head).toBe(other.id);
+    });
+
+    it('refuses a write a browser marks as cross-site', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+      const forged = new Request(`${BASE}/snapshots`, { method: 'POST', body: JSON.stringify({ manifests }), headers: { 'sec-fetch-site': 'cross-site' } });
+
+      expect((await api.handle(forged))?.status).toBe(403);
+      expect((await api.handle(post('/snapshots', { manifests })))?.status).toBe(201);
+    });
+  });
 });

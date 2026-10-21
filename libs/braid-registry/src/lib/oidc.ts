@@ -22,7 +22,8 @@ import type { AuthorizeResult, RegistryAction } from './api.js';
  * Okta specifics that cause most first-run 401s: use a *custom* authorization server (its tokens
  * are verifiable by third parties; the org server's are not), and add a `groups` claim to the
  * **access** token. A client-credentials token (a CI service app) has no user and so no groups —
- * grant it a custom scope and map the scope, since role map keys match groups and scopes alike.
+ * grant it a custom scope and put that scope in `scopeMap`, and in Okta's access policy allow only
+ * the CI client to request it: a scope is whatever a permitted client asks for.
  */
 export interface OidcAuthorizerOptions {
   /** The token issuer, exactly as it appears in `iss` — e.g. `https://example.okta.com/oauth2/default`. */
@@ -32,10 +33,20 @@ export interface OidcAuthorizerOptions {
   /** Claim listing the caller's groups. Defaults to `groups`. */
   rolesClaim?: string;
   /**
-   * Group or scope name → the actions it grants. A caller gets the union over everything they hold.
-   * Defaults to {@link DEFAULT_ROLE_MAP}.
+   * Group name (from `rolesClaim`) → the actions it grants. A caller gets the union over every
+   * group they hold. Defaults to {@link DEFAULT_ROLE_MAP}.
    */
   roleMap?: Record<string, readonly RegistryAction[]>;
+  /**
+   * Scope (from `scp` or `scope`) → the actions it grants, for client-credentials tokens that carry
+   * no groups. Empty by default.
+   *
+   * Separate from `roleMap` on purpose. Group membership is administered; a scope is whatever a
+   * client the authorization server permits chose to request — including the console's own SPA
+   * client, which any signed-in viewer can drive. Map a scope only if the issuer's access policy
+   * restricts it to the clients that should hold it.
+   */
+  scopeMap?: Record<string, readonly RegistryAction[]>;
   /**
    * Verification keys to use instead of fetching the issuer's — for tests and air-gapped networks.
    * When omitted, keys come from the issuer's `jwks_uri` (OIDC discovery) and are cached.
@@ -69,7 +80,7 @@ export interface OidcAuthorizer {
 }
 
 export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthorizer {
-  const { issuer, audience, rolesClaim = 'groups', roleMap = DEFAULT_ROLE_MAP, clockTolerance = 30 } = options;
+  const { issuer, audience, rolesClaim = 'groups', roleMap = DEFAULT_ROLE_MAP, scopeMap = {}, clockTolerance = 30 } = options;
   const doFetch = options.fetch ?? globalThis.fetch;
 
   // Each request is verified once, however many actions are asked about (publish checks publish
@@ -122,14 +133,14 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
     try {
       set = await keySet();
     } catch (error) {
-      return {
-        ok: false,
-        response: jsonResponse({ error: `cannot verify tokens: ${error instanceof Error ? error.message : String(error)}` }, 503),
-      };
+      // The cause (an issuer URL, a network error) is for the operator's log, not the caller.
+      console.warn('braid-registry: cannot load the token issuer keys', error);
+      return { ok: false, response: jsonResponse({ error: 'token verification is unavailable' }, 503) };
     }
 
     try {
-      const { payload } = await jwtVerify(match[1], set, { issuer, audience, algorithms: ALGORITHMS, clockTolerance });
+      // `exp` is required: jose accepts a token without one, which would never expire.
+      const { payload } = await jwtVerify(match[1], set, { issuer, audience, algorithms: ALGORITHMS, clockTolerance, requiredClaims: ['exp'] });
       return { ok: true, claims: payload };
     } catch {
       // The reason stays server-side: telling a caller *why* their token failed helps an attacker
@@ -145,7 +156,7 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
     async authorize(request, action) {
       const result = await verify(request);
       if (!result.ok) return result.response;
-      return grants(result.claims, rolesClaim, roleMap).has(action);
+      return grants(result.claims, rolesClaim, roleMap, scopeMap).has(action);
     },
 
     async identify(request) {
@@ -161,19 +172,23 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
   };
 }
 
-/** The actions a token's groups and scopes grant, under a role map. */
+/** The actions a token's groups (under `roleMap`) and scopes (under `scopeMap`) grant. */
 export function grants(
   claims: JWTPayload,
   rolesClaim: string,
   roleMap: Record<string, readonly RegistryAction[]>,
+  scopeMap: Record<string, readonly RegistryAction[]> = {},
 ): Set<RegistryAction> {
-  const held = [...asList(claims[rolesClaim]), ...asList(claims['scp']), ...asList(claims['scope'], ' ')];
   const actions = new Set<RegistryAction>();
-  for (const name of held) {
-    // Own properties only: a group called "constructor" must not reach Object.prototype.
-    if (!Object.prototype.hasOwnProperty.call(roleMap, name)) continue;
-    for (const action of roleMap[name] ?? []) actions.add(action);
-  }
+  const add = (names: string[], map: Record<string, readonly RegistryAction[]>) => {
+    for (const name of names) {
+      // Own properties only: a group called "constructor" must not reach Object.prototype.
+      if (!Object.prototype.hasOwnProperty.call(map, name)) continue;
+      for (const action of map[name] ?? []) actions.add(action);
+    }
+  };
+  add(asList(claims[rolesClaim]), roleMap);
+  add([...asList(claims['scp']), ...asList(claims['scope'], ' ')], scopeMap);
   return actions;
 }
 

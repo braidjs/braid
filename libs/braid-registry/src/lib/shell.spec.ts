@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { validateRegistry } from './analysis.js';
-import { formatAreas, isSafeAssetUrl, parseAreas, type ShellManifest } from './shell.js';
+import { formatAreas, isSafeAssetUrl, isSafeTrackList, parseAreas, type ShellManifest } from './shell.js';
 
 const billing: FragmentManifest = { id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'] };
 const reviews: FragmentManifest = { id: 'reviews', endpoint: 'https://reviews.internal' };
@@ -96,7 +96,13 @@ describe('isSafeAssetUrl', () => {
     ['javascript:alert(1)', false],
     ['data:text/javascript,alert(1)', false],
     ['', false],
-  ])('%s → %s', (url, safe) => {
+    ['/\t/evil.com/x.js', false],
+    ['/\n/evil.com', false],
+    ['/\r/evil.com', false],
+    [' https://cdn.example.com/a.js', false],
+    ['https://cdn.example.com/a\u2028.js', false],
+    ['HTTPS://cdn.example.com/a.js', true],
+  ])('%j → %s', (url, safe) => {
     expect(isSafeAssetUrl(url)).toBe(safe);
   });
 });
@@ -172,5 +178,47 @@ describe('validateRegistry with shells', () => {
 
   it('refuses an unsafe stylesheet URL', () => {
     expect(codes([shell({ head: { stylesheets: [{ href: 'javascript:x' }] } })])).toEqual(['unsafe-shell-url']);
+  });
+
+  it('refuses a track list that would open a CSS comment', () => {
+    expect(isSafeTrackList('calc(100% / 3) 1fr')).toBe(true);
+    expect(isSafeTrackList('1fr /*')).toBe(false);
+    expect(isSafeTrackList('*/ 1fr')).toBe(false);
+    expect(codes([shell({ routes: [{ path: '/x', layout: { areas: 'main', columns: '1fr /*' } }] })])).toEqual(['invalid-shell-layout']);
+  });
+
+  it('refuses shell ids outside a charset safe in files, classes, comments and URLs', () => {
+    expect(codes([shell({ id: 'x--!><script>' })])).toEqual(['invalid-shell-id']);
+    expect(codes([shell({ id: 'partner-portal.v2_b' })])).toEqual([]);
+  });
+
+  it('refuses route paths with whitespace or line separators', () => {
+    expect(codes([shell({ routes: [{ path: "/a\u2028fetch('//evil')//", layout: { areas: 'main' } }] })])).toEqual(['invalid-route-path']);
+  });
+
+  it('reports a malformed shell instead of crashing on it', () => {
+    const malformed = [
+      { id: 'a', framework: 'react', routes: 'nope' },
+      { id: 'b', framework: 'react', routes: [{ path: '/', layout: { areas: 7 } }] },
+      { id: 'c', framework: 'react', routes: [], head: { title: {} } },
+      { id: 'd', framework: 'react', routes: [], head: { scripts: [{ src: 'https://x.example/a.js', defer: 'yes' }] } },
+      { id: 'e', framework: 'react', routes: [], head: { meta: [{ content: 'no name' }] } },
+      { id: 'f', framework: 'react', routes: [{ path: '/', layout: { areas: 'main' }, slots: { main: 3 } }] },
+    ] as unknown as ShellManifest[];
+
+    expect(() => validateRegistry([billing], { shells: malformed })).not.toThrow();
+    expect(validateRegistry([billing], { shells: malformed }).map((finding) => [finding.shellIds?.[0], finding.code])).toEqual(
+      ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => [id, 'invalid-shell-field']),
+    );
+  });
+});
+
+describe('parseAreas reserved names', () => {
+  it('refuses __proto__, which a plain object cannot hold as a slot key', () => {
+    expect(parseAreas('__proto__ main').errors).toEqual([expect.stringContaining('"__proto__" is not a valid area name')]);
+  });
+
+  it('reads CRLF input', () => {
+    expect(parseAreas('header header\r\nnav main').errors).toEqual([]);
   });
 });

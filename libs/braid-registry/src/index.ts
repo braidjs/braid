@@ -26,7 +26,7 @@ export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.j
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 
-export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, SHELL_FRAMEWORKS } from './lib/shell.js';
+export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
 export type {
   ShellManifest,
   ShellFramework,

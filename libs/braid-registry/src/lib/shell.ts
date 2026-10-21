@@ -142,7 +142,7 @@ export function parseAreas(text: string): ParsedAreas {
   cells.forEach((row, r) =>
     row.forEach((name, c) => {
       if (name === '.') return;
-      if (!AREA_NAME.test(name)) {
+      if (!AREA_NAME.test(name) || name === '__proto__') {
         if (!positions.has(name)) errors.push(`"${name}" is not a valid area name — use letters, digits, "-" and "_", starting with a letter`);
         positions.set(name, []);
         return;
@@ -188,7 +188,15 @@ export function formatAreas(cells: readonly (readonly string[])[]): string[] {
  * list can contain. `;`, braces and angle brackets are what would let a value escape its
  * declaration.
  */
-const CSS_TRACKS = /^[a-zA-Z0-9\s().,%+*/-]+$/;
+const CSS_TRACKS = /^[a-zA-Z0-9 ().,%+*/-]+$/;
+
+/**
+ * A grid track list or gap that can be written into generated CSS as-is. `/` and `*` are allowed
+ * for `calc()`, but never together: `/*` would open a comment that swallows the rest of the file.
+ */
+export function isSafeTrackList(value: string): boolean {
+  return typeof value === 'string' && CSS_TRACKS.test(value) && !/\/\*|\*\//.test(value);
+}
 
 /**
  * Validates shells against each other and against the fragments they place.
@@ -205,34 +213,42 @@ export function validateShells(shells: readonly ShellManifest[], manifests: read
     findings.push({ severity: 'error', code, shellIds: [shellId], fragmentIds: fragments, message, ...(hint ? { hint } : {}) });
 
   for (const shell of shells) {
-    const id = shell.id;
+    // Shape first. A shell arrives as JSON from whoever may publish, and everything downstream —
+    // this function, the console, generated code — assumes the declared types. A malformed one is
+    // reported and not looked at further, rather than crashing whoever reads it next.
+    const problems = shapeProblems(shell);
+    const id = typeof shell?.id === 'string' ? shell.id : String(shell?.id);
+    if (problems.length > 0) {
+      for (const problem of problems) error('invalid-shell-field', id, `shell "${id}": ${problem}`);
+      continue;
+    }
 
-    if (!id || id.includes('/')) {
-      error('invalid-shell-id', String(id), `shell id "${id}" is invalid`, 'shell ids must be non-empty and must not contain "/"');
+    if (!SHELL_ID.test(id)) {
+      error('invalid-shell-id', id, `shell id "${id}" is invalid`, 'use letters, digits, ".", "_" and "-", starting with a letter or digit');
     } else if (seen.has(id)) {
       error('duplicate-shell-id', id, `shell id "${id}" is defined more than once`, 'give one of them a different id');
     }
-    if (id) seen.add(id);
+    seen.add(id);
 
     if (!SHELL_FRAMEWORKS.includes(shell.framework)) {
       error('invalid-shell-framework', id, `shell "${id}" has an unknown framework "${shell.framework}"`, `use one of ${SHELL_FRAMEWORKS.join(', ')}`);
     }
 
     const paths = new Set<string>();
-    for (const route of shell.routes ?? []) {
+    for (const route of shell.routes) {
       validateRoutePath(route.path, id, paths, error);
       paths.add(route.path);
 
-      const parsed = parseAreas(route.layout?.areas ?? '');
+      const parsed = parseAreas(route.layout.areas);
       for (const message of parsed.errors) {
         error('invalid-shell-layout', id, `shell "${id}" route ${route.path}: ${message}`);
       }
       for (const [property, value] of [
-        ['columns', route.layout?.columns],
-        ['rows', route.layout?.rows],
-        ['gap', route.layout?.gap],
+        ['columns', route.layout.columns],
+        ['rows', route.layout.rows],
+        ['gap', route.layout.gap],
       ] as const) {
-        if (value !== undefined && !CSS_TRACKS.test(value)) {
+        if (value !== undefined && !isSafeTrackList(value)) {
           error('invalid-shell-layout', id, `shell "${id}" route ${route.path}: ${property} "${value}" is not a CSS track list`, 'use sizes such as 220px 1fr or minmax(0, 1fr)');
         }
       }
@@ -264,6 +280,74 @@ export function validateShells(shells: readonly ShellManifest[], manifests: read
   return findings;
 }
 
+/** Shell ids end up in file names, CSS classes, comments and URLs: kept to a charset safe in all. */
+const SHELL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** What is wrong with a shell's types, as messages; empty when it has the declared shape. */
+function shapeProblems(shell: ShellManifest): string[] {
+  const problems: string[] = [];
+  const isString = (value: unknown) => typeof value === 'string';
+  const optionalString = (value: unknown, name: string) => {
+    if (value !== undefined && !isString(value)) problems.push(`${name} must be a string`);
+  };
+  const isStringList = (value: unknown) => Array.isArray(value) && value.every(isString);
+
+  if (typeof shell !== 'object' || shell === null) return ['is not an object'];
+  if (!isString(shell.id)) problems.push('id must be a string');
+  optionalString(shell.title, 'title');
+  optionalString(shell.description, 'description');
+  if (shell.tags !== undefined && !isStringList(shell.tags)) problems.push('tags must be a list of strings');
+  if (!isString(shell.framework)) problems.push('framework must be a string');
+
+  if (!Array.isArray(shell.routes)) {
+    problems.push('routes must be a list');
+  } else {
+    shell.routes.forEach((route, index) => {
+      const at = `routes[${index}]`;
+      if (typeof route !== 'object' || route === null) return problems.push(`${at} is not an object`);
+      if (!isString(route.path)) problems.push(`${at}.path must be a string`);
+      if (typeof route.layout !== 'object' || route.layout === null || !isString(route.layout.areas)) {
+        problems.push(`${at}.layout.areas must be a string`);
+      } else {
+        optionalString(route.layout.columns, `${at}.layout.columns`);
+        optionalString(route.layout.rows, `${at}.layout.rows`);
+        optionalString(route.layout.gap, `${at}.layout.gap`);
+      }
+      if (route.slots !== undefined && (typeof route.slots !== 'object' || route.slots === null || Array.isArray(route.slots) || !Object.values(route.slots).every(isString))) {
+        problems.push(`${at}.slots must map area names to fragment ids`);
+      }
+      return undefined;
+    });
+  }
+
+  const head = shell.head;
+  if (head !== undefined) {
+    if (typeof head !== 'object' || head === null) return [...problems, 'head must be an object'];
+    optionalString(head.title, 'head.title');
+    for (const [index, meta] of (Array.isArray(head.meta) ? head.meta : head.meta === undefined ? [] : [null]).entries()) {
+      if (typeof meta !== 'object' || meta === null || !isString(meta.content) || !(isString(meta.name) || isString(meta.property))) {
+        problems.push(`head.meta[${index}] needs a string content and a string name or property`);
+      }
+    }
+    for (const [index, script] of (Array.isArray(head.scripts) ? head.scripts : head.scripts === undefined ? [] : [null]).entries()) {
+      if (typeof script !== 'object' || script === null || !isString(script.src)) problems.push(`head.scripts[${index}].src must be a string`);
+      else {
+        optionalString(script.integrity, `head.scripts[${index}].integrity`);
+        if (script.type !== undefined && script.type !== 'module' && script.type !== 'classic') problems.push(`head.scripts[${index}].type must be module or classic`);
+        for (const flag of ['async', 'defer'] as const) {
+          if (script[flag] !== undefined && typeof script[flag] !== 'boolean') problems.push(`head.scripts[${index}].${flag} must be true or false`);
+        }
+      }
+    }
+    for (const [index, sheet] of (Array.isArray(head.stylesheets) ? head.stylesheets : head.stylesheets === undefined ? [] : [null]).entries()) {
+      if (typeof sheet !== 'object' || sheet === null || !isString(sheet.href)) problems.push(`head.stylesheets[${index}].href must be a string`);
+      else optionalString(sheet.integrity, `head.stylesheets[${index}].integrity`);
+    }
+  }
+
+  return problems;
+}
+
 function validateRoutePath(
   path: string,
   shellId: string,
@@ -274,7 +358,11 @@ function validateRoutePath(
     error('invalid-route-path', shellId, `shell "${shellId}" declares route ${path} more than once`);
     return;
   }
-  if (typeof path !== 'string' || !path.startsWith('/')) {
+  if (UNSAFE_CHARACTERS.test(path)) {
+    error('invalid-route-path', shellId, `shell "${shellId}" has a route path containing whitespace or control characters`, 'paths use URLPattern pathname syntax, e.g. /orders/*');
+    return;
+  }
+  if (!path.startsWith('/')) {
     error('invalid-route-path', shellId, `shell "${shellId}" has a route path "${path}" that does not start with "/"`, 'paths use URLPattern pathname syntax, e.g. /orders/* or /orders/:id');
     return;
   }
@@ -288,9 +376,16 @@ function validateRoutePath(
   }
 }
 
+/** Whitespace, C0/C1 controls, and the Unicode line and paragraph separators. */
+// Matching control characters is the point of this pattern.
+// eslint-disable-next-line no-control-regex
+const UNSAFE_CHARACTERS = /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/;
+
 /** `https:` URLs and root-relative paths. Protocol-relative `//host` is refused: it inherits `http:`. */
 export function isSafeAssetUrl(url: string): boolean {
   if (typeof url !== 'string' || url.length === 0) return false;
+  // Browsers drop tabs and newlines inside URLs, so "/\t/evil.com" would load //evil.com.
+  if (UNSAFE_CHARACTERS.test(url)) return false;
   if (url.startsWith('/')) return !url.startsWith('//') && !url.startsWith('/\\');
   try {
     return new URL(url).protocol === 'https:';

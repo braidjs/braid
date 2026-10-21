@@ -91,8 +91,10 @@ describe('snapshots with shells', () => {
   };
 
   it('addresses an empty shells list exactly as a snapshot without the field', async () => {
-    const without = await createSnapshot({ manifests: [billing, reviews] });
-    const empty = await createSnapshot({ manifests: [billing, reviews], shells: [] });
+    // A fixed createdAt: two snapshots minted a millisecond apart would serialize differently.
+    const createdAt = '2026-10-21T00:00:00.000Z';
+    const without = await createSnapshot({ manifests: [billing, reviews], createdAt });
+    const empty = await createSnapshot({ manifests: [billing, reviews], shells: [], createdAt });
 
     expect(empty.id).toBe('reg_bc25abc511812088f248a24bb2b8d78b');
     expect(empty).not.toHaveProperty('shells');

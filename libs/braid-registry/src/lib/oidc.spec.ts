@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, vi } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet, type JWTPayload } from 'jose';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createRegistryApi } from './api.js';
@@ -61,8 +61,8 @@ describe('createOidcAuthorizer', () => {
     expect(await auth.authorize(req, 'publish')).toBe(false);
   });
 
-  it('maps scopes as well as groups, for client-credentials tokens that have no user', async () => {
-    const auth = authorizer({ roleMap: { 'braid:publish': ['read', 'publish', 'pin'] } });
+  it('maps scopes through scopeMap, for client-credentials tokens that have no user', async () => {
+    const auth = authorizer({ scopeMap: { 'braid:publish': ['read', 'publish', 'pin'] } });
     const ci = await token({ groups: undefined, email: undefined, scp: ['braid:publish'] });
 
     expect(await auth.authorize(request(ci), 'publish')).toBe(true);
@@ -70,9 +70,39 @@ describe('createOidcAuthorizer', () => {
   });
 
   it('reads a space-delimited scope claim too', async () => {
-    const auth = authorizer({ roleMap: { 'braid:publish': ['publish'] } });
+    const auth = authorizer({ scopeMap: { 'braid:publish': ['publish'] } });
 
     expect(await auth.authorize(request(await token({ groups: undefined, scope: 'openid braid:publish' })), 'publish')).toBe(true);
+  });
+
+  it('does not let a requested scope stand in for a group', async () => {
+    // A scope is whatever a permitted client asked for, so a viewer must not gain publish by
+    // requesting one that happens to share a name with a mapped group.
+    const auth = authorizer({ roleMap: { 'braid-editors': ['read', 'publish', 'pin'] } });
+    const viewerAskingForMore = await token({ groups: ['braid-viewers'], scp: ['braid-editors'] });
+
+    expect(await auth.authorize(request(viewerAskingForMore), 'publish')).toBe(false);
+  });
+
+  it('refuses a token without exp, which would never expire', async () => {
+    const forever = await new SignJWT({ groups: ['braid-editors'] })
+      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
+      .sign(privateKey);
+
+    expect(((await authorizer().authorize(request(forever), 'read')) as Response).status).toBe(401);
+  });
+
+  it('accepts a lowercase bearer scheme and refuses other schemes', async () => {
+    const auth = authorizer();
+    const valid = await token();
+
+    expect(await auth.authorize(new Request(`${BASE}/head`, { headers: { authorization: `bearer ${valid}` } }), 'read')).toBe(true);
+    for (const header of ['Basic abc', 'Bearer', 'Bearer a b']) {
+      const outcome = (await auth.authorize(new Request(`${BASE}/head`, { headers: { authorization: header } }), 'read')) as Response;
+      expect(outcome.status).toBe(401);
+    }
   });
 
   it('denies a group the role map does not name, with 403 rather than 401', async () => {
@@ -151,6 +181,7 @@ describe('createOidcAuthorizer', () => {
   });
 
   it('answers 503 when the issuer cannot be reached, and retries next time', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let calls = 0;
     const auth = authorizer({
       jwks: undefined,
@@ -164,6 +195,7 @@ describe('createOidcAuthorizer', () => {
     await auth.authorize(request(await token()), 'read');
 
     expect(first.status).toBe(503);
+    expect(await first.json()).toEqual({ error: 'token verification is unavailable' });
     expect(calls).toBe(2);
   });
 
@@ -193,7 +225,16 @@ describe('createOidcAuthorizer', () => {
       expect((await api.handle(request()))?.status).toBe(401);
     });
 
-    it('reports permissions for the caller', async () => {
+    it('answers anonymous permissions with all false, not 401, so a UI can show a signed-out state', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), ...authorizer() });
+
+      const response = await api.handle(new Request(`${BASE}/permissions`));
+
+      expect(response?.status).toBe(200);
+      expect(await response!.json()).toEqual({ read: false, publish: false, pin: false, actor: null });
+    });
+
+        it('reports permissions for the caller', async () => {
       const api = createRegistryApi({ store: memorySnapshotStore(), ...authorizer() });
       const viewer = await token({ groups: ['braid-viewers'] });
 

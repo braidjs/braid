@@ -224,13 +224,19 @@ The publish body is `{ manifests, shells?, labels?, pin?, baseId? }`:
 
 - **`pin`** defaults to true, and a publish that pins is checked for **both** `publish` and `pin`. A
   role that may only publish sends `pin: false` and leaves a candidate for someone who may pin.
+  **Upgrading:** before this, a default publish asked `authorize` only for `publish` and pinned
+  regardless. A hook that grants a pipeline `publish` but not `pin` now gets 403 for a pinning
+  publish; grant `pin` too, or publish with `pin: false`.
 - **`baseId`** is the snapshot id a draft started from (`null` if nothing was pinned). When sent, a
   publish is refused with **409** and `{ head }` if HEAD has moved since, so two editors cannot
   silently overwrite each other. Omit it for last-write-wins, as a pipeline might.
 - **`shells`**: omit to keep HEAD's shells, `[]` to remove them. Carried shells are validated, so
   deleting a fragment a shell still slots is refused by name rather than publishing a hole.
 
-Malformed JSON is a **400**. `authorize` may return a `Response` — a 401 with `WWW-Authenticate`,
+Malformed JSON is a **400**, and a shell of the wrong shape a **422** naming the field. A write that
+a browser marks `Sec-Fetch-Site: cross-site` is refused, which closes CSRF for an `authorize` hook
+that reads a cookie. `baseId` is checked on arrival and again just before HEAD moves, without a
+lock: two publishes in the same instant can both pass, which only a compare-and-set store closes. `authorize` may return a `Response` — a 401 with `WWW-Authenticate`,
 say — which is sent as-is; `false` is a 403.
 
 **`identify(request)`** names the caller as the server knows them. When present, every publish
@@ -303,16 +309,19 @@ const api = createRegistryApi({
       'braid-viewers': ['read'],
       'braid-contributors': ['read', 'publish'], // candidates only
       'braid-editors': ['read', 'publish', 'pin'],
-      'braid:publish': ['read', 'publish', 'pin'], // a CI service app's scope
     },
+    // For a CI service app's client-credentials token, which has no groups.
+    scopeMap: { 'braid:publish': ['read', 'publish', 'pin'] },
   }),
 });
 ```
 
 Tokens are verified against the issuer's JWKS, found by OIDC discovery (or given as `jwks` for tests
 and air-gapped networks), with asymmetric algorithms only. A missing or invalid token is a 401, a
-role that does not grant the action a 403, an unreachable issuer a 503. The role map matches the
-`groups` claim (or `rolesClaim`) and the token's scopes alike.
+role that does not grant the action a 403, an unreachable issuer a 503. `roleMap` matches the
+`groups` claim (or `rolesClaim`); `scopeMap` matches the token's scopes. They are separate because
+a scope is whatever a permitted client asked for: map one only when the issuer's access policy lets
+just the CI client request it, or any signed-in user could ask for it through the console.
 
 For Okta: use a **custom authorization server** (`/oauth2/default` or your own) — the org server's
 access tokens are not verifiable by third parties — and add a **`groups` claim to the access token**,
