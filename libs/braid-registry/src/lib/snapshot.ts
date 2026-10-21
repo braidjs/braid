@@ -1,4 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
+import type { ShellManifest } from './shell.js';
 
 /**
  * A registry snapshot: an immutable, content-addressed set of fragment manifests.
@@ -25,6 +26,12 @@ export interface RegistrySnapshot {
   readonly createdAt: string;
   readonly manifests: readonly FragmentManifest[];
   /**
+   * The shells these fragments compose into, sorted by id. Absent when there are none, which keeps
+   * a snapshot without shells byte-identical — and identically addressed — to one minted before
+   * shells existed.
+   */
+  readonly shells?: readonly ShellManifest[];
+  /**
    * Free-form attribution: who published, why, which ticket. Not part of the content address —
    * two publishes of identical manifests are the same snapshot regardless of who did it.
    */
@@ -34,6 +41,7 @@ export interface RegistrySnapshot {
 /** A snapshot without its content-derived fields, as handed to {@link createSnapshot}. */
 export interface SnapshotInput {
   manifests: readonly FragmentManifest[];
+  shells?: readonly ShellManifest[];
   createdAt?: string;
   labels?: Record<string, string>;
 }
@@ -49,12 +57,14 @@ export const SNAPSHOT_ID_PREFIX = 'reg_';
  */
 export async function createSnapshot(input: SnapshotInput): Promise<RegistrySnapshot> {
   const manifests = [...input.manifests].sort((a, b) => compareIds(a.id, b.id));
-  const id = await contentAddress(manifests);
+  const shells = [...(input.shells ?? [])].sort((a, b) => compareIds(a.id, b.id));
+  const id = await contentAddress(manifests, shells);
 
   return {
     id,
     createdAt: input.createdAt ?? new Date().toISOString(),
     manifests,
+    ...(shells.length > 0 ? { shells } : {}),
     ...(input.labels ? { labels: { ...input.labels } } : {}),
   };
 }
@@ -67,7 +77,7 @@ export async function createSnapshot(input: SnapshotInput): Promise<RegistrySnap
  * would silently change which fragments compose which pages.
  */
 export async function verifySnapshot(snapshot: RegistrySnapshot): Promise<boolean> {
-  return (await contentAddress(snapshot.manifests)) === snapshot.id;
+  return (await contentAddress(snapshot.manifests, snapshot.shells ?? [])) === snapshot.id;
 }
 
 /**
@@ -86,11 +96,20 @@ export function parseSnapshot(json: string): RegistrySnapshot {
   if (typeof value?.id !== 'string' || !Array.isArray(value.manifests)) {
     throw new Error('braid-registry: not a registry snapshot — expected { id, manifests }');
   }
+  if (value.shells !== undefined && !Array.isArray(value.shells)) {
+    throw new Error('braid-registry: not a registry snapshot — shells must be an array');
+  }
   return value as RegistrySnapshot;
 }
 
-async function contentAddress(manifests: readonly FragmentManifest[]): Promise<string> {
-  const bytes = new TextEncoder().encode(canonicalJson(manifests));
+/**
+ * The hash input. Without shells it is the manifests array alone — exactly what every snapshot
+ * minted before shells hashed — so adding the field changed no existing id. With shells it is an
+ * object, which no manifests-only input can collide with.
+ */
+async function contentAddress(manifests: readonly FragmentManifest[], shells: readonly ShellManifest[]): Promise<string> {
+  const content = shells.length > 0 ? { manifests, shells } : manifests;
+  const bytes = new TextEncoder().encode(canonicalJson(content));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return `${SNAPSHOT_ID_PREFIX}${hex.slice(0, 32)}`;

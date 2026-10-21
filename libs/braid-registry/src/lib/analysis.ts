@@ -1,4 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
+import { validateShells, type ShellManifest } from './shell.js';
 
 /**
  * Registry analysis: what is wrong with a set of manifests, and what a proposed set would change.
@@ -17,6 +18,8 @@ export interface RegistryFinding {
   message: string;
   /** Fragments involved. Two ids for a conflict, one for everything else. */
   fragmentIds: string[];
+  /** Shells involved, for findings about a shell. Absent on fragment-only findings. */
+  shellIds?: string[];
   hint?: string;
 }
 
@@ -29,7 +32,15 @@ export type FindingCode =
   | 'urlpattern-unavailable'
   | 'pierce-overlap'
   | 'custom-element-incomplete'
-  | 'empty-access-rule';
+  | 'empty-access-rule'
+  | 'invalid-shell-id'
+  | 'duplicate-shell-id'
+  | 'invalid-shell-framework'
+  | 'invalid-shell-layout'
+  | 'invalid-route-path'
+  | 'slot-unknown-area'
+  | 'slot-unknown-fragment'
+  | 'unsafe-shell-url';
 
 /**
  * Validates a registry without contacting anything.
@@ -37,7 +48,10 @@ export type FindingCode =
  * Everything here is decidable from the manifests alone, which is what makes it cheap enough to
  * run at save time and in CI rather than only in a preview pane.
  */
-export function validateRegistry(manifests: readonly FragmentManifest[]): RegistryFinding[] {
+export function validateRegistry(
+  manifests: readonly FragmentManifest[],
+  options: { shells?: readonly ShellManifest[] } = {},
+): RegistryFinding[] {
   const findings: RegistryFinding[] = [];
   const seen = new Set<string>();
 
@@ -70,6 +84,7 @@ export function validateRegistry(manifests: readonly FragmentManifest[]): Regist
   }
 
   findings.push(...findPierceOverlaps(manifests));
+  if (options.shells) findings.push(...validateShells(options.shells, manifests));
   return findings;
 }
 

@@ -26,6 +26,20 @@ export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.j
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 
+export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, SHELL_FRAMEWORKS } from './lib/shell.js';
+export type {
+  ShellManifest,
+  ShellFramework,
+  ShellRoute,
+  ShellLayout,
+  ShellHead,
+  ShellMeta,
+  ShellScript,
+  ShellStylesheet,
+  GridArea,
+  ParsedAreas,
+} from './lib/shell.js';
+
 export { fetchDescriptors, mergeDescriptors, DEFAULT_DESCRIPTOR_PATH } from './lib/descriptor.js';
 export type {
   FragmentDescriptor,

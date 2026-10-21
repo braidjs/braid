@@ -1,5 +1,10 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FragmentManifest } from '@braidlabs/gateway';
+import { fileSnapshotStore } from './file-store.js';
+import type { ShellManifest } from './shell.js';
 import { createSnapshot, parseSnapshot, serializeSnapshot, verifySnapshot } from './snapshot.js';
 
 const billing: FragmentManifest = { id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'] };
@@ -75,5 +80,74 @@ describe('registry snapshots', () => {
 
   it('rejects json that is not a snapshot', () => {
     expect(() => parseSnapshot('{"nope":true}')).toThrow(/not a registry snapshot/);
+  });
+});
+
+describe('snapshots with shells', () => {
+  const storefront: ShellManifest = {
+    id: 'storefront',
+    framework: 'react',
+    routes: [{ path: '/billing/*', layout: { areas: 'header\nmain' }, slots: { main: 'billing' } }],
+  };
+
+  it('addresses an empty shells list exactly as a snapshot without the field', async () => {
+    const without = await createSnapshot({ manifests: [billing, reviews] });
+    const empty = await createSnapshot({ manifests: [billing, reviews], shells: [] });
+
+    expect(empty.id).toBe('reg_bc25abc511812088f248a24bb2b8d78b');
+    expect(empty).not.toHaveProperty('shells');
+    expect(serializeSnapshot(empty)).toBe(serializeSnapshot(without));
+  });
+
+  it('changes id when a shell is added or changed', async () => {
+    const without = await createSnapshot({ manifests: [billing, reviews] });
+    const withShell = await createSnapshot({ manifests: [billing, reviews], shells: [storefront] });
+    const changed = await createSnapshot({ manifests: [billing, reviews], shells: [{ ...storefront, framework: 'angular' }] });
+
+    expect(withShell.id).not.toBe(without.id);
+    expect(changed.id).not.toBe(withShell.id);
+  });
+
+  it('is independent of shell order', async () => {
+    const other: ShellManifest = { ...storefront, id: 'admin' };
+    const a = await createSnapshot({ manifests: [billing], shells: [storefront, other] });
+    const b = await createSnapshot({ manifests: [billing], shells: [other, storefront] });
+
+    expect(a.id).toBe(b.id);
+    expect(a.shells?.map((s) => s.id)).toEqual(['admin', 'storefront']);
+  });
+
+  it('fails verification when a shell has been altered', async () => {
+    const snapshot = await createSnapshot({ manifests: [billing], shells: [storefront] });
+    const tampered = { ...snapshot, shells: [{ ...storefront, routes: [] }] };
+
+    expect(await verifySnapshot(snapshot)).toBe(true);
+    expect(await verifySnapshot(tampered)).toBe(false);
+  });
+
+  it('fails verification when shells are stripped', async () => {
+    const snapshot = await createSnapshot({ manifests: [billing], shells: [storefront] });
+    const stripped = { ...snapshot, shells: undefined };
+
+    expect(await verifySnapshot(stripped)).toBe(false);
+  });
+
+  it('rejects shells that are not an array', () => {
+    expect(() => parseSnapshot('{"id":"reg_x","manifests":[],"shells":{}}')).toThrow(/shells must be an array/);
+  });
+
+  it('round-trips shells through the file store', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'braid-snapshots-'));
+    try {
+      const store = fileSnapshotStore({ directory });
+      const snapshot = await createSnapshot({ manifests: [billing], shells: [storefront] });
+      await store.put(snapshot);
+
+      const read = await store.get(snapshot.id);
+      expect(read).toEqual(snapshot);
+      expect(read && (await verifySnapshot(read))).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
