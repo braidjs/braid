@@ -56,6 +56,19 @@ export const BRAID_ADAPTER_META = 'braid-adapter';
  */
 export const BRAID_ADAPTER_OPTIONS_META = 'braid-adapter-options';
 
+/**
+ * Request header on an upstream fragment fetch: one `braid` entry per gateway the request has
+ * crossed. Gateways compose — that is what federation is — so the count is what stops a registry
+ * that points a fragment back at a gateway already on the path from recursing until it times out.
+ */
+export const BRAID_VIA_HEADER = 'x-braid-via';
+
+/**
+ * How many gateways a request may cross before the next one refuses it with a 508. A federated
+ * page needs two (the org's and a team's); the rest is headroom, not a configuration knob.
+ */
+export const BRAID_MAX_HOPS = 4;
+
 /** Response/request header carrying a fragment id for diagnostics. */
 export const BRAID_FRAGMENT_ID_HEADER = 'x-braid-fragment-id';
 

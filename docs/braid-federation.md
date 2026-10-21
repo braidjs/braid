@@ -210,9 +210,9 @@ own. Register it as `bound: false` with a `src`, and give it a slot.
 - **One timeout budget, two hops.** The org copies each fragment's `timeoutMs`, so the team hop and
   the org's own timer race on the same budget. Give the team gateway the shorter timeout, so a slow
   origin fails there with the team's fallback.
-- **No loop guard.** A team manifest whose endpoint points back at the org gateway's
-  `/__braid/frag/` recurses until the fragment timeout. Composition never produces this; only hand
-  configuration can.
+- **Loops are cut off.** Each gateway a fragment request crosses adds an entry to `x-braid-via`.
+  A request that has already crossed four gets a `508 Loop Detected`, so a team endpoint that points
+  back at the org gateway fails at once instead of waiting out the fragment timeout.
 
 ## Not in this version
 

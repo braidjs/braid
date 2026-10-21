@@ -2,6 +2,7 @@ import {
   BRAID_ADAPTER_META,
   BRAID_ADAPTER_OPTIONS_META,
   BRAID_FRAGMENT_ID_HEADER,
+  BRAID_MAX_HOPS,
   BRAID_PROTOCOL_META,
   BRAID_PROTOCOL_VERSION,
   BRAID_REDIRECT_LOCATION_HEADER,
@@ -11,6 +12,7 @@ import {
   BRAID_SERVICE_WORKER_PATH,
   BRAID_VITALS_BEACON_PATH,
   BRAID_VITALS_SCRIPT_PATH,
+  BRAID_VIA_HEADER,
 } from './protocol.js';
 import {
   canFetch,
@@ -426,6 +428,14 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     async handle(request: Request, next?: () => Promise<Response>): Promise<Response | null> {
       const requestUrl = new URL(request.url);
 
+      if (hopCount(request) >= BRAID_MAX_HOPS) {
+        return htmlResponse(
+          `<!doctype html><title>Braid: loop detected</title><p>This request has already crossed ` +
+            `${BRAID_MAX_HOPS} Braid gateways. A fragment endpoint probably points back at a gateway on its own path.</p>`,
+          508,
+        );
+      }
+
       if (discovery?.owns(requestUrl.pathname)) {
         return discovery.handle(request, requestUrl);
       }
@@ -820,6 +830,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       fragmentRequest.headers.delete('cookie');
       fragmentRequest.headers.delete('authorization');
     }
+
+    // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
+    // of gateways accumulates one entry each — see BRAID_MAX_HOPS.
+    fragmentRequest.headers.set(BRAID_VIA_HEADER, [request.headers.get(BRAID_VIA_HEADER), 'braid'].filter(Boolean).join(', '));
 
     // Tell the fragment endpoint the protocol and host the *user* reached us on.
     //
@@ -1447,4 +1461,10 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */
+function hopCount(request: Request): number {
+  const via = request.headers.get(BRAID_VIA_HEADER);
+  return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
 }
