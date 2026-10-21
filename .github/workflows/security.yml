@@ -14,7 +14,7 @@ on:
   # Advisories are published without any change to this repo; a PR-only check
   # would never notice one landing against a dependency already on main.
   schedule:
-    - cron: '17 9 * * 1' # Mondays 09:17 UTC
+    - cron: '17 9 * * *' # daily 09:17 UTC
   workflow_dispatch:
 
 permissions:
