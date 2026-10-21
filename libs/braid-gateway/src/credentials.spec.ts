@@ -150,7 +150,7 @@ describe('additionalHeaders as a function', () => {
  */
 describe('per-fragment credential forwarding', () => {
   const graph = [
-    { id: 'billing', endpoint: 'https://billing.internal' },
+    { id: 'billing', endpoint: 'https://billing.internal/' },
     { id: 'promo', endpoint: 'https://promo.partner.example' },
   ];
 
@@ -181,7 +181,7 @@ describe('per-fragment credential forwarding', () => {
     const gateway = createGateway({
       registry: graph,
       forwardCredentials: (fragment) =>
-        typeof fragment.endpoint === 'string' && fragment.endpoint.startsWith('https://billing.internal'),
+        typeof fragment.endpoint === 'string' && fragment.endpoint.startsWith('https://billing.internal/'),
     });
 
     const billing = captureFragmentFetch();
@@ -223,5 +223,55 @@ describe('per-fragment credential forwarding', () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('"promo"');
+  });
+});
+
+/**
+ * An auth proxy in front of the shell adds identity headers of its own, and those authenticate the
+ * user just as surely as a cookie does.
+ */
+describe('identity headers beyond cookie and authorization', () => {
+  function proxiedRequest() {
+    return new Request('https://shell.example.com/__braid/frag/billing/x', {
+      headers: {
+        cookie: 'session=s',
+        'proxy-authorization': 'Basic cHJveHk6c2VjcmV0',
+        'x-auth-request-access-token': 'oidc-access-token',
+        'cf-access-jwt-assertion': 'cf-jwt',
+        'x-request-id': 'keep-me',
+      },
+    });
+  }
+
+  it('always strips proxy-authorization, and any header the host names', async () => {
+    const captured = captureFragmentFetch();
+    await createGateway({ registry, credentialHeaders: ['X-Auth-Request-Access-Token', 'cf-access-jwt-assertion'] }).handle(
+      proxiedRequest(),
+    );
+
+    const sent = captured.sent().headers;
+    expect(sent.get('proxy-authorization')).toBeNull();
+    expect(sent.get('x-auth-request-access-token')).toBeNull();
+    expect(sent.get('cf-access-jwt-assertion')).toBeNull();
+    expect(sent.get('x-request-id')).toBe('keep-me');
+  });
+
+  it('forwards them all to a fragment that forwardCredentials allows', async () => {
+    const captured = captureFragmentFetch();
+    await createGateway({ registry, forwardCredentials: true, credentialHeaders: ['x-auth-request-access-token'] }).handle(
+      proxiedRequest(),
+    );
+
+    expect(captured.sent().headers.get('x-auth-request-access-token')).toBe('oidc-access-token');
+    expect(captured.sent().headers.get('proxy-authorization')).toBe('Basic cHJveHk6c2VjcmV0');
+  });
+
+  it('hands websocket bindings the same list to strip', async () => {
+    const target = await createGateway({ registry, credentialHeaders: ['X-Auth-Request-Access-Token'] }).resolveUpgrade(
+      new Request('https://shell.example.com/__braid/frag/billing/ws'),
+    );
+
+    expect(target?.forwardCredentials).toBe(false);
+    expect(target?.credentialHeaders).toEqual(['cookie', 'authorization', 'proxy-authorization', 'x-auth-request-access-token']);
   });
 });

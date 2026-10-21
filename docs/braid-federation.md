@@ -131,22 +131,34 @@ upgrade, unless `forwardCredentials` allows that fragment. In a federated graph:
   by the org gateway. Without them, the team gateway sees every user as anonymous and refuses. That
   is fail-closed, but it is probably not what you want.
 - **Scope it per subgraph.** `forwardCredentials: true` sends the user's org cookies to every
-  endpoint in the graph. Pass a function instead and decide per fragment. Keying on the endpoint is
-  the reliable way to scope it to a subgraph, because `subgraph()` writes every team endpoint as
-  `<url>/__braid/frag/<id>/`, so the prefix is the org's, not the team's:
+  endpoint in the graph. Pass a function instead and decide per fragment. Keying on the endpoint's
+  origin is the reliable way to scope it to a subgraph. `subgraph()` writes every team endpoint as
+  `<url>/__braid/frag/<id>/`, and `url` comes from the org's config, so a team cannot choose which
+  origin its fragments are fetched from:
 
   ```ts
-  const trusted = ['https://orders.internal.example.com/', 'https://refunds.internal.example.com/'];
+  const trusted = new Set(['https://orders.internal.example.com', 'https://refunds.internal.example.com']);
   createGateway({
     registry: supergraph([...]),
-    forwardCredentials: (fragment) =>
-      typeof fragment.endpoint === 'string' && trusted.some((prefix) => fragment.endpoint.startsWith(prefix)),
+    forwardCredentials: (fragment) => {
+      const endpoint = fragment.endpoint;
+      return typeof endpoint === 'string' && trusted.has(new URL(endpoint).origin);
+    },
   });
   ```
+
+  Compare origins, not raw string prefixes. `startsWith('https://orders.internal')` also matches
+  `https://orders.internal.attacker.example`. A path prefix on a shared host is only safe once the
+  endpoint is normalised (`new URL(endpoint).pathname`), since `/orders/../billing/` passes a naive
+  check and resolves somewhere else.
 
   Don't key on `id` alone: a team chooses its own fragment ids. Composition stops two teams claiming
   the same id, but nothing stops a team naming one to match your rule. A predicate that throws
   forwards nothing.
+- **Proxy-added identity headers.** `cookie`, `authorization` and `proxy-authorization` are
+  stripped by default. An auth proxy in front of the org may add its own, such as
+  `x-auth-request-access-token` or `cf-access-jwt-assertion`. List them in the gateway's
+  `credentialHeaders` so they follow the same rule.
 - **Routes still matter.** A subgraph that receives credentials receives them on every page it
   pierces, which is why `routes` bounds where that can be.
 
@@ -210,9 +222,10 @@ own. Register it as `bound: false` with a `src`, and give it a slot.
 - **One timeout budget, two hops.** The org copies each fragment's `timeoutMs`, so the team hop and
   the org's own timer race on the same budget. Give the team gateway the shorter timeout, so a slow
   origin fails there with the team's fallback.
-- **Loops are cut off.** Each gateway a fragment request crosses adds an entry to `x-braid-via`.
-  A request that has already crossed four gets a `508 Loop Detected`, so a team endpoint that points
-  back at the org gateway fails at once instead of waiting out the fragment timeout.
+- **Loops are cut off.** Each gateway a fragment request or websocket upgrade crosses adds an entry
+  to `x-braid-via`. A fragment request that has already crossed four gets a `508 Loop Detected`,
+  and an upgrade is refused. A team endpoint that points back at the org gateway therefore fails at
+  once instead of waiting out the fragment timeout.
 
 ## Not in this version
 

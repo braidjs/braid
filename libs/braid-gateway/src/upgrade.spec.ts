@@ -162,6 +162,8 @@ describe('websocket pass-through', () => {
     expect(upstream.seenHeaders[0].authorization).toBeUndefined();
     expect(upstream.seenHeaders[1].cookie).toBe('session=abc');
     expect(upstream.seenHeaders[1].authorization).toBe('Bearer user-token');
+    // and the endpoint can tell a gateway sent it, which is what bounds a loop
+    expect(upstream.seenHeaders[0]['x-braid-via']).toBe('braid');
   });
 
   it('leaves upgrades it does not own to the next handler', async () => {

@@ -80,4 +80,30 @@ describe('gateway loop guard', () => {
     expect(response!.status).toBe(508);
     expect(seen).toHaveLength(0);
   });
+
+  it('answers only fragment traffic with a 508, and never lets a cache keep it', async () => {
+    network({});
+    const gateway = createGateway({ mode: 'production', registry: [{ id: 'orders', endpoint: 'https://origin.internal' }] });
+    const hops = { [BRAID_VIA_HEADER]: Array.from({ length: BRAID_MAX_HOPS }, () => 'braid').join(', ') };
+
+    const fragment = await gateway.handle(new Request('https://www.example/__braid/frag/orders/a.js', { headers: hops }));
+    expect(fragment!.status).toBe(508);
+    expect(fragment!.headers.get('cache-control')).toBe('no-store');
+
+    // a page request with a forged header is the shell's to answer, not a loop
+    const page = await gateway.handle(new Request('https://www.example/about', { headers: hops }));
+    expect(page).toBeNull();
+  });
+
+  it('counts websocket upgrades as hops, and refuses one that has crossed too many', async () => {
+    const gateway = createGateway({ mode: 'production', registry: [{ id: 'orders', endpoint: 'https://origin.internal' }] });
+    const upgrade = (via?: string) =>
+      gateway.resolveUpgrade(
+        new Request('https://www.example/__braid/frag/orders/ws', via ? { headers: { [BRAID_VIA_HEADER]: via } } : {}),
+      );
+
+    expect((await upgrade())?.via).toBe('braid');
+    expect((await upgrade('braid'))?.via).toBe('braid, braid');
+    expect(await upgrade(Array.from({ length: BRAID_MAX_HOPS }, () => 'braid').join(', '))).toBeNull();
+  });
 });
