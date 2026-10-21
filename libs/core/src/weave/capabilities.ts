@@ -12,7 +12,7 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * | `sandbox` | the browser | n/a — no frame to sandbox | yes |
  * | `permissions` | the browser (Permissions-Policy) | n/a | yes |
  * | `network` | the browser (CSP), or nobody | **advisory only** | CSP on the fragment's own origin |
- * | `sharedGlobals` | **Braid** — realm-window accessors | yes | n/a — ignored, nothing to share across origins |
+ * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
  *
  * `context` is the one that matters most on the trusted tier, and the one Braid can actually
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment

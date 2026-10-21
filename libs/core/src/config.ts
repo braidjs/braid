@@ -48,7 +48,8 @@ export interface BraidOptions {
    * that a fragment's own `<script src>` for the vendor still runs unless it checks first
    * (`if (!window._satellite)`).
    *
-   * Trusted (same-origin compat) fragments only; the untrusted tier ignores it. A fragment's
+   * Trusted fragments only (compat and custom-element); the untrusted tier ignores it, as do
+   * contract fragments, whose host API is the contract. A fragment's
    * `capabilities.sharedGlobals` replaces this default, and `[]` opts it out. Names the fragment's
    * realm already defines (`location`, `document`, constructors…) are skipped.
    */
