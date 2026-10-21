@@ -288,10 +288,14 @@ export interface BraidGateway {
    * addressed through the fragment namespace, so the gateway has to say where they go — the
    * socket plumbing itself belongs to the platform binding.
    *
-   * @returns the endpoint URL to dial, or null when the request is not a fragment upgrade, the
-   *          fragment is unknown, or the caller may not load it.
+   * @returns the endpoint URL to dial and whether the caller's `cookie` and `authorization` may go
+   *          with it (the same {@link GatewayOptions.forwardCredentials} rule as a fetch), or null
+   *          when the request is not a fragment upgrade, the fragment is unknown, or the caller may
+   *          not load it.
    */
-  resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null>;
+  resolveUpgrade(
+    request: Request,
+  ): Promise<{ fragmentId: string; target: URL; forwardCredentials: boolean } | null>;
 }
 
 export function createGateway(options: GatewayOptions): BraidGateway {
@@ -513,7 +517,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       }
     },
 
-    async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null> {
+    async resolveUpgrade(
+      request: Request,
+    ): Promise<{ fragmentId: string; target: URL; forwardCredentials: boolean } | null> {
       const requestUrl = new URL(request.url);
       const route = braidRoute(requestUrl.pathname);
 
@@ -533,7 +539,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       strippedUrl.pathname = route.pathname;
 
       try {
-        return { fragmentId: fragment.id, target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id) };
+        return {
+          fragmentId: fragment.id,
+          target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
+          forwardCredentials,
+        };
       } catch {
         return null;
       }

@@ -185,8 +185,8 @@ own. Register it as `bound: false` with a `src`, and give it a slot.
   the fragment (`login`, no leading slash), or an absolute redirect to a public identity provider
   listed in the org's `redirectOrigins`.
 - **WebSockets.** An upgrade crosses both gateways only if the team's server wires
-  `toNodeUpgradeHandler` and the fragment's team endpoint is a URL, not a function. Upgrades
-  forward `cookie` and `authorization` whatever `forwardCredentials` says.
+  `toNodeUpgradeHandler` and the fragment's team endpoint is a URL, not a function. Credentials
+  follow the same `forwardCredentials` rule as page and asset requests.
 - **Absolute URLs in fragment HTML.** An absolute `entry` is refused at composition. Absolute URLs
   that point at the team's private origin inside the HTML itself still break in the browser, just as
   they would standalone.

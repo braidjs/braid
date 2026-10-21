@@ -34,10 +34,12 @@ async function listen(server: Server): Promise<{ origin: string; port: number }>
 /** A minimal websocket-ish endpoint: completes the handshake, then echoes uppercase. */
 function upstreamWithSockets() {
   const seenPaths: string[] = [];
+  const seenHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const server = createServer((_req, res) => res.end('http'));
 
   server.on('upgrade', (req, socket: Duplex, head) => {
     seenPaths.push(req.url ?? '');
+    seenHeaders.push(req.headers);
     const key = req.headers['sec-websocket-key'] as string;
     const accept = createHash('sha1')
       .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -52,11 +54,15 @@ function upstreamWithSockets() {
     socket.on('data', (chunk: Buffer) => socket.write(chunk.toString().toUpperCase()));
   });
 
-  return { server, seenPaths };
+  return { server, seenPaths, seenHeaders };
 }
 
 /** Performs a raw upgrade request and returns the response head plus one echoed frame. */
-function attemptUpgrade(port: number, path: string): Promise<{ head: string; echo: string }> {
+function attemptUpgrade(
+  port: number,
+  path: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ head: string; echo: string }> {
   return new Promise((resolve, reject) => {
     const socket = new Socket();
     let buffer = '';
@@ -73,7 +79,11 @@ function attemptUpgrade(port: number, path: string): Promise<{ head: string; ech
       socket.write(
         `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
           'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n' +
+          Object.entries(extraHeaders)
+            .map(([name, value]) => `${name}: ${value}\r\n`)
+            .join('') +
+          '\r\n',
       );
     });
 
@@ -127,6 +137,31 @@ describe('websocket pass-through', () => {
     expect(echo).toBe('PING');
     // the endpoint sees the path it would serve standalone
     expect(upstream.seenPaths).toEqual(['/ng-cli-ws']);
+  });
+
+  it("does not hand the caller's credentials to the endpoint unless forwardCredentials says so", async () => {
+    const upstream = upstreamWithSockets();
+    const { origin } = await listen(upstream.server);
+    const credentials = { cookie: 'session=abc', authorization: 'Bearer user-token' };
+
+    for (const forwardCredentials of [undefined, true]) {
+      const gateway = createGateway({
+        registry: [{ id: 'billing', endpoint: origin }],
+        ...(forwardCredentials === undefined ? {} : { forwardCredentials }),
+      });
+      const host = hostServer(gateway);
+      host.on('upgrade', toNodeUpgradeHandler(gateway));
+      const { port } = await listen(host);
+
+      const { echo } = await attemptUpgrade(port, '/__braid/frag/billing/live', credentials);
+      expect(echo).toBe('PING');
+    }
+
+    // the same trust boundary as a fetch: a socket is not a way around it
+    expect(upstream.seenHeaders[0].cookie).toBeUndefined();
+    expect(upstream.seenHeaders[0].authorization).toBeUndefined();
+    expect(upstream.seenHeaders[1].cookie).toBe('session=abc');
+    expect(upstream.seenHeaders[1].authorization).toBe('Bearer user-token');
   });
 
   it('leaves upgrades it does not own to the next handler', async () => {
