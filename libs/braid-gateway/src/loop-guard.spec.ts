@@ -25,12 +25,11 @@ describe('gateway loop guard', () => {
   }
 
   it('stops a fragment whose endpoint loops back to the same gateway, without waiting out the timeout', async () => {
-    let gateway: BraidGateway;
-    const seen = network({ 'org.example': () => gateway });
-    gateway = createGateway({
+    const gateway = createGateway({
       mode: 'production',
       registry: [{ id: 'loop', endpoint: 'https://org.example/__braid/frag/loop/', timeoutMs: 30_000 }],
     });
+    const seen = network({ 'org.example': () => gateway });
 
     const started = Date.now();
     const response = await gateway.handle(new Request('https://org.example/__braid/frag/loop/app.js'));
