@@ -167,8 +167,34 @@ same reason Apollo recommends a static supergraph over composing at runtime.
 ## Layout
 
 Pierced content goes into the `<fragment-slot>` whose `name` is the fragment id. If the org shell
-has no such slot, the content lands just before `</body>`. So the org shell declares a slot for each
-team fragment id it routes to.
+has no such slot, the content lands just before `</body>`.
+
+Rather than naming a slot for every team route, give the org shell one **outlet**:
+
+```html
+<nav>…org chrome…</nav>
+<main><fragment-slot outlet></fragment-slot></main>
+```
+
+On each page load the gateway pierces the page's routed (bound) fragment into the outlet and names
+the slot after it, so a new subgraph's routes need no change to the org shell. The rules:
+
+- **Which fragment.** The first routed fragment, in registration order, that the page matched and
+  no earlier named slot claimed. Unbound widgets never fill an outlet, because they have a `src`
+  and a slot of their own.
+- **Named slots.** A named slot *before* the outlet wins its fragment. One *after* it is too late,
+  because the gateway streams the page and cannot look ahead. The gateway unnames that slot (it
+  gets `data-braid-in-outlet="<id>"` instead), so the client does not boot a second copy, and it
+  warns. Put named slots before the outlet.
+- **More than one.** Each further outlet takes the next routed match. An outlet marked
+  `trust="untrusted"` or `adapter="contract"` is never filled.
+- **Inside `<template>`.** The gateway does not look inside templates, so an outlet in a
+  `<template>` claims a fragment like a live one. Keep the outlet in the page's live markup.
+- **No match.** When no routed fragment matches the page, the outlet is left as written, and the
+  client leaves a nameless outlet alone.
+- **Full page loads only.** The outlet is filled on a full page load. A client-side navigation from
+  one team's route to another's does not swap what it holds. Navigate between teams with full page
+  loads, which is what a link to a route on another team's gateway already does.
 
 Team chrome that used to live in the team shell, such as a sub-navigation, becomes a fragment of its
 own. Register it as `bound: false` with a `src`, and give it a slot.
