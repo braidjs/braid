@@ -6,6 +6,14 @@ const billing: FragmentManifest = { id: 'billing', endpoint: 'https://billing.in
 const reviews: FragmentManifest = { id: 'reviews', endpoint: 'https://reviews.internal' };
 
 describe('registry snapshots', () => {
+  // A literal, not a computed expectation: every snapshot id already in someone's store depends on
+  // this algorithm. If this fails, existing pins stop resolving — change the code, not the id.
+  it('keeps the content address of a manifests-only snapshot stable', async () => {
+    const snapshot = await createSnapshot({ manifests: [billing, reviews] });
+
+    expect(snapshot.id).toBe('reg_bc25abc511812088f248a24bb2b8d78b');
+  });
+
   it('addresses by content, so the same manifests are the same snapshot', async () => {
     const a = await createSnapshot({ manifests: [billing, reviews] });
     const b = await createSnapshot({ manifests: [billing, reviews] });
