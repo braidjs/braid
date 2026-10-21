@@ -151,3 +151,18 @@ chrome, such as a sub-nav, can be registered as a `bound: false` fragment of its
   host.
 - **Two proxy hops per asset** (org gateway, then team gateway, then origin). A CDN in front of
   the org gateway matters more in this topology.
+
+## Changed in review
+
+Code review and the security audit of the build (PR #26's branch, `feat/gateway-federation`) moved
+three items into v1:
+
+- **Capabilities are the org's.** `subgraph()` drops capabilities the team's registry declares. The
+  org grants them per fragment with `subgraph({ capabilities })`. Otherwise a team's registry
+  could grant its own fragments context, permissions or `sharedGlobals`.
+- **Route claims are bounded.** `subgraph({ routes })` limits the pierce patterns a team may
+  declare. Without it, whole-site claims (`/`, `/*`, a leading parameter) fail. A claimed page is a
+  page whose cookies `forwardCredentials` sends to the team.
+- **Composition is bounded in time.** URL registries time out (5s default), concurrent callers
+  share one composition, and a failure is retried on the next call. Absolute `entry` URLs are
+  refused, and the redirect guidance in the docs was corrected.

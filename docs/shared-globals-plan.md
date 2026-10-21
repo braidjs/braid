@@ -110,3 +110,12 @@ fragment's realm. What changes is that a trusted fragment can now write to host 
   `defaultTimeoutMs`, which don't exist, and omits `capabilities`, `contract` and `dev`.
 - `docs/braid-architecture.md:144` says host purity is "enforced in CI via automated host-purity
   test suites". No such suite was found.
+
+## Changed in review
+
+Built in PR #25. Review and the security audit added:
+
+- `resolveSharedGlobals` ignores a grant that is not an array of strings.
+- A spec pins the boot order at the adapter seam.
+- The docs say plainly that a per-fragment grant **replaces** the host list, so it can widen it,
+  and that whoever controls the registry controls it.
