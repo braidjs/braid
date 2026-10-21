@@ -165,6 +165,11 @@ describe('buildTopology with shells', () => {
     expect(topology.routes.find((route) => route.label === '/billing/*')?.shared).toBe(true);
   });
 
+  it('does not call a fragment a shell slots unrouted', () => {
+    expect(buildTopology(entries).unrouted.map((node) => node.label)).toEqual(['notifications']);
+    expect(buildTopology(entries, { shells }).unrouted).toEqual([]);
+  });
+
   it('draws a shell route nothing pierces, and ignores slots naming unregistered fragments', () => {
     const topology = buildTopology(entries, { shells });
 

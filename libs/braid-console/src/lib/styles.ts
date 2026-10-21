@@ -233,12 +233,11 @@ export const CONSOLE_STYLES = `
 .braid-console__graphmain { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
 
 .braid-console__collabels {
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  position: relative; height: 16px; min-width: 480px;
   font-size: 11px; font-weight: 600; color: var(--bc-subtle);
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
 }
-.braid-console__collabels span:nth-child(2) { text-align: center; }
-.braid-console__collabels span:nth-child(3) { text-align: right; }
+.braid-console__collabels span { position: absolute; top: 0; padding-left: 2px; white-space: nowrap; }
 
 .braid-console__graph { width: 100%; min-width: 480px; display: block; overflow: visible; }
 

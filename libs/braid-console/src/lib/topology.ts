@@ -149,7 +149,8 @@ export function buildTopology(entries: readonly DiscoveryEntry[], options: { she
     fragment.degree = edges.filter((edge) => edge.to === fragment.id || edge.from === fragment.id).length;
   }
 
-  const routed = new Set(edges.filter((edge) => edge.kind === 'composes').map((edge) => edge.to));
+  // A shell slotting a widget places it as surely as a pierce pattern does, so it is not unrouted.
+  const routed = new Set(edges.filter((edge) => edge.kind === 'composes' || edge.kind === 'slots').map((edge) => edge.to));
   const shellList = shells.sort((a, b) => a.label.localeCompare(b.label));
 
   return {

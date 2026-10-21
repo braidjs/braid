@@ -58,11 +58,17 @@ export function TopologyGraph({ entries, shells, onSelect, onEmbed }: TopologyGr
   return (
     <div className="braid-console__graphwrap">
       <div className="braid-console__graphmain">
+        {/* Placed by the same geometry as the columns, so a heading sits over its column however
+            many columns there are. */}
         <div className="braid-console__collabels" aria-hidden="true">
-          {topology.shells.length > 0 && <span>Shells</span>}
-          <span>Routes</span>
-          <span>Fragments</span>
-          {!topology.originsUnknown && <span>Origins</span>}
+          {columnLabels(topology).map((text, index) => (
+            <span
+              key={text}
+              style={{ left: `${((index * (NODE_W + COL_GAP)) / layout.width) * 100}%`, width: `${(NODE_W / layout.width) * 100}%` }}
+            >
+              {text}
+            </span>
+          ))}
         </div>
 
         <svg
@@ -344,6 +350,10 @@ export function layoutTopology(topology: Topology): {
   }
 
   return { nodes: placed, edges, width, height };
+}
+
+function columnLabels(topology: Topology): string[] {
+  return [...(topology.shells.length > 0 ? ['Shells'] : []), 'Routes', 'Fragments', ...(topology.originsUnknown ? [] : ['Origins'])];
 }
 
 function describe(node: TopologyNode, topology: Topology): string {
