@@ -56,8 +56,11 @@ export interface TopologyEdge {
 export interface Topology {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
-  /** Empty unless shells were given. */
-  shells: TopologyNode[];
+  /**
+   * Empty unless shells were given. Optional so a `Topology` built by hand, or by an earlier
+   * version, still lays out.
+   */
+  shells?: TopologyNode[];
   routes: TopologyNode[];
   fragments: TopologyNode[];
   origins: TopologyNode[];

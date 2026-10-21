@@ -19,7 +19,7 @@
  */
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGateway } from '../../libs/braid-gateway/src/index.ts';
 import { toNodeMiddleware } from '../../libs/braid-gateway/src/node.ts';
@@ -141,13 +141,25 @@ createServer(async (request, response) => {
     // falling through to a read of the dist directory itself.
     const pathname = (request.url ?? '/').split('?')[0];
     const path = !pathname || pathname === '/' ? '/index.html' : pathname;
+    // Resolved and then checked: a raw `/../../package.json` must not read outside the bundle.
+    let file;
     try {
-      let body = await readFile(join(DIST, path));
+      file = resolve(DIST, `.${decodeURIComponent(path)}`);
+    } catch {
+      file = null;
+    }
+    if (!file || !file.startsWith(DIST + sep)) {
+      response.writeHead(404).end('not found');
+      return;
+    }
+    try {
+      let body = await readFile(file);
       if (path === '/index.html') {
         body = Buffer.from(
           body.toString('utf8').replace(
             /(<script type="application\/json" id="braid-console-config">)[\s\S]*?(<\/script>)/,
-            `$1${CONSOLE_CONFIG.replace(/</g, '\\u003c')}$2`,
+            // A function, so a `$` in the config is text rather than a replacement pattern.
+            (_match, open, close) => `${open}${CONSOLE_CONFIG.replace(/</g, '\\u003c')}${close}`,
           ),
         );
       }
@@ -157,7 +169,9 @@ createServer(async (request, response) => {
       response.writeHead(404).end('not found');
     }
   });
-}).listen(PORT, () => console.log(`console demo → ${ORIGIN}${oidc ? '  (mock Okta sign-in; curl tokens at /mock-oidc/dev-token?role=viewer|candidate|editor)' : ''}`));
+  // Loopback only: the demo authorizes everyone (or hands out tokens), which is fine on this
+  // machine and not on the network it is attached to.
+}).listen(PORT, '127.0.0.1', () => console.log(`console demo → ${ORIGIN}${oidc ? '  (mock Okta sign-in; curl tokens at /mock-oidc/dev-token?role=viewer|candidate|editor)' : ''}`));
 
 async function toWebRequest(request) {
   const url = new URL(request.url, `http://${request.headers.host ?? `localhost:${PORT}`}`);

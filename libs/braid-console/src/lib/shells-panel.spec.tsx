@@ -5,6 +5,7 @@ import type { FragmentManifest } from '@braidlabs/gateway';
 import type { RegistryPermissions, ShellManifest } from '@braidlabs/registry';
 import { ShellsPanel } from './shells-panel.js';
 import { HistoryPanel } from './history-panel.js';
+import { tagClass } from './tags.js';
 
 const manifests: FragmentManifest[] = [
   { id: 'billing', endpoint: 'https://b.internal', pierce: ['/billing/*'], tags: ['finance'] },
@@ -240,6 +241,109 @@ describe('<ShellsPanel>', () => {
     expect(container.textContent).toContain('No shells yet');
     await click(button('Create your first shell'));
     expect(textarea()).toBeTruthy();
+  });
+
+  const twoShells = {
+    id: 'reg_a',
+    snapshot: { id: 'reg_a', createdAt: '', manifests, shells: [{ ...storefront, id: 'admin', routes: [{ path: '/admin', layout: { areas: 'only' } }] }, storefront] },
+  };
+
+  it('stays on the shell being renamed, even onto another shell\u2019s id', async () => {
+    const onSelect = vi.fn();
+    await render(server({ head: twoShells }), { selected: 'storefront', onSelect });
+
+    await type(fieldInput('Id'), 'store');
+    expect(onSelect).toHaveBeenLastCalledWith('store');
+    await act(async () => root.render(<ShellsPanel api={server({ head: twoShells })} selected="store" onSelect={onSelect} />));
+    expect(textarea()?.value).toBe('header header\nnav main');
+
+    await type(fieldInput('Id'), 'admin');
+    await act(async () => root.render(<ShellsPanel api={server({ head: twoShells })} selected="admin" onSelect={onSelect} />));
+    expect(textarea()?.value).toBe('header header\nnav main');
+    expect(container.textContent).toContain('duplicate-shell-id');
+    expect(button('Publish & pin')?.disabled).toBe(true);
+  });
+
+  it('keeps the designer open while the id is cleared to retype it', async () => {
+    const onSelect = vi.fn();
+    await render(server({}), { selected: 'storefront', onSelect });
+
+    await type(fieldInput('Id'), '');
+
+    expect(onSelect).not.toHaveBeenCalledWith('');
+    expect(textarea()).toBeTruthy();
+  });
+
+  it('keeps the base after a candidate publish, so the next one is still checked against HEAD', async () => {
+    const api = server({ permissions: { ...EDITOR, pin: false } });
+    await render(api);
+    await click(button('New shell'));
+    await click(button('Publish as candidate'));
+    expect(container.textContent).toContain('as a candidate, not pinned');
+    await click(button('← Shells'));
+    await click(button('New shell'));
+    await click(button('Publish as candidate'));
+
+    expect(api.calls.filter((call) => call.method === 'POST').map((call) => call.body?.['baseId'])).toEqual(['reg_a', 'reg_a']);
+  });
+
+  it('moves the base to the new snapshot after a pinned publish', async () => {
+    const api = server({});
+    await render(api);
+    await click(button('New shell'));
+    await click(button('Publish & pin'));
+    await click(button('← Shells'));
+    await click(button('New shell'));
+    await click(button('Publish & pin'));
+
+    expect(api.calls.filter((call) => call.method === 'POST').map((call) => call.body?.['baseId'])).toEqual(['reg_a', 'reg_b']);
+  });
+
+  it('keeps edits typed while a publish is in flight', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const api = server({ publish: () => json({}, 500) });
+    const fetchMock = api.fetch as unknown as ReturnType<typeof vi.fn>;
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init: RequestInit = {}) =>
+      init.method === 'POST' ? new Promise<Response>((resolve) => (answer = resolve)) : original(url, init),
+    );
+    await render(api);
+    await click(button('Edit'));
+    await type(fieldInput('Title'), 'Before');
+    await act(async () => button('Publish & pin')!.click());
+    await type(fieldInput('Title'), 'Typed during publish');
+    await act(async () => answer(json({ snapshot: { id: 'reg_b', createdAt: '', fragmentCount: 2 }, findings: [], descriptorNotes: [], pinned: true }, 201)));
+
+    expect(fieldInput('Title')?.value).toBe('Typed during publish');
+    expect(button('Discard')?.disabled).toBe(false);
+  });
+
+  it('edits the route shown after Discard removes the one that was selected', async () => {
+    await render(server({}));
+    await click(button('Edit'));
+    await click(button('+ Route'));
+    await click(button('Discard'));
+    await type(fieldInput('Path'), '/checkout/*');
+
+    expect(container.querySelector('.braid-console__routebutton')?.textContent).toBe('/checkout/*');
+  });
+
+  it('reports unpublished changes to the host', async () => {
+    const onDirtyChange = vi.fn();
+    await render(server({}), { onDirtyChange });
+    await click(button('New shell'));
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    await click(button('Discard'));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows tag chips in the list and the designer with the same colors as everywhere else', async () => {
+    await render(server({}));
+    expect(container.querySelector('button[aria-label="Filter by tag core"]')?.className).toBe(`${tagClass('core')} braid-console__tagbutton`);
+
+    await click(button('Edit'));
+    expect(container.querySelector('.braid-console__tagrow .braid-console__tag')?.className).toBe(tagClass('core'));
   });
 
   it('follows a host-controlled selection by id', async () => {

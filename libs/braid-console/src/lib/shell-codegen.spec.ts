@@ -97,7 +97,8 @@ describe('shellCode', () => {
     }
 
     expect(all('react', hostile)).toContain('name={"a\\"b`${c}"}');
-    expect(all('angular', hostile)).toContain('name="a&quot;b\\`\\${c}"');
+    // Braces are entities in an Angular template, so `{{ }}` can never become an interpolation.
+    expect(all('angular', hostile)).toContain('name="a&quot;b\\`$&#123;c&#125;"');
   });
 
   it('notes empty areas instead of inventing content for them', () => {
@@ -115,5 +116,42 @@ describe('angularPath', () => {
     ['/*', '**'],
   ])('%s → %s', (path, expected) => {
     expect(angularPath(path)).toBe(expected);
+  });
+});
+
+describe('comment and template breakouts', () => {
+  const sneaky = (path: string): ShellManifest => ({ ...shell, routes: [{ path, layout: { areas: 'main' }, slots: { main: 'billing' } }] });
+
+  it.each(['/a--!><img src=x onerror=alert(1)>', '/a--><img src=x>', '/a<!--x'])('keeps %s inside the HTML comment', (path) => {
+    const html = all('vanilla', sneaky(path));
+    const header = html.split('\n')[1] ?? '';
+
+    expect(header.startsWith('<!-- ')).toBe(true);
+    expect(header.indexOf('-->')).toBe(header.length - 3);
+    expect(header).not.toMatch(/--!?>.*--!?>/);
+  });
+
+  it('keeps a U+2028 in a route path from ending a // comment', () => {
+    const code = all('react', sneaky('/a\u2028alert(1)//'));
+
+    expect(code).not.toContain('\u2028');
+    expect(code).toContain('// Route /a alert(1)//');
+  });
+
+  it('turns braces into entities in Angular templates', () => {
+    const code = all('angular', { ...shell, routes: [{ path: '/', layout: { areas: 'main' }, slots: { main: '{{constructor}}' } }] });
+
+    expect(code).not.toContain('{{constructor}}');
+    expect(code).toContain('name="&#123;&#123;constructor&#125;&#125;"');
+  });
+
+  it('gives every route a distinct stem even when suffixes collide', () => {
+    const colliding: ShellManifest = {
+      ...shell,
+      routes: ['/a-2', '/a', '/a/*', '/a'].map((path) => ({ path, layout: { areas: 'main' } })),
+    };
+    const names = shellCode(colliding, fragments, 'vanilla').map((file) => file.name);
+
+    expect(new Set(names).size).toBe(names.length);
   });
 });

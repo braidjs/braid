@@ -28,6 +28,15 @@ const { auth, edit, ...api } = config;
 // anonymous and come back 401, which is noise, not information. The sign-in code is loaded only
 // in this branch.
 if (auth) {
+  // Something to see while the sign-in code loads and the issuer answers, instead of a blank page.
+  ensureStyles();
+  root.render(
+    <div className="braid-console">
+      <p className="braid-console__empty" role="status">
+        Signing in…
+      </p>
+    </div>,
+  );
   import('./auth.js')
     .then(({ signIn }) => signIn(auth))
     .then(

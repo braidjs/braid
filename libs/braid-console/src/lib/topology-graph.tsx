@@ -305,7 +305,7 @@ export function layoutTopology(topology: Topology): {
   height: number;
 } {
   const columns: TopologyNode[][] = [
-    ...(topology.shells.length > 0 ? [topology.shells] : []),
+    ...(topology.shells?.length ? [topology.shells] : []),
     topology.routes,
     topology.fragments,
     ...(topology.originsUnknown ? [] : [topology.origins]),
@@ -353,7 +353,7 @@ export function layoutTopology(topology: Topology): {
 }
 
 function columnLabels(topology: Topology): string[] {
-  return [...(topology.shells.length > 0 ? ['Shells'] : []), 'Routes', 'Fragments', ...(topology.originsUnknown ? [] : ['Origins'])];
+  return [...(topology.shells?.length ? ['Shells'] : []), 'Routes', 'Fragments', ...(topology.originsUnknown ? [] : ['Origins'])];
 }
 
 function describe(node: TopologyNode, topology: Topology): string {

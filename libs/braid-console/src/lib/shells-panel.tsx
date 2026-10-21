@@ -3,7 +3,7 @@ import type { FragmentManifest } from '@braidlabs/gateway';
 import {
   parseAreas,
   formatAreas,
-  validateRegistry,
+  validateShells,
   SHELL_FRAMEWORKS,
   type RegistryFinding,
   type RegistryPermissions,
@@ -39,6 +39,11 @@ export interface ShellsPanelProps {
   selected?: string | null;
   onSelect?: (id: string | null) => void;
   onPublished?: (outcome: PublishOutcome) => void;
+  /**
+   * Whether there are unpublished changes, for a host that wants to warn before leaving. The
+   * panel does not touch `beforeunload` itself: the page is the host's.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface Workspace {
@@ -71,7 +76,7 @@ type Phase =
  * injected into this page. Rendering it here would run third-party code in the admin origin with
  * an operator's token in reach; the preview draws the grid and nothing else.
  */
-export function ShellsPanel({ api, theme, className, selected, onSelect, onPublished }: ShellsPanelProps) {
+export function ShellsPanel({ api, theme, className, selected, onSelect, onPublished, onDirtyChange }: ShellsPanelProps) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [phase, setPhase] = useState<Phase>({ status: 'loading' });
   const [ownOpen, setOwnOpen] = useState<number | null>(null);
@@ -114,9 +119,12 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
 
   // Controlled by id when the host passes one; an id that is mid-edit (and so matches nothing)
   // keeps the current shell open rather than closing it under the person typing.
+  // The shell already open wins when it carries the selected id, so renaming it onto another
+  // shell's id (a duplicate, flagged as an error) does not jump the designer to that other shell.
   const open = useMemo(() => {
     if (selected === undefined || !workspace) return ownOpen;
     if (selected === null) return null;
+    if (ownOpen !== null && workspace.shells[ownOpen]?.id === selected) return ownOpen;
     const index = workspace.shells.findIndex((shell) => shell.id === selected);
     return index >= 0 ? index : ownOpen;
   }, [selected, workspace, ownOpen]);
@@ -126,11 +134,18 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
     onSelect?.(index === null ? null : (workspace?.shells[index]?.id ?? null));
   };
 
-  const findings = useMemo(
-    () =>
-      workspace ? validateRegistry(workspace.manifests, { shells: workspace.shells }).filter((finding) => finding.shellIds) : [],
-    [workspace],
-  );
+  // Shells only: the fragments are the pinned ones and cannot change here, and re-checking them
+  // (pierce overlaps are quadratic) on every keystroke costs ~100 ms at a few hundred fragments.
+  const manifests = workspace?.manifests;
+  const shells = workspace?.shells;
+  const findings = useMemo(() => (shells && manifests ? validateShells(shells, manifests) : []), [shells, manifests]);
+  const base = workspace?.base;
+  const dirty = useMemo(() => Boolean(shells && base) && JSON.stringify(shells) !== JSON.stringify(base), [shells, base]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    // onDirtyChange is a notification; depending on it would re-notify on every host render.
+  }, [dirty]);
 
   if (phase.status === 'loading' || (!workspace && phase.status !== 'empty' && phase.status !== 'failed')) {
     return (
@@ -160,7 +175,6 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
 
   const { permissions } = workspace;
   const canEdit = permissions.publish;
-  const dirty = JSON.stringify(workspace.shells) !== JSON.stringify(workspace.base);
   const errors = findings.filter((finding) => finding.severity === 'error');
 
   const update = (shells: ShellManifest[]) => {
@@ -182,15 +196,19 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
 
   const publish = async (pin: boolean) => {
     setPhase({ status: 'publishing' });
+    // What was sent, not what is in state when the answer arrives: edits typed while the request
+    // was in flight are newer than the publish and must survive it.
+    const sent = workspace.shells;
     try {
       const outcome = await publishSnapshot(api ?? {}, {
         manifests: workspace.manifests,
-        shells: workspace.shells,
+        shells: sent,
         baseId: workspace.baseId,
         pin,
       });
-      // A candidate (unpinned) publish leaves HEAD where it was, so the draft keeps its base.
-      setWorkspace({ ...workspace, base: workspace.shells, baseId: pin ? outcome.snapshot.id : workspace.baseId });
+      // Only a pinned publish moves the base. A candidate leaves HEAD where it was, so the draft
+      // still differs from what is live, and Discard still means "back to HEAD".
+      if (outcome.pinned) setWorkspace((current) => (current ? { ...current, base: sent, baseId: outcome.snapshot.id } : current));
       setPhase({ status: 'published', outcome });
       onPublished?.(outcome);
     } catch (error) {
@@ -212,7 +230,12 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
           readOnly={!canEdit}
           onChange={(next) => {
             update(workspace.shells.map((current, position) => (position === open ? next : current)));
-            if (next.id !== shell.id) onSelect?.(next.id);
+            if (next.id !== shell.id) {
+              // Track the open shell by position from here on, so the id can change under it.
+              setOwnOpen(open);
+              // An emptied id is mid-edit, not a deselection: keep the URL on the last real id.
+              if (next.id !== '') onSelect?.(next.id);
+            }
           }}
           onBack={() => choose(null)}
           onDelete={() => remove(open)}
@@ -370,8 +393,10 @@ function ShellDesigner({
   onDelete: () => void;
 }) {
   const [tab, setTab] = useState<DesignerTab>('layout');
-  const [routeIndex, setRouteIndex] = useState(0);
-  const route = shell.routes[Math.min(routeIndex, shell.routes.length - 1)];
+  const [requestedRoute, setRouteIndex] = useState(0);
+  // Clamped once and used everywhere: Discard or a reload can remove the route that was selected.
+  const routeIndex = Math.max(0, Math.min(requestedRoute, shell.routes.length - 1));
+  const route = shell.routes[routeIndex];
   const set = (patch: Partial<ShellManifest>) => onChange({ ...shell, ...patch });
 
   const setRoute = (patch: Partial<ShellRoute>) =>
@@ -412,6 +437,13 @@ function ShellDesigner({
           value={(shell.tags ?? []).join(', ')}
           onChange={(text) => set(optionalList('tags', text))}
         />
+        {shell.tags && shell.tags.length > 0 && (
+          <div className="braid-console__tagrow" aria-label="Tags">
+            {shell.tags.map((tag) => (
+              <TagChip key={tag} tag={tag} />
+            ))}
+          </div>
+        )}
       </fieldset>
 
       <p className="braid-console__notice braid-console__notice--quiet">

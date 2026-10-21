@@ -451,6 +451,7 @@ export const CONSOLE_STYLES = `
 .braid-console__actions { white-space: nowrap; }
 .braid-console__designer { gap: var(--bc-gap); }
 .braid-console__shellmeta { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); margin: 0; }
+.braid-console__tagrow { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; }
 .braid-console__designerbody { display: flex; gap: var(--bc-gap); align-items: flex-start; flex-wrap: wrap; }
 .braid-console__routes { display: flex; flex-direction: column; gap: 4px; flex: 0 0 200px; }
 .braid-console__routebutton {
