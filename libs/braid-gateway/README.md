@@ -554,6 +554,11 @@ user against the shell. A fragment that needs to know who is asking should be gi
 scoped to it: a per-request assertion via `additionalHeaders`, or a token exchanged for the
 fragment's own audience. `forwardCredentials: true` restores the old behaviour, and is only
 appropriate when every endpoint in the registry sits inside the same trust boundary as the shell.
+When only some do, pass a function instead, `forwardCredentials: (fragment) => …`, and the gateway
+decides per fragment. A function that throws forwards nothing, and websocket upgrades follow the
+same decision. `proxy-authorization` is stripped with them, and `credentialHeaders` adds any
+identity header an auth proxy in front of the shell injects (`x-auth-request-access-token`,
+`cf-access-jwt-assertion`, …).
 
 Not yet implemented from the architecture's security section: allow-listed manifest origins and
 signed manifests. Until those land, treat the registry as trusted configuration.

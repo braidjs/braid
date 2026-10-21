@@ -2,6 +2,7 @@ import {
   BRAID_ADAPTER_META,
   BRAID_ADAPTER_OPTIONS_META,
   BRAID_FRAGMENT_ID_HEADER,
+  BRAID_MAX_HOPS,
   BRAID_PROTOCOL_META,
   BRAID_PROTOCOL_VERSION,
   BRAID_REDIRECT_LOCATION_HEADER,
@@ -11,6 +12,7 @@ import {
   BRAID_SERVICE_WORKER_PATH,
   BRAID_VITALS_BEACON_PATH,
   BRAID_VITALS_SCRIPT_PATH,
+  BRAID_VIA_HEADER,
 } from './protocol.js';
 import {
   canFetch,
@@ -19,6 +21,7 @@ import {
   Principal,
   Registry,
   RegistrySource,
+  FragmentManifest,
   ResolvedFragmentManifest,
 } from './registry.js';
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
@@ -89,8 +92,31 @@ export interface GatewayOptions {
    * assertion minted per request via {@link GatewayOptions.additionalHeaders}, or a token
    * exchanged for the fragment's own audience. Turn this on only when every endpoint in the
    * registry is inside the same trust boundary as the shell.
+   *
+   * Or decide per fragment, when only some of them are — the usual case once a gateway composes
+   * other teams' gateways:
+   *
+   * ```ts
+   * forwardCredentials: (fragment) => typeof fragment.endpoint === 'string' &&
+   *   fragment.endpoint.startsWith('https://orders.internal/'),
+   * ```
+   *
+   * The function is the host's, never the manifest's: a fragment that could declare its own
+   * entitlement to the user's cookies would not be behind a boundary at all. A function that
+   * throws forwards nothing. The same decision applies to websocket upgrades.
    */
-  forwardCredentials?: boolean;
+  forwardCredentials?: boolean | ((fragment: FragmentManifest) => boolean);
+  /**
+   * More request headers that carry the caller's identity, stripped alongside `cookie`,
+   * `authorization` and `proxy-authorization` whenever {@link GatewayOptions.forwardCredentials}
+   * does not allow a fragment.
+   *
+   * An auth proxy in front of the shell often adds its own: `x-auth-request-access-token`
+   * (oauth2-proxy), `cf-access-jwt-assertion` (Cloudflare Access), `x-amzn-oidc-data` (an ALB).
+   * The gateway cannot know them, and each one is the user's identity handed to every fragment
+   * endpoint unless it is listed here.
+   */
+  credentialHeaders?: readonly string[];
   /**
    * Publishes a paginated listing of the fragments this gateway serves, for shells that build
    * their UI from the registry instead of hard-coding slot names.
@@ -270,6 +296,17 @@ export interface RoutingEvent {
   at: number;
 }
 
+/** Where a fragment websocket upgrade goes, and what may travel with it. See `resolveUpgrade`. */
+export interface UpgradeTarget {
+  fragmentId: string;
+  target: URL;
+  forwardCredentials: boolean;
+  /** Headers that carry the caller's identity: stripped unless `forwardCredentials`. */
+  credentialHeaders: readonly string[];
+  /** The `x-braid-via` value for the upstream request, this gateway's hop included. */
+  via: string;
+}
+
 export interface BraidGateway {
   /**
    * Handles a request if it belongs to Braid: a fragment-namespace request, or a document
@@ -288,10 +325,17 @@ export interface BraidGateway {
    * addressed through the fragment namespace, so the gateway has to say where they go — the
    * socket plumbing itself belongs to the platform binding.
    *
-   * @returns the endpoint URL to dial, or null when the request is not a fragment upgrade, the
-   *          fragment is unknown, or the caller may not load it.
+   * A binding other than `toNodeUpgradeHandler` **must** remove `credentialHeaders` from the
+   * upstream request when `forwardCredentials` is false, and set `x-braid-via` to `via` — the
+   * socket otherwise carries the user's identity past the boundary every fetch respects.
+   *
+   * @returns the endpoint URL to dial, whether the caller's credentials may go with it (the same
+   *          {@link GatewayOptions.forwardCredentials} rule as a fetch) and which headers carry
+   *          them, and the hop header to send — or null when the request is not a fragment
+   *          upgrade, the fragment is unknown, the caller may not load it, or it has already
+   *          crossed too many gateways.
    */
-  resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null>;
+  resolveUpgrade(request: Request): Promise<UpgradeTarget | null>;
 }
 
 export function createGateway(options: GatewayOptions): BraidGateway {
@@ -302,7 +346,20 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
     ? additionalHeaders
     : () => additionalHeaders;
-  const forwardCredentials = options.forwardCredentials ?? false;
+  const credentialHeaders = [
+    ...new Set(['cookie', 'authorization', 'proxy-authorization', ...(options.credentialHeaders ?? [])].map((name) => name.toLowerCase())),
+  ];
+
+  /** Whether the caller's `cookie` and `authorization` may go to this fragment's endpoint. */
+  const forwardsCredentialsTo = (fragment: FragmentManifest): boolean => {
+    const rule = options.forwardCredentials ?? false;
+    if (typeof rule !== 'function') return rule;
+    try {
+      return rule(fragment) === true;
+    } catch {
+      return false;
+    }
+  };
   const trustForwardedHeaders = options.trustForwardedHeaders ?? false;
   const serviceWorker = options.serviceWorker
     ? (options.serviceWorker === true ? {} : options.serviceWorker)
@@ -332,8 +389,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    * login sends them back, unless something carries their identity to it. Credentials are stripped
    * by default, so say so up front rather than let the first user find out.
    */
-  function warnIfNoIdentity(manifest: { id: string; redirect?: string }): void {
-    if (manifest.redirect !== 'navigate' || forwardCredentials || options.additionalHeaders) return;
+  function warnIfNoIdentity(manifest: FragmentManifest): void {
+    if (manifest.redirect !== 'navigate' || forwardsCredentialsTo(manifest) || options.additionalHeaders) return;
     if (warnedNoIdentity.has(manifest.id)) return;
     warnedNoIdentity.add(manifest.id);
     console.warn(
@@ -399,6 +456,16 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   return {
     async handle(request: Request, next?: () => Promise<Response>): Promise<Response | null> {
       const requestUrl = new URL(request.url);
+
+      // Only fragment traffic loops: everything else here is answered locally or passed to the shell.
+      if (hopCount(request) >= BRAID_MAX_HOPS && braidRoute(requestUrl.pathname)) {
+        return htmlResponse(
+          `<!doctype html><title>Braid: loop detected</title><p>This request has already crossed ` +
+            `${BRAID_MAX_HOPS} Braid gateways. A fragment endpoint probably points back at a gateway on its own path.</p>`,
+          508,
+          { 'cache-control': 'no-store' },
+        );
+      }
 
       if (discovery?.owns(requestUrl.pathname)) {
         return discovery.handle(request, requestUrl);
@@ -513,8 +580,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       }
     },
 
-    async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null> {
+    async resolveUpgrade(request: Request): Promise<UpgradeTarget | null> {
       const requestUrl = new URL(request.url);
+
+      // a socket loops as easily as a fetch, and has no timeout to end it
+      if (hopCount(request) >= BRAID_MAX_HOPS) return null;
       const route = braidRoute(requestUrl.pathname);
 
       // only the fragment namespace carries live sockets; stubs and documents are plain GETs
@@ -533,7 +603,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       strippedUrl.pathname = route.pathname;
 
       try {
-        return { fragmentId: fragment.id, target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id) };
+        return {
+          fragmentId: fragment.id,
+          target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
+          forwardCredentials: forwardsCredentialsTo(fragment),
+          credentialHeaders,
+          via: appendHop(request),
+        };
       } catch {
         return null;
       }
@@ -644,7 +720,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
-    forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);
+    // set, not append: an endpoint that is itself a gateway has already named the fragment
+    forwarded.headers.set(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
       // the body was transformed, so any length/encoding the endpoint declared no longer describes it
       forwarded.headers.delete('content-length');
@@ -784,10 +861,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
     // different origin by construction — so they are removed unless the host has said its whole
     // registry is inside one trust boundary. See `forwardCredentials`.
-    if (!forwardCredentials) {
-      fragmentRequest.headers.delete('cookie');
-      fragmentRequest.headers.delete('authorization');
+    if (!forwardsCredentialsTo(fragment)) {
+      for (const name of credentialHeaders) fragmentRequest.headers.delete(name);
     }
+
+    // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
+    // of gateways accumulates one entry each — see BRAID_MAX_HOPS.
+    fragmentRequest.headers.set(BRAID_VIA_HEADER, appendHop(request));
 
     // Tell the fragment endpoint the protocol and host the *user* reached us on.
     //
@@ -1416,4 +1496,15 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/** The `x-braid-via` value for an upstream request: the inbound hops plus this gateway's. */
+function appendHop(request: Request): string {
+  return [request.headers.get(BRAID_VIA_HEADER), 'braid'].filter(Boolean).join(', ');
+}
+
+/** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */
+function hopCount(request: Request): number {
+  const via = request.headers.get(BRAID_VIA_HEADER);
+  return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
 }

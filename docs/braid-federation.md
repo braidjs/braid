@@ -19,7 +19,8 @@ createGateway({
       routes: ['/orders', '/refunds'], // the pages this team may pierce into
     }),
   ]),
-  forwardCredentials: true, // only if team fragments need the user's identity, see "Credentials"
+  // only to teams that need the user's identity — see "Credentials"
+  forwardCredentials: (fragment) => typeof fragment.endpoint === 'string' && fragment.endpoint.startsWith('https://orders.internal.example.com/'),
 });
 ```
 
@@ -123,15 +124,43 @@ its shell (see Layout).
 
 ## Credentials
 
-The gateway strips `cookie` and `authorization` from every fragment fetch unless
-`forwardCredentials` is set. In a federated graph that has two consequences:
+The gateway strips `cookie` and `authorization` from every fragment fetch, and every websocket
+upgrade, unless `forwardCredentials` allows that fragment. In a federated graph:
 
-- **Gated fragments need `forwardCredentials`.** A team fragment with `access` rules needs it on the
-  org gateway. Without it, the team gateway sees every user as anonymous and refuses. That is
-  fail-closed, but it is probably not what you want.
-- **It applies to every endpoint.** `forwardCredentials` covers the whole registry. Every subgraph
-  then receives the user's org cookies on every page it pierces, which is why `routes` matters. Turn
-  it on only when every team in the graph should receive them.
+- **Gated fragments need it.** A team fragment with `access` rules needs its credentials forwarded
+  by the org gateway. Without them, the team gateway sees every user as anonymous and refuses. That
+  is fail-closed, but it is probably not what you want.
+- **Scope it per subgraph.** `forwardCredentials: true` sends the user's org cookies to every
+  endpoint in the graph. Pass a function instead and decide per fragment. Keying on the endpoint's
+  origin is the reliable way to scope it to a subgraph. `subgraph()` writes every team endpoint as
+  `<url>/__braid/frag/<id>/`, and `url` comes from the org's config, so a team cannot choose which
+  origin its fragments are fetched from:
+
+  ```ts
+  const trusted = new Set(['https://orders.internal.example.com', 'https://refunds.internal.example.com']);
+  createGateway({
+    registry: supergraph([...]),
+    forwardCredentials: (fragment) => {
+      const endpoint = fragment.endpoint;
+      return typeof endpoint === 'string' && trusted.has(new URL(endpoint).origin);
+    },
+  });
+  ```
+
+  Compare origins, not raw string prefixes. `startsWith('https://orders.internal')` also matches
+  `https://orders.internal.attacker.example`. A path prefix on a shared host is only safe once the
+  endpoint is normalised (`new URL(endpoint).pathname`), since `/orders/../billing/` passes a naive
+  check and resolves somewhere else.
+
+  Don't key on `id` alone: a team chooses its own fragment ids. Composition stops two teams claiming
+  the same id, but nothing stops a team naming one to match your rule. A predicate that throws
+  forwards nothing.
+- **Proxy-added identity headers.** `cookie`, `authorization` and `proxy-authorization` are
+  stripped by default. An auth proxy in front of the org may add its own, such as
+  `x-auth-request-access-token` or `cf-access-jwt-assertion`. List them in the gateway's
+  `credentialHeaders` so they follow the same rule.
+- **Routes still matter.** A subgraph that receives credentials receives them on every page it
+  pierces, which is why `routes` bounds where that can be.
 
 `access` rules are copied as data, so the org gateway also enforces them at its edge (it needs a
 `principal` resolver that understands the same identity). The team gateway stays authoritative:
@@ -213,17 +242,18 @@ own. Register it as `bound: false` with a `src`, and give it a slot.
   the fragment (`login`, no leading slash), or an absolute redirect to a public identity provider
   listed in the org's `redirectOrigins`.
 - **WebSockets.** An upgrade crosses both gateways only if the team's server wires
-  `toNodeUpgradeHandler` and the fragment's team endpoint is a URL, not a function. Upgrades
-  forward `cookie` and `authorization` whatever `forwardCredentials` says.
+  `toNodeUpgradeHandler` and the fragment's team endpoint is a URL, not a function. Credentials
+  follow the same `forwardCredentials` rule as page and asset requests.
 - **Absolute URLs in fragment HTML.** An absolute `entry` is refused at composition. Absolute URLs
   that point at the team's private origin inside the HTML itself still break in the browser, just as
   they would standalone.
 - **One timeout budget, two hops.** The org copies each fragment's `timeoutMs`, so the team hop and
   the org's own timer race on the same budget. Give the team gateway the shorter timeout, so a slow
   origin fails there with the team's fallback.
-- **No loop guard.** A team manifest whose endpoint points back at the org gateway's
-  `/__braid/frag/` recurses until the fragment timeout. Composition never produces this; only hand
-  configuration can.
+- **Loops are cut off.** Each gateway a fragment request or websocket upgrade crosses adds an entry
+  to `x-braid-via`. A fragment request that has already crossed four gets a `508 Loop Detected`,
+  and an upgrade is refused. A team endpoint that points back at the org gateway therefore fails at
+  once instead of waiting out the fragment timeout.
 
 ## Not in this version
 
