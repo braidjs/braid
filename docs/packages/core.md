@@ -151,6 +151,7 @@ DOM Properties and methods on the custom element:
 | :--- | :--- | :--- |
 | `name` | `string` | The fragment ID registered in the gateway manifest. |
 | `trust` | `'trusted' \| 'untrusted'` | Trust level (`'trusted'` for realm isolation; `'untrusted'` for sandboxed iframe). |
+| `outlet` | attribute | Marks the slot the gateway fills with the page's routed fragment and names after it. A nameless outlet waits quietly, and boots when it is given a `name`. |
 | `props` | `Record<string, unknown>` | Reactive props passed into the fragment. |
 | `state` | `'idle' \| 'loading' \| 'ready' \| 'error'` | Current lifecycle state of the slot. |
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
