@@ -1,3 +1,5 @@
+import { TAG_STYLES } from './tags.js';
+
 /**
  * The console's styles, as a string injected once at mount.
  *
@@ -456,7 +458,7 @@ export const CONSOLE_STYLES = `
 @media (prefers-reduced-motion: reduce) {
   .braid-console__edge, .braid-console__node, .braid-console__caret { transition: none; }
 }
-`;
+` + TAG_STYLES;
 
 const STYLE_ELEMENT_ID = 'braid-console-styles';
 

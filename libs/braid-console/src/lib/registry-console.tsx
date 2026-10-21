@@ -5,6 +5,8 @@ import { ensureStyles } from './styles.js';
 import { buildTopology } from './topology.js';
 import { TopologyGraph } from './topology-graph.js';
 import { IntegrationPanel } from './integration-panel.js';
+import { filterBy, fragmentItem } from './query.js';
+import { TagChip } from './tag-chip.js';
 
 export interface RegistryConsoleProps {
   /** How to reach the gateway. Defaults to this origin's `/__braid/registry`. */
@@ -161,7 +163,7 @@ export function RegistryConsole({ api, theme, className, onLoaded, chrome = true
               className="braid-console__search"
               type="search"
               value={query}
-              placeholder="Filter by id, title, tag, route"
+              placeholder="Filter — text, or tag:finance is:gated route:/billing/*"
               aria-label="Filter fragments"
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -186,7 +188,7 @@ export function RegistryConsole({ api, theme, className, onLoaded, chrome = true
               {entries.length === 0 ? 'No fragments are registered.' : `Nothing matches “${query}”.`}
             </p>
           ) : tab === 'fragments' ? (
-            <FragmentTable entries={visible} onEmbed={setEmbedding} />
+            <FragmentTable entries={visible} onEmbed={setEmbedding} onTag={(tag) => setQuery(tagQuery(tag))} />
           ) : (
             <TopologyGraph entries={visible} onEmbed={setEmbedding} />
           )}
@@ -239,7 +241,15 @@ function StatStrip({
   );
 }
 
-function FragmentTable({ entries, onEmbed }: { entries: DiscoveryEntry[]; onEmbed: (entry: DiscoveryEntry) => void }) {
+function FragmentTable({
+  entries,
+  onEmbed,
+  onTag,
+}: {
+  entries: DiscoveryEntry[];
+  onEmbed: (entry: DiscoveryEntry) => void;
+  onTag: (tag: string) => void;
+}) {
   return (
     <table className="braid-console__table">
       <thead>
@@ -262,9 +272,7 @@ function FragmentTable({ entries, onEmbed }: { entries: DiscoveryEntry[]; onEmbe
               {entry.title !== entry.id && <div className="braid-console__desc">{entry.title}</div>}
               {entry.description && <div className="braid-console__desc">{entry.description}</div>}
               {entry.tags?.map((tag) => (
-                <span className="braid-console__tag" key={tag}>
-                  {tag}
-                </span>
+                <TagChip tag={tag} key={tag} onSelect={onTag} />
               ))}
             </td>
             <td className="braid-console__mono">{entry.adapter}</td>
@@ -322,14 +330,15 @@ function ErrorPanel({ error, onRetry }: { error: Error; onRetry: () => void }) {
   );
 }
 
-/** Matches across everything visible in a row, so the filter finds what the eye can see. */
-export function filterEntries(entries: readonly DiscoveryEntry[], query: string): DiscoveryEntry[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return [...entries];
+/** The query that filters by one tag, quoted when the tag has spaces. */
+export function tagQuery(tag: string): string {
+  return /\s/.test(tag) ? `tag:"${tag}"` : `tag:${tag}`;
+}
 
-  return entries.filter((entry) =>
-    [entry.id, entry.title, entry.description, entry.adapter, ...(entry.tags ?? []), ...(entry.pierce ?? [])]
-      .filter(Boolean)
-      .some((field) => String(field).toLowerCase().includes(needle)),
-  );
+/**
+ * Matches across everything visible in a row, so the filter finds what the eye can see — plus the
+ * `key:value` terms of the query language (see `query.ts`), e.g. `tag:finance -is:gated`.
+ */
+export function filterEntries(entries: readonly DiscoveryEntry[], query: string): DiscoveryEntry[] {
+  return filterBy(entries, query, fragmentItem);
 }
