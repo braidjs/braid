@@ -25,7 +25,8 @@
     "@braidlabs/gateway": "^0.0.1",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
-    "@braidlabs/registry": "^0.0.1"
+    "@braidlabs/registry": "^0.0.1",
+    "oidc-client-ts": "^3.5.0"
   },
   "publishConfig": {
     "access": "public"
@@ -38,5 +39,10 @@
   "homepage": "https://github.com/braidjs/braid#readme",
   "bugs": {
     "url": "https://github.com/braidjs/braid/issues"
+  },
+  "peerDependenciesMeta": {
+    "oidc-client-ts": {
+      "optional": true
+    }
   }
 }
