@@ -119,3 +119,15 @@ Built in PR #25. Review and the security audit added:
 - A spec pins the boot order at the adapter seam.
 - The docs say plainly that a per-fragment grant **replaces** the host list, so it can widen it,
   and that whoever controls the registry controls it.
+
+## Follow-up (2026-10-21)
+
+- **Built (#30):** `sharedGlobals` now reach custom-element fragments, with a real-realm host-purity
+  spec. `InitBraidOptions` in the core docs is corrected, and the architecture doc no longer claims a
+  CI host-purity suite.
+- **Declined:**
+  - **Vendor script dedupe:** skipping a fragment's `<script src>` would also skip libraries each
+    realm needs its own copy of. The documented `if (!window._satellite)` guard is enough.
+  - **`sharedGlobals` for contract fragments:** their host API is the contract.
+  - **Dev warnings (untrusted-tier grant, post-boot shadowing check):** cut again in simplification.
+    The shadowing check could see only boot-time shadowing.

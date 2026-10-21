@@ -1121,6 +1121,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const targets: PendingPierceTarget[] = matches.map((fragment, index) => ({
       fragmentId: fragment.id,
       ...(fragment.src === undefined ? {} : { src: fragment.src }),
+      bound: fragment.bound !== false,
       settled: fragmentResults[index].then((result) => pierceContent(fragment, result)),
     }));
 
