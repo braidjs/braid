@@ -67,6 +67,33 @@ npx braid detangle --write --gateway --shell-edits
 
 ---
 
+### `braid registry`
+
+Checks and publishes the fragment registry: `validate`, `diff --against <ref>`, `publish --to <dir>`,
+`access`, `impact`. Run `braid registry --help` for the flags.
+
+Every subcommand reads the registry from `braid.config` by default, or from a module with
+`--source <module>`. The module's default export is the manifest array, or a function returning
+it. That is how a composed registry is checked in CI without restating it as config:
+
+```bash
+braid registry validate --source ./supergraph.mjs
+braid registry publish --source ./supergraph.mjs --to ./registry --label commit=$GIT_SHA
+```
+
+```js
+// supergraph.mjs
+import { subgraph, supergraph } from '@braidlabs/registry';
+export default supergraph([orgManifests, subgraph({ name: 'orders', url: '…', registry: '…', routes: ['/orders'] })]);
+```
+
+A composition error, such as two subgraphs claiming one fragment id, exits 1.
+
+Write the module as `.mjs` or `.js`. A `.ts` module works on Node 22.18 or later, as long as it
+uses only type annotations Node can strip. Imports resolve from the module's own location, so keep
+it inside a project that has `@braidlabs/registry` installed. With `--source`, `braid registry
+access` takes principals from `--as` only, never from a `braid.config` it happens to find.
+
 ## Configuration (`braid.config.json`)
 
 ```jsonc

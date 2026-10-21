@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import {
   accessMatrix,
@@ -48,7 +49,9 @@ export const REGISTRY_USAGE = `braid registry — inspect and publish the fragme
                                                   name:roles=a,b;scopes=c   (bare name = holds nothing)
 
   <ref> is a snapshot file, a directory holding one, or an http(s) URL.
-  Every command accepts --config <path>.
+  Every command reads the registry from --config <path> (braid.config by default), or from
+  --source <module>: a module whose default export is the manifest array or a function returning
+  it — a supergraph([...]), say.
 
   Principals may also live in braid.config.json:
       "principals": { "trader": { "roles": ["trader"] }, "auditor": {} }
@@ -221,6 +224,10 @@ async function resolvePrincipals(argv: string[]): Promise<NamedPrincipal[]> {
 }
 
 async function configPrincipals(argv: string[]): Promise<NamedPrincipal[]> {
+  // A registry read from --source has no braid.config behind it, and borrowing principals from
+  // whichever config sits up the tree would answer a question about a different registry.
+  if (argv.includes('--source')) return [];
+
   const explicit = flag(argv, '--config');
   const configPath = explicit ? resolve(process.cwd(), explicit) : await findConfig();
   if (!configPath) return [];
@@ -265,6 +272,24 @@ async function impactCommand(argv: string[]): Promise<number> {
 // ---------------------------------------------------------------------------
 
 async function localManifests(argv: string[]): Promise<FragmentManifest[] | null> {
+  const source = flag(argv, '--source');
+  if (argv.includes('--source') && (source === undefined || source.startsWith('--'))) {
+    process.stderr.write('braid registry: --source needs a module path, e.g. --source ./supergraph.mjs\n');
+    return null;
+  }
+  if (source !== undefined) {
+    if (flag(argv, '--config') !== undefined) {
+      process.stderr.write('braid registry: pass either --source or --config, not both.\n');
+      return null;
+    }
+    try {
+      return await sourceManifests(source);
+    } catch (error) {
+      process.stderr.write(`braid registry: ${error instanceof Error ? error.message : String(error)}\n`);
+      return null;
+    }
+  }
+
   const explicit = flag(argv, '--config');
   const configPath = explicit ? resolve(process.cwd(), explicit) : await findConfig();
 
@@ -277,6 +302,37 @@ async function localManifests(argv: string[]): Promise<FragmentManifest[] | null
   // `dev` is local scaffolding, not registry configuration — it must not reach a snapshot, or
   // two developers would publish different ids for the same registry.
   return config.fragments.map(({ dev: _dev, ...manifest }) => manifest);
+}
+
+/**
+ * Reads a registry from a module: its default export is the manifest array, or a function that
+ * returns one (sync or async) — the same shapes a gateway's `registry` option accepts, minus the
+ * URL, which `--against` already covers.
+ *
+ * This is how a composed registry is checked in CI: `supergraph([...])` is a function, and running
+ * it is the composition, so a duplicate id or a subgraph outside its routes fails the command.
+ */
+async function sourceManifests(source: string): Promise<FragmentManifest[]> {
+  const path = resolve(process.cwd(), source);
+  let module: { default?: unknown };
+  try {
+    module = (await import(pathToFileURL(path).href)) as { default?: unknown };
+  } catch (error) {
+    throw new Error(`--source ${source}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+
+  const exported = module.default;
+  const isFunction = typeof exported === 'function';
+  const manifests = isFunction ? await (exported as () => unknown)() : exported;
+
+  if (!Array.isArray(manifests)) {
+    const got = manifests === null ? 'null' : typeof manifests;
+    throw new Error(
+      `--source ${source}: the default export must be an array of manifests or a function returning one, ` +
+        (isFunction ? `but the function returned ${got}` : `got ${got}`),
+    );
+  }
+  return manifests as FragmentManifest[];
 }
 
 /**

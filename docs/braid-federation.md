@@ -145,13 +145,15 @@ share that one load. If a team's registry is unreachable, the load fails after t
 recovers, every request that needs the registry waits out the timeout and then fails. That includes
 org pages that have nothing to do with the team.
 
-So in production, compose at build or deploy time and serve a snapshot:
+So in production, compose at build or deploy time and serve a snapshot. Export the supergraph from a
+module and let the CLI compose, validate and publish it in CI:
+
+```bash
+# supergraph.mjs: export default supergraph([...])
+braid registry publish --source ./supergraph.mjs --to ./registry
+```
 
 ```ts
-// in CI or a deploy step
-const snapshot = await createSnapshot({ manifests: await supergraph([...])() });
-await store.put(snapshot);
-
 // in the org gateway
 createGateway({
   registry: snapshotRegistry({ store, pinned: process.env.BRAID_SUPERGRAPH, cache: fileSnapshotStore({ directory: '/var/cache/braid' }) }),
