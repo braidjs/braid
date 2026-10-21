@@ -55,6 +55,19 @@ describe('gateway loop guard', () => {
     expect(seen.map((request) => request.headers.get(BRAID_VIA_HEADER))).toEqual(['braid', 'braid, braid']);
   });
 
+  it('names the fragment once, not once per gateway it crossed', async () => {
+    const team = createGateway({ mode: 'production', registry: [{ id: 'orders', endpoint: 'https://origin.internal' }] });
+    const org = createGateway({
+      mode: 'production',
+      registry: [{ id: 'orders', endpoint: 'https://team.internal/__braid/frag/orders/' }],
+    });
+    network({ 'team.internal': () => team });
+
+    const response = await org.handle(new Request('https://www.example/__braid/frag/orders/app.js'));
+
+    expect(response!.headers.get('x-braid-fragment-id')).toBe('orders');
+  });
+
   it(`refuses a request that has already crossed ${BRAID_MAX_HOPS} gateways`, async () => {
     const seen = network({});
     const gateway = createGateway({ mode: 'production', registry: [{ id: 'orders', endpoint: 'https://origin.internal' }] });

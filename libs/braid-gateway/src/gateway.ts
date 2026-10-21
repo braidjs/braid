@@ -686,7 +686,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
-    forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);
+    // set, not append: an endpoint that is itself a gateway has already named the fragment
+    forwarded.headers.set(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
       // the body was transformed, so any length/encoding the endpoint declared no longer describes it
       forwarded.headers.delete('content-length');
