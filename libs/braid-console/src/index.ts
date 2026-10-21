@@ -49,6 +49,7 @@ export {
   listSnapshots,
   publishSnapshot,
   pinSnapshot,
+  fetchPermissions,
   RegistryFetchError,
   RegistryApiError,
   DEFAULT_DISCOVERY_PATH,
