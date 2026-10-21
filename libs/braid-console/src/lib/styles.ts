@@ -244,6 +244,7 @@ export const CONSOLE_STYLES = `
 
 .braid-console__edge { fill: none; stroke: var(--bc-border-strong); stroke-width: 1.25; transition: stroke 0.12s, opacity 0.12s; }
 .braid-console__edge--served-by { stroke-dasharray: 3 3; }
+.braid-console__edge--slots { stroke-dasharray: 1 3; stroke-linecap: round; }
 .braid-console__edge.is-lit { stroke: var(--bc-accent); stroke-width: 2; }
 .braid-console__edge.is-dim { opacity: 0.2; }
 
@@ -256,6 +257,7 @@ export const CONSOLE_STYLES = `
 .braid-console__node.is-selected .braid-console__nodebox { stroke: var(--bc-accent); stroke-width: 2; fill: var(--bc-accent-soft); }
 
 .braid-console__node--fragment .braid-console__nodebox { fill: var(--bc-surface-alt); }
+.braid-console__node--shell .braid-console__nodebox { fill: var(--bc-accent-soft); stroke: var(--bc-accent); }
 /* A shared route is the one state worth colouring: more than one fragment lands on this page. */
 .braid-console__node--route.is-shared .braid-console__nodebox { stroke: var(--bc-warn-border); border-left: 2px solid var(--bc-warn-text); }
 .braid-console__node--route.is-shared .braid-console__nodecount { fill: var(--bc-warn-text); font-weight: 700; }
@@ -293,6 +295,7 @@ export const CONSOLE_STYLES = `
   border-radius: 3px; padding: 2px 6px; background: var(--bc-surface-alt); color: var(--bc-muted);
 }
 .braid-console__kind--route { color: var(--bc-accent); background: var(--bc-accent-soft); }
+.braid-console__kind--shell { color: var(--bc-accent); background: var(--bc-accent-soft); }
 
 .braid-console__props { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0 0; }
 .braid-console__props dt { color: var(--bc-subtle); font-size: 12px; }

@@ -1,4 +1,5 @@
 import type { DiscoveryEntry } from '@braidlabs/gateway';
+import type { ShellManifest } from '@braidlabs/registry';
 
 /**
  * The composition topology of a gateway, derived from a discovery listing.
@@ -20,7 +21,7 @@ import type { DiscoveryEntry } from '@braidlabs/gateway';
  * listing that withholds endpoints simply yields a graph without the origin column.
  */
 
-export type TopologyNodeKind = 'route' | 'fragment' | 'origin';
+export type TopologyNodeKind = 'shell' | 'route' | 'fragment' | 'origin';
 
 export interface TopologyNode {
   /** Unique within the graph. Prefixed by kind, since a route and an origin can read alike. */
@@ -29,6 +30,8 @@ export interface TopologyNode {
   label: string;
   /** Fragment nodes only: the entry this came from, for the detail panel. */
   entry?: DiscoveryEntry;
+  /** Shell nodes only: the shell this came from. */
+  shell?: ShellManifest;
   /** How many fragments a route or origin touches. Drives the count badge. */
   degree: number;
   /**
@@ -43,12 +46,18 @@ export interface TopologyNode {
 export interface TopologyEdge {
   from: string;
   to: string;
-  kind: 'composes' | 'served-by';
+  /**
+   * `composes`: a route pierces a fragment (gateway routing). `served-by`: a fragment's origin.
+   * `hosts`: a shell declares a route. `slots`: a shell's layout places a fragment on that route.
+   */
+  kind: 'composes' | 'served-by' | 'hosts' | 'slots';
 }
 
 export interface Topology {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
+  /** Empty unless shells were given. */
+  shells: TopologyNode[];
   routes: TopologyNode[];
   fragments: TopologyNode[];
   origins: TopologyNode[];
@@ -65,6 +74,7 @@ export interface Topology {
   originsUnknown: boolean;
 }
 
+export const SHELL_PREFIX = 'shell:';
 export const ROUTE_PREFIX = 'route:';
 export const FRAGMENT_PREFIX = 'fragment:';
 export const ORIGIN_PREFIX = 'origin:';
@@ -76,7 +86,7 @@ export const ORIGIN_PREFIX = 'origin:';
  * are what an operator is looking for) and then by name, so a reload does not reshuffle the
  * picture under someone reading it.
  */
-export function buildTopology(entries: readonly DiscoveryEntry[]): Topology {
+export function buildTopology(entries: readonly DiscoveryEntry[], options: { shells?: readonly ShellManifest[] } = {}): Topology {
   const routes = new Map<string, TopologyNode>();
   const origins = new Map<string, TopologyNode>();
   const fragments: TopologyNode[] = [];
@@ -104,6 +114,31 @@ export function buildTopology(entries: readonly DiscoveryEntry[]): Topology {
     }
   }
 
+  // Shells add the layer above routes. A shell's route and a pierce pattern written identically
+  // are one node, which is what lets the map show a slotted fragment and its routing side by side.
+  // `slots` is drawn only where routing does not already connect the pair.
+  const shells: TopologyNode[] = [];
+  const known = new Set(fragments.map((fragment) => fragment.id));
+  for (const shell of options.shells ?? []) {
+    const shellId = `${SHELL_PREFIX}${shell.id}`;
+    shells.push({ id: shellId, kind: 'shell', label: shell.id, shell, degree: shell.routes.length });
+
+    for (const route of shell.routes) {
+      const routeId = `${ROUTE_PREFIX}${route.path}`;
+      if (!routes.has(routeId)) routes.set(routeId, { id: routeId, kind: 'route', label: route.path, degree: 0 });
+      edges.push({ from: shellId, to: routeId, kind: 'hosts' });
+
+      for (const fragment of new Set(Object.values(route.slots ?? {}))) {
+        const fragmentId = `${FRAGMENT_PREFIX}${fragment}`;
+        if (!known.has(fragmentId)) continue;
+        if (edges.some((edge) => edge.from === routeId && edge.to === fragmentId)) continue;
+        edges.push({ from: routeId, to: fragmentId, kind: 'slots' });
+        const node = routes.get(routeId);
+        if (node) node.degree += 1;
+      }
+    }
+  }
+
   for (const route of routes.values()) route.shared = route.degree > 1;
 
   const routeList = [...routes.values()].sort(byDegreeThenLabel);
@@ -115,10 +150,12 @@ export function buildTopology(entries: readonly DiscoveryEntry[]): Topology {
   }
 
   const routed = new Set(edges.filter((edge) => edge.kind === 'composes').map((edge) => edge.to));
+  const shellList = shells.sort((a, b) => a.label.localeCompare(b.label));
 
   return {
-    nodes: [...routeList, ...fragmentList, ...originList],
+    nodes: [...shellList, ...routeList, ...fragmentList, ...originList],
     edges,
+    shells: shellList,
     routes: routeList,
     fragments: fragmentList,
     origins: originList,
@@ -154,6 +191,15 @@ export function neighborhood(topology: Topology, nodeId: string | null): { nodes
   if (nodeId.startsWith(FRAGMENT_PREFIX)) {
     for (const edge of topology.edges) {
       if (edge.kind !== 'composes' || !nodes.has(edge.from)) continue;
+      edges.add(edgeKey(edge));
+      nodes.add(edge.to);
+    }
+  }
+
+  // From a shell, reach what it composes: its routes' fragments, however they arrive.
+  if (nodeId.startsWith(SHELL_PREFIX)) {
+    for (const edge of topology.edges) {
+      if ((edge.kind !== 'composes' && edge.kind !== 'slots') || !nodes.has(edge.from)) continue;
       edges.add(edgeKey(edge));
       nodes.add(edge.to);
     }
