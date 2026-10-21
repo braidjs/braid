@@ -347,3 +347,38 @@ describe('followFragmentRedirect()', () => {
     expect(assign).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * An outlet is a slot the gateway names when it pierces the page's routed fragment into it. When
+ * nothing on this page is routed there, it arrives nameless — which is a page with an empty main
+ * area, not a misconfigured slot.
+ */
+describe('<fragment-slot outlet>', () => {
+  if (!customElements.get('fragment-slot')) customElements.define('fragment-slot', FragmentSlot);
+
+  async function mount(markup: string) {
+    const errors: unknown[] = [];
+    const host = document.createElement('div');
+    host.addEventListener('braid:error', (event) => errors.push((event as CustomEvent).detail), { capture: true });
+    host.innerHTML = markup;
+    document.body.append(host);
+    // boot is scheduled on a microtask, and a failed one reports a task later
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return { slot: host.firstElementChild as FragmentSlot, errors, host };
+  }
+
+  it('waits quietly while it has no name', async () => {
+    const { slot, errors, host } = await mount('<fragment-slot outlet></fragment-slot>');
+
+    expect(errors).toEqual([]);
+    expect(slot.state).not.toBe('error');
+    host.remove();
+  });
+
+  it('is still an error for an ordinary slot with no name', async () => {
+    const { errors, host } = await mount('<fragment-slot></fragment-slot>');
+
+    expect(errors).toHaveLength(1);
+    host.remove();
+  });
+});

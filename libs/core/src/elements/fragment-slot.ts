@@ -239,6 +239,11 @@ export class FragmentSlot extends HTMLElement {
     if (this.#booted || this.#bootScheduled) {
       return;
     }
+    // An outlet the gateway did not fill has no fragment yet: the page is simply not one of the
+    // routed ones. It boots when it is given a name (see attributeChangedCallback).
+    if (!this.name && this.hasAttribute('outlet')) {
+      return;
+    }
     this.#bootScheduled = true;
     queueMicrotask(() => {
       this.#bootScheduled = false;

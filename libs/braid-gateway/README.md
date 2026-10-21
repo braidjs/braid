@@ -166,6 +166,12 @@ as a declarative shadow root, so the browser parses it into exactly the shape th
 would have built; the slot then adopts it instead of fetching. Shells with no matching slot get
 one created before `</body>`.
 
+A shell can instead mark one `<fragment-slot outlet>`. It takes the page's routed (bound) fragment,
+the first in registration order that no earlier named slot claimed, and is named after it. A shell
+that composes many routes then needs one slot rather than one per fragment id. Unbound widgets
+never fill an outlet. A named slot after the outlet is too late for a fragment the outlet already
+took, and the gateway warns. The outlet is filled on full page loads only.
+
 Fragment HTML is transformed on the way through: the doctype is stripped, `<html>/<head>/<body>`
 become `braid-html/braid-head/braid-body` (start *and* end tags), scripts are neutralized to
 `type="inert"`, and script preload links become `rel="inert-*"`. Fragment scripts are therefore
