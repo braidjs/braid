@@ -192,6 +192,32 @@ describe('braid registry', () => {
       expect(stderr).toContain('default export');
     });
 
+    it('refuses a --source with no module, rather than falling back to braid.config', async () => {
+      await writeConfig(healthy);
+
+      expect(await registry(['validate', '--source'])).toBe(1);
+      expect(await registry(['validate', '--source', '--dry-run'])).toBe(1);
+      expect(stderr).toContain('--source needs a module path');
+    });
+
+    it('takes principals for access from --as only, never from a braid.config up the tree', async () => {
+      const previous = process.cwd();
+      await writeFile(
+        join(directory, 'braid.config.json'),
+        JSON.stringify({ port: 4000, shell: { port: 4200 }, fragments: [], principals: { trader: { roles: ['trader'] } } }),
+      );
+      const source = await writeSource('registry.mjs', `export default ${JSON.stringify(healthy)};`);
+      process.chdir(directory);
+      try {
+        expect(await registry(['access', '--source', source])).toBe(0);
+      } finally {
+        process.chdir(previous);
+      }
+
+      expect(plain(stdout)).toContain('anonymous');
+      expect(plain(stdout)).not.toContain('trader');
+    });
+
     it('refuses --source together with --config, rather than picking one', async () => {
       const source = await writeSource('registry.mjs', `export default [];`);
       const config = await writeConfig(healthy);

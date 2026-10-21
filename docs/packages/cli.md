@@ -89,6 +89,11 @@ export default supergraph([orgManifests, subgraph({ name: 'orders', url: '…', 
 
 A composition error, such as two subgraphs claiming one fragment id, exits 1.
 
+Write the module as `.mjs` or `.js`. A `.ts` module works on Node 22.18 or later, as long as it
+uses only type annotations Node can strip. Imports resolve from the module's own location, so keep
+it inside a project that has `@braidlabs/registry` installed. With `--source`, `braid registry
+access` takes principals from `--as` only, never from a `braid.config` it happens to find.
+
 ## Configuration (`braid.config.json`)
 
 ```jsonc
