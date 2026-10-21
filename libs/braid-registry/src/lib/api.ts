@@ -259,7 +259,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * anonymous publish is exactly the forgery this exists to prevent.
    */
   async function attributed(request: Request, labels: Record<string, string> | undefined): Promise<Record<string, string> | undefined> {
-    const { publishedBy: _claimed, ...rest } = labels ?? {};
+    const rest = Object.fromEntries(Object.entries(labels ?? {}).filter(([key]) => key !== 'publishedBy'));
     const actor = (await identify?.(request)) ?? null;
     const result = actor ? { ...rest, publishedBy: actor } : rest;
     return Object.keys(result).length > 0 ? result : undefined;
