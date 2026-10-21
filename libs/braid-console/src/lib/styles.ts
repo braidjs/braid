@@ -1,3 +1,5 @@
+import { TAG_STYLES } from './tags.js';
+
 /**
  * The console's styles, as a string injected once at mount.
  *
@@ -231,17 +233,17 @@ export const CONSOLE_STYLES = `
 .braid-console__graphmain { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
 
 .braid-console__collabels {
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  position: relative; height: 16px; min-width: 480px;
   font-size: 11px; font-weight: 600; color: var(--bc-subtle);
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
 }
-.braid-console__collabels span:nth-child(2) { text-align: center; }
-.braid-console__collabels span:nth-child(3) { text-align: right; }
+.braid-console__collabels span { position: absolute; top: 0; padding-left: 2px; white-space: nowrap; }
 
 .braid-console__graph { width: 100%; min-width: 480px; display: block; overflow: visible; }
 
 .braid-console__edge { fill: none; stroke: var(--bc-border-strong); stroke-width: 1.25; transition: stroke 0.12s, opacity 0.12s; }
 .braid-console__edge--served-by { stroke-dasharray: 3 3; }
+.braid-console__edge--slots { stroke-dasharray: 1 3; stroke-linecap: round; }
 .braid-console__edge.is-lit { stroke: var(--bc-accent); stroke-width: 2; }
 .braid-console__edge.is-dim { opacity: 0.2; }
 
@@ -254,6 +256,7 @@ export const CONSOLE_STYLES = `
 .braid-console__node.is-selected .braid-console__nodebox { stroke: var(--bc-accent); stroke-width: 2; fill: var(--bc-accent-soft); }
 
 .braid-console__node--fragment .braid-console__nodebox { fill: var(--bc-surface-alt); }
+.braid-console__node--shell .braid-console__nodebox { fill: var(--bc-accent-soft); stroke: var(--bc-accent); }
 /* A shared route is the one state worth colouring: more than one fragment lands on this page. */
 .braid-console__node--route.is-shared .braid-console__nodebox { stroke: var(--bc-warn-border); border-left: 2px solid var(--bc-warn-text); }
 .braid-console__node--route.is-shared .braid-console__nodecount { fill: var(--bc-warn-text); font-weight: 700; }
@@ -291,6 +294,7 @@ export const CONSOLE_STYLES = `
   border-radius: 3px; padding: 2px 6px; background: var(--bc-surface-alt); color: var(--bc-muted);
 }
 .braid-console__kind--route { color: var(--bc-accent); background: var(--bc-accent-soft); }
+.braid-console__kind--shell { color: var(--bc-accent); background: var(--bc-accent-soft); }
 
 .braid-console__props { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0 0; }
 .braid-console__props dt { color: var(--bc-subtle); font-size: 12px; }
@@ -438,6 +442,71 @@ export const CONSOLE_STYLES = `
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
+/* --- shells ------------------------------------------------------------ */
+
+.braid-console__identity { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--bc-muted); }
+.braid-console__rolebadge { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 10px; color: var(--bc-accent); background: var(--bc-accent-soft); }
+
+.braid-console__notice--quiet { background: var(--bc-surface); color: var(--bc-muted); border-color: var(--bc-border); border-left-color: var(--bc-border-strong); }
+.braid-console__actions { white-space: nowrap; }
+.braid-console__designer { gap: var(--bc-gap); }
+.braid-console__shellmeta { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); margin: 0; }
+.braid-console__tagrow { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; }
+.braid-console__designerbody { display: flex; gap: var(--bc-gap); align-items: flex-start; flex-wrap: wrap; }
+.braid-console__routes { display: flex; flex-direction: column; gap: 4px; flex: 0 0 200px; }
+.braid-console__routebutton {
+  font: inherit; font-size: 13px; text-align: left; color: inherit; cursor: pointer;
+  background: var(--bc-bg); border: 1px solid var(--bc-border); border-radius: var(--bc-radius); padding: 7px 10px;
+}
+.braid-console__routebutton[aria-pressed='true'] { border-color: var(--bc-accent); background: var(--bc-accent-soft); }
+.braid-console__routebutton:focus-visible { outline: 2px solid var(--bc-accent); outline-offset: 1px; }
+.braid-console__routeeditor { flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column; gap: var(--bc-gap); }
+.braid-console__routeeditor .braid-console__fields { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); margin: 0; }
+.braid-console__layoutrow { grid-column: 1 / -1; display: flex; gap: var(--bc-gap); flex-wrap: wrap; }
+.braid-console__field--grow { flex: 2 1 320px; }
+.braid-console__tracks { flex: 1 1 200px; display: flex; flex-direction: column; gap: 8px; }
+.braid-console__ascii {
+  font-family: var(--bc-mono); font-size: 15px; line-height: 1.7; letter-spacing: 0.02em; white-space: pre;
+  color: inherit; background: var(--bc-bg); border: 1px solid var(--bc-border-strong); border-radius: var(--bc-radius);
+  padding: 10px 12px; width: 100%; resize: vertical; overflow-x: auto;
+}
+.braid-console__ascii:focus-visible { outline: none; border-color: var(--bc-accent); box-shadow: inset 0 -2px 0 0 var(--bc-accent); }
+.braid-console__ascii[aria-invalid='true'] { border-color: var(--bc-err); }
+.braid-console__preview { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--bc-border); border-radius: var(--bc-radius); background: var(--bc-surface); }
+.braid-console__previewhead { display: flex; gap: 10px; align-items: baseline; font-size: 12px; font-weight: 600; color: var(--bc-muted); }
+.braid-console__gridpreview {
+  display: grid; gap: 8px; min-height: 260px; padding: 10px;
+  background: var(--bc-bg); border: 1px solid var(--bc-border-strong); border-radius: var(--bc-radius);
+}
+.braid-console__area {
+  font: inherit; min-width: 0; min-height: 44px; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 3px; padding: 8px; overflow: hidden;
+  color: var(--bc-muted); background: var(--bc-surface); border: 1px dashed var(--bc-border-strong); border-radius: var(--bc-radius);
+}
+.braid-console__area.is-filled { border-style: solid; border-color: transparent; color: var(--bc-text); background: var(--bc-surface-alt); }
+.braid-console__area.is-filled[class*='braid-console__tag--c'] { color: var(--bc-tag-fg); background: var(--bc-tag-bg); }
+.braid-console__area[aria-pressed='true'] { outline: 2px solid var(--bc-accent); outline-offset: -2px; }
+.braid-console__area:focus-visible { outline: 2px solid var(--bc-accent); outline-offset: 1px; }
+.braid-console__areaname { font-family: var(--bc-mono); font-size: 11px; opacity: 0.85; }
+.braid-console__areafragment { font-family: var(--bc-mono); font-size: 13px; font-weight: 600; }
+.braid-console__head { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); margin: 0; }
+.braid-console__head .braid-console__notice, .braid-console__subhead, .braid-console__head > .braid-console__desc, .braid-console__add { grid-column: 1 / -1; }
+.braid-console__subhead { margin: 6px 0 0; font-size: 13px; font-weight: 600; }
+.braid-console__row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.braid-console__row > .braid-console__field { flex: 1 1 180px; }
+.braid-console__add { justify-self: start; }
+.braid-console__check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; padding-bottom: 7px; }
+.braid-console__codeview { display: flex; flex-direction: column; gap: var(--bc-gap); }
+.braid-console__codefile { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); padding: 8px 12px 12px; }
+.braid-console__codehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.braid-console__emptystate {
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 760px;
+  padding: 20px; border: 1px dashed var(--bc-border-strong); border-radius: var(--bc-radius); background: var(--bc-surface);
+}
+.braid-console__emptystate h3 { margin: 0; font-size: 16px; }
+.braid-console__emptystate p { margin: 0; color: var(--bc-muted); }
+.braid-console__emptystate .braid-console__code { align-self: stretch; }
+
 /* Container query, not a media query: the library's width is its host's business, not the
    viewport's. A console in a 400px sidebar should stack even on a wide screen. */
 @container (max-width: 860px) {
@@ -456,7 +525,7 @@ export const CONSOLE_STYLES = `
 @media (prefers-reduced-motion: reduce) {
   .braid-console__edge, .braid-console__node, .braid-console__caret { transition: none; }
 }
-`;
+` + TAG_STYLES;
 
 const STYLE_ELEMENT_ID = 'braid-console-styles';
 

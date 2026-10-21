@@ -20,6 +20,29 @@
         "prod-host"
       ],
       "port": 4410
+    },
+    {
+      "name": "console-demo-mock-okta",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "BRAID_DEMO_AUTH=mock",
+        "TSX_TSCONFIG_PATH=tsconfig.base.json",
+        "npx",
+        "tsx",
+        "tools/braid-console/demo-server.mjs"
+      ],
+      "port": 9100
+    },
+    {
+      "name": "console-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "TSX_TSCONFIG_PATH=tsconfig.base.json",
+        "npx",
+        "tsx",
+        "tools/braid-console/demo-server.mjs"
+      ],
+      "port": 9100
     }
   ]
 }

@@ -3,6 +3,7 @@ import type { FragmentManifest } from '@braidlabs/gateway';
 import { createRegistryApi } from './api.js';
 import { memorySnapshotStore } from './store.js';
 import { createSnapshot } from './snapshot.js';
+import type { ShellManifest } from './shell.js';
 
 const BASE = 'https://ops.example/__braid/registry-api';
 const manifests: FragmentManifest[] = [{ id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'] }];
@@ -51,6 +52,7 @@ describe('registry write API', () => {
       expect(authorize.mock.calls.map((call) => (call as unknown as [Request, string])[1])).toEqual([
         'read',
         'publish',
+        'pin',
       ]);
     });
   });
@@ -215,6 +217,220 @@ describe('registry write API', () => {
 
       expect(response?.status).toBe(404);
       expect((await response!.json()).error).toMatch(/cannot pin what is not stored/);
+    });
+  });
+
+  describe('hardening', () => {
+    it('answers malformed JSON with 400, not 500', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+      const malformed = (path: string) => new Request(`${BASE}${path}`, { method: 'POST', body: '{"manifests": [' });
+
+      for (const path of ['/snapshots', '/head']) {
+        const response = await api.handle(malformed(path));
+        expect(response?.status).toBe(400);
+        expect((await response!.json()).error).toMatch(/not valid JSON/);
+      }
+    });
+
+    it('refuses a publish whose base is stale, and says where HEAD is', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      const first = await (await api.handle(post('/snapshots', { manifests, baseId: null })))!.json();
+
+      const stale = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'r', endpoint: 'https://r.internal' }], baseId: null }));
+
+      expect(stale?.status).toBe(409);
+      expect((await stale!.json()).head).toBe(first.snapshot.id);
+      expect(await store.head?.()).toBe(first.snapshot.id);
+    });
+
+    it('accepts a publish whose base is current', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      const first = await (await api.handle(post('/snapshots', { manifests, baseId: null })))!.json();
+
+      const next = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'r', endpoint: 'https://r.internal' }], baseId: first.snapshot.id }));
+
+      expect(next?.status).toBe(201);
+    });
+
+    it('checks pin permission when a publish pins, and writes nothing when refused', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: (_request, action) => action !== 'pin' });
+
+      const pinned = await api.handle(post('/snapshots', { manifests }));
+      expect(pinned?.status).toBe(403);
+      expect(await store.list({ limit: 10 })).toEqual([]);
+      expect(await store.head?.()).toBeNull();
+
+      const candidate = await api.handle(post('/snapshots', { manifests, pin: false }));
+      expect(candidate?.status).toBe(201);
+      expect(await store.head?.()).toBeNull();
+    });
+
+    it('passes a Response from authorize through unchanged', async () => {
+      const challenge = new Response('{}', { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: () => challenge });
+
+      const response = await api.handle(new Request(`${BASE}/head`));
+
+      expect(response?.status).toBe(401);
+      expect(response?.headers.get('www-authenticate')).toBe('Bearer');
+    });
+  });
+
+  describe('identity', () => {
+    it('records the verified actor as publishedBy, over whatever the client claimed', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, identify: () => 'dana@example.com' });
+
+      const result = await (await api.handle(post('/snapshots', { manifests, labels: { publishedBy: 'someone-else', note: 'x' } })))!.json();
+      const stored = await store.get(result.snapshot.id);
+
+      expect(stored?.labels).toEqual({ publishedBy: 'dana@example.com', note: 'x' });
+    });
+
+    it('drops a claimed publishedBy when the caller cannot be identified', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, identify: () => null });
+
+      const result = await (await api.handle(post('/snapshots', { manifests, labels: { publishedBy: 'forged' } })))!.json();
+
+      expect((await store.get(result.snapshot.id))?.labels).toBeUndefined();
+    });
+
+    it('keeps client labels as they are without an identify hook', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+
+      const result = await (await api.handle(post('/snapshots', { manifests, labels: { publishedBy: 'ci' } })))!.json();
+
+      expect((await store.get(result.snapshot.id))?.labels).toEqual({ publishedBy: 'ci' });
+    });
+
+    it('reports the caller’s own permissions and identity', async () => {
+      const api = createRegistryApi({
+        store: memorySnapshotStore(),
+        authorize: (_request, action) => action !== 'pin',
+        identify: () => 'dana@example.com',
+      });
+
+      const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
+
+      expect(body).toEqual({ read: true, publish: true, pin: false, actor: 'dana@example.com' });
+    });
+
+    it('reports read-only permissions when no authorize hook is configured', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore() });
+
+      const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
+
+      expect(body).toEqual({ read: true, publish: false, pin: false, actor: null });
+    });
+  });
+
+  describe('shells', () => {
+    const storefront: ShellManifest = {
+      id: 'storefront',
+      framework: 'react',
+      routes: [{ path: '/billing/*', layout: { areas: 'header\nmain' }, slots: { main: 'billing' } }],
+    };
+
+    it('publishes shells and serves them from head and by id', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+
+      const result = await (await api.handle(post('/snapshots', { manifests, shells: [storefront] })))!.json();
+      const head = await (await api.handle(new Request(`${BASE}/head`)))!.json();
+      const byId = await (await api.handle(new Request(`${BASE}/snapshots/${result.snapshot.id}`)))!.json();
+
+      expect(head.snapshot.shells).toEqual([storefront]);
+      expect(byId.shells).toEqual([storefront]);
+    });
+
+    it('carries HEAD’s shells forward when a publish omits them, and clears them on []', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      await api.handle(post('/snapshots', { manifests, shells: [storefront] }));
+
+      const carried = await (await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'r', endpoint: 'https://r.internal' }] })))!.json();
+      expect((await store.get(carried.snapshot.id))?.shells).toEqual([storefront]);
+
+      const cleared = await (await api.handle(post('/snapshots', { manifests, shells: [] })))!.json();
+      expect((await store.get(cleared.snapshot.id))?.shells).toBeUndefined();
+    });
+
+    it('refuses invalid shells with their findings', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+
+      const response = await api.handle(post('/snapshots', { manifests, shells: [{ ...storefront, head: { scripts: [{ src: 'javascript:alert(1)' }] } }] }));
+
+      expect(response?.status).toBe(422);
+      expect((await response!.json()).findings.map((f: { code: string }) => f.code)).toEqual(['unsafe-shell-url']);
+    });
+
+    it('refuses to delete a fragment a carried-forward shell still slots', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      await api.handle(post('/snapshots', { manifests, shells: [storefront] }));
+
+      const response = await api.handle(post('/snapshots', { manifests: [{ id: 'other', endpoint: 'https://o.internal' }] }));
+      const body = await response!.json();
+
+      expect(response?.status).toBe(422);
+      expect(body.findings[0]).toMatchObject({ code: 'slot-unknown-fragment', shellIds: ['storefront'], fragmentIds: ['billing'] });
+    });
+
+    it('rejects shells that are not an array', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+
+      expect((await api.handle(post('/snapshots', { manifests, shells: {} })))?.status).toBe(400);
+    });
+  });
+
+  describe('ordering and cross-site writes', () => {
+    it('refuses an unauthorized publish before reading its body', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: (_request, action) => action === 'read' });
+
+      const response = await api.handle(new Request(`${BASE}/snapshots`, { method: 'POST', body: '{bad' }));
+
+      expect(response?.status).toBe(403);
+    });
+
+    it('refuses a stale publish without probing or storing anything', async () => {
+      const store = memorySnapshotStore();
+      const probe = vi.fn(async () => new Response('{}', { status: 404 }));
+      const api = createRegistryApi({ store, authorize: allow, fetchDescriptors: true, fetch: probe as unknown as typeof fetch });
+
+      const response = await api.handle(post('/snapshots', { manifests, baseId: 'reg_stale' }));
+
+      expect(response?.status).toBe(409);
+      expect(probe).not.toHaveBeenCalled();
+      expect(await store.list({ limit: 10 })).toEqual([]);
+    });
+
+    it('refuses to pin when HEAD moved while the publish was in flight', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow });
+      const first = await (await api.handle(post('/snapshots', { manifests })))!.json();
+      // Someone else pins between this publish's first check and its write.
+      const other = await createSnapshot({ manifests: [{ id: 'other', endpoint: 'https://o.internal' }] });
+      await store.put(other);
+      const head = store.head!.bind(store);
+      let calls = 0;
+      store.head = async () => (++calls === 1 ? head() : other.id);
+
+      const response = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'r', endpoint: 'https://r.internal' }], baseId: first.snapshot.id }));
+
+      expect(response?.status).toBe(409);
+      expect((await response!.json()).head).toBe(other.id);
+    });
+
+    it('refuses a write a browser marks as cross-site', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+      const forged = new Request(`${BASE}/snapshots`, { method: 'POST', body: JSON.stringify({ manifests }), headers: { 'sec-fetch-site': 'cross-site' } });
+
+      expect((await api.handle(forged))?.status).toBe(403);
+      expect((await api.handle(post('/snapshots', { manifests })))?.status).toBe(201);
     });
   });
 });

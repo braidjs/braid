@@ -11,10 +11,15 @@
   "exports": {
     ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
     "./node": { "types": "./src/node.d.ts", "default": "./src/node.js" },
+    "./oidc": { "types": "./src/oidc.d.ts", "default": "./src/oidc.js" },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "@braidlabs/gateway": "^0.0.1"
+    "@braidlabs/gateway": "^0.0.1",
+    "jose": "^6.2.12"
+  },
+  "peerDependenciesMeta": {
+    "jose": { "optional": true }
   },
   "publishConfig": { "access": "public" },
   "repository": {

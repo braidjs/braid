@@ -1,11 +1,15 @@
 # @braidlabs/console
 
-A read-only console for a [Braid](../braid-gateway) gateway's fragment registry. One package, two
-shapes: a mountable React component, and a standalone deployable app.
+A console for a [Braid](../braid-gateway) gateway's registry: fragments, the composition map,
+**shells** designed as data, and snapshot history with rollback. One package, two shapes: mountable
+React components, and a standalone deployable app with optional OIDC (Okta) sign-in.
 
-**It needs nothing deployed.** It reads the `/__braid/registry` discovery endpoint the gateway
-already serves, so it works against a gateway whose manifests are defined in code — which is every
-gateway today. No snapshot store, no write API.
+**Viewing needs nothing deployed.** The fragment list and map read the `/__braid/registry`
+discovery endpoint the gateway already serves. Shells, history and editing need the registry write
+API from [`@braidlabs/registry`](../braid-registry); without it those views say what to mount.
+
+The full guide — the layout designer, query syntax, Okta setup, and how an enterprise runs it — is
+[docs/packages/console.md](../../docs/packages/console.md).
 
 ## As a library
 
@@ -67,7 +71,7 @@ directions, because an admin shell may be dark inside a light OS.
 viewport's. In a 420px sidebar it stacks — on a 1280px screen.
 
 **Slim is a number.** 140 kB gzipped for the app bundle including React and the inlined
-stylesheet, enforced by `nx size braid-console`. Currently 61 kB. React is a peer dependency in
+stylesheet, enforced by `nx size braid-console`. Currently 105 kB, with the OIDC client in a separate chunk loaded only when sign-in is configured. React is a peer dependency in
 library form, so a host never ships two copies.
 
 ## Editing
@@ -123,9 +127,29 @@ but not load is a legitimate state — a launcher should render it, not hide it.
 is in development mode the listing skips access filtering entirely, which the console says out
 loud rather than letting you mistake a dev listing for a production one.
 
+## Shells, search, and sign-in
+
+```tsx
+import { ShellsPanel, HistoryPanel } from '@braidlabs/console';
+
+<ShellsPanel api={api} selected={shellId} onSelect={setShellId} />
+<HistoryPanel api={api} />
+```
+
+- **`ShellsPanel`** lists shells and opens a designer: routes, a layout typed as ASCII art that *is*
+  CSS `grid-template-areas` with a live grid preview, a fragment per area, the document head as
+  data (never loaded into this page), and generated host code for React, Angular, Angular SSR and
+  plain HTML. Publishing sends `baseId`, so a stale draft is refused rather than overwriting.
+- **`HistoryPanel`** lists snapshots with their server-recorded publisher. Rollback is pinning one.
+- **Query syntax** in every filter: `tag:` `type:` `framework:` `route:` `adapter:` `is:gated`
+  `is:unrouted`, `-` to negate, quotes for spaces. Tags are colored from their text, the same
+  everywhere.
+- **Sign-in** is the standalone app's alone: add `"auth": { "issuer", "clientId" }` to the page
+  config and it signs in with Authorization Code + PKCE, loading the OIDC client only then. The
+  library still never logs in; `GET /permissions` only decides which buttons to draw.
+
 ## Related
 
-- [`@braidlabs/registry`](../braid-registry) — snapshots and analysis, for when the registry
-  becomes editable
-- [the plan](../../docs/plans/braid-registry-console-plan.md) — including why the console is
-  deliberately optional, and the line it must not cross
+- [`@braidlabs/registry`](../braid-registry) — snapshots, shells, analysis, the write API, and
+  `@braidlabs/registry/oidc`
+- [the guide](../../docs/packages/console.md) — including how an enterprise deploys and governs it

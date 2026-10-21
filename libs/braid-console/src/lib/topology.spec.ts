@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DiscoveryEntry } from '@braidlabs/gateway';
-import { buildTopology, coTenants, neighborhood, FRAGMENT_PREFIX, ROUTE_PREFIX } from './topology.js';
+import type { ShellManifest } from '@braidlabs/registry';
+import { buildTopology, coTenants, neighborhood, FRAGMENT_PREFIX, ROUTE_PREFIX, SHELL_PREFIX } from './topology.js';
+import { layoutTopology } from './topology-graph.js';
 
 function entry(overrides: Partial<DiscoveryEntry> & { id: string }): DiscoveryEntry {
   return {
@@ -128,5 +130,74 @@ describe('coTenants', () => {
 
     expect(coTenants(topology, `${FRAGMENT_PREFIX}billing`)).toEqual([`${FRAGMENT_PREFIX}reviews`]);
     expect(coTenants(topology, `${FRAGMENT_PREFIX}payroll`)).toEqual([]);
+  });
+});
+
+describe('buildTopology with shells', () => {
+  const entries = [
+    entry({ id: 'billing', pierce: ['/billing/*'], endpoint: 'https://billing.internal' }),
+    entry({ id: 'notifications', endpoint: 'https://notify.internal' }),
+    entry({ id: 'reviews', pierce: ['/reviews/*'] }),
+  ];
+  const shells: ShellManifest[] = [
+    {
+      id: 'portal',
+      framework: 'react',
+      routes: [
+        { path: '/billing/*', layout: { areas: 'header\nmain' }, slots: { header: 'notifications', main: 'billing' } },
+        { path: '/settings', layout: { areas: 'main' }, slots: { main: 'ghost' } },
+      ],
+    },
+  ];
+
+  it('adds shell nodes that host their routes, and slots the fragments their layouts place', () => {
+    const topology = buildTopology(entries, { shells });
+
+    expect(topology.shells.map((node) => node.label)).toEqual(['portal']);
+    expect(topology.edges.filter((edge) => edge.kind === 'hosts').map((edge) => edge.to)).toEqual([
+      `${ROUTE_PREFIX}/billing/*`,
+      `${ROUTE_PREFIX}/settings`,
+    ]);
+    // billing already pierces /billing/*, so routing draws that pair; only notifications needs a slot edge.
+    expect(topology.edges.filter((edge) => edge.kind === 'slots')).toEqual([
+      { from: `${ROUTE_PREFIX}/billing/*`, to: `${FRAGMENT_PREFIX}notifications`, kind: 'slots' },
+    ]);
+    expect(topology.routes.find((route) => route.label === '/billing/*')?.shared).toBe(true);
+  });
+
+  it('does not call a fragment a shell slots unrouted', () => {
+    expect(buildTopology(entries).unrouted.map((node) => node.label)).toEqual(['notifications']);
+    expect(buildTopology(entries, { shells }).unrouted).toEqual([]);
+  });
+
+  it('draws a shell route nothing pierces, and ignores slots naming unregistered fragments', () => {
+    const topology = buildTopology(entries, { shells });
+
+    expect(topology.routes.find((route) => route.label === '/settings')?.degree).toBe(0);
+    expect(topology.edges.some((edge) => edge.to === `${FRAGMENT_PREFIX}ghost`)).toBe(false);
+  });
+
+  it('reaches every fragment a shell composes from the shell node', () => {
+    const topology = buildTopology(entries, { shells });
+    const lit = neighborhood(topology, `${SHELL_PREFIX}portal`);
+
+    expect(lit.nodes.has(`${FRAGMENT_PREFIX}billing`)).toBe(true);
+    expect(lit.nodes.has(`${FRAGMENT_PREFIX}notifications`)).toBe(true);
+    expect(lit.nodes.has(`${FRAGMENT_PREFIX}reviews`)).toBe(false);
+  });
+
+  it('is unchanged without shells', () => {
+    const { shells: none, ...withoutShells } = buildTopology(entries);
+    const { shells: empty, ...withEmpty } = buildTopology(entries, { shells: [] });
+
+    expect(none).toEqual([]);
+    expect(empty).toEqual([]);
+    expect(withEmpty).toEqual(withoutShells);
+    expect(withoutShells.edges.every((edge) => edge.kind === 'composes' || edge.kind === 'served-by')).toBe(true);
+  });
+
+  it('adds a shells column to the layout only when there are shells', () => {
+    expect(new Set(layoutTopology(buildTopology(entries)).nodes.map((node) => node.x)).size).toBe(3);
+    expect(new Set(layoutTopology(buildTopology(entries, { shells })).nodes.map((node) => node.x)).size).toBe(4);
   });
 });
