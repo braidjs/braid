@@ -328,6 +328,21 @@ describe('<ShellsPanel>', () => {
     expect(container.querySelector('.braid-console__routebutton')?.textContent).toBe('/checkout/*');
   });
 
+  it('reloads HEAD when refreshKey changes, unless there is a draft', async () => {
+    const api = server({});
+    const heads = () => api.calls.filter((call) => call.path === '/head').length;
+    await act(async () => root.render(<ShellsPanel api={api} refreshKey={0} />));
+    expect(heads()).toBe(1);
+
+    await act(async () => root.render(<ShellsPanel api={api} refreshKey={1} />));
+    expect(heads()).toBe(2);
+
+    await click(button('New shell'));
+    await act(async () => root.render(<ShellsPanel api={api} refreshKey={2} />));
+    expect(heads()).toBe(2);
+    expect(textarea()).toBeTruthy();
+  });
+
   it('reports unpublished changes to the host', async () => {
     const onDirtyChange = vi.fn();
     await render(server({}), { onDirtyChange });

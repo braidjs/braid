@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import type { RegistryPermissions, ShellManifest } from '@braidlabs/registry';
 import { RegistryConsole } from '../lib/registry-console.js';
 import { ensureStyles } from '../lib/styles.js';
-import { fetchHead, fetchPermissions, type ConsoleApi } from '../lib/client.js';
+import { fetchHead, fetchPermissions, RegistryApiError, type ConsoleApi } from '../lib/client.js';
 import { readRoute, routeHash, type Route, type View } from './routes.js';
 import type { Session } from './auth.js';
 
@@ -28,6 +28,9 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
   const [permissions, setPermissions] = useState<RegistryPermissions | null>(null);
   const [shells, setShells] = useState<ShellManifest[] | undefined>(undefined);
   const [pinToken, setPinToken] = useState(0);
+  // Bumped by a rollback in History only: the Shells panel reloads on it, but not on its own
+  // publishes, which it already reflects.
+  const [rollbackToken, setRollbackToken] = useState(0);
   // Views with a draft stay mounted once opened, hidden when not shown, so switching tabs or going
   // Back never throws away unpublished edits.
   const [visited, setVisited] = useState<Set<View>>(() => new Set([route.view]));
@@ -56,17 +59,18 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
   useEffect(() => {
     let current = true;
     fetchPermissions(api).then(
-      (result) => {
-        if (!current) return;
-        // Signed in here, yet the server cannot say who we are: it rejected the token.
-        if (session && result.actor === null && !result.read && session.signInAgain()) return;
-        setPermissions(result);
-      },
+      (result) => current && setPermissions(result),
       () => current && setPermissions(null),
     );
     fetchHead(api).then(
       (head) => current && setShells(head.snapshot?.shells ?? []),
-      () => current && setShells(undefined),
+      (error: unknown) => {
+        if (!current) return;
+        // Signed in here, yet the server refused the token outright (a 401, not a 403 for a
+        // known user who lacks a role): sign in again rather than show a console that cannot read.
+        if (session && error instanceof RegistryApiError && error.status === 401 && session.signInAgain()) return;
+        setShells(undefined);
+      },
     );
     return () => {
       current = false;
@@ -150,11 +154,9 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
       </div>
 
       <Suspense fallback={<p className="braid-console__empty">Loading…</p>}>
-        {canEdit && visited.has('edit') && (
-          <div hidden={view !== 'edit'}>
-            <RegistryEditor api={api} />
-          </div>
-        )}
+        {/* Mounted only while shown: its publish carries no baseId, so a copy kept from before a
+            rollback would silently publish the old HEAD back. */}
+        {view === 'edit' && <RegistryEditor api={api} />}
         {visited.has('shells') && (
           <div hidden={view !== 'shells'}>
             <ShellsPanel
@@ -163,10 +165,19 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
               onSelect={(id) => go(id ? { view: 'shells', shell: id } : { view: 'shells' })}
               onPublished={(outcome) => outcome.pinned && setPinToken((token) => token + 1)}
               onDirtyChange={setShellsDirty}
+              refreshKey={rollbackToken}
             />
           </div>
         )}
-        {view === 'history' && <HistoryPanel api={api} onPinned={() => setPinToken((token) => token + 1)} />}
+        {view === 'history' && (
+          <HistoryPanel
+            api={api}
+            onPinned={() => {
+              setPinToken((token) => token + 1);
+              setRollbackToken((token) => token + 1);
+            }}
+          />
+        )}
       </Suspense>
       {(view === 'fragments' || view === 'topology') && (
         // `chrome={false}` because the shell above already renders the heading, and `view` because

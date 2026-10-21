@@ -225,6 +225,14 @@ describe('parseAreas reserved names', () => {
     expect(parsed.areas.map((area) => area.name)).toEqual(['header', 'nav', 'main']);
   });
 
+  it('never drops a row when quoted and unquoted rows are mixed', () => {
+    expect(parseAreas('"header header"\nnav main').cells).toEqual([
+      ['header', 'header'],
+      ['nav', 'main'],
+    ]);
+    expect(parseAreas('"a b"\n"c d\'s"').errors).toEqual([expect.stringContaining("d's")]);
+  });
+
   it('reads CRLF input', () => {
     expect(parseAreas('header header\r\nnav main').errors).toEqual([]);
   });

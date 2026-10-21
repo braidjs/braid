@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import {
   parseAreas,
@@ -44,6 +44,11 @@ export interface ShellsPanelProps {
    * panel does not touch `beforeunload` itself: the page is the host's.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Change it to have the panel reload HEAD — after a rollback elsewhere, say. Ignored while there
+   * are unpublished changes: those publish against their own base and a stale one is a 409.
+   */
+  refreshKey?: unknown;
 }
 
 interface Workspace {
@@ -76,7 +81,7 @@ type Phase =
  * injected into this page. Rendering it here would run third-party code in the admin origin with
  * an operator's token in reach; the preview draws the grid and nothing else.
  */
-export function ShellsPanel({ api, theme, className, selected, onSelect, onPublished, onDirtyChange }: ShellsPanelProps) {
+export function ShellsPanel({ api, theme, className, selected, onSelect, onPublished, onDirtyChange, refreshKey }: ShellsPanelProps) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [phase, setPhase] = useState<Phase>({ status: 'loading' });
   const [ownOpen, setOwnOpen] = useState<number | null>(null);
@@ -146,6 +151,17 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
     onDirtyChange?.(dirty);
     // onDirtyChange is a notification; depending on it would re-notify on every host render.
   }, [dirty]);
+
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const firstRefresh = useRef(true);
+  useEffect(() => {
+    if (firstRefresh.current) {
+      firstRefresh.current = false;
+      return;
+    }
+    if (!dirtyRef.current) setReloadToken((token) => token + 1);
+  }, [refreshKey]);
 
   if (phase.status === 'loading' || (!workspace && phase.status !== 'empty' && phase.status !== 'failed')) {
     return (
