@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { customElementAdapter } from './custom-element-adapter.js';
 import { BraidError } from '../errors.js';
 import type { AdapterBootContext } from './adapter.js';
@@ -148,6 +148,13 @@ describe('custom-element adapter', () => {
  */
 describe('custom-element adapter and shared globals', () => {
   const host = window as unknown as Record<string, unknown>;
+  const cleanup: Array<() => void> = [];
+
+  afterEach(() => {
+    cleanup.splice(0).forEach((step) => step());
+    delete host.dataLayer;
+    delete host._satellite;
+  });
 
   function realmContext(sharedGlobals: readonly string[] | undefined, script: string) {
     const frame = document.createElement('iframe');
@@ -155,6 +162,7 @@ describe('custom-element adapter and shared globals', () => {
     const realmWindow = frame.contentWindow as Window & typeof globalThis;
     const root = document.createElement('braid-document');
     document.body.append(root);
+    cleanup.push(() => frame.remove(), () => root.remove());
 
     const realm = {
       kind: 'compat-http',
@@ -182,49 +190,45 @@ describe('custom-element adapter and shared globals', () => {
       env: { root, props: {}, onPropsChanged: () => () => undefined, emit: () => undefined },
     } as unknown as AdapterBootContext;
 
-    return { ctx, realmWindow, frame, root };
+    return { ctx, realmWindow };
   }
 
   /** Everything a fragment could have reached on the host: its own globals and the DOM prototypes. */
   function hostSurface() {
-    const describe = (target: object) =>
+    const ownSurface = (target: object) =>
       Object.entries(Object.getOwnPropertyDescriptors(target)).map(([key, d]) => [key, d.value ?? d.get ?? d.set]);
     return {
-      window: describe(window),
-      prototypes: [Node, Element, HTMLElement, Document, EventTarget, History].map((type) => describe(type.prototype)),
+      window: ownSurface(window),
+      prototypes: [Node, Element, HTMLElement, Document, EventTarget, History].map((type) => ownSurface(type.prototype)),
     };
   }
 
   it("lands the element's analytics push in the host's data layer, and touches nothing else on the host", async () => {
     const hostDataLayer: unknown[] = [];
     host.dataLayer = hostDataLayer;
-    const { ctx, realmWindow, frame, root } = realmContext(['dataLayer'], `dataLayer.push({ event: 'rating:ready' });`);
+    // `_satellite` is shared but the host has not loaded it yet, so an accessor installed on the
+    // wrong window would show up as a new host property
+    const { ctx, realmWindow } = realmContext(['dataLayer', '_satellite'], `dataLayer.push({ event: 'rating:ready' });`);
     const before = hostSurface();
 
     await customElementAdapter.boot(ctx);
 
     expect(hostDataLayer).toEqual([{ event: 'rating:ready' }]);
     expect(Object.getOwnPropertyDescriptor(realmWindow, 'dataLayer')?.get).toBeTypeOf('function');
-    // the accessor lives on the realm; the host's window and prototypes are exactly as they were
+    expect(Object.getOwnPropertyDescriptor(realmWindow, '_satellite')?.get).toBeTypeOf('function');
+    // the accessors live on the realm; the host's window and prototypes are exactly as they were
     expect(hostSurface()).toEqual(before);
+    expect('_satellite' in window).toBe(false);
     expect(Object.getOwnPropertyDescriptor(window, 'dataLayer')?.value).toBe(hostDataLayer);
-
-    frame.remove();
-    root.remove();
-    delete host.dataLayer;
   });
 
   it('shares nothing when the slot passes no list', async () => {
     host.dataLayer = [];
-    const { ctx, realmWindow, frame, root } = realmContext(undefined, `var dataLayer = [{ event: 'local' }];`);
+    const { ctx, realmWindow } = realmContext(undefined, `var dataLayer = [{ event: 'local' }];`);
 
     await customElementAdapter.boot(ctx);
 
     expect(host.dataLayer).toEqual([]);
     expect((realmWindow as unknown as { dataLayer: unknown[] }).dataLayer).toEqual([{ event: 'local' }]);
-
-    frame.remove();
-    root.remove();
-    delete host.dataLayer;
   });
 });
