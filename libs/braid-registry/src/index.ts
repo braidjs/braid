@@ -76,7 +76,15 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
-export type { RegistryApi, RegistryApiOptions, PublishRequestBody, PublishResult } from './lib/api.js';
+export type {
+  RegistryApi,
+  RegistryApiOptions,
+  PublishRequestBody,
+  PublishResult,
+  RegistryAction,
+  AuthorizeResult,
+  RegistryPermissions,
+} from './lib/api.js';
 export type {
   RegistryFinding,
   FindingCode,
