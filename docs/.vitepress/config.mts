@@ -166,6 +166,7 @@ export default defineConfig({
             link: '/braid-from-module-federation',
           },
           { text: 'Without the gateway', link: '/braid-without-gateway' },
+          { text: 'Federating gateways', link: '/braid-federation' },
           { text: 'The POC', link: '/braid-poc' },
           { text: 'Architecture Diagrams', link: '/architecture' },
         ],

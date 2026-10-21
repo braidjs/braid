@@ -26,6 +26,9 @@ export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.j
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 
+export { subgraph, supergraph } from './lib/supergraph.js';
+export type { SubgraphOptions, SubgraphSource } from './lib/supergraph.js';
+
 export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
 export type {
   ShellManifest,

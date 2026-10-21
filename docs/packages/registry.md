@@ -66,6 +66,25 @@ const gateway = createGateway({
 });
 ```
 
+### Federating team gateways
+
+`subgraph()` and `supergraph()` compose another team's gateway into this one's registry, so its
+fragments pierce straight into your shell instead of arriving as a shell within a shell:
+
+```ts
+import { subgraph, supergraph } from '@braidlabs/registry';
+
+createGateway({
+  registry: supergraph([
+    orgManifests,
+    subgraph({ name: 'orders', url: 'https://orders.internal', registry: 'https://orders.internal/braid-registry.json' }),
+  ]),
+});
+```
+
+Composition fails closed on a fragment id claimed twice. See [Federating gateways](/braid-federation)
+for the request flow, credentials, and composing ahead of time into a snapshot.
+
 ---
 
 ## Snapshot Diffing
