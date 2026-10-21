@@ -480,7 +480,7 @@ npm run format
 npm run audit:cve                # cve-lite-cli: fails on high/critical CVEs
 ```
 
-`npm run audit:cve` also runs in CI on every PR and weekly. Accepted findings live
+`npm run audit:cve` also runs in CI on every PR and daily. Accepted findings live
 in `.cve-lite/baseline.json`, with the reason for each in
 [`.cve-lite/README.md`](.cve-lite/README.md). Fix a finding rather than
 baselining it; regenerate the baseline only to remove entries.
