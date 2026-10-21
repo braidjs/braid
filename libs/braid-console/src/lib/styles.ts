@@ -445,6 +445,9 @@ export const CONSOLE_STYLES = `
 
 /* --- shells ------------------------------------------------------------ */
 
+.braid-console__identity { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--bc-muted); }
+.braid-console__rolebadge { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 10px; color: var(--bc-accent); background: var(--bc-accent-soft); }
+
 .braid-console__notice--quiet { background: var(--bc-surface); color: var(--bc-muted); border-color: var(--bc-border); border-left-color: var(--bc-border-strong); }
 .braid-console__actions { white-space: nowrap; }
 .braid-console__designer { gap: var(--bc-gap); }

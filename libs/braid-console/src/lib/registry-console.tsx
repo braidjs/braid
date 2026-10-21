@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DiscoveryEntry } from '@braidlabs/gateway';
+import type { ShellManifest } from '@braidlabs/registry';
 import { fetchRegistry, type ConsoleApi, type RegistryListing } from './client.js';
 import { ensureStyles } from './styles.js';
 import { buildTopology } from './topology.js';
@@ -37,6 +38,11 @@ export interface RegistryConsoleProps {
    * of tabs disagreeing about which one is selected.
    */
   view?: ConsoleView;
+  /**
+   * Shells to draw on the topology, from the pinned snapshot. The discovery listing this console
+   * reads knows only fragments, so a host with the write API passes them in.
+   */
+  shells?: readonly ShellManifest[];
 }
 
 export type ConsoleView = 'fragments' | 'topology';
@@ -56,7 +62,7 @@ type State =
  * What it deliberately does not do: own the URL, own a session, or style anything outside itself.
  * See `styles.ts` for the second, and `ConsoleApi` for the first two.
  */
-export function RegistryConsole({ api, theme, className, onLoaded, chrome = true, view }: RegistryConsoleProps) {
+export function RegistryConsole({ api, theme, className, onLoaded, chrome = true, view, shells }: RegistryConsoleProps) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [query, setQuery] = useState('');
   const [ownTab, setOwnTab] = useState<ConsoleView>('fragments');
@@ -190,7 +196,7 @@ export function RegistryConsole({ api, theme, className, onLoaded, chrome = true
           ) : tab === 'fragments' ? (
             <FragmentTable entries={visible} onEmbed={setEmbedding} onTag={(tag) => setQuery(tagQuery(tag))} />
           ) : (
-            <TopologyGraph entries={visible} onEmbed={setEmbedding} />
+            <TopologyGraph entries={visible} {...(shells ? { shells } : {})} onEmbed={setEmbedding} />
           )}
 
           {embedding && <IntegrationPanel entry={embedding} onClose={() => setEmbedding(null)} />}
