@@ -81,7 +81,8 @@ copy of the vendor script. Each listed name becomes an accessor on the fragment'
 reads the host's property live and writes it back, bare identifiers included:
 `var dataLayer = dataLayer || []` finds the host's array.
 
-- **Trusted tier only.** Untrusted (cross-origin) fragments ignore it.
+- **Trusted tier only.** Compat and custom-element fragments get the accessors. Untrusted
+  (cross-origin) fragments ignore it, and so do contract fragments, whose host API is the contract.
 - **Per fragment.** `capabilities.sharedGlobals` in the registry manifest or in
   `initBraid({ capabilities })` replaces the default. `[]` opts a fragment out.
 - **Fragments can write these globals.** Initialize them on the host first.
@@ -131,16 +132,18 @@ Registers the `<fragment-slot>` custom element and sets up global runtime observ
 
 ```ts
 interface InitBraidOptions {
-  /** Callback to wire host router navigation events to fragments. */
-  onHostNavigation?: (notify: () => void) => void;
+  /** What this host offers fragments, as a contract they can require a range of. */
+  contract?: HostContract;
+  /** Per-fragment capability grants, by fragment id. The registry's grants win where both speak. */
+  capabilities?: Record<string, FragmentCapabilities>;
   /** Host globals trusted fragments share instead of a realm-local copy (see "Shared host globals"). */
   sharedGlobals?: string[];
+  /** Development diagnostics: unaudited-API warnings, boundary-bypass reports, verbose boot logs. */
+  dev?: boolean;
+  /** Callback to wire host router navigation events to fragments. */
+  onHostNavigation?: (notify: () => void) => void;
   /** The gateway's mount when the host does not own the domain root ('/manage'); must match the gateway's basePath. */
   basePath?: string;
-  /** Base URL for gateway requests (default: current origin). */
-  gatewayBaseUrl?: string;
-  /** Global timeout in milliseconds before triggering slot fallbacks. */
-  defaultTimeoutMs?: number;
 }
 ```
 
