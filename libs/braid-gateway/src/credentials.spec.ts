@@ -142,3 +142,86 @@ describe('additionalHeaders as a function', () => {
     expect(captured.sent().headers.get('x-tenant')).toBe('acme');
   });
 });
+
+/**
+ * A federated graph puts several teams' endpoints in one registry, and a yes/no for all of them is
+ * the wrong granularity: the org trusts its own fragments with the user's cookies, not every team
+ * it composes. The function form decides per fragment.
+ */
+describe('per-fragment credential forwarding', () => {
+  const graph = [
+    { id: 'billing', endpoint: 'https://billing.internal' },
+    { id: 'promo', endpoint: 'https://promo.partner.example' },
+  ];
+
+  function signedInFor(id: string) {
+    return new Request(`https://shell.example.com/__braid/frag/${id}/x`, {
+      headers: { cookie: 'session=s', authorization: 'Bearer t' },
+    });
+  }
+
+  it('forwards credentials only to the fragments the predicate approves', async () => {
+    const gateway = createGateway({
+      registry: graph,
+      forwardCredentials: (fragment) => fragment.id === 'billing',
+    });
+
+    const billing = captureFragmentFetch();
+    await gateway.handle(signedInFor('billing'));
+    expect(billing.sent().headers.get('cookie')).toBe('session=s');
+    expect(billing.sent().headers.get('authorization')).toBe('Bearer t');
+
+    const promo = captureFragmentFetch();
+    await gateway.handle(signedInFor('promo'));
+    expect(promo.sent().headers.get('cookie')).toBeNull();
+    expect(promo.sent().headers.get('authorization')).toBeNull();
+  });
+
+  it('can key on the endpoint, which is how an org scopes credentials to one subgraph', async () => {
+    const gateway = createGateway({
+      registry: graph,
+      forwardCredentials: (fragment) =>
+        typeof fragment.endpoint === 'string' && fragment.endpoint.startsWith('https://billing.internal'),
+    });
+
+    const billing = captureFragmentFetch();
+    await gateway.handle(signedInFor('billing'));
+    expect(billing.sent().headers.get('cookie')).toBe('session=s');
+  });
+
+  it('fails closed when the predicate throws', async () => {
+    const captured = captureFragmentFetch();
+    const gateway = createGateway({
+      registry: graph,
+      forwardCredentials: () => {
+        throw new Error('policy service down');
+      },
+    });
+
+    await gateway.handle(signedInFor('billing'));
+
+    expect(captured.sent().headers.get('cookie')).toBeNull();
+    expect(captured.sent().headers.get('authorization')).toBeNull();
+  });
+
+  it('applies the same decision to websocket upgrades', async () => {
+    const gateway = createGateway({ registry: graph, forwardCredentials: (fragment) => fragment.id === 'billing' });
+    const upgrade = (id: string) =>
+      gateway.resolveUpgrade(new Request(`https://shell.example.com/__braid/frag/${id}/ws`, { headers: { upgrade: 'websocket' } }));
+
+    expect((await upgrade('billing'))?.forwardCredentials).toBe(true);
+    expect((await upgrade('promo'))?.forwardCredentials).toBe(false);
+  });
+
+  it("warns about a redirecting fragment only when the predicate withholds the user's identity", () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    createGateway({
+      registry: graph.map((fragment) => ({ ...fragment, redirect: 'navigate' as const })),
+      forwardCredentials: (fragment) => fragment.id === 'billing',
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('"promo"');
+  });
+});

@@ -19,7 +19,8 @@ createGateway({
       routes: ['/orders', '/refunds'], // the pages this team may pierce into
     }),
   ]),
-  forwardCredentials: true, // only if team fragments need the user's identity, see "Credentials"
+  // only to teams that need the user's identity — see "Credentials"
+  forwardCredentials: (fragment) => typeof fragment.endpoint === 'string' && fragment.endpoint.startsWith('https://orders.internal.example.com/'),
 });
 ```
 
@@ -123,15 +124,31 @@ its shell (see Layout).
 
 ## Credentials
 
-The gateway strips `cookie` and `authorization` from every fragment fetch unless
-`forwardCredentials` is set. In a federated graph that has two consequences:
+The gateway strips `cookie` and `authorization` from every fragment fetch, and every websocket
+upgrade, unless `forwardCredentials` allows that fragment. In a federated graph:
 
-- **Gated fragments need `forwardCredentials`.** A team fragment with `access` rules needs it on the
-  org gateway. Without it, the team gateway sees every user as anonymous and refuses. That is
-  fail-closed, but it is probably not what you want.
-- **It applies to every endpoint.** `forwardCredentials` covers the whole registry. Every subgraph
-  then receives the user's org cookies on every page it pierces, which is why `routes` matters. Turn
-  it on only when every team in the graph should receive them.
+- **Gated fragments need it.** A team fragment with `access` rules needs its credentials forwarded
+  by the org gateway. Without them, the team gateway sees every user as anonymous and refuses. That
+  is fail-closed, but it is probably not what you want.
+- **Scope it per subgraph.** `forwardCredentials: true` sends the user's org cookies to every
+  endpoint in the graph. Pass a function instead and decide per fragment. Keying on the endpoint is
+  the reliable way to scope it to a subgraph, because `subgraph()` writes every team endpoint as
+  `<url>/__braid/frag/<id>/`, so the prefix is the org's, not the team's:
+
+  ```ts
+  const trusted = ['https://orders.internal.example.com/', 'https://refunds.internal.example.com/'];
+  createGateway({
+    registry: supergraph([...]),
+    forwardCredentials: (fragment) =>
+      typeof fragment.endpoint === 'string' && trusted.some((prefix) => fragment.endpoint.startsWith(prefix)),
+  });
+  ```
+
+  Don't key on `id` alone: a team chooses its own fragment ids. Composition stops two teams claiming
+  the same id, but nothing stops a team naming one to match your rule. A predicate that throws
+  forwards nothing.
+- **Routes still matter.** A subgraph that receives credentials receives them on every page it
+  pierces, which is why `routes` bounds where that can be.
 
 `access` rules are copied as data, so the org gateway also enforces them at its edge (it needs a
 `principal` resolver that understands the same identity). The team gateway stays authoritative:

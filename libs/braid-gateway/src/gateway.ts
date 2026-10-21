@@ -19,6 +19,7 @@ import {
   Principal,
   Registry,
   RegistrySource,
+  FragmentManifest,
   ResolvedFragmentManifest,
 } from './registry.js';
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
@@ -89,8 +90,20 @@ export interface GatewayOptions {
    * assertion minted per request via {@link GatewayOptions.additionalHeaders}, or a token
    * exchanged for the fragment's own audience. Turn this on only when every endpoint in the
    * registry is inside the same trust boundary as the shell.
+   *
+   * Or decide per fragment, when only some of them are — the usual case once a gateway composes
+   * other teams' gateways:
+   *
+   * ```ts
+   * forwardCredentials: (fragment) => typeof fragment.endpoint === 'string' &&
+   *   fragment.endpoint.startsWith('https://orders.internal/'),
+   * ```
+   *
+   * The function is the host's, never the manifest's: a fragment that could declare its own
+   * entitlement to the user's cookies would not be behind a boundary at all. A function that
+   * throws forwards nothing. The same decision applies to websocket upgrades.
    */
-  forwardCredentials?: boolean;
+  forwardCredentials?: boolean | ((fragment: FragmentManifest) => boolean);
   /**
    * Publishes a paginated listing of the fragments this gateway serves, for shells that build
    * their UI from the registry instead of hard-coding slot names.
@@ -306,7 +319,16 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
     ? additionalHeaders
     : () => additionalHeaders;
-  const forwardCredentials = options.forwardCredentials ?? false;
+  /** Whether the caller's `cookie` and `authorization` may go to this fragment's endpoint. */
+  const forwardsCredentialsTo = (fragment: FragmentManifest): boolean => {
+    const rule = options.forwardCredentials ?? false;
+    if (typeof rule !== 'function') return rule;
+    try {
+      return rule(fragment) === true;
+    } catch {
+      return false;
+    }
+  };
   const trustForwardedHeaders = options.trustForwardedHeaders ?? false;
   const serviceWorker = options.serviceWorker
     ? (options.serviceWorker === true ? {} : options.serviceWorker)
@@ -336,8 +358,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    * login sends them back, unless something carries their identity to it. Credentials are stripped
    * by default, so say so up front rather than let the first user find out.
    */
-  function warnIfNoIdentity(manifest: { id: string; redirect?: string }): void {
-    if (manifest.redirect !== 'navigate' || forwardCredentials || options.additionalHeaders) return;
+  function warnIfNoIdentity(manifest: FragmentManifest): void {
+    if (manifest.redirect !== 'navigate' || forwardsCredentialsTo(manifest) || options.additionalHeaders) return;
     if (warnedNoIdentity.has(manifest.id)) return;
     warnedNoIdentity.add(manifest.id);
     console.warn(
@@ -542,7 +564,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         return {
           fragmentId: fragment.id,
           target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
-          forwardCredentials,
+          forwardCredentials: forwardsCredentialsTo(fragment),
         };
       } catch {
         return null;
@@ -794,7 +816,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
     // different origin by construction — so they are removed unless the host has said its whole
     // registry is inside one trust boundary. See `forwardCredentials`.
-    if (!forwardCredentials) {
+    if (!forwardsCredentialsTo(fragment)) {
       fragmentRequest.headers.delete('cookie');
       fragmentRequest.headers.delete('authorization');
     }
