@@ -882,15 +882,19 @@ function RemoveButton({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
-/** A starting shell: a three-row page, ids kept unique so two new shells never collide. */
+/**
+ * A starting shell: a three-row page. Its id and its route are both unique, so two new shells
+ * never collide — a page has one shell, and validation refuses two on the same route.
+ */
 export function newShell(existing: readonly ShellManifest[]): ShellManifest {
   const ids = new Set(existing.map((shell) => shell.id));
+  const paths = new Set(existing.flatMap((shell) => shell.routes.map((route) => route.path)));
   let id = 'new-shell';
-  for (let n = 2; ids.has(id); n += 1) id = `new-shell-${n}`;
+  for (let n = 2; ids.has(id) || paths.has(`/${id}`); n += 1) id = `new-shell-${n}`;
   return {
     id,
     framework: 'react',
-    routes: [{ path: '/', layout: { areas: 'header header\nnav main\nfooter footer', columns: '220px 1fr', rows: 'auto 1fr auto' }, slots: {} }],
+    routes: [{ path: `/${id}`, layout: { areas: 'header header\nnav main\nfooter footer', columns: '220px 1fr', rows: 'auto 1fr auto' }, slots: {} }],
   };
 }
 

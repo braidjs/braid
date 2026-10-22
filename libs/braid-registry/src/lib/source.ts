@@ -70,19 +70,37 @@ export interface SnapshotDiagnostic {
  * 4. A reload that fails — the store is down, the new snapshot does not verify — leaves the
  *    current snapshot serving. It never falls back to an older cached one.
  */
-export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promise<FragmentManifest[]> {
+/**
+ * A registry source that also hands out the whole snapshot it is serving — shells included — so a
+ * gateway's `documents` hook renders shells from the same snapshot its fragments come from.
+ */
+export type SnapshotRegistrySource = (() => Promise<FragmentManifest[]>) & {
+  /** The snapshot currently served, resolving one first if nothing has loaded yet. */
+  snapshot(): Promise<RegistrySnapshot>;
+};
+
+export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegistrySource {
   const { store, pinned, cache, fallback = 'last-known-good', verify = true, onDiagnostic } = options;
 
   /** The snapshot being served, and the manifests handed to the gateway for it. */
   let current: { snapshot: RegistrySnapshot; manifests: FragmentManifest[] } | undefined;
 
-  return async () => {
+  const load = async (): Promise<FragmentManifest[]> => {
     const snapshot = await resolve();
     // The same array for the same snapshot, which is how the gateway tells "nothing changed" apart
     // from a re-pin without comparing manifests.
     if (current?.snapshot.id !== snapshot.id) current = { snapshot, manifests: [...snapshot.manifests] };
     return current.manifests;
   };
+
+  return Object.assign(load, {
+    // The snapshot the gateway last loaded — not a fresh HEAD lookup, which would let a shell move
+    // ahead of the fragments it slots between two registry reloads.
+    async snapshot(): Promise<RegistrySnapshot> {
+      if (!current) await load();
+      return current!.snapshot;
+    },
+  });
 
   async function resolve(): Promise<RegistrySnapshot> {
     let id = pinned;

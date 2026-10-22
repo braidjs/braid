@@ -83,6 +83,16 @@ export interface GatewayOptions {
    * instant. Not allowed with inline manifests, which cannot change.
    */
   registryRefreshMs?: number;
+  /**
+   * Supplies the page itself for a document request, in place of the shell app behind the gateway:
+   * return HTML, or null to let `next` (the app) answer as usual.
+   *
+   * Fragments are pierced into what this returns exactly as into an app's response, and a page it
+   * answers is served even when no fragment pierces it. This is how a shell defined as data — see
+   * `shellDocuments` in `@braidlabs/registry` — is served with no app and no rebuild. Consulted only
+   * for document requests (GET, `Sec-Fetch-Dest: document` or an HTML `Accept`).
+   */
+  documents?: (request: Request) => Response | null | Promise<Response | null>;
   /** 'development' enables verbose error bodies; defaults to 'development'. */
   mode?: 'production' | 'development';
   /**
@@ -570,6 +580,17 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
+        const document = options.documents && isDocumentRequest(request) ? await options.documents(request) : null;
+        if (document) {
+          // The defined document is the shell: pierced like an app's response when fragments match,
+          // and served as it is when none do.
+          const composed = await handleShellRequest(request, requestUrl, async () => document);
+          if (composed) return composed;
+          const served = new Response(document.body, document);
+          served.headers.append('vary', 'sec-fetch-dest');
+          applyPierceCacheControl(served.headers);
+          return served;
+        }
         return next ? handleShellRequest(request, requestUrl, next) : null;
       }
 

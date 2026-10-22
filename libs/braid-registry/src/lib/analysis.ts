@@ -41,7 +41,8 @@ export type FindingCode =
   | 'slot-unknown-area'
   | 'slot-unknown-fragment'
   | 'unsafe-shell-url'
-  | 'invalid-shell-field';
+  | 'invalid-shell-field'
+  | 'shell-route-conflict';
 
 /**
  * Validates a registry without contacting anything.

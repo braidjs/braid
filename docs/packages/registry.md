@@ -130,10 +130,46 @@ await createSnapshot({
 });
 ```
 
-`validateRegistry(manifests, { shells })` checks layouts by the browser's rules (rectangular areas,
-equal-width rows), that every slotted fragment is registered, route syntax, and that scripts and
-stylesheets load over `https:` or a root-relative path. A snapshot without shells keeps the id it
-always had.
+`validateRegistry(manifests, { shells })` checks:
+
+- layouts by the browser's rules (rectangular areas, equal-width rows);
+- that every slotted fragment is registered;
+- route syntax, and that no two shells claim the same route;
+- that scripts and stylesheets load over `https:` or a root-relative path.
+
+A snapshot without shells keeps the id it always had.
+
+### Serving shells from their definition
+
+A `vanilla` shell needs no application. The gateway renders it from the registry and pierces
+fragments into it in the same pass, so publishing the shell puts the page live with no rebuild:
+
+```ts
+import { shellDocuments, snapshotRegistry } from '@braidlabs/registry';
+
+const registry = snapshotRegistry({ store });
+createGateway({
+  registry,
+  registryRefreshMs: 5_000, // with hot re-pin, a published shell is live within seconds
+  documents: shellDocuments({ registry, runtimeSrc: '/assets/braid-runtime.js' }),
+});
+```
+
+- **Matching.** A document request that a vanilla shell's route matches is answered with that route
+  rendered. Shells are tried in id order and routes in the order declared, with the same
+  trailing-slash tolerance as `pierce`. Anything else falls through to the app behind the gateway.
+- **What it renders.** The head, the route's grid as an inline `<style>` rule, a named
+  `<fragment-slot>` per slotted area, and the runtime module. Unbound fragments get their `src`.
+- **Untrusted input.** The snapshot is treated as untrusted at render time, not only at publish
+  time. Text is escaped, a script or stylesheet URL that is not `https:` or root-relative is left
+  out, and a layout value that is not a CSS track list is dropped.
+- **`runtimeSrc`.** A module you build and serve that runs `initBraid()` from `@braidlabs/core`. A
+  served page has no bundler to resolve a bare import, so the runtime has to arrive as one file.
+- **Same snapshot.** Shells come from the snapshot the gateway is serving fragments from, so a
+  re-pin moves both together.
+
+React, Angular and Angular SSR shells are applications. The console generates their code, and they
+are served by your app as before.
 
 Today the framework selects the host code the console generates. The gateway still serves the HTML
 your shell app returns; serving shells from the definition is planned.
