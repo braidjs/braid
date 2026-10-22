@@ -281,7 +281,7 @@ export function findPierceOverlaps(manifests: readonly FragmentManifest[]): Regi
  * Exact duplicates are an error (`shell-route-conflict`); an overlap is a warning, because the
  * gateway resolves it deterministically (shells in id order) but probably not as anyone intended.
  */
-export function findShellRouteOverlaps(shells: readonly ShellManifest[]): RegistryFinding[] {
+function findShellRouteOverlaps(shells: readonly ShellManifest[]): RegistryFinding[] {
   const compiled: { shell: string; path: string; matcher: URLPattern; sample: string }[] = [];
   if (typeof URLPattern === 'undefined') return [];
   for (const shell of shells) {

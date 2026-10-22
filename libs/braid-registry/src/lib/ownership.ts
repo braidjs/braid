@@ -1,6 +1,7 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { ShellManifest } from './shell.js';
-import { findPierceOverlaps, findShellRouteOverlaps } from './analysis.js';
+import { findPierceOverlaps } from './analysis.js';
+import { routesMayOverlap } from './route-scope.js';
 
 /**
  * Per-tag ownership: which fragments and shells a caller may change, by the tags they carry.
@@ -52,30 +53,52 @@ export function ownershipViolations(before: RegistryContent, after: RegistryCont
 }
 
 /**
- * New route overlaps between a shell the caller owns and one they do not.
+ * Shell routes that would answer pages a shell the caller does not own answers.
  *
  * A served shell answers a page ahead of the app behind the gateway, and where two shells' routes
  * overlap the one with the earlier id wins. Without this, a team could publish a shell of its own
  * whose route lands on another team's pages — and win them by choosing an id that sorts first.
- * As for fragments, only overlaps the change creates count.
+ *
+ * Judged per pair of routes with {@link routesMayOverlap}, which presumes an overlap it cannot rule
+ * out, rather than by sampling, which a crafted pattern slips past. A pair that already overlapped
+ * in HEAD is not the caller's doing and does not lock them out — but it is the pair of *routes*
+ * that is grandfathered, not the pair of shells, so widening a route that overlapped a little into
+ * one that overlaps a lot is a new claim.
  */
 function shellRouteViolations(
   before: readonly ShellManifest[],
   after: readonly ShellManifest[],
   owned: readonly string[],
 ): OwnershipViolation[] {
-  const pairKey = (ids: readonly string[]) => [...ids].sort().join('\u0000');
-  const existing = new Set(findShellRouteOverlaps(before).map((finding) => pairKey(finding.shellIds ?? [])));
-  const byId = new Map(after.map((shell) => [shell.id, shell]));
+  const routesOf = (shells: readonly ShellManifest[]) =>
+    shells.flatMap((shell) =>
+      (Array.isArray(shell?.routes) ? shell.routes : [])
+        .filter((route) => typeof route?.path === 'string')
+        .map((route) => ({ shell, path: route.path })),
+    );
+  const pairKey = (a: { shell: ShellManifest; path: string }, b: { shell: ShellManifest; path: string }) =>
+    [`${a.shell.id}\u0000${a.path}`, `${b.shell.id}\u0000${b.path}`].sort().join('\u0001');
+
+  const overlappingPairs = (shells: readonly ShellManifest[]) => {
+    const routes = routesOf(shells);
+    const pairs: [(typeof routes)[number], (typeof routes)[number]][] = [];
+    for (let i = 0; i < routes.length; i++) {
+      for (let j = i + 1; j < routes.length; j++) {
+        if (routes[i]!.shell.id !== routes[j]!.shell.id && routesMayOverlap(routes[i]!.path, routes[j]!.path)) {
+          pairs.push([routes[i]!, routes[j]!]);
+        }
+      }
+    }
+    return pairs;
+  };
+
+  const existing = new Set(overlappingPairs(before).map(([a, b]) => pairKey(a, b)));
   const ownsOneOf = (tags: unknown) => tagsOf(tags).some((tag) => owned.includes(tag));
 
   const found = new Map<string, OwnershipViolation>();
-  for (const finding of findShellRouteOverlaps(after)) {
-    const ids = finding.shellIds ?? [];
-    if (existing.has(pairKey(ids))) continue;
-    const [a, b] = ids.map((id) => byId.get(id));
-    if (!a || !b) continue;
-    for (const [mine, theirs] of [[a, b], [b, a]] as const) {
+  for (const [a, b] of overlappingPairs(after)) {
+    if (existing.has(pairKey(a, b))) continue;
+    for (const [mine, theirs] of [[a.shell, b.shell], [b.shell, a.shell]] as const) {
       if (ownsOneOf(mine.tags) && !ownsOneOf(theirs.tags)) {
         found.set(mine.id, { kind: 'shell-route', id: mine.id, tags: tagsOf(theirs.tags) });
       }
