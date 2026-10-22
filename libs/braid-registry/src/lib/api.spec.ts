@@ -191,6 +191,41 @@ describe('registry write API', () => {
       expect(body.head).toBe(snapshot.id);
     });
 
+    it('pages history with a next cursor, so nothing older than one page is out of reach', async () => {
+      const minted = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          createSnapshot({ manifests: [{ id: `f${i}`, endpoint: 'https://f.internal' }], createdAt: `2026-01-0${i + 1}T00:00:00.000Z` }),
+        ),
+      );
+      const api = createRegistryApi({ store: memorySnapshotStore(minted), authorize: allow });
+      const page = async (query: string) => (await api.handle(new Request(`${BASE}/snapshots${query}`)))!.json();
+
+      const first = await page('?limit=2');
+      const second = await page(`?limit=2&before=${encodeURIComponent(first.next)}`);
+      const third = await page(`?limit=2&before=${encodeURIComponent(second.next)}`);
+
+      expect([...first.items, ...second.items, ...third.items].map((ref: { id: string }) => ref.id)).toEqual(
+        [...minted].reverse().map((snapshot) => snapshot.id),
+      );
+      expect(third.next).toBeNull();
+      expect((await api.handle(new Request(`${BASE}/snapshots?before=nonsense`)))!.status).toBe(400);
+    });
+
+    it('ends the listing rather than looping when a custom store ignores before', async () => {
+      const minted = await Promise.all(
+        [1, 2, 3].map((i) => createSnapshot({ manifests: [{ id: `f${i}`, endpoint: 'https://f.internal' }], createdAt: `2026-01-0${i}T00:00:00.000Z` })),
+      );
+      const inner = memorySnapshotStore(minted);
+      const legacy = { ...inner, list: ({ limit }: { limit?: number } = {}) => inner.list(limit === undefined ? {} : { limit }) };
+      const api = createRegistryApi({ store: legacy, authorize: allow });
+
+      const first = await (await api.handle(new Request(`${BASE}/snapshots?limit=2`)))!.json();
+      const second = await (await api.handle(new Request(`${BASE}/snapshots?limit=2&before=${encodeURIComponent(first.next)}`)))!.json();
+
+      expect(second.items).toEqual([]);
+      expect(second.next).toBeNull();
+    });
+
     it('serves a snapshot by id and 404s an unknown one', async () => {
       const snapshot = await createSnapshot({ manifests });
       const api = createRegistryApi({ store: memorySnapshotStore([snapshot]), authorize: allow });

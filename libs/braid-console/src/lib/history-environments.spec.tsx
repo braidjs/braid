@@ -120,3 +120,50 @@ describe('<HistoryPanel> environments', () => {
     expect(container.querySelectorAll('tbody tr')).toHaveLength(2);
   });
 });
+
+describe('<HistoryPanel> paging', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.body.appendChild(document.createElement('div'));
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('loads older snapshots past the first page, so they can still be rolled back to', async () => {
+    const older = { id: 'reg_0', createdAt: '2026-10-01T10:00:00Z', fragmentCount: 1 };
+    const requested: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url, 'https://x.example');
+      const path = parsed.pathname.replace('/__braid/registry-api', '');
+      if (path === '/snapshots') {
+        requested.push(parsed.search);
+        return parsed.searchParams.get('before') === 'cursor-1'
+          ? json({ items: [older], head: 'reg_b', next: null })
+          : json({ items, head: 'reg_b', next: 'cursor-1' });
+      }
+      if (path === '/permissions') return json({ read: true, publish: true, pin: true, actor: null });
+      if (path === '/environments') return json({ error: 'none' }, 404);
+      return json({ error: 'no route' }, 404);
+    });
+    const loadOlder = () => [...container.querySelectorAll('button')].find((b) => b.textContent === 'Load older');
+
+    await act(async () => root.render(<HistoryPanel api={{ fetch: fetchMock as unknown as typeof fetch }} />));
+    await act(async () => undefined);
+    expect(container.textContent).not.toContain('reg_0');
+
+    await act(async () => loadOlder()!.click());
+    await act(async () => undefined);
+
+    expect(requested).toEqual(['', '?before=cursor-1']);
+    expect(container.textContent).toContain('reg_0');
+    expect(container.querySelector('button[aria-label="Pin reg_0 (roll back to it)"]')).not.toBeNull();
+    // the last page has no next, so there is nothing more to offer
+    expect(loadOlder()).toBeUndefined();
+  });
+});

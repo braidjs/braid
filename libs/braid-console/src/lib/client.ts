@@ -137,8 +137,20 @@ export async function fetchHead(api: ConsoleApi = {}, signal?: AbortSignal): Pro
   return apiRequest<HeadState>(api, '/head', { method: 'GET' }, signal);
 }
 
-export async function listSnapshots(api: ConsoleApi = {}, signal?: AbortSignal): Promise<{ items: SnapshotRef[]; head: string | null }> {
-  return apiRequest(api, '/snapshots', { method: 'GET' }, signal);
+/**
+ * One page of history, newest first. Pass the previous page's `next` as `before` for the page after
+ * it; `next` is null on the last page, and absent from servers that predate paging.
+ */
+export async function listSnapshots(
+  api: ConsoleApi = {},
+  signal?: AbortSignal,
+  page: { before?: string; limit?: number } = {},
+): Promise<{ items: SnapshotRef[]; head: string | null; next?: string | null }> {
+  const query = new URLSearchParams();
+  if (page.limit !== undefined) query.set('limit', String(page.limit));
+  if (page.before !== undefined) query.set('before', page.before);
+  const search = query.toString() ? `?${query}` : '';
+  return apiRequest(api, `/snapshots${search}`, { method: 'GET' }, signal);
 }
 
 /**

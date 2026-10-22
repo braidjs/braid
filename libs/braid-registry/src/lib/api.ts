@@ -1,6 +1,6 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createSnapshot, type RegistrySnapshot } from './snapshot.js';
-import { isEnvironmentName, type SnapshotStore } from './store.js';
+import { isAfterCursor, isEnvironmentName, refCursor, type SnapshotStore } from './store.js';
 import { diffRegistries, validateRegistry, type RegistryFinding } from './analysis.js';
 import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descriptor.js';
 import type { ShellManifest } from './shell.js';
@@ -356,9 +356,23 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     if (denied) return denied;
 
     const limitParam = Number(url.searchParams.get('limit'));
-    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25;
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 100) : 25;
+    const before = url.searchParams.get('before') ?? undefined;
+    if (before !== undefined && (before.length > 200 || !before.includes('~'))) {
+      return json({ error: 'expected before to be a cursor from a previous page\'s next' }, 400);
+    }
 
-    return json({ items: await store.list({ limit }), head: (await store.head?.()) ?? null });
+    // Filtered here too: a custom store from before paging ignores `before`, and would otherwise
+    // answer every page with the first one. It then ends the listing rather than looping.
+    const items = (await store.list({ limit, ...(before !== undefined ? { before } : {}) })).filter(
+      (ref) => before === undefined || isAfterCursor(ref, before),
+    );
+    const last = items.at(-1);
+    return json({
+      items,
+      head: (await store.head?.()) ?? null,
+      next: items.length === limit && last ? refCursor(last) : null,
+    });
   }
 
   async function getSnapshot(request: Request, id: string): Promise<Response> {
