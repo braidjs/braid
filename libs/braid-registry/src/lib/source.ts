@@ -75,8 +75,14 @@ export interface SnapshotDiagnostic {
  * gateway's `documents` hook renders shells from the same snapshot its fragments come from.
  */
 export type SnapshotRegistrySource = (() => Promise<FragmentManifest[]>) & {
-  /** The snapshot currently served, resolving one first if nothing has loaded yet. */
+  /** The snapshot this source last loaded, resolving one first if nothing has loaded yet. */
   snapshot(): Promise<RegistrySnapshot>;
+  /**
+   * The snapshot a manifests array this source returned came from. The gateway passes the array
+   * it is actually serving to its `documents` hook, and this maps it back — so a shell is rendered
+   * from the snapshot the gateway accepted, even if a later load was refused.
+   */
+  snapshotFor(manifests: readonly FragmentManifest[]): RegistrySnapshot | undefined;
 };
 
 export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegistrySource {
@@ -84,12 +90,17 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegi
 
   /** The snapshot being served, and the manifests handed to the gateway for it. */
   let current: { snapshot: RegistrySnapshot; manifests: FragmentManifest[] } | undefined;
+  /** Every manifests array handed out, back to its snapshot — weak, so old ones are collected. */
+  const origins = new WeakMap<readonly FragmentManifest[], RegistrySnapshot>();
 
   const load = async (): Promise<FragmentManifest[]> => {
     const snapshot = await resolve();
     // The same array for the same snapshot, which is how the gateway tells "nothing changed" apart
     // from a re-pin without comparing manifests.
-    if (current?.snapshot.id !== snapshot.id) current = { snapshot, manifests: [...snapshot.manifests] };
+    if (current?.snapshot.id !== snapshot.id) {
+      current = { snapshot, manifests: [...snapshot.manifests] };
+      origins.set(current.manifests, snapshot);
+    }
     return current.manifests;
   };
 
@@ -99,6 +110,9 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegi
     async snapshot(): Promise<RegistrySnapshot> {
       if (!current) await load();
       return current!.snapshot;
+    },
+    snapshotFor(manifests: readonly FragmentManifest[]): RegistrySnapshot | undefined {
+      return origins.get(manifests);
     },
   });
 

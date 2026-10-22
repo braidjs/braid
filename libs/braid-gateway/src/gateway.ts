@@ -92,7 +92,7 @@ export interface GatewayOptions {
    * `shellDocuments` in `@braidlabs/registry` — is served with no app and no rebuild. Consulted only
    * for document requests (GET, `Sec-Fetch-Dest: document` or an HTML `Accept`).
    */
-  documents?: (request: Request) => Response | null | Promise<Response | null>;
+  documents?: (request: Request, context: DocumentsContext) => Response | null | Promise<Response | null>;
   /** 'development' enables verbose error bodies; defaults to 'development'. */
   mode?: 'production' | 'development';
   /**
@@ -329,6 +329,16 @@ export interface UpgradeTarget {
   credentialHeaders: readonly string[];
   /** The `x-braid-via` value for the upstream request, this gateway's hop included. */
   via: string;
+}
+
+/** What the gateway tells a `documents` hook about the registry it is serving right now. */
+export interface DocumentsContext {
+  /**
+   * The manifests the gateway is serving — exactly the array its registry source last returned and
+   * it accepted. A hook that renders from the same snapshot (`shellDocuments`) keys on this, so a
+   * page's shell can never come from a snapshot the gateway refused to load.
+   */
+  manifests: readonly FragmentManifest[];
 }
 
 export interface BraidGateway {
@@ -580,7 +590,24 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
-        const document = options.documents && isDocumentRequest(request) ? await options.documents(request) : null;
+        // HEAD gets the same answer without the body, so a monitor or link checker in front of a
+        // gateway with no app behind it sees the page a browser would.
+        if (options.documents && request.method === 'HEAD') {
+          const asGet = new Request(request.url, { method: 'GET', headers: request.headers });
+          const document = await options.documents(asGet, { manifests: await registry.current() });
+          if (document) {
+            const headers = new Headers(document.headers);
+            headers.append('vary', 'sec-fetch-dest');
+            applyPierceCacheControl(headers);
+            await document.body?.cancel();
+            return new Response(null, { status: document.status, headers });
+          }
+        }
+
+        const document =
+          options.documents && isDocumentRequest(request)
+            ? await options.documents(request, { manifests: await registry.current() })
+            : null;
         if (document) {
           // The defined document is the shell: pierced like an app's response when fragments match,
           // and served as it is when none do.

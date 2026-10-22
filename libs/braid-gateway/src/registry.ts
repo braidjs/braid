@@ -367,6 +367,11 @@ export class Registry {
     return !Array.isArray(this.#source);
   }
 
+  /** The manifests as the source returned them, for the registry being served now. */
+  async current(): Promise<readonly FragmentManifest[]> {
+    return (await this.#load()).raw;
+  }
+
   async getFragment(fragmentId: string): Promise<ResolvedFragmentManifest | undefined> {
     const { manifests } = await this.#load();
     return manifests.get(fragmentId);
@@ -430,7 +435,13 @@ export class Registry {
 
     const previous = this.#state;
     const raw = await loadSource(this.#source);
-    if (raw === previous.raw || JSON.stringify(raw) === previous.fingerprint) return unchanged(previous);
+    if (raw === previous.raw) return unchanged(previous);
+    if (JSON.stringify(raw) === previous.fingerprint) {
+      // Same manifests, new array — a snapshot that changed only its shells, say. Nothing to
+      // recompile, but adopt the array: it is how the source tells which snapshot is being served.
+      this.#state = { ...previous, raw };
+      return unchanged(this.#state);
+    }
 
     const next = compileState(raw);
     this.#state = next;

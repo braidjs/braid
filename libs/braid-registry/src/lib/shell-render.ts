@@ -27,6 +27,16 @@ export interface RenderShellOptions {
    * `https:`. Required: a served shell has no bundler to resolve a bare `@braidlabs/core` import.
    */
   runtimeSrc: string;
+  /**
+   * Origins a served shell may load scripts and stylesheets from, besides its own — e.g.
+   * `['https://cdn.example.com']`. Default: none, so only root-relative assets load.
+   *
+   * A shell is published by whoever may publish it, and a script it names runs on this origin with
+   * every pierced fragment, every cookie and the registry API next to it. Which third parties may do
+   * that is the operator's decision, made here, not each publisher's. A cross-origin entry should
+   * also carry `integrity`.
+   */
+  assetOrigins?: readonly string[];
 }
 
 /**
@@ -53,6 +63,9 @@ export function renderShellDocument(
   }
 
   const head = shell.head ?? {};
+  const allowedOrigins = new Set((options.assetOrigins ?? []).map((origin) => new URL(origin).origin));
+  const assetAllowed = (url: string | undefined): url is string =>
+    isSafeAssetUrl(url ?? '') && (url!.startsWith('/') || allowedOrigins.has(new URL(url!).origin));
   const byId = new Map(manifests.map((manifest) => [manifest.id, manifest]));
   const parsed = parseAreas(route.layout.areas);
   const grid = parsed.errors.length === 0;
@@ -72,7 +85,11 @@ export function renderShellDocument(
     .filter(([area]) => grid && parsed.areas.some((known) => known.name === area))
     .map(([area, fragmentId]) => {
       const manifest = byId.get(fragmentId);
-      const src = manifest?.bound === false && manifest.src ? ` src="${escapeHtml(manifest.src)}"` : '';
+      // a path on the fragment's own endpoint; anything else is not a src the client should resolve
+      const src =
+        manifest?.bound === false && typeof manifest.src === 'string' && /^\/(?![/\\])/.test(manifest.src)
+          ? ` src="${escapeHtml(manifest.src)}"`
+          : '';
       return `<fragment-slot name="${escapeHtml(fragmentId)}" data-braid-area="${escapeHtml(area)}"${src}></fragment-slot>`;
     });
 
@@ -93,14 +110,14 @@ export function renderShellDocument(
           : `<meta name="${escapeHtml(meta.name ?? '')}" content="${escapeHtml(meta.content)}">`,
       ),
     ...(head.stylesheets ?? [])
-      .filter((sheet) => isSafeAssetUrl(sheet?.href))
+      .filter((sheet) => assetAllowed(sheet?.href))
       .map(
         (sheet) =>
           `<link rel="stylesheet" href="${escapeHtml(sheet.href)}"${sheet.integrity ? ` integrity="${escapeHtml(sheet.integrity)}" crossorigin="anonymous"` : ''}>`,
       ),
     `<style>.braid-shell{${gridDeclarations.join(';')}}${areaRules.join('')}</style>`,
     ...(head.scripts ?? [])
-      .filter((script) => isSafeAssetUrl(script?.src))
+      .filter((script) => assetAllowed(script?.src))
       .map((script) => {
         const attributes = [
           ...(script.type === 'module' ? ['type="module"'] : []),
@@ -125,7 +142,19 @@ export interface ShellDocumentsOptions extends RenderShellOptions {
    * Where shells come from: the same `snapshotRegistry()` the gateway serves fragments from, so
    * shells and fragments are always one snapshot — and a hot re-pin moves both together.
    */
-  registry: { snapshot(): Promise<RegistrySnapshot> };
+  registry: {
+    snapshot(): Promise<RegistrySnapshot>;
+    snapshotFor?(manifests: readonly FragmentManifest[]): RegistrySnapshot | undefined;
+  };
+  /**
+   * Path prefixes shells may be served at — e.g. `['/billing', '/promo']`. Routes outside them are
+   * not served from their definition.
+   *
+   * A served shell answers ahead of the app behind the gateway, so a route is a claim on part of
+   * the site. Without `paths`, only claims on the whole site (`/`, `/*`, a leading parameter) are
+   * refused; list `'/'` to allow those too.
+   */
+  paths?: readonly string[];
 }
 
 /**
@@ -136,7 +165,9 @@ export interface ShellDocumentsOptions extends RenderShellOptions {
  * answered with that route rendered by {@link renderShellDocument}. Anything no vanilla shell
  * claims returns null, and the gateway falls through to the app behind it.
  */
-export function shellDocuments(options: ShellDocumentsOptions): (request: Request) => Promise<Response | null> {
+export function shellDocuments(
+  options: ShellDocumentsOptions,
+): (request: Request, context?: { manifests: readonly FragmentManifest[] }) => Promise<Response | null> {
   // Fail at startup, not on the first page view.
   if (!isSafeAssetUrl(options.runtimeSrc)) {
     throw new Error(`braid-registry: runtimeSrc "${options.runtimeSrc}" must be an https: URL or a root-relative path`);
@@ -144,11 +175,30 @@ export function shellDocuments(options: ShellDocumentsOptions): (request: Reques
 
   /** Compiled routes for the snapshot last seen, recompiled only when a re-pin changes it. */
   let compiled: { snapshotId: string; routes: CompiledShellRoute[] } | undefined;
+  const prefixes = options.paths?.map((path) => path.replace(/\/+$/, '') || '/');
+  const warned = new Set<string>();
 
-  return async (request) => {
-    const snapshot = await options.registry.snapshot();
+  const servable = (shell: ShellManifest, path: string): boolean => {
+    const allowed = prefixes
+      ? prefixes.some((prefix) => prefix === '/' || path === prefix || path.startsWith(`${prefix}/`))
+      : !(path === '/' || /^\/[*:(]/.test(path));
+    if (!allowed && !warned.has(`${shell.id} ${path}`)) {
+      warned.add(`${shell.id} ${path}`);
+      console.warn(
+        `braid-registry: not serving shell "${shell.id}" at ${path} — ` +
+          (prefixes ? `outside the paths shellDocuments allows (${prefixes.join(', ')})` : `it claims the whole site; allow it with paths: ['/']`),
+      );
+    }
+    return allowed;
+  };
+
+  return async (request, context?: { manifests: readonly FragmentManifest[] }) => {
+    // The snapshot the gateway is actually serving fragments from, when it says which; a load the
+    // gateway refused never reaches the page as a shell ahead of its fragments.
+    const snapshot =
+      (context && options.registry.snapshotFor?.(context.manifests)) ?? (await options.registry.snapshot());
     if (compiled?.snapshotId !== snapshot.id) {
-      compiled = { snapshotId: snapshot.id, routes: compileShellRoutes(snapshot.shells ?? []) };
+      compiled = { snapshotId: snapshot.id, routes: compileShellRoutes(snapshot.shells ?? []).filter((route) => servable(route.shell, route.route.path)) };
     }
 
     const { pathname } = new URL(request.url);
@@ -184,8 +234,12 @@ function compileShellRoutes(shells: readonly ShellManifest[]): CompiledShellRout
             shell,
             route,
             // `/billing/*` also answers `/billing`, as pierce patterns do
-            matches: (pathname: string) =>
-              pattern.test({ pathname }) || pattern.test({ pathname: pathname.endsWith('/') ? pathname.slice(0, -1) : `${pathname}/` }),
+            // the same tolerance as the gateway's pierce matcher: never toggled into an empty path
+            matches: (pathname: string) => {
+              if (pattern.test({ pathname })) return true;
+              const toggled = pathname.endsWith('/') ? pathname.slice(0, -1) : `${pathname}/`;
+              return toggled !== '' && pattern.test({ pathname: toggled });
+            },
           },
         ];
       }),

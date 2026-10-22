@@ -151,7 +151,12 @@ const registry = snapshotRegistry({ store });
 createGateway({
   registry,
   registryRefreshMs: 5_000, // with hot re-pin, a published shell is live within seconds
-  documents: shellDocuments({ registry, runtimeSrc: '/assets/braid-runtime.js' }),
+  documents: shellDocuments({
+    registry,
+    runtimeSrc: '/assets/braid-runtime.js',
+    assetOrigins: ['https://cdn.example.com'], // third parties a shell may load from; default none
+    paths: ['/billing', '/promo'], // where shells may answer; default: anywhere but the whole site
+  }),
 });
 ```
 
@@ -162,11 +167,29 @@ createGateway({
   `<fragment-slot>` per slotted area, and the runtime module. Unbound fragments get their `src`.
 - **Untrusted input.** The snapshot is treated as untrusted at render time, not only at publish
   time. Text is escaped, a script or stylesheet URL that is not `https:` or root-relative is left
-  out, and a layout value that is not a CSS track list is dropped.
+  out, a layout value that is not a CSS track list is dropped, and an unbound fragment's `src` must
+  be a root-relative path.
+- **Operator limits.** Publishers decide what a shell contains, and the operator decides what a
+  served shell may do:
+  - `assetOrigins` lists the origins whose scripts and stylesheets a served shell may load. By
+    default only root-relative assets load, because a script a shell names runs on this origin,
+    beside every pierced fragment, every cookie and the registry API.
+  - `paths` lists the path prefixes shells may be served at. Without it, a route that claims the
+    whole site (`/`, `/*`, a leading parameter) is not served and is logged. List `'/'` to allow
+    those.
+- **HEAD.** A HEAD request gets the same status and headers without the body, so monitors and link
+  checkers see what a browser does.
+- **No CSP header.** Served pages carry no Content-Security-Policy. A strict `style-src` would block
+  the inline styles inside pierced fragments, so the right policy depends on your fragments; set
+  one at your edge.
 - **`runtimeSrc`.** A module you build and serve that runs `initBraid()` from `@braidlabs/core`. A
   served page has no bundler to resolve a bare import, so the runtime has to arrive as one file.
-- **Same snapshot.** Shells come from the snapshot the gateway is serving fragments from, so a
-  re-pin moves both together.
+- **Same snapshot.** Shells come from the snapshot whose fragments the gateway is serving, so a
+  re-pin moves both together. A snapshot the gateway refused to load, for example one with a
+  pattern that doesn't compile, can't put its shell ahead of the fragments still being served.
+- **Overlaps.** Two shells declaring the same route is a validation error. Routes in different
+  shells that can answer the same page, such as `/billing/*` and `/billing/:id`, get a
+  `shell-route-overlap` warning, and the shell with the earlier id wins.
 
 React, Angular and Angular SSR shells are applications. The console generates their code, and they
 are served by your app as before.

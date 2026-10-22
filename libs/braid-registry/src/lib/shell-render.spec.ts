@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createGateway } from '@braidlabs/gateway';
 import { renderShellDocument, shellDocuments } from './shell-render.js';
@@ -33,7 +33,8 @@ const storefront: ShellManifest = {
 const RUNTIME = '/assets/braid-runtime.js';
 
 describe('renderShellDocument()', () => {
-  const html = () => renderShellDocument(storefront, storefront.routes[0], manifests, { runtimeSrc: RUNTIME });
+  const html = () =>
+    renderShellDocument(storefront, storefront.routes[0], manifests, { runtimeSrc: RUNTIME, assetOrigins: ['https://cdn.example'] });
 
   it('renders the head, escaped', () => {
     const page = html();
@@ -77,6 +78,19 @@ describe('renderShellDocument()', () => {
     expect(page).toContain('<script src="/ok.js"></script>');
   });
 
+  it('loads cross-origin assets only from origins the operator allowed', () => {
+    const page = renderShellDocument(storefront, storefront.routes[0], manifests, { runtimeSrc: RUNTIME });
+
+    expect(page).not.toContain('cdn.example');
+    expect(page).toContain('<link rel="stylesheet" href="/assets/site.css">');
+  });
+
+  it("drops an unbound fragment's src unless it is a path on its own endpoint", () => {
+    const hostile = [manifests[0]!, { ...manifests[1]!, src: '//evil.example/x' }];
+
+    expect(renderShellDocument(storefront, storefront.routes[0], hostile, { runtimeSrc: RUNTIME })).not.toContain('evil.example');
+  });
+
   it('drops a layout value that is not a track list rather than writing it into a style rule', () => {
     const route = { ...storefront.routes[0], layout: { ...storefront.routes[0].layout, columns: '1fr; } body { display:none' } };
 
@@ -112,6 +126,48 @@ describe('shellDocuments()', () => {
     expect(await page!.text()).toContain('<fragment-slot name="billing"');
 
     expect(await documents(documentRequest('/about'))).toBeNull();
+  });
+
+  it('does not serve a route that claims the whole site unless the operator allows it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const everything = { ...storefront, id: 'everything', routes: [{ ...storefront.routes[0]!, path: '/*' }] };
+    const snapshot = await createSnapshot({ manifests, shells: [everything] });
+    const registry = snapshotRegistry({ store: memorySnapshotStore([snapshot]) });
+
+    expect(await shellDocuments({ registry, runtimeSrc: RUNTIME })(documentRequest('/anything'))).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('claims the whole site'));
+    expect(await shellDocuments({ registry, runtimeSrc: RUNTIME, paths: ['/'] })(documentRequest('/anything'))).not.toBeNull();
+    expect(await shellDocuments({ registry, runtimeSrc: RUNTIME, paths: ['/promo'] })(documentRequest('/anything'))).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('renders from the snapshot the gateway is serving, not one it refused to load', async () => {
+    const good = await createSnapshot({ manifests, shells: [storefront] });
+    // a snapshot written straight to the store, past validation: its fragment id cannot compile
+    const broken = await createSnapshot({ manifests: [...manifests, { id: 'bad/id', endpoint: 'https://x.internal' }], shells: [] });
+    const store = memorySnapshotStore([good, broken]);
+    await store.setHead?.(good.id);
+    const registry = snapshotRegistry({ store, verify: false });
+    const gateway = createGateway({ mode: 'production', registry, documents: shellDocuments({ registry, runtimeSrc: RUNTIME }) });
+    await gateway.refreshRegistry();
+
+    await store.setHead?.(broken.id);
+    await expect(gateway.refreshRegistry()).rejects.toThrow();
+
+    // the gateway kept the good snapshot's fragments, so the page keeps the good snapshot's shell
+    const response = await gateway.handle(documentRequest('/billing/1'));
+    expect(await response!.text()).toContain('<fragment-slot name="billing"');
+  });
+
+  it('answers HEAD for a page it serves, without the body', async () => {
+    const { documents } = await setup([storefront]);
+    const gateway = createGateway({ mode: 'production', registry: [...manifests], documents });
+
+    const response = await gateway.handle(new Request('https://www.example/billing/1', { method: 'HEAD' }));
+
+    expect(response!.status).toBe(200);
+    expect(response!.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response!.body).toBeNull();
   });
 
   it('leaves app-rendered shells to their apps', async () => {
