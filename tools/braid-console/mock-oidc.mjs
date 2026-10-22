@@ -25,7 +25,8 @@ const USERS = {
 export const MOCK_ROLE_MAP = {
   'braid-viewers': ['read'],
   'braid-contributors': ['read', 'publish'],
-  'braid-editors': ['read', 'publish', 'pin'],
+  // editors promote through environments, and may approve someone else's promotion to production
+  'braid-editors': ['read', 'publish', 'pin', 'promote', 'approve'],
 };
 
 export async function createMockOidc({ origin, prefix = '/mock-oidc' }) {

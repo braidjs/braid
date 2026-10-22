@@ -44,9 +44,15 @@ export interface AuditEvent {
   diff?: { added: number; removed: number; changed: number };
   /** The pull request a GitOps publish opened instead of publishing. */
   pullRequest?: string;
+  /** The environment a promotion, approval or rejection was in. */
+  environment?: string;
+  /** A promotion that is now waiting for approval rather than done. */
+  pending?: boolean;
+  /** For an approval or rejection: who requested the promotion — four-eyes in one event. */
+  requestedBy?: string;
 }
 
-export type AuditAction = 'publish' | 'pin';
+export type AuditAction = 'publish' | 'pin' | 'promote' | 'approve' | 'reject';
 
 /** Receives each event. May be async; nothing waits for it, and nothing it throws reaches a caller. */
 export type AuditSink = (event: AuditEvent) => void | Promise<void>;

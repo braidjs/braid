@@ -279,6 +279,59 @@ A few more details:
 Without a publisher API, CI can still publish from git: `braid registry publish --source` in a
 pipeline that runs on merge.
 
+### Environments, promotion and approvals
+
+HEAD is where publishing lands. Environments are named pointers beside it, and they move only by
+promotion. A gateway can follow an environment instead of HEAD:
+
+```ts
+createRegistryApi({
+  store,
+  ...authorizer,
+  environments: [
+    { name: 'staging' }, // promoted from HEAD
+    { name: 'production', from: 'staging', approvals: 1 },
+  ],
+});
+
+// production's gateway serves what was promoted to production, live within the refresh interval
+createGateway({ registry: snapshotRegistry({ store, environment: 'production' }), registryRefreshMs: 15_000 });
+```
+
+| Route | Does |
+| :--- | :--- |
+| `GET /environments` | each environment, where it points, and any promotion awaiting approval |
+| `POST /environments/:env/promote` | `{ id? }`: move the environment, or with `approvals`, ask to (202) |
+| `POST /environments/:env/approve` | approve the pending promotion |
+| `POST /environments/:env/reject` | withdraw it (the requester) or decline it (an approver) |
+
+- **What can be promoted.** An environment with a `from` source takes that source's current
+  snapshot, so production gets exactly what staging was tested with. It can also be promoted back
+  to a snapshot it served before, which is how it rolls back. One with no source takes HEAD, or any
+  snapshot named.
+- **Approvals.** With `approvals: 1`, a promotion waits until someone other than the requester
+  approves it. The API refuses to start without `identify`, because an approval that can't tell
+  people apart isn't one. Several rules keep the approval honest:
+  - **People are compared by `subject`,** a stable identity. `createOidcAuthorizer` supplies
+    issuer plus subject, so one person showing up under different display names on different
+    clients is still one person.
+  - **An approval names the request it approves** (`{ id, requestedAt }`, which the console
+    sends). It is refused if that request was withdrawn and replaced after review, or if the
+    environment moved since the request.
+  - **Steps are serialized.** Promote, approve and reject run one at a time per environment within
+    one API instance. Across instances, a store with compare-and-set would be needed.
+  - **Withdrawing** is the requester's, while they still hold the right to promote there.
+- **Rights per environment.** `promote` and `approve` are actions, and `authorize` receives the
+  environment. With `createOidcAuthorizer`, `roleMap` can grant `'promote:staging'` or
+  `'approve:production'`, and the bare action grants it everywhere. `DEFAULT_ROLE_MAP` grants
+  neither. `/permissions` reports both rights for each environment. If your own `authorize` returns
+  true for every action other than `read`, it now grants `promote` and `approve` too. Check it
+  before turning environments on.
+- **Ownership and audit.** Under per-tag ownership, a promotion is checked like a pin, by what it
+  changes. Every promotion, approval and rejection is an audit event carrying its `environment`.
+- **Storage.** Both bundled stores keep environments: memory, and the file store's `refs/` and
+  `pending/` beside `HEAD`.
+
 ### Per-tag ownership
 
 A registry is shared by many teams, and "may publish" is too coarse a right for it. With `owns`,

@@ -1,6 +1,6 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createSnapshot, type RegistrySnapshot } from './snapshot.js';
-import type { SnapshotStore } from './store.js';
+import { isEnvironmentName, type SnapshotStore } from './store.js';
 import { diffRegistries, validateRegistry, type RegistryFinding } from './analysis.js';
 import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descriptor.js';
 import type { ShellManifest } from './shell.js';
@@ -35,7 +35,7 @@ export interface RegistryApiOptions {
    * A publish that also pins (the default) is checked for both `publish` and `pin`, so a role that
    * may only publish candidates cannot move HEAD by leaving `pin` unset.
    */
-  authorize?: (request: Request, action: RegistryAction) => AuthorizeResult | Promise<AuthorizeResult>;
+  authorize?: (request: Request, action: RegistryAction, context?: AuthorizeContext) => AuthorizeResult | Promise<AuthorizeResult>;
   /**
    * Who is making the request, as the server knows it — an email or subject from a verified token.
    *
@@ -44,6 +44,13 @@ export interface RegistryApiOptions {
    * rather than a note.
    */
   identify?: (request: Request) => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * A stable identifier for the caller — the token's issuer and subject, say — for comparisons that
+   * must not be fooled by display names. `identify` returns whatever a token carries (an email from
+   * one client, a username from another), so the same person can look like two; approval compares
+   * this instead when it is set. `createOidcAuthorizer` provides it.
+   */
+  subject?: (request: Request) => string | null | undefined | Promise<string | null | undefined>;
   /** Path the API is mounted at. Defaults to `/__braid/registry-api`. */
   basePath?: string;
   /**
@@ -80,9 +87,44 @@ export interface RegistryApiOptions {
    * the repository. Pins still act directly on the store, so under GitOps leave pinning to merges.
    */
   publisher?: SnapshotPublisher;
+  /**
+   * Named environments with promotion, and optionally approval. See {@link EnvironmentConfig}.
+   * Needs a store with environment support (both bundled stores have it), and `identify` when any
+   * environment requires approval — an approval is only worth anything if it comes from someone
+   * other than the requester.
+   */
+  environments?: readonly EnvironmentConfig[];
 }
 
-export type RegistryAction = 'read' | 'publish' | 'pin';
+export type RegistryAction = 'read' | 'publish' | 'pin' | 'promote' | 'approve';
+
+/** What an action is about, for rights scoped narrower than the action — `promote` to `production`. */
+export interface AuthorizeContext {
+  environment?: string;
+}
+
+/**
+ * A named environment — `staging`, `production` — that points at a snapshot, beside HEAD.
+ *
+ * HEAD stays where publishing lands. An environment moves only by **promotion**, and a gateway
+ * that follows it (`snapshotRegistry({ environment })`) serves what was promoted, not what was
+ * published.
+ */
+export interface EnvironmentConfig {
+  /** Lowercase letters, digits and `-`, starting with a letter. */
+  name: string;
+  /**
+   * The environment this one is promoted from. A promotion must take that environment's current
+   * snapshot (or roll back to one this environment served before). Without it, a promotion takes
+   * HEAD, or any snapshot named explicitly.
+   */
+  from?: string;
+  /**
+   * How many people other than the requester must approve a promotion before it moves the
+   * environment. 0 (the default) or 1.
+   */
+  approvals?: 0 | 1;
+}
 
 export type AuthorizeResult = boolean | Response;
 
@@ -116,6 +158,8 @@ export interface RegistryPermissions {
   publish: boolean;
   pin: boolean;
   actor: string | null;
+  /** Promote and approve rights per environment, when the API has environments. */
+  environments?: Record<string, { promote: boolean; approve: boolean }>;
   /**
    * The tags the caller may change, `'*'` for all, or null when the API has no tag ownership.
    * Optional because a server from before per-tag ownership does not send it; read absent as null.
@@ -142,12 +186,55 @@ export interface RegistryApi {
 export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
   const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
+  const environments = new Map((options.environments ?? []).map((environment) => [environment.name, environment]));
+
+  // Configuration mistakes fail at startup, where they are cheap to read, not on the first promote.
+  for (const environment of environments.values()) {
+    if (!isEnvironmentName(environment.name)) {
+      throw new Error(`braid-registry: environment name "${environment.name}" must be lowercase letters, digits and "-", starting with a letter`);
+    }
+    if (environment.from !== undefined && (environment.from === environment.name || !environments.has(environment.from))) {
+      throw new Error(`braid-registry: environment "${environment.name}" is promoted from "${environment.from}", which is not a configured environment`);
+    }
+    if (environment.approvals && !identify) {
+      throw new Error(`braid-registry: environment "${environment.name}" requires approval, which needs identify — an approval must come from someone other than the requester`);
+    }
+  }
+  if (environments.size > 0 && (!store.ref || !store.setRef || !store.refLog || !store.pending || !store.setPending)) {
+    throw new Error('braid-registry: environments need a store with environment support (ref, setRef, refLog, pending, setPending)');
+  }
 
   /**
    * What a write handler learned on its way to a response, for the audit event that describes it —
    * and who the caller is, resolved once and used for both the event and `labels.publishedBy`.
    */
-  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff' | 'pullRequest'> & { actor: string | null };
+  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff' | 'environment' | 'pending' | 'requestedBy' | 'pullRequest'> & {
+    actor: string | null;
+  };
+
+  /**
+   * One promotion step at a time per environment. Promote, approve and reject are each a read, a
+   * check and a write; interleaved, two promotes could both see "nothing pending", or an approval
+   * could apply a request that was just withdrawn. This serializes them in-process; across several
+   * API instances, a store with compare-and-set is what closes it.
+   */
+  const locks = new Map<string, Promise<unknown>>();
+  function serialized<T>(environment: string, step: () => Promise<T>): Promise<T> {
+    const previous = locks.get(environment) ?? Promise.resolve();
+    const next = previous.then(step, step);
+    locks.set(environment, next.catch(() => undefined));
+    return next;
+  }
+
+  /** The caller's stable identity for four-eyes: `subject` when configured, else the actor. */
+  async function subjectOf(request: Request, actor: string | null): Promise<string | null> {
+    if (!options.subject) return actor;
+    try {
+      return (await options.subject(request)) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Runs a write and audits it from the response it produced, so every path out of the handler —
@@ -216,6 +303,18 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
         }
         if (request.method === 'POST' && route === '/head') {
           return await audited(request, 'pin', (d) => crossSite(request) ?? pin(request, d));
+        }
+        if (request.method === 'GET' && route === '/environments') return await listEnvironments(request);
+        const environmentRoute = /^\/environments\/([^/]+)\/(promote|approve|reject)$/.exec(route);
+        if (request.method === 'POST' && environmentRoute) {
+          const [, name, step] = environmentRoute as unknown as [string, string, 'promote' | 'approve' | 'reject'];
+          const environment = environments.get(decodeURIComponent(name));
+          if (!environment) return json({ error: `no environment "${decodeURIComponent(name)}"` }, 404);
+          return await audited(request, step, (d) => {
+            d.environment = environment.name;
+            const handler = step === 'promote' ? promote : step === 'approve' ? approve : reject;
+            return crossSite(request) ?? serialized(environment.name, () => handler(request, environment, d));
+          });
         }
         if (request.method === 'POST' && crossSite(request)) return crossSite(request)!;
 
@@ -465,7 +564,154 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       actor: (identify ? await identify(request) : null) ?? null,
       tags: options.owns ? ((await options.owns(request)) ?? []) : null,
     };
+    if (environments.size > 0) {
+      result.environments = {};
+      for (const name of environments.keys()) {
+        result.environments[name] = {
+          promote: (await refuse(request, 'promote', { environment: name })) === null,
+          approve: (await refuse(request, 'approve', { environment: name })) === null,
+        };
+      }
+    }
     return json(result);
+  }
+
+  /** Every environment, where it points, and what is waiting for approval in it. */
+  async function listEnvironments(request: Request): Promise<Response> {
+    const denied = await refuse(request, 'read');
+    if (denied) return denied;
+
+    const items = [];
+    for (const environment of environments.values()) {
+      items.push({
+        name: environment.name,
+        from: environment.from ?? null,
+        approvals: environment.approvals ?? 0,
+        id: await store.ref!(environment.name),
+        pending: await store.pending!(environment.name),
+      });
+    }
+    return json({ items });
+  }
+
+  /**
+   * Moves an environment to a snapshot — or, where approval is required, asks to.
+   *
+   * What may be promoted: the source environment's current snapshot, or one this environment has
+   * served before (a rollback). With no source: HEAD, or any snapshot named.
+   */
+  async function promote(request: Request, environment: EnvironmentConfig, audit: AuditDetail): Promise<Response> {
+    const denied = await refuse(request, 'promote', { environment: environment.name });
+    if (denied) return denied;
+
+    const body = await readJson<{ id?: unknown }>(request);
+    if (body instanceof Response) return body;
+    if (body?.id !== undefined && !isSnapshotId(body.id)) return json({ error: 'expected { id } to be a snapshot id' }, 400);
+
+    const current = await store.ref!(environment.name);
+    audit.previousId = current;
+    const source = environment.from ? await store.ref!(environment.from) : ((await store.head?.()) ?? null);
+    const id = (body?.id as string | undefined) ?? source;
+    if (!id) {
+      return json({ error: `nothing to promote — ${environment.from ? `"${environment.from}" points at nothing yet` : 'nothing is published'}` }, 409);
+    }
+
+    const servedBefore = (await store.refLog!(environment.name)).some((move) => move.id === id);
+    if (environment.from && id !== source && !servedBefore) {
+      return json(
+        { error: `"${environment.name}" is promoted from "${environment.from}", which points at ${source ?? 'nothing'} — promote that, or a snapshot "${environment.name}" served before` },
+        409,
+      );
+    }
+
+    const target = await store.get(id);
+    if (!target) return json({ error: `no snapshot "${id}"` }, 404);
+    audit.snapshotId = id;
+
+    const before = current ? await store.get(current) : null;
+    const ownership = await ownershipRefusal(
+      request,
+      { manifests: before?.manifests ?? [], shells: before?.shells ?? [] },
+      { manifests: target.manifests, shells: target.shells ?? [] },
+    );
+    if (ownership) return ownership;
+
+    if (environment.approvals) {
+      if (await store.pending!(environment.name)) {
+        return json({ error: `a promotion into "${environment.name}" is already waiting for approval — approve or reject it first` }, 409);
+      }
+      const requestedSubject = await subjectOf(request, audit.actor);
+      if (!audit.actor || !requestedSubject) {
+        return json({ error: 'a promotion that needs approval needs an identified requester' }, 403);
+      }
+      const pending = {
+        id,
+        base: current,
+        requestedBy: audit.actor,
+        ...(options.subject ? { requestedSubject } : {}),
+        requestedAt: new Date().toISOString(),
+      };
+      await store.setPending!(environment.name, pending);
+      audit.pending = true;
+      return json({ environment: environment.name, pending }, 202);
+    }
+
+    await store.setRef!(environment.name, id, audit.actor);
+    return json({ environment: environment.name, id });
+  }
+
+  /** Approves the pending promotion: by someone with the right who did not ask for it. */
+  async function approve(request: Request, environment: EnvironmentConfig, audit: AuditDetail): Promise<Response> {
+    const denied = await refuse(request, 'approve', { environment: environment.name });
+    if (denied) return denied;
+
+    const pending = await store.pending!(environment.name);
+    if (!pending) return json({ error: `nothing is waiting for approval in "${environment.name}"` }, 404);
+    audit.snapshotId = pending.id;
+    audit.previousId = pending.base;
+    audit.requestedBy = pending.requestedBy;
+
+    // An approval names what it approves. Without this, a requester could withdraw the request the
+    // approver reviewed and ask for something else, and the approval would land on that instead.
+    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request);
+    if (body instanceof Response) return body;
+    if (body?.id !== pending.id || body?.requestedAt !== pending.requestedAt) {
+      return json({ error: 'that is not the promotion waiting for approval — reload and review the current one', pending }, 409);
+    }
+
+    const approver = await subjectOf(request, audit.actor);
+    const requester = pending.requestedSubject ?? pending.requestedBy;
+    if (!audit.actor || !approver || approver === requester) {
+      return json({ error: 'a promotion must be approved by someone other than whoever requested it' }, 403);
+    }
+    // The approver saw a change from `base`. If the environment has moved since, that is no
+    // longer the change being made, and approving it would be approving something unseen.
+    if ((await store.ref!(environment.name)) !== pending.base) {
+      return json({ error: `"${environment.name}" moved since this promotion was requested — reject it and request again` }, 409);
+    }
+
+    await store.setRef!(environment.name, pending.id, audit.actor);
+    await store.setPending!(environment.name, null);
+    return json({ environment: environment.name, id: pending.id, approvedBy: audit.actor });
+  }
+
+  /** Withdraws the pending promotion: the requester changing their mind, or an approver declining. */
+  async function reject(request: Request, environment: EnvironmentConfig, audit: AuditDetail): Promise<Response> {
+    const pending = await store.pending!(environment.name);
+    if (!pending) return json({ error: `nothing is waiting for approval in "${environment.name}"` }, 404);
+    audit.snapshotId = pending.id;
+    audit.previousId = pending.base;
+    audit.requestedBy = pending.requestedBy;
+
+    // The requester may withdraw — while they still hold the right to promote there; anyone else
+    // needs the right to approve.
+    const caller = await subjectOf(request, audit.actor);
+    const isRequester = caller !== null && caller === (pending.requestedSubject ?? pending.requestedBy);
+    const denied = await refuse(request, isRequester ? 'promote' : 'approve', { environment: environment.name });
+    if (denied) return denied;
+
+    await store.setPending!(environment.name, null);
+    return json({ environment: environment.name, rejected: pending.id });
   }
 
   /** A 403 naming every item the caller may not change, or null when tag ownership allows it all. */
@@ -485,7 +731,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   }
 
   /** Returns a refusal response, or null when the action is allowed. */
-  async function refuse(request: Request, action: RegistryAction): Promise<Response | null> {
+  async function refuse(request: Request, action: RegistryAction, context?: AuthorizeContext): Promise<Response | null> {
     if (!authorize) {
       if (action === 'read') return null;
       return json(
@@ -498,7 +744,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       );
     }
 
-    const outcome = await authorize(request, action);
+    const outcome = await authorize(request, action, context);
     if (outcome instanceof Response) return outcome;
     return outcome ? null : json({ error: `not authorized to ${action}` }, 403);
   }

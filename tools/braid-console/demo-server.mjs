@@ -132,6 +132,9 @@ const oidc = MOCK_AUTH ? await createMockOidc({ origin: ORIGIN }) : null;
 
 const registryApi = createRegistryApi({
   store,
+  // staging → production. With sign-in, production needs a second person to approve a promotion;
+  // without it there is no way to tell people apart, so the demo promotes directly.
+  environments: [{ name: 'staging' }, { name: 'production', from: 'staging', approvals: oidc ? 1 : 0 }],
   // every publish, pin and refused write, one JSON line each — what a log shipper would forward
   audit: jsonLinesAuditSink((line) => process.stdout.write(`audit ${line}`)),
   ...(oidc
