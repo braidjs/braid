@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { DescriptorNote, FieldChange, NamedPrincipal, RegistryFinding } from '@braidlabs/registry';
 import { AccessPanel } from './access-panel.js';
@@ -126,11 +126,14 @@ export function RegistryEditor({
 
   const status = useMemo(() => draftStatus(draft), [draft]);
 
+  // Through a ref, so a host passing an inline callback hears only real changes, not one per render.
+  const dirtyListener = useRef(onDirtyChange);
+  dirtyListener.current = onDirtyChange;
   useEffect(() => {
-    onDirtyChange?.(!status.clean);
-  }, [status.clean, onDirtyChange]);
+    dirtyListener.current?.(!status.clean);
+  }, [status.clean]);
   // Once unmounted the editor holds no draft, so there is nothing left for the host to warn about.
-  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  useEffect(() => () => dirtyListener.current?.(false), []);
 
   // Computed whether or not the panel is open: an access loss is a finding, and a finding hidden
   // behind a toggle nobody pressed is not a finding.

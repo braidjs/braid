@@ -261,6 +261,20 @@ describe('<RegistryEditor>', () => {
     expect(dirty).toHaveBeenLastCalledWith(false);
   });
 
+  it('reports dirtiness only when it changes, even given a fresh callback every render', async () => {
+    const api = fakeApi();
+    const seen: boolean[] = [];
+    const renderWith = () => act(async () => root.render(<RegistryEditor api={api} onDirtyChange={(dirty) => seen.push(dirty)} />));
+    await renderWith();
+    await click(byLabel('Remove billing'));
+    seen.length = 0;
+
+    await renderWith();
+    await renderWith();
+
+    expect(seen).toEqual([]);
+  });
+
   it('reports an authorization refusal in the server’s own words', async () => {
     const api = fakeApi({ publish: () => json({ error: 'not authorized to publish' }, 403) });
     await render(api);
