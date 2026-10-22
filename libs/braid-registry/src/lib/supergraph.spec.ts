@@ -100,10 +100,14 @@ describe('subgraph() limits on what a team registry can declare', () => {
     );
     // a prefix is a path segment, not a string prefix
     await expect(team({ pierce: ['/orders-admin'] }, { routes: ['/orders'] })).rejects.toThrow(/outside its routes/);
+    // judged as URLPattern reads the pattern: these are /login however they are written
+    for (const pattern of ['/orders/../login', '/orders/%2e%2e/login', '/orders{/..}/login']) {
+      await expect(team({ pierce: [pattern] }, { routes: ['/orders'] })).rejects.toThrow(/outside its routes/);
+    }
   });
 
   it('refuses a claim on the whole site when the org declared no routes', async () => {
-    for (const pattern of ['/', '/*', '/:page', '/(.*)']) {
+    for (const pattern of ['/', '/*', '/:page', '/(.*)', '/{*}', '/{:page}']) {
       await expect(team({ pierce: [pattern] })).rejects.toThrow(/claims the whole site/);
     }
     await expect(team({ pierce: ['/orders/*'] })).resolves.toHaveLength(1);

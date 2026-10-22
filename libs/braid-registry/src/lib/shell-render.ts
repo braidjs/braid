@@ -1,6 +1,7 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { isSafeAssetUrl, isSafeTrackList, parseAreas, type ShellManifest, type ShellRoute } from './shell.js';
 import type { RegistrySnapshot } from './snapshot.js';
+import { claimsWholeSite, withinPrefixes } from './route-scope.js';
 
 /**
  * Shells served from their definition: the gateway answers a page by rendering the shell the
@@ -87,7 +88,7 @@ export function renderShellDocument(
       const manifest = byId.get(fragmentId);
       // a path on the fragment's own endpoint; anything else is not a src the client should resolve
       const src =
-        manifest?.bound === false && typeof manifest.src === 'string' && /^\/(?![/\\])/.test(manifest.src)
+        manifest?.bound === false && typeof manifest.src === 'string' && manifest.src.startsWith('/') && isSafeAssetUrl(manifest.src)
           ? ` src="${escapeHtml(manifest.src)}"`
           : '';
       return `<fragment-slot name="${escapeHtml(fragmentId)}" data-braid-area="${escapeHtml(area)}"${src}></fragment-slot>`;
@@ -179,9 +180,7 @@ export function shellDocuments(
   const warned = new Set<string>();
 
   const servable = (shell: ShellManifest, path: string): boolean => {
-    const allowed = prefixes
-      ? prefixes.some((prefix) => prefix === '/' || path === prefix || path.startsWith(`${prefix}/`))
-      : !(path === '/' || /^\/[*:(]/.test(path));
+    const allowed = prefixes ? withinPrefixes(path, prefixes) : !claimsWholeSite(path);
     if (!allowed && !warned.has(`${shell.id} ${path}`)) {
       warned.add(`${shell.id} ${path}`);
       console.warn(
