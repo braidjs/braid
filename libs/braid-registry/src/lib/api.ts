@@ -4,6 +4,7 @@ import type { SnapshotStore } from './store.js';
 import { diffRegistries, validateRegistry, type RegistryFinding } from './analysis.js';
 import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descriptor.js';
 import type { ShellManifest } from './shell.js';
+import { createAuditEmitter, type AuditAction, type AuditEvent, type AuditSink } from './audit.js';
 
 /**
  * The registry write API — fetch-native, like the gateway, so it mounts on any runtime.
@@ -50,6 +51,14 @@ export interface RegistryApiOptions {
    */
   fetchDescriptors?: boolean;
   fetch?: typeof fetch;
+  /**
+   * Where audit events go — one per attempted write, whether it succeeded, was refused for lack of
+   * rights, or was rejected by the server. Reads are not audited. See `audit.ts` for the event and
+   * the `jsonLinesAuditSink` and `webhookAuditSink` helpers.
+   *
+   * Pair it with `identify`: an event's `actor` is whoever `identify` names, and is null without it.
+   */
+  audit?: AuditSink | readonly AuditSink[];
 }
 
 export type RegistryAction = 'read' | 'publish' | 'pin';
@@ -104,6 +113,47 @@ export interface RegistryApi {
 
 export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
+  const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
+
+  /** What a write handler learned on its way to a response, for the audit event that describes it. */
+  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff'>;
+
+  /**
+   * Runs a write and audits it from the response it produced, so every path out of the handler —
+   * refusal, validation error, conflict, success — is recorded the same way, and none can be missed
+   * by a branch that forgot to emit.
+   */
+  async function audited(
+    request: Request,
+    action: AuditAction,
+    run: (detail: AuditDetail) => Promise<Response>,
+  ): Promise<Response> {
+    const detail: AuditDetail = {};
+    const response = await run(detail);
+    if (!emitAudit) return response;
+
+    const { status } = response;
+    const outcome = status < 300 ? 'success' : status === 401 || status === 403 ? 'denied' : 'rejected';
+    const reason = outcome === 'success' ? undefined : await errorOf(response);
+    let actor: string | null = null;
+    try {
+      actor = (await identify?.(request)) ?? null;
+    } catch {
+      // an unidentifiable caller is recorded as such, not as a failed request
+    }
+
+    emitAudit({
+      version: 1,
+      at: new Date().toISOString(),
+      action,
+      outcome,
+      actor,
+      status,
+      ...detail,
+      ...(reason === undefined ? {} : { reason }),
+    });
+    return response;
+  }
 
   return {
     async handle(request: Request): Promise<Response | null> {
@@ -126,8 +176,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
         }
         if (request.method === 'GET' && route === '/head') return await getHead(request);
         if (request.method === 'GET' && route === '/permissions') return await permissions(request);
-        if (request.method === 'POST' && route === '/snapshots') return await publish(request);
-        if (request.method === 'POST' && route === '/head') return await pin(request);
+        if (request.method === 'POST' && route === '/snapshots') return await audited(request, 'publish', (d) => publish(request, d));
+        if (request.method === 'POST' && route === '/head') return await audited(request, 'pin', (d) => pin(request, d));
 
         return json({ error: `no route for ${request.method} ${route}` }, 404);
       } catch (error) {
@@ -170,7 +220,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * validates as you type because that is good to use, not because it is trusted; this is the
    * check that decides whether a snapshot exists.
    */
-  async function publish(request: Request): Promise<Response> {
+  async function publish(request: Request, audit: AuditDetail): Promise<Response> {
     const denied = await refuse(request, 'publish');
     if (denied) return denied;
 
@@ -191,6 +241,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     }
 
     const previousId = (await store.head?.()) ?? null;
+    audit.previousId = previousId;
     if (body.baseId !== undefined && body.baseId !== previousId) {
       return json(
         {
@@ -231,6 +282,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       ...(labels ? { labels } : {}),
     });
     await store.put(snapshot);
+    audit.snapshotId = snapshot.id;
+    audit.pinned = false;
 
     // Checked again just before moving HEAD: descriptor probes above can take seconds, and another
     // publish may have pinned meanwhile. The snapshot stays stored either way — it is immutable and
@@ -244,6 +297,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     }
 
     if (shouldPin) await store.setHead?.(snapshot.id);
+    audit.pinned = shouldPin;
 
     const result: PublishResult = {
       snapshot: { id: snapshot.id, createdAt: snapshot.createdAt, fragmentCount: snapshot.manifests.length },
@@ -252,11 +306,14 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       pinned: shouldPin,
       ...(previous ? { diff: diffRegistries(previous.manifests, snapshot.manifests) } : {}),
     };
+    if (result.diff) {
+      audit.diff = { added: result.diff.added.length, removed: result.diff.removed.length, changed: result.diff.changed.length };
+    }
 
     return json(result, 201);
   }
 
-  async function pin(request: Request): Promise<Response> {
+  async function pin(request: Request, audit: AuditDetail): Promise<Response> {
     const denied = await refuse(request, 'pin');
     if (denied) return denied;
 
@@ -269,7 +326,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     if (!snapshot) return json({ error: `no snapshot "${id}" — cannot pin what is not stored` }, 404);
 
     if (!store.setHead) return json({ error: 'this store does not track a head' }, 501);
+    audit.previousId = (await store.head?.()) ?? null;
     await store.setHead(id);
+    audit.snapshotId = id;
 
     return json({ id, pinned: true });
   }
@@ -335,4 +394,14 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json;charset=UTF-8', 'cache-control': 'no-store' },
   });
+}
+
+/** The `error` a refusal carried, for the audit record of why. */
+async function errorOf(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.clone().json()) as { error?: unknown };
+    return typeof body?.error === 'string' ? body.error : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -168,6 +168,39 @@ const response = await api.handle(request); // null when the path is not the API
 - **Omitted `shells` carry HEAD's forward**, so a client that only edits fragments cannot delete
   every shell by accident; `[]` removes them.
 
+### Audit export
+
+Every attempted write produces one audit event: a publish or pin that succeeded, one refused for
+lack of rights (`denied`), or one the server rejected (`rejected`), such as a registry with errors
+or a HEAD that moved. Each event carries the verified actor (from `identify`), the HTTP status, the
+snapshot ids involved and, for a refusal, the reason. Reads are not audited.
+
+```ts
+import { createRegistryApi, jsonLinesAuditSink, webhookAuditSink } from '@braidlabs/registry';
+
+createRegistryApi({
+  store,
+  ...authorizer,
+  audit: [
+    // one JSON object per line, for Fluent Bit, Vector, or the Splunk or Datadog agent to ship
+    jsonLinesAuditSink((line) => process.stdout.write(line)),
+    // or straight to an HTTP collector, batched
+    webhookAuditSink({ url: 'https://splunk.example/services/collector/raw', headers: { authorization: `Splunk ${token}` } }),
+  ],
+});
+```
+
+```json
+{"version":1,"at":"2026-10-22T09:14:03.112Z","action":"pin","outcome":"success","actor":"ada@example.com","status":200,"previousId":"reg_9f…","snapshotId":"reg_41…"}
+```
+
+Sinks are best effort. They run after the response is decided, and a sink that throws or rejects
+is logged once and never changes what the caller gets. That way an audit pipeline that is down
+cannot stop someone rolling back a broken page. `webhookAuditSink` batches events (50 per POST,
+or every 5 seconds). A batch the endpoint refuses is kept for the next flush. When the queue
+reaches 10 000 events, the oldest are dropped and the count is logged. For fail-closed auditing,
+ship the JSON-lines output with a durable log agent.
+
 ### Okta
 
 `createOidcAuthorizer` verifies bearer tokens against the issuer's JWKS and maps groups and scopes
