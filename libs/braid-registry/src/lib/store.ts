@@ -23,6 +23,41 @@ export interface SnapshotStore {
   /** The most recently published snapshot id, when the store tracks one. */
   head?(): Promise<string | null>;
   setHead?(id: string): Promise<void>;
+
+  /**
+   * Named environments — `staging`, `production` — each pointing at a snapshot, beside HEAD. HEAD
+   * stays the publish target; an environment moves only by promotion. All optional: a store
+   * without them simply has no environments.
+   */
+  ref?(environment: string): Promise<string | null>;
+  /** Points an environment at a snapshot and appends the move to its log. */
+  setRef?(environment: string, id: string, by?: string | null): Promise<void>;
+  /** An environment's moves, newest first — what a rollback may return it to. */
+  refLog?(environment: string, options?: { limit?: number }): Promise<RefMove[]>;
+  /** The promotion waiting for approval in an environment, if any. */
+  pending?(environment: string): Promise<PendingPromotion | null>;
+  setPending?(environment: string, pending: PendingPromotion | null): Promise<void>;
+}
+
+export interface RefMove {
+  id: string;
+  at: string;
+  by: string | null;
+}
+
+/** A promotion requested into an environment that needs approval before it moves. */
+export interface PendingPromotion {
+  /** The snapshot to move the environment to. */
+  id: string;
+  /** What the environment pointed at when this was requested — approval is refused if it moved. */
+  base: string | null;
+  requestedBy: string;
+  requestedAt: string;
+}
+
+/** Environment names end up in file names and URLs, so they are kept to a short, plain charset. */
+export function isEnvironmentName(name: unknown): name is string {
+  return typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name);
 }
 
 export interface SnapshotRef {
@@ -48,6 +83,8 @@ export function toRef(snapshot: RegistrySnapshot): SnapshotRef {
 export function memorySnapshotStore(seed: readonly RegistrySnapshot[] = []): SnapshotStore {
   const snapshots = new Map<string, RegistrySnapshot>();
   let head: string | null = null;
+  const refs = new Map<string, RefMove[]>();
+  const pending = new Map<string, PendingPromotion>();
 
   for (const snapshot of seed) {
     snapshots.set(snapshot.id, snapshot);
@@ -75,6 +112,25 @@ export function memorySnapshotStore(seed: readonly RegistrySnapshot[] = []): Sna
         throw new Error(`braid-registry: cannot point head at unknown snapshot "${id}"`);
       }
       head = id;
+    },
+    async ref(environment) {
+      return refs.get(environment)?.[0]?.id ?? null;
+    },
+    async setRef(environment, id, by = null) {
+      if (!isEnvironmentName(environment)) throw new Error(`braid-registry: invalid environment name "${environment}"`);
+      if (!snapshots.has(id)) throw new Error(`braid-registry: cannot point ${environment} at unknown snapshot "${id}"`);
+      refs.set(environment, [{ id, at: new Date().toISOString(), by }, ...(refs.get(environment) ?? [])]);
+    },
+    async refLog(environment, { limit } = {}) {
+      const log = refs.get(environment) ?? [];
+      return limit === undefined ? [...log] : log.slice(0, limit);
+    },
+    async pending(environment) {
+      return pending.get(environment) ?? null;
+    },
+    async setPending(environment, value) {
+      if (value) pending.set(environment, value);
+      else pending.delete(environment);
     },
   };
 }

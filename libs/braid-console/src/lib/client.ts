@@ -176,6 +176,41 @@ export async function fetchPermissions(api: ConsoleApi = {}, signal?: AbortSigna
   }
 }
 
+/** An environment as `GET /environments` describes it. */
+export interface EnvironmentState {
+  name: string;
+  from: string | null;
+  approvals: number;
+  id: string | null;
+  pending: { id: string; base: string | null; requestedBy: string; requestedAt: string } | null;
+}
+
+/**
+ * The registry's environments. A server with none — or too old to have them — answers 404, which
+ * reads as an empty list: there is nothing to promote to.
+ */
+export async function fetchEnvironments(api: ConsoleApi = {}, signal?: AbortSignal): Promise<EnvironmentState[]> {
+  try {
+    return (await apiRequest<{ items: EnvironmentState[] }>(api, '/environments', { method: 'GET' }, signal)).items;
+  } catch (error) {
+    if (error instanceof RegistryApiError && error.status === 404) return [];
+    throw error;
+  }
+}
+
+/** Promotes a snapshot into an environment; `pending` when the environment needs approval. */
+export async function promoteSnapshot(api: ConsoleApi, environment: string, id: string): Promise<{ pending?: unknown }> {
+  return apiRequest(api, `/environments/${encodeURIComponent(environment)}/promote`, { method: 'POST', body: JSON.stringify({ id }) });
+}
+
+export async function approvePromotion(api: ConsoleApi, environment: string): Promise<void> {
+  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/approve`, { method: 'POST', body: '{}' });
+}
+
+export async function rejectPromotion(api: ConsoleApi, environment: string): Promise<void> {
+  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/reject`, { method: 'POST', body: '{}' });
+}
+
 /** Re-points HEAD. Rollback is this and nothing else. */
 export async function pinSnapshot(api: ConsoleApi, id: string): Promise<void> {
   await apiRequest(api, '/head', { method: 'POST', body: JSON.stringify({ id }) });

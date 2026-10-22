@@ -98,6 +98,17 @@ describe('createOidcAuthorizer', () => {
     expect(authorizer().owns).toBeUndefined();
   });
 
+  it('scopes promote and approve to one environment, as roleMap writes them', async () => {
+    const auth = authorizer({ roleMap: { releasers: ['read', 'promote:staging'], approvers: ['approve:production'] } });
+    const releaser = request(await token({ groups: ['releasers'] }));
+    const approver = request(await token({ groups: ['approvers'] }));
+
+    expect(await auth.authorize(releaser, 'promote', { environment: 'staging' })).toBe(true);
+    expect(await auth.authorize(releaser, 'promote', { environment: 'production' })).toBe(false);
+    expect(await auth.authorize(releaser, 'promote')).toBe(false);
+    expect(await auth.authorize(approver, 'approve', { environment: 'production' })).toBe(true);
+  });
+
   it('refuses a token without exp, which would never expire', async () => {
     const forever = await new SignJWT({ groups: ['braid-editors'] })
       .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
