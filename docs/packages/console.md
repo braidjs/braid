@@ -167,7 +167,7 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
   artifact.
 - **API and CI first.** Everything the console does is an HTTP call. A pipeline validates with
   `validateRegistry`, publishes with a client-credentials token, and sends `baseId` to avoid races.
-  Teams that prefer GitOps keep snapshots in git and publish from CI.
+  Teams that prefer GitOps give the API a `githubPublisher`, so every publish from the console opens a pull request (see [GitOps](./registry.md#gitops-publish-by-pull-request)), or keep snapshots in git and publish from CI.
 - **Auditable.** Every snapshot records who published it, taken from the verified token. History
   is append-only, and rollback is a re-pin. Every write attempt (publish, pin, and refusals) is
   also an audit event for your SIEM, as JSON lines or batched to a webhook (see
@@ -175,8 +175,7 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
-Planned: named environments with promotion and approvals, and a GitOps mode that opens a pull request
-instead of publishing.
+Planned: named environments with promotion and approvals.
 
 ---
 

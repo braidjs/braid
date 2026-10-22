@@ -6,6 +6,7 @@ import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descr
 import type { ShellManifest } from './shell.js';
 import { createAuditEmitter, type AuditAction, type AuditEvent, type AuditSink } from './audit.js';
 import { describeViolations, ownershipViolations, type OwnedTags, type RegistryContent } from './ownership.js';
+import type { SnapshotPublisher } from './github-publisher.js';
 
 /**
  * The registry write API — fetch-native, like the gateway, so it mounts on any runtime.
@@ -71,6 +72,14 @@ export interface RegistryApiOptions {
    * this from token groups.
    */
   owns?: (request: Request) => OwnedTags | null | undefined | Promise<OwnedTags | null | undefined>;
+  /**
+   * GitOps: propose each publish for review instead of making it. A valid publish — validated,
+   * ownership-checked, minted exactly as it would be stored — is handed to the publisher (a GitHub
+   * pull request with `githubPublisher`), the store and HEAD are left alone, and the answer is 202
+   * with the pull request. Merging is what publishes, through whatever deploys the registry from
+   * the repository. Pins and promotions still act directly.
+   */
+  publisher?: SnapshotPublisher;
 }
 
 export type RegistryAction = 'read' | 'publish' | 'pin';
@@ -121,6 +130,8 @@ export interface PublishResult {
   pinned: boolean;
   /** What this snapshot changes about the one HEAD pointed at before, when there was one. */
   diff?: ReturnType<typeof diffRegistries>;
+  /** Present when a GitOps publisher proposed the snapshot instead of publishing it (status 202). */
+  pullRequest?: { url: string; number: number };
 }
 
 export interface RegistryApi {
@@ -136,7 +147,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * What a write handler learned on its way to a response, for the audit event that describes it —
    * and who the caller is, resolved once and used for both the event and `labels.publishedBy`.
    */
-  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff'> & { actor: string | null };
+  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff' | 'pullRequest'> & { actor: string | null };
 
   /**
    * Runs a write and audits it from the response it produced, so every path out of the handler —
@@ -332,6 +343,32 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       shells,
       ...(labels ? { labels } : {}),
     });
+
+    if (options.publisher) {
+      audit.snapshotId = snapshot.id;
+      audit.pinned = false;
+      const diff = previous ? diffRegistries(previous.manifests, snapshot.manifests) : undefined;
+      let proposed: Awaited<ReturnType<SnapshotPublisher['propose']>>;
+      try {
+        proposed = await options.publisher.propose({ snapshot, pin: shouldPin, actor: audit.actor, findings, ...(diff ? { diff } : {}) });
+      } catch (error) {
+        // The registry API is fine; the place it proposes changes to is not.
+        return json({ error: error instanceof Error ? error.message : String(error) }, 502);
+      }
+      audit.pullRequest = proposed.pullRequest.url;
+      return json(
+        {
+          snapshot: { id: snapshot.id, createdAt: snapshot.createdAt, fragmentCount: snapshot.manifests.length },
+          findings,
+          descriptorNotes,
+          pinned: false,
+          pullRequest: proposed.pullRequest,
+          ...(diff ? { diff } : {}),
+        },
+        202,
+      );
+    }
+
     await store.put(snapshot);
     audit.snapshotId = snapshot.id;
     audit.pinned = false;

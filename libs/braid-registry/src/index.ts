@@ -82,6 +82,8 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
+export { githubPublisher, GitHubPublishError } from './lib/github-publisher.js';
+export type { SnapshotPublisher, SnapshotProposal, GitHubPublisherOptions } from './lib/github-publisher.js';
 export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';
 export { ownershipViolations } from './lib/ownership.js';
 export type { OwnedTags, OwnershipViolation } from './lib/ownership.js';

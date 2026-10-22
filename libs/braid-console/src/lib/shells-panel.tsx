@@ -803,10 +803,19 @@ function PublishBar({
   return (
     <div className="braid-console__bar" role="region" aria-label="Publish shells">
       <span className="braid-console__barstate" role="status">
-        {phase.status === 'published' ? (
+        {phase.status === 'published' && phase.outcome.pullRequest ? (
+          <>
+            Proposed as{' '}
+            <a href={phase.outcome.pullRequest.url} target="_blank" rel="noreferrer">
+              pull request #{phase.outcome.pullRequest.number}
+            </a>
+            . It is published when the pull request is merged.
+          </>
+        ) : phase.status === 'published' ? (
           <>
             Published <code className="braid-console__mono">{phase.outcome.snapshot.id}</code>
-            {phase.outcome.pinned ? ' and pinned.' : ' as a candidate, not pinned.'} A gateway picks up a new pin when it restarts.
+            {phase.outcome.pinned ? ' and pinned.' : ' as a candidate, not pinned.'} A gateway following HEAD serves a new pin
+            within its refresh interval, or on restart without one.
           </>
         ) : phase.status === 'refused' ? (
           <span className="braid-console__barstate--error">

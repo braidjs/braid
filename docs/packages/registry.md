@@ -227,6 +227,49 @@ const response = await api.handle(request); // null when the path is not the API
 - **Omitted `shells` carry HEAD's forward**, so a client that only edits fragments cannot delete
   every shell by accident; `[]` removes them.
 
+### GitOps: publish by pull request
+
+Give the API a `publisher`, and a publish becomes a proposal. It is validated, checked for
+ownership and minted exactly as it would be stored, then handed to the publisher instead of the
+store. The API answers `202` with the pull request, and HEAD stays where it is. Review and merge
+are the approval, and whatever deploys the registry from the repository is what makes it live.
+
+```ts
+import { createRegistryApi, githubPublisher } from '@braidlabs/registry';
+
+createRegistryApi({
+  store, // synced from the repository's main branch, e.g. a file store over a checkout
+  ...authorizer,
+  publisher: githubPublisher({
+    owner: 'acme',
+    repo: 'registry',
+    token: process.env.GITHUB_TOKEN, // contents: write, pull_requests: write
+    directory: 'registry', // <id>.json and HEAD, in the file store's layout
+  }),
+});
+```
+
+For each publish, `githubPublisher`:
+
+- creates a branch;
+- writes `<directory>/<id>.json`, byte-for-byte what `fileSnapshotStore` holds;
+- for a pin, also writes `<directory>/HEAD`;
+- opens a pull request against `base`. The body says who asked, what changes, and any warnings.
+
+Merging is therefore publishing for anything that reads the directory with `fileSnapshotStore`.
+
+A few more details:
+
+- An invalid registry is still a 422, and GitHub is never called.
+- A GitHub failure is a 502 that carries GitHub's message, never the token.
+- The audit event records the pull request URL.
+- The console links the pull request.
+- Pins and promotions still act directly.
+- For GitHub Enterprise Server, set `apiUrl`.
+
+Without a publisher API, CI can still publish from git: `braid registry publish --source` in a
+pipeline that runs on merge.
+
 ### Per-tag ownership
 
 A registry is shared by many teams, and "may publish" is too coarse a right for it. With `owns`,

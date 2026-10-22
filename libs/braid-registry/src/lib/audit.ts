@@ -41,6 +41,8 @@ export interface AuditEvent {
   reason?: string;
   /** How much a successful publish changed, by fragment count — the detail is in the snapshots. */
   diff?: { added: number; removed: number; changed: number };
+  /** The pull request a GitOps publish opened instead of publishing. */
+  pullRequest?: string;
 }
 
 export type AuditAction = 'publish' | 'pin';
