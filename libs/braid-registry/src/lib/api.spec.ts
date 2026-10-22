@@ -317,7 +317,7 @@ describe('registry write API', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
 
-      expect(body).toEqual({ read: true, publish: true, pin: false, actor: 'dana@example.com' });
+      expect(body).toEqual({ read: true, publish: true, pin: false, actor: 'dana@example.com', tags: null });
     });
 
     it('reports read-only permissions when no authorize hook is configured', async () => {
@@ -325,7 +325,7 @@ describe('registry write API', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
 
-      expect(body).toEqual({ read: true, publish: false, pin: false, actor: null });
+      expect(body).toEqual({ read: true, publish: false, pin: false, actor: null, tags: null });
     });
   });
 

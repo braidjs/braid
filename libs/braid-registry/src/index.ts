@@ -80,6 +80,8 @@ export type {
 
 export { createRegistryApi } from './lib/api.js';
 export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';
+export { ownershipViolations } from './lib/ownership.js';
+export type { OwnedTags, OwnershipViolation } from './lib/ownership.js';
 export type { AuditEvent, AuditAction, AuditSink, WebhookAuditSink, WebhookAuditSinkOptions } from './lib/audit.js';
 export type {
   RegistryApi,

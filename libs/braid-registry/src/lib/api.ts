@@ -5,6 +5,7 @@ import { diffRegistries, validateRegistry, type RegistryFinding } from './analys
 import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descriptor.js';
 import type { ShellManifest } from './shell.js';
 import { createAuditEmitter, type AuditAction, type AuditEvent, type AuditSink } from './audit.js';
+import { describeViolations, ownershipViolations, type OwnedTags, type RegistryContent } from './ownership.js';
 
 /**
  * The registry write API — fetch-native, like the gateway, so it mounts on any runtime.
@@ -59,6 +60,17 @@ export interface RegistryApiOptions {
    * Pair it with `identify`: an event's `actor` is whoever `identify` names, and is null without it.
    */
   audit?: AuditSink | readonly AuditSink[];
+  /**
+   * The tags whose fragments and shells the caller may change — per-tag ownership. Return `'*'`
+   * for everything.
+   *
+   * When set, a publish or pin that would add, change or remove an item outside the caller's tags
+   * is refused with 403 and the items named. The caller must own one of an item's old tags and one
+   * of its new ones, so nothing can be taken over by retagging it; an untagged item needs `'*'`.
+   * Unset, `publish` and `pin` rights are all there is. `createOidcAuthorizer({ tagMap })` provides
+   * this from token groups.
+   */
+  owns?: (request: Request) => OwnedTags | null | undefined | Promise<OwnedTags | null | undefined>;
 }
 
 export type RegistryAction = 'read' | 'publish' | 'pin';
@@ -95,6 +107,8 @@ export interface RegistryPermissions {
   publish: boolean;
   pin: boolean;
   actor: string | null;
+  /** The tags the caller may change, `'*'` for all, or null when the API has no tag ownership. */
+  tags: OwnedTags | null;
 }
 
 export interface PublishResult {
@@ -298,6 +312,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
     }
 
+    const ownership = await ownershipRefusal(request, { manifests: previous?.manifests ?? [], shells: previous?.shells ?? [] }, { manifests, shells });
+    if (ownership) return ownership;
+
     const labels = identify ? attributed(audit.actor, body.labels) : body.labels;
 
     const snapshot = await createSnapshot({
@@ -351,6 +368,17 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     if (!store.setHead) return json({ error: 'this store does not track a head' }, 501);
     audit.previousId = (await store.head?.()) ?? null;
+
+    // A pin is checked by what it changes about what is served, so it cannot do what a publish
+    // may not — pinning someone else's edit is changing their fragment.
+    const current = audit.previousId ? await store.get(audit.previousId) : null;
+    const ownership = await ownershipRefusal(
+      request,
+      { manifests: current?.manifests ?? [], shells: current?.shells ?? [] },
+      { manifests: snapshot.manifests, shells: snapshot.shells ?? [] },
+    );
+    if (ownership) return ownership;
+
     await store.setHead(id);
     audit.snapshotId = id;
 
@@ -379,8 +407,17 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       publish: await allowed('publish'),
       pin: await allowed('pin'),
       actor: (identify ? await identify(request) : null) ?? null,
+      tags: options.owns ? ((await options.owns(request)) ?? []) : null,
     };
     return json(result);
+  }
+
+  /** A 403 naming every item the caller may not change, or null when tag ownership allows it all. */
+  async function ownershipRefusal(request: Request, before: RegistryContent, after: RegistryContent): Promise<Response | null> {
+    if (!options.owns) return null;
+    const owned = (await options.owns(request)) ?? [];
+    const items = ownershipViolations(before, after, owned);
+    return items.length > 0 ? json({ error: describeViolations(items), items }, 403) : null;
   }
 
   /** Returns a refusal response, or null when the action is allowed. */

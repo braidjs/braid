@@ -4,6 +4,7 @@ import type { DescriptorNote, FieldChange, NamedPrincipal, RegistryFinding } fro
 import { AccessPanel } from './access-panel.js';
 import {
   fetchHead,
+  fetchPermissions,
   publishSnapshot,
   RegistryApiError,
   type ConsoleApi,
@@ -22,6 +23,8 @@ import {
   type Draft,
 } from './draft.js';
 import { ensureStyles } from './styles.js';
+import { canChange, startingTags } from './ownership.js';
+import type { OwnedTags } from '@braidlabs/registry';
 
 export interface RegistryEditorProps {
   /** Must carry an `apiPath` (or accept the default) — editing needs the write API. */
@@ -68,6 +71,8 @@ export function RegistryEditor({
   const [showDiff, setShowDiff] = useState(false);
   const [showAccess, setShowAccess] = useState(false);
   const [ownPrincipals, setOwnPrincipals] = useState<NamedPrincipal[]>([]);
+  /** Per-tag ownership from /permissions; null when the registry has none, or did not say. */
+  const [owned, setOwned] = useState<OwnedTags | null>(null);
 
   // Controlled when the host supplies them, uncontrolled otherwise — the same shape as any input.
   const testPrincipals = principals ?? ownPrincipals;
@@ -84,6 +89,12 @@ export function RegistryEditor({
     let current = true;
 
     setPhase({ status: 'loading' });
+    // Ownership only narrows what the editor offers; if it cannot be read, offer everything and let
+    // the server refuse what it refuses.
+    fetchPermissions(api, controller.signal).then(
+      (permissions) => current && setOwned(permissions.tags ?? null),
+      () => undefined,
+    );
     fetchHead(api, controller.signal).then(
       (head) => {
         if (!current) return;
@@ -154,7 +165,7 @@ export function RegistryEditor({
           )}
         </span>
         <span className="braid-console__spacer" />
-        <button className="braid-console__retry" type="button" onClick={() => setDraft(addFragment(draft))}>
+        <button className="braid-console__retry" type="button" onClick={() => setDraft(addFragment(draft, startingTags(owned)))}>
           Add fragment
         </button>
       </div>
@@ -172,6 +183,8 @@ export function RegistryEditor({
               manifest={manifest}
               findings={status.findings.filter((finding) => finding.fragmentIds.includes(manifest.id))}
               expanded={expanded === index}
+              // Judged by the tags it was published with, so retagging cannot unlock it mid-edit.
+              editable={canChange((draft.base.find((base) => base.id === manifest.id) ?? manifest).tags, owned)}
               onToggle={() => setExpanded(expanded === index ? null : index)}
               onChange={(patch) => setDraft(updateFragment(draft, index, patch))}
               onRemove={() => {
@@ -212,6 +225,7 @@ function FragmentRow({
   manifest,
   findings,
   expanded,
+  editable,
   onToggle,
   onChange,
   onRemove,
@@ -219,6 +233,7 @@ function FragmentRow({
   manifest: FragmentManifest;
   findings: RegistryFinding[];
   expanded: boolean;
+  editable: boolean;
   onToggle: () => void;
   onChange: (patch: Partial<FragmentManifest>) => void;
   onRemove: () => void;
@@ -256,18 +271,26 @@ function FragmentRow({
         {errors.length > 0 && (
           <span className="braid-console__badge braid-console__badge--error">{errors.length} error</span>
         )}
-        <button
-          className="braid-console__ghost"
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-controls={fieldsId}
-        >
-          {expanded ? 'Done' : 'Edit'}
-        </button>
-        <button className="braid-console__ghost" type="button" onClick={onRemove} aria-label={`Remove ${manifest.id}`}>
-          Remove
-        </button>
+        {editable ? (
+          <>
+            <button
+              className="braid-console__ghost"
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              aria-controls={fieldsId}
+            >
+              {expanded ? 'Done' : 'Edit'}
+            </button>
+            <button className="braid-console__ghost" type="button" onClick={onRemove} aria-label={`Remove ${manifest.id}`}>
+              Remove
+            </button>
+          </>
+        ) : (
+          <span className="braid-console__desc" title="Owned by another team's tags">
+            read-only
+          </span>
+        )}
       </div>
 
       {findings.length > 0 && (
@@ -281,7 +304,7 @@ function FragmentRow({
         </ul>
       )}
 
-      {expanded && <FragmentFields manifest={manifest} onChange={onChange} id={fieldsId} />}
+      {expanded && editable && <FragmentFields manifest={manifest} onChange={onChange} id={fieldsId} />}
     </li>
   );
 }

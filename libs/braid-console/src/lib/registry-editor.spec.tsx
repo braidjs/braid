@@ -8,17 +8,25 @@ const manifests: FragmentManifest[] = [
   { id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'], title: 'Billing' },
 ];
 
+const owned: FragmentManifest[] = [
+  { id: 'billing', endpoint: 'https://billing.internal', tags: ['finance'] },
+  { id: 'reviews', endpoint: 'https://reviews.internal', tags: ['react'] },
+];
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 /** A fake API: GET /head serves a pinned snapshot, POST /snapshots publishes. */
-function fakeApi(over: { publish?: () => Response } = {}) {
+function fakeApi(over: { publish?: () => Response; permissions?: unknown } = {}) {
   const calls: { url: string; method: string; body?: unknown }[] = [];
 
   const doFetch = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
 
+    if (url.endsWith('/permissions') && method === 'GET') {
+      return json(over.permissions ?? { read: true, publish: true, pin: true, actor: null, tags: null });
+    }
     if (url.endsWith('/head') && method === 'GET') {
       return json({ id: 'reg_base', snapshot: { id: 'reg_base', createdAt: '2026-01-01', manifests } });
     }
@@ -277,5 +285,18 @@ describe('<RegistryEditor>', () => {
     await render({ fetch: doFetch as unknown as typeof fetch });
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('not authorized to read');
+  });
+
+  it('offers editing only on fragments carrying a tag the caller owns', async () => {
+    const api = fakeApi({ permissions: { read: true, publish: true, pin: true, actor: null, tags: ['finance'] } });
+    api.fetch = (async (url: string, init?: RequestInit) =>
+      url.endsWith('/head')
+        ? json({ id: 'reg_base', snapshot: { id: 'reg_base', createdAt: '', manifests: owned } })
+        : (fakeApi({ permissions: { read: true, publish: true, pin: true, actor: null, tags: ['finance'] } }).fetch as typeof fetch)(url, init)) as typeof fetch;
+    await render(api);
+
+    expect(byLabel('Remove billing')).toBeDefined();
+    expect(byLabel('Remove reviews')).toBeUndefined();
+    expect(container.textContent).toContain('read-only');
   });
 });

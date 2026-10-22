@@ -1,5 +1,6 @@
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet, type JWTPayload } from 'jose';
 import type { AuthorizeResult, RegistryAction } from './api.js';
+import type { OwnedTags } from './ownership.js';
 
 /**
  * `authorize` and `identify` for the registry API, from an OIDC provider's access tokens — Okta,
@@ -48,6 +49,14 @@ export interface OidcAuthorizerOptions {
    */
   scopeMap?: Record<string, readonly RegistryAction[]>;
   /**
+   * Group name (from `rolesClaim`) → the tags its members own, or `'*'` for all of them — per-tag
+   * ownership (see `owns` on the registry API). A caller owns the union over every group they hold.
+   *
+   * Omit it and there is no tag ownership: whoever may publish may change anything. With it, a
+   * caller in no mapped group owns nothing, and so may change nothing, whatever `roleMap` grants.
+   */
+  tagMap?: Record<string, readonly string[] | '*'>;
+  /**
    * Verification keys to use instead of fetching the issuer's — for tests and air-gapped networks.
    * When omitted, keys come from the issuer's `jwks_uri` (OIDC discovery) and are cached.
    */
@@ -77,6 +86,8 @@ type Verification = { ok: true; claims: JWTPayload } | { ok: false; response: Re
 export interface OidcAuthorizer {
   authorize(request: Request, action: RegistryAction): Promise<AuthorizeResult>;
   identify(request: Request): Promise<string | null>;
+  /** Present only with a `tagMap`. */
+  owns?: (request: Request) => Promise<OwnedTags>;
 }
 
 export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthorizer {
@@ -152,7 +163,26 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
     }
   }
 
+  const tagMap = options.tagMap;
+  const owns = tagMap
+    ? async (request: Request): Promise<OwnedTags> => {
+        const result = await verify(request);
+        if (!result.ok) return [];
+        const tags = new Set<string>();
+        for (const group of asList(result.claims[rolesClaim])) {
+          // Own properties only, as in grants(): a group called "constructor" owns nothing.
+          if (!Object.prototype.hasOwnProperty.call(tagMap, group)) continue;
+          const owned = tagMap[group];
+          if (owned === '*') return '*';
+          for (const tag of owned ?? []) tags.add(tag);
+        }
+        return [...tags];
+      }
+    : undefined;
+
   return {
+    ...(owns ? { owns } : {}),
+
     async authorize(request, action) {
       const result = await verify(request);
       if (!result.ok) return result.response;
