@@ -107,8 +107,11 @@ export interface RegistryPermissions {
   publish: boolean;
   pin: boolean;
   actor: string | null;
-  /** The tags the caller may change, `'*'` for all, or null when the API has no tag ownership. */
-  tags: OwnedTags | null;
+  /**
+   * The tags the caller may change, `'*'` for all, or null when the API has no tag ownership.
+   * Optional because a server from before per-tag ownership does not send it; read absent as null.
+   */
+  tags?: OwnedTags | null;
 }
 
 export interface PublishResult {
@@ -292,6 +295,16 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const previous = previousId ? await store.get(previousId) : null;
     const shells = body.shells ?? previous?.shells ?? [];
 
+    // Judged on what the caller sent, before descriptors are merged: a descriptor filling in
+    // another team's fragment is not this caller changing it, and a refused publish should not
+    // cost a fan-out of probes first.
+    const ownership = await ownershipRefusal(
+      request,
+      { manifests: previous?.manifests ?? [], shells: previous?.shells ?? [] },
+      { manifests: body.manifests, shells },
+    );
+    if (ownership) return ownership;
+
     let manifests = body.manifests;
     let descriptorNotes: DescriptorNote[] = [];
 
@@ -312,9 +325,6 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
     }
 
-    const ownership = await ownershipRefusal(request, { manifests: previous?.manifests ?? [], shells: previous?.shells ?? [] }, { manifests, shells });
-    if (ownership) return ownership;
-
     const labels = identify ? attributed(audit.actor, body.labels) : body.labels;
 
     const snapshot = await createSnapshot({
@@ -330,7 +340,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     // publish may have pinned meanwhile. The snapshot stays stored either way — it is immutable and
     // unpinned, so harmless. This narrows the window to two store calls; it does not close it,
     // which needs a compare-and-set in the store.
-    if (shouldPin && body.baseId !== undefined) {
+    // Always, under tag ownership: the check above was against `previous`, and a HEAD that moved
+    // since would otherwise be replaced by a copy of it that reverts another team's change.
+    if (shouldPin && (body.baseId !== undefined || options.owns)) {
       const current = (await store.head?.()) ?? null;
       if (current !== previousId) {
         return json({ error: `HEAD moved to ${current ?? 'nothing'} while publishing — reload before publishing`, head: current }, 409);
@@ -379,6 +391,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     );
     if (ownership) return ownership;
 
+    if (options.owns && ((await store.head?.()) ?? null) !== audit.previousId) {
+      return json({ error: 'HEAD moved while this pin was being checked — reload and try again' }, 409);
+    }
     await store.setHead(id);
     audit.snapshotId = id;
 
@@ -415,7 +430,15 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   /** A 403 naming every item the caller may not change, or null when tag ownership allows it all. */
   async function ownershipRefusal(request: Request, before: RegistryContent, after: RegistryContent): Promise<Response | null> {
     if (!options.owns) return null;
-    const owned = (await options.owns(request)) ?? [];
+    let owned: OwnedTags;
+    try {
+      owned = (await options.owns(request)) ?? [];
+    } catch (error) {
+      // Fails closed, and says nothing about why: the cause (an IdP URL, a key fetch) is for the
+      // operator's log, not the caller.
+      console.warn('[braid-registry] owns failed; refusing the write', error);
+      return json({ error: 'ownership could not be determined — try again' }, 503);
+    }
     const items = ownershipViolations(before, after, owned);
     return items.length > 0 ? json({ error: describeViolations(items), items }, 403) : null;
   }

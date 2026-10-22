@@ -194,7 +194,18 @@ HEAD. The caller must own **one of its old tags and one of its new ones**:
 - An untagged item belongs to no team, so it needs `'*'`.
 
 A pin is checked the same way, by what it changes about what is being served, so pinning someone
-else's edit is not a way around it. A refusal is a 403 that names every item, and it is audited as
+else's edit is not a way around it. Further rules:
+
+- **Routes.** Owning a fragment doesn't mean owning every URL it can claim. A change that makes a
+  fragment pierce pages already pierced by a fragment the caller doesn't own is refused. Overlaps
+  that already existed in HEAD are not the caller's doing and don't block their edits.
+- **Races.** HEAD is re-checked just before it moves, with or without `baseId`. A publish or pin
+  checked against one HEAD therefore can't replace a newer one and silently revert another team's
+  change.
+- **Co-owned items.** A fragment tagged `[finance, react]` can be changed by either team, and that
+  includes removing the other team's tag.
+- **Descriptors.** Ownership is judged on what the caller sent, before descriptors are merged.
+- **Failures.** If `owns` throws, the write is refused with a generic 503. A refusal is a 403 that names every item, and it is audited as
 `denied`. `GET /permissions` reports the caller's `tags`, and the console hides Edit and Delete on
 items the caller doesn't own. Without `owns` (or `tagMap`), nothing changes, and `publish` and `pin`
 rights are all there is.

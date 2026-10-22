@@ -111,6 +111,61 @@ describe('per-tag ownership', () => {
     expect((await api.handle(pin('react', base.id)))!.status).toBe(200);
   });
 
+  it('refuses a new fragment that would pierce into routes another team owns', async () => {
+    const { api } = await ownedApi();
+    const intruder = { id: 'promo', endpoint: 'https://promo.internal', tags: ['react'], pierce: ['/billing/*'] };
+    const ownBilling = { ...billing, pierce: ['/billing/*'] };
+    // billing pierces /billing/* in this test's HEAD
+    const base = await createSnapshot({ manifests: [ownBilling, reviews, legacy], shells: [storefront] });
+    const store = memorySnapshotStore([base]);
+    const scoped = createRegistryApi({ store, authorize: () => true, owns: (r) => (r.headers.get('x-tags') ?? '').split(',') });
+
+    const response = await scoped.handle(publish('react', { manifests: [ownBilling, reviews, legacy, intruder] }));
+
+    expect(response!.status).toBe(403);
+    expect((await response!.json()).items).toEqual([expect.objectContaining({ kind: 'route', id: 'promo' })]);
+    void api;
+  });
+
+  it('refuses a publish that would replace a HEAD that moved meanwhile, even without baseId', async () => {
+    const { api, store, base } = await ownedApi();
+    const theirs = await createSnapshot({ manifests: [billing, { ...reviews, title: 'React team hotfix' }, legacy], shells: [storefront] });
+    await store.put(theirs);
+    const realHead = store.head!.bind(store);
+    let reads = 0;
+    // HEAD moves between the ownership check and the pin, as a slow publish would see it
+    store.head = async () => (++reads === 1 ? base.id : theirs.id);
+    void realHead;
+
+    const response = await api.handle(publish('finance', { manifests: [{ ...billing, title: 'Billing v2' }, reviews, legacy] }));
+
+    expect(response!.status).toBe(409);
+  });
+
+  it('fails closed with a generic answer when owns throws', async () => {
+    const base = await createSnapshot({ manifests: [billing] });
+    const api = createRegistryApi({
+      store: memorySnapshotStore([base]),
+      authorize: () => true,
+      owns: () => {
+        throw new Error('idp unreachable at https://internal.example/jwks');
+      },
+    });
+
+    const response = await api.handle(publish('finance', { manifests: [{ ...billing, title: 'x' }] }));
+
+    expect(response!.status).toBe(503);
+    expect(JSON.stringify(await response!.json())).not.toContain('internal.example');
+  });
+
+  it('treats tags that are not a list as no tags, and duplicates as unowned', async () => {
+    const { api } = await ownedApi();
+
+    expect(
+      (await api.handle(publish('finance', { manifests: [{ ...billing, tags: 'finance' as unknown as string[] }, reviews, legacy] })))!.status,
+    ).toBe(403);
+  });
+
   it('reports the caller\'s tags in /permissions, so a UI can offer only what will work', async () => {
     const { api } = await ownedApi();
 

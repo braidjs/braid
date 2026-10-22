@@ -267,6 +267,7 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
           onQuery={setQuery}
           canEdit={canEdit}
           owned={owned}
+          base={workspace.base}
           onOpen={choose}
           onCreate={create}
           onDelete={remove}
@@ -302,6 +303,7 @@ function ShellList({
   onQuery,
   canEdit,
   owned,
+  base,
   onOpen,
   onCreate,
   onDelete,
@@ -311,6 +313,8 @@ function ShellList({
   onQuery: (query: string) => void;
   canEdit: boolean;
   owned: OwnedTags | null;
+  /** The published shells: ownership is judged by the tags an item was published with. */
+  base: readonly ShellManifest[];
   onOpen: (index: number) => void;
   onCreate: () => void;
   onDelete: (index: number) => void;
@@ -375,9 +379,9 @@ function ShellList({
                 </td>
                 <td className="braid-console__actions">
                   <button type="button" className="braid-console__ghost" onClick={() => onOpen(index)}>
-                    {canEdit && canChange(shell.tags, owned) ? 'Edit' : 'View'}
+                    {canEdit && canChange((base.find((b) => b.id === shell.id) ?? shell).tags, owned) ? 'Edit' : 'View'}
                   </button>
-                  {canEdit && canChange(shell.tags, owned) && (
+                  {canEdit && canChange((base.find((b) => b.id === shell.id) ?? shell).tags, owned) && (
                     <button type="button" className="braid-console__ghost" onClick={() => onDelete(index)} aria-label={`Delete ${shell.id}`}>
                       Delete
                     </button>
