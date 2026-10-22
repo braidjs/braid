@@ -14,7 +14,7 @@
  */
 
 export { createGateway, toWebMiddleware, toFetchHandler } from './gateway.js';
-export type { BraidGateway, GatewayOptions, RoutingEvent, ServiceWorkerOptions, UpgradeTarget } from './gateway.js';
+export type { BraidGateway, DocumentsContext, GatewayOptions, RoutingEvent, ServiceWorkerOptions, UpgradeTarget } from './gateway.js';
 export { rateVital, parseVitalsBeacon, vitalsCollectorScript } from './telemetry.js';
 export { createBreaker, DEFAULT_BREAKER } from './breaker.js';
 export { createSingleFlight, singleFlightKey } from './single-flight.js';

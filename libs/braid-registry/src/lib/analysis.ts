@@ -41,7 +41,9 @@ export type FindingCode =
   | 'slot-unknown-area'
   | 'slot-unknown-fragment'
   | 'unsafe-shell-url'
-  | 'invalid-shell-field';
+  | 'invalid-shell-field'
+  | 'shell-route-conflict'
+  | 'shell-route-overlap';
 
 /**
  * Validates a registry without contacting anything.
@@ -85,7 +87,10 @@ export function validateRegistry(
   }
 
   findings.push(...findPierceOverlaps(manifests));
-  if (options.shells) findings.push(...validateShells(options.shells, manifests));
+  if (options.shells) {
+    findings.push(...validateShells(options.shells, manifests));
+    findings.push(...findShellRouteOverlaps(options.shells));
+  }
   return findings;
 }
 
@@ -249,6 +254,43 @@ export function findPierceOverlaps(manifests: readonly FragmentManifest[]): Regi
 }
 
 /** Reduces a pattern to one concrete path it matches, for probing. */
+/**
+ * Routes in different shells that can answer the same page — `/billing/*` and `/billing/:id`.
+ * Exact duplicates are an error (`shell-route-conflict`); an overlap is a warning, because the
+ * gateway resolves it deterministically (shells in id order) but probably not as anyone intended.
+ */
+function findShellRouteOverlaps(shells: readonly ShellManifest[]): RegistryFinding[] {
+  const compiled: { shell: string; path: string; matcher: URLPattern; sample: string }[] = [];
+  if (typeof URLPattern === 'undefined') return [];
+  for (const shell of shells) {
+    for (const route of Array.isArray(shell?.routes) ? shell.routes : []) {
+      try {
+        compiled.push({ shell: shell.id, path: route.path, matcher: new URLPattern({ pathname: route.path }), sample: samplePath(route.path) });
+      } catch {
+        // reported by validateShells
+      }
+    }
+  }
+  const findings: RegistryFinding[] = [];
+  for (let i = 0; i < compiled.length; i++) {
+    for (let j = i + 1; j < compiled.length; j++) {
+      const a = compiled[i]!;
+      const b = compiled[j]!;
+      if (a.shell === b.shell || a.path === b.path) continue;
+      if (!(b.matcher.test({ pathname: a.sample }) || a.matcher.test({ pathname: b.sample }))) continue;
+      findings.push({
+        severity: 'warning',
+        code: 'shell-route-overlap',
+        shellIds: [a.shell, b.shell],
+        fragmentIds: [],
+        message: `shells "${a.shell}" (${a.path}) and "${b.shell}" (${b.path}) can both answer the same page`,
+        hint: 'the shell with the earlier id wins; narrow one of the routes so each page has one shell',
+      });
+    }
+  }
+  return findings;
+}
+
 function samplePath(pattern: string): string {
   return (
     pattern
