@@ -76,7 +76,22 @@ export interface SnapshotDiagnostic {
  * 4. A reload that fails — the store is down, the new snapshot does not verify — leaves the
  *    current snapshot serving. It never falls back to an older cached one.
  */
-export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promise<FragmentManifest[]> {
+/**
+ * A registry source that also hands out the whole snapshot it is serving — shells included — so a
+ * gateway's `documents` hook renders shells from the same snapshot its fragments come from.
+ */
+export type SnapshotRegistrySource = (() => Promise<FragmentManifest[]>) & {
+  /** The snapshot this source last loaded, resolving one first if nothing has loaded yet. */
+  snapshot(): Promise<RegistrySnapshot>;
+  /**
+   * The snapshot a manifests array this source returned came from. The gateway passes the array
+   * it is actually serving to its `documents` hook, and this maps it back — so a shell is rendered
+   * from the snapshot the gateway accepted, even if a later load was refused.
+   */
+  snapshotFor(manifests: readonly FragmentManifest[]): RegistrySnapshot | undefined;
+};
+
+export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegistrySource {
   const { store, pinned, environment, cache, fallback = 'last-known-good', verify = true, onDiagnostic } = options;
   if (environment !== undefined && !pinned && !store.ref) {
     throw new Error(`braid-registry: following environment "${environment}" needs a store with environment support`);
@@ -84,14 +99,31 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promis
 
   /** The snapshot being served, and the manifests handed to the gateway for it. */
   let current: { snapshot: RegistrySnapshot; manifests: FragmentManifest[] } | undefined;
+  /** Every manifests array handed out, back to its snapshot — weak, so old ones are collected. */
+  const origins = new WeakMap<readonly FragmentManifest[], RegistrySnapshot>();
 
-  return async () => {
+  const load = async (): Promise<FragmentManifest[]> => {
     const snapshot = await resolve();
     // The same array for the same snapshot, which is how the gateway tells "nothing changed" apart
     // from a re-pin without comparing manifests.
-    if (current?.snapshot.id !== snapshot.id) current = { snapshot, manifests: [...snapshot.manifests] };
+    if (current?.snapshot.id !== snapshot.id) {
+      current = { snapshot, manifests: [...snapshot.manifests] };
+      origins.set(current.manifests, snapshot);
+    }
     return current.manifests;
   };
+
+  return Object.assign(load, {
+    // The snapshot the gateway last loaded — not a fresh HEAD lookup, which would let a shell move
+    // ahead of the fragments it slots between two registry reloads.
+    async snapshot(): Promise<RegistrySnapshot> {
+      if (!current) await load();
+      return current!.snapshot;
+    },
+    snapshotFor(manifests: readonly FragmentManifest[]): RegistrySnapshot | undefined {
+      return origins.get(manifests);
+    },
+  });
 
   async function resolve(): Promise<RegistrySnapshot> {
     let id = pinned;

@@ -23,7 +23,8 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGateway } from '../../libs/braid-gateway/src/index.ts';
 import { toNodeMiddleware } from '../../libs/braid-gateway/src/node.ts';
-import { createRegistryApi, createSnapshot, jsonLinesAuditSink, memorySnapshotStore, snapshotRegistry } from '../../libs/braid-registry/src/index.ts';
+import { build } from 'esbuild';
+import { createRegistryApi, createSnapshot, jsonLinesAuditSink, memorySnapshotStore, shellDocuments, snapshotRegistry } from '../../libs/braid-registry/src/index.ts';
 import { createOidcAuthorizer } from '../../libs/braid-registry/src/oidc.ts';
 import { createMockOidc, MOCK_AUDIENCE, MOCK_CLIENT_ID, MOCK_ROLE_MAP } from './mock-oidc.mjs';
 
@@ -33,6 +34,22 @@ const MOCK_AUTH = process.env.BRAID_DEMO_AUTH === 'mock';
 
 // Resolved from this file, not the cwd, so the server runs correctly from any directory.
 const DIST = fileURLToPath(new URL('../../dist/apps/braid-console', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+// The client runtime a served shell loads: @braidlabs/core bundled into one module that starts it.
+// A real deployment builds and serves this itself (or from its CDN); bundling it here keeps the
+// demo to one process.
+const RUNTIME_PATH = '/__demo/braid-runtime.js';
+const RUNTIME = (
+  await build({
+    stdin: { contents: "import { initBraid } from '@braidlabs/core';\ninitBraid();\n", resolveDir: ROOT, loader: 'ts' },
+    bundle: true,
+    format: 'esm',
+    write: false,
+    tsconfig: `${ROOT}/tsconfig.base.json`,
+    logLevel: 'silent',
+  })
+).outputFiles[0].contents;
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 
 const REGISTRY = [
@@ -73,12 +90,13 @@ const REGISTRY = [
   },
 ];
 
-// One shell, so the designer and the map have something to show: the billing page as a grid.
+// One shell, so the designer and the map have something to show: the billing page as a grid. It is
+// plain JS, so the gateway serves it from its definition: open /billing/1 — no shell app runs here.
 const SHELLS = [
   {
     id: 'storefront',
     title: 'Customer storefront',
-    framework: 'react',
+    framework: 'vanilla',
     tags: ['core'],
     routes: [
       {
@@ -98,12 +116,15 @@ await store.put(seeded);
 await store.setHead(seeded.id);
 
 // The gateway serves the store the console publishes to, and follows its HEAD: publish or pin in
-// the console and the next page load shows it, with no restart (hot re-pin).
+// the console and the next page load shows it, with no restart (hot re-pin). Plain-JS shells are
+// served from their definition, so a shell published in the console is a live page.
+const registry = snapshotRegistry({ store });
 const gateway = createGateway({
   mode: process.env.GATEWAY_MODE === 'production' ? 'production' : 'development',
   discovery: { includeEndpoints: false },
-  registry: snapshotRegistry({ store }),
+  registry,
   registryRefreshMs: 1000,
+  documents: shellDocuments({ registry, runtimeSrc: RUNTIME_PATH }),
   principal: () => ({ roles: ['finance'], scopes: [] }),
 });
 
@@ -136,6 +157,11 @@ const middleware = toNodeMiddleware(gateway);
 
 createServer(async (request, response) => {
   if (oidc && (await oidc.handle(request, response))) return;
+
+  if (request.url === RUNTIME_PATH) {
+    response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }).end(RUNTIME);
+    return;
+  }
 
   middleware(request, response, async () => {
     const apiResponse = await registryApi.handle(await toWebRequest(request));

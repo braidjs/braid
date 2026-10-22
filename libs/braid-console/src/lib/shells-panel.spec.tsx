@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { RegistryPermissions, ShellManifest } from '@braidlabs/registry';
-import { ShellsPanel } from './shells-panel.js';
+import { newShell, ShellsPanel } from './shells-panel.js';
 import { HistoryPanel } from './history-panel.js';
 import { tagClass } from './tags.js';
 
@@ -425,5 +425,17 @@ describe('<HistoryPanel>', () => {
 
     act(() => root.unmount());
     container.remove();
+  });
+});
+
+describe('newShell()', () => {
+  it('gives each new shell a route of its own, so two never claim one page', () => {
+    const first = newShell([]);
+    const second = newShell([first]);
+    const clashing = newShell([{ ...first, id: 'other', routes: [{ path: '/new-shell-2', layout: { areas: 'main' } }] }, first]);
+
+    expect(first.routes[0]!.path).toBe('/new-shell');
+    expect(second.routes[0]!.path).toBe('/new-shell-2');
+    expect(clashing.routes[0]!.path).toBe('/new-shell-3');
   });
 });

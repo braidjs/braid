@@ -56,6 +56,16 @@ describe('Registry.refresh()', () => {
     expect(await registry.refresh()).toMatchObject({ changed: false });
   });
 
+  it('adopts a new array with the same manifests, without recompiling', async () => {
+    let current: FragmentManifest[] = structuredClone(a);
+    const registry = new Registry(async () => current);
+    await registry.listFragments();
+
+    current = structuredClone(a);
+    expect(await registry.refresh()).toMatchObject({ changed: false });
+    expect(await registry.current()).toBe(current);
+  });
+
   it('treats a refresh before anything loaded as the first load, not a change', async () => {
     const source = vi.fn(async () => structuredClone(a));
     const registry = new Registry(source);
