@@ -82,6 +82,8 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
+export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';
+export type { AuditEvent, AuditAction, AuditSink, WebhookAuditSink, WebhookAuditSinkOptions } from './lib/audit.js';
 export type {
   RegistryApi,
   RegistryApiOptions,

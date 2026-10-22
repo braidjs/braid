@@ -169,12 +169,14 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
   `validateRegistry`, publishes with a client-credentials token, and sends `baseId` to avoid races.
   Teams that prefer GitOps keep snapshots in git and publish from CI.
 - **Auditable.** Every snapshot records who published it, taken from the verified token. History
-  is append-only, and rollback is a re-pin.
+  is append-only, and rollback is a re-pin. Every write attempt (publish, pin, and refusals) is
+  also an audit event for your SIEM, as JSON lines or batched to a webhook (see
+  [audit export](./registry.md#audit-export)).
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
 Planned: named environments with promotion and approvals, a GitOps mode that opens a pull request
-instead of publishing, per-tag ownership in RBAC, and audit export to a SIEM.
+instead of publishing, and per-tag ownership in RBAC.
 
 ---
 

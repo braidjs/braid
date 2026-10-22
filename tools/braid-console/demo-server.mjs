@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { createGateway } from '../../libs/braid-gateway/src/index.ts';
 import { toNodeMiddleware } from '../../libs/braid-gateway/src/node.ts';
 import { build } from 'esbuild';
-import { createRegistryApi, createSnapshot, memorySnapshotStore, shellDocuments, snapshotRegistry } from '../../libs/braid-registry/src/index.ts';
+import { createRegistryApi, createSnapshot, jsonLinesAuditSink, memorySnapshotStore, shellDocuments, snapshotRegistry } from '../../libs/braid-registry/src/index.ts';
 import { createOidcAuthorizer } from '../../libs/braid-registry/src/oidc.ts';
 import { createMockOidc, MOCK_AUDIENCE, MOCK_CLIENT_ID, MOCK_ROLE_MAP } from './mock-oidc.mjs';
 
@@ -132,6 +132,8 @@ const oidc = MOCK_AUTH ? await createMockOidc({ origin: ORIGIN }) : null;
 
 const registryApi = createRegistryApi({
   store,
+  // every publish, pin and refused write, one JSON line each — what a log shipper would forward
+  audit: jsonLinesAuditSink((line) => process.stdout.write(`audit ${line}`)),
   ...(oidc
     ? // The production verifier, against the mock's keys. `jwks` skips discovery only because the
       // mock lives in this process; a real deployment omits it and the keys come from Okta.
