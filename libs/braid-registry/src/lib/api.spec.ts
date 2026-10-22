@@ -232,6 +232,39 @@ describe('registry write API', () => {
       }
     });
 
+    it('refuses a body over maxBodyBytes with 413, before parsing it', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, maxBodyBytes: 1024 });
+      const big = JSON.stringify({ manifests: [{ ...manifests[0], description: 'x'.repeat(2048) }] });
+
+      // declared up front…
+      expect((await api.handle(post('/snapshots', JSON.parse(big))))!.status).toBe(413);
+      // …and counted while streaming, when nothing was declared
+      const chunked = new Request(`${BASE}/snapshots`, { method: 'POST', body: new Blob([big]).stream(), duplex: 'half' } as RequestInit);
+      expect(chunked.headers.get('content-length')).toBeNull();
+      expect((await api.handle(chunked))!.status).toBe(413);
+
+      expect(await store.list()).toEqual([]);
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
+    it('requires JSON from a browser, so a form or text/plain POST cannot skip the CORS preflight', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+      const fromBrowser = (type: string) =>
+        new Request(`${BASE}/snapshots`, {
+          method: 'POST',
+          headers: { 'sec-fetch-site': 'same-site', 'content-type': type },
+          body: JSON.stringify({ manifests }),
+        });
+
+      for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data']) {
+        expect((await api.handle(fromBrowser(type)))!.status).toBe(415);
+      }
+      expect((await api.handle(fromBrowser('application/json; charset=utf-8')))!.status).toBe(201);
+      // a pipeline, which sends no browser headers, is not a browser
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
     it('refuses an endpoint outside endpointOrigins, which the gateway would open to the internet', async () => {
       const store = memorySnapshotStore();
       const api = createRegistryApi({ store, authorize: allow, endpointOrigins: ['https://billing.internal'] });

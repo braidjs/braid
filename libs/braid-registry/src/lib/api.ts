@@ -70,6 +70,11 @@ export interface RegistryApiOptions {
    */
   endpointOrigins?: readonly string[];
   /**
+   * The largest request body a write accepts, in bytes. Defaults to 5 MB — a registry of a few
+   * thousand fragments. Larger is refused with 413 before it is parsed.
+   */
+  maxBodyBytes?: number;
+  /**
    * Where audit events go — one per attempted write, whether it succeeded, was refused for lack of
    * rights, or was rejected by the server. Reads are not audited. See `audit.ts` for the event and
    * the `jsonLinesAuditSink` and `webhookAuditSink` helpers.
@@ -194,6 +199,7 @@ export interface RegistryApi {
 
 export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
+  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
   const environments = new Map((options.environments ?? []).map((environment) => [environment.name, environment]));
 
@@ -386,14 +392,24 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * because a forged write is the refusal an auditor most wants to see.
    */
   function crossSite(request: Request): Response | null {
-    return request.headers.get('sec-fetch-site') === 'cross-site' ? json({ error: 'cross-site writes are refused' }, 403) : null;
+    if (request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'cross-site writes are refused' }, 403);
+    // A browser can send a text/plain or form POST to another origin without a preflight, from a
+    // sibling subdomain as easily as from the same site. Requiring JSON from browsers makes every
+    // write one the API's CORS policy has to approve first. Non-browser clients (no Origin, no
+    // Sec-Fetch-Site) are unaffected — they cannot be forged by a page.
+    const fromBrowser = request.headers.has('sec-fetch-site') || request.headers.has('origin');
+    const type = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+    if (fromBrowser && type !== 'application/json') {
+      return json({ error: 'writes from a browser must be sent as application/json' }, 415);
+    }
+    return null;
   }
 
   async function publish(request: Request, audit: AuditDetail): Promise<Response> {
     const denied = await refuse(request, 'publish');
     if (denied) return denied;
 
-    const body = await readJson<PublishRequestBody>(request);
+    const body = await readJson<PublishRequestBody>(request, maxBody);
     if (body instanceof Response) return body;
     if (!Array.isArray(body?.manifests)) {
       return json({ error: 'expected { manifests: FragmentManifest[] }' }, 400);
@@ -533,7 +549,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const denied = await refuse(request, 'pin');
     if (denied) return denied;
 
-    const body = await readJson<{ id?: string }>(request);
+    const body = await readJson<{ id?: string }>(request, maxBody);
     if (body instanceof Response) return body;
     const id = body?.id;
     if (!isSnapshotId(id)) return json({ error: 'expected { id } with a snapshot id' }, 400);
@@ -627,7 +643,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const denied = await refuse(request, 'promote', { environment: environment.name });
     if (denied) return denied;
 
-    const body = await readJson<{ id?: unknown }>(request);
+    const body = await readJson<{ id?: unknown }>(request, maxBody);
     if (body instanceof Response) return body;
     if (body?.id !== undefined && !isSnapshotId(body.id)) return json({ error: 'expected { id } to be a snapshot id' }, 400);
 
@@ -696,7 +712,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     // An approval names what it approves. Without this, a requester could withdraw the request the
     // approver reviewed and ask for something else, and the approval would land on that instead.
-    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request);
+    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request, maxBody);
     if (body instanceof Response) return body;
     if (body?.id !== pending.id || body?.requestedAt !== pending.requestedAt) {
       return json({ error: 'that is not the promotion waiting for approval — reload and review the current one', pending }, 409);
@@ -774,13 +790,36 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 }
 
 /** The body as JSON, or a 400 — malformed input is the client's error, not the server's. */
-async function readJson<T>(request: Request): Promise<T | Response> {
+async function readJson<T>(request: Request, limit: number): Promise<T | Response> {
+  const tooLarge = () => json({ error: `the request body is larger than ${limit} bytes` }, 413);
+  if (Number(request.headers.get('content-length')) > limit) return tooLarge();
+
+  // Read with a running count rather than trusting content-length, which a chunked body omits.
+  let text = '';
+  if (request.body) {
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        return tooLarge();
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  }
   try {
-    return (await request.json()) as T;
+    return JSON.parse(text) as T;
   } catch {
     return json({ error: 'the request body is not valid JSON' }, 400);
   }
 }
+
+const DEFAULT_MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
