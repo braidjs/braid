@@ -421,17 +421,21 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    * is just memory.
    */
   async function refreshRegistry(): Promise<RegistryRefresh> {
+    let result: RegistryRefresh;
     try {
-      const result = await registry.refresh();
-      for (const id of [...result.removed, ...result.endpointChanged]) breaker?.forget(id);
-      if (result.changed) {
-        emit({ kind: 'registry', outcome: 'refreshed', fragmentCount: result.fragmentCount, at: Date.now() });
-      }
-      return result;
+      result = await registry.refresh();
     } catch (error) {
       emit({ kind: 'registry', outcome: 'failed', error: error instanceof Error ? error.message : String(error), at: Date.now() });
       throw error;
     }
+    // A request still in flight to an old endpoint may report its outcome after this, against the
+    // fresh circuit. One stray result against a threshold of several is not worth a generation
+    // counter per circuit.
+    for (const id of [...result.removed, ...result.endpointChanged]) breaker?.forget(id);
+    if (result.changed) {
+      emit({ kind: 'registry', outcome: 'refreshed', fragmentCount: result.fragmentCount, at: Date.now() });
+    }
+    return result;
   }
 
   // Sequential, not setInterval: the next reload is scheduled only once this one has finished, so
@@ -610,15 +614,17 @@ export function createGateway(options: GatewayOptions): BraidGateway {
             adapterOptionsMeta(fragment, basePath) +
             `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`;
           // The stub is generated from the manifest, so it changes when a re-pin changes the
-          // fragment's adapter, entry or capabilities. Short-lived and revalidatable, so a browser
-          // learns of a re-pin within minutes and pays one 304 to learn nothing changed.
-          const etag = `"${await stubEtag(stub)}"`;
+          // fragment's adapter, entry or capabilities. Fresh for five minutes in the browser and one
+          // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
+          // returning visitor's fragment boot never waits on it — the cost is that the first boot
+          // after a re-pin may use the previous stub once, while the new one is fetched.
+          const etag = await stubEtag(stub);
           const cacheHeaders = {
             [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
             ETag: etag,
-            'Cache-Control': 'max-age=300, public, stale-while-revalidate=3600',
+            'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
           };
-          if (request.headers.get('if-none-match') === etag) {
+          if (etagMatches(request.headers.get('if-none-match'), etag)) {
             return new Response(null, { status: 304, headers: cacheHeaders });
           }
           return htmlResponse(stub, 200, cacheHeaders);
@@ -1589,11 +1595,31 @@ function hopCount(request: Request): number {
   return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
 }
 
-/** A short content hash of a realm stub, for its ETag. */
+/** Realm stub ETags by stub content, so a hot path does not hash the same few hundred bytes twice. */
+const stubEtags = new Map<string, string>();
+
+/** A strong ETag over a realm stub's content. */
 async function stubEtag(stub: string): Promise<string> {
+  const cached = stubEtags.get(stub);
+  if (cached) return cached;
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stub));
-  return btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 12)))
+  const etag = `"${btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 12)))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
-    .replace(/=+$/, '');
+    .replace(/=+$/, '')}"`;
+  // Bounded by the registry's size times its realm paths; cleared wholesale if something unusual
+  // (a fragment generating endless distinct stubs) ever grows it.
+  if (stubEtags.size > 10_000) stubEtags.clear();
+  stubEtags.set(stub, etag);
+  return etag;
+}
+
+/**
+ * If-None-Match, compared weakly as RFC 9110 requires: a CDN that compresses at the edge turns a
+ * strong `"x"` into `W/"x"`, and the header may list several tags or be `*`.
+ */
+function etagMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').some((candidate) => candidate.trim().replace(/^W\//, '') === etag);
 }

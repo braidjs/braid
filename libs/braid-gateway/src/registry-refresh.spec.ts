@@ -49,6 +49,21 @@ describe('Registry.refresh()', () => {
     expect((await registry.listFragments()).map((m) => m.id)).toEqual(['billing']);
   });
 
+  it('does nothing when a source returns equal manifests in a new array, as a URL source does', async () => {
+    const registry = new Registry(async () => structuredClone(a));
+    await registry.listFragments();
+
+    expect(await registry.refresh()).toMatchObject({ changed: false });
+  });
+
+  it('treats a refresh before anything loaded as the first load, not a change', async () => {
+    const source = vi.fn(async () => structuredClone(a));
+    const registry = new Registry(source);
+
+    expect(await registry.refresh()).toMatchObject({ changed: false, fragmentCount: 1 });
+    expect(source).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing when the source returns the same manifests', async () => {
     const registry = new Registry(async () => a);
     await registry.listFragments();
@@ -155,12 +170,20 @@ describe('realm stub caching', () => {
     const first = (await gateway.handle(new Request('https://shell.example/__braid/realm/billing/')))!;
     const etag = first.headers.get('etag');
     expect(etag).toMatch(/^"[\w-]+"$/);
-    expect(first.headers.get('cache-control')).toBe('max-age=300, public, stale-while-revalidate=3600');
+    expect(first.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400');
 
     const revalidated = (await gateway.handle(
       new Request('https://shell.example/__braid/realm/billing/', { headers: { 'if-none-match': etag! } }),
     ))!;
     expect(revalidated.status).toBe(304);
     expect(await revalidated.text()).toBe('');
+
+    // compared weakly, as a compressing CDN forwards it, and within a list
+    for (const header of [`W/${etag}`, `"other", ${etag}`, '*']) {
+      const response = (await gateway.handle(
+        new Request('https://shell.example/__braid/realm/billing/', { headers: { 'if-none-match': header } }),
+      ))!;
+      expect(response.status).toBe(304);
+    }
   });
 });

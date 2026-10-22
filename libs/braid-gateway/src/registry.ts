@@ -336,6 +336,12 @@ export interface RegistryRefresh {
 interface RegistryState {
   /** What the source returned, kept to tell an unchanged reload from a new one cheaply. */
   raw: readonly FragmentManifest[];
+  /**
+   * The manifests as JSON, for sources that return a new array with the same content on every
+   * load — a URL, or a loader with no memo. Comparing this before compiling is what keeps an
+   * unchanged poll from recompiling every pattern and announcing a change that did not happen.
+   */
+  fingerprint: string;
   manifests: Map<string, ResolvedFragmentManifest>;
   pierceRoutes: CompiledPierceRoute[];
 }
@@ -412,11 +418,19 @@ export class Registry {
   }
 
   async #reload(): Promise<RegistryRefresh> {
-    const previous = this.#state ?? (await this.#load());
+    const unchanged = (state: RegistryState): RegistryRefresh => ({
+      changed: false,
+      fragmentCount: state.manifests.size,
+      removed: [],
+      endpointChanged: [],
+    });
+
+    // Nothing loaded yet: this *is* the first load, not a change to one.
+    if (!this.#state) return unchanged(await this.#load());
+
+    const previous = this.#state;
     const raw = await loadSource(this.#source);
-    if (raw === previous.raw) {
-      return { changed: false, fragmentCount: previous.manifests.size, removed: [], endpointChanged: [] };
-    }
+    if (raw === previous.raw || JSON.stringify(raw) === previous.fingerprint) return unchanged(previous);
 
     const next = compileState(raw);
     this.#state = next;
@@ -457,7 +471,7 @@ async function loadSource(source: RegistrySource): Promise<readonly FragmentMani
 
 function compileState(raw: readonly FragmentManifest[]): RegistryState {
   const manifests = indexManifests(raw);
-  return { raw, manifests, pierceRoutes: compilePierceRoutes(manifests) };
+  return { raw, fingerprint: JSON.stringify(raw), manifests, pierceRoutes: compilePierceRoutes(manifests) };
 }
 
 /**
