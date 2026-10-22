@@ -205,10 +205,11 @@ else's edit is not a way around it. Further rules:
 - **Co-owned items.** A fragment tagged `[finance, react]` can be changed by either team, and that
   includes removing the other team's tag.
 - **Descriptors.** Ownership is judged on what the caller sent, before descriptors are merged.
-- **Failures.** If `owns` throws, the write is refused with a generic 503. A refusal is a 403 that names every item, and it is audited as
-`denied`. `GET /permissions` reports the caller's `tags`, and the console hides Edit and Delete on
-items the caller doesn't own. Without `owns` (or `tagMap`), nothing changes, and `publish` and `pin`
-rights are all there is.
+- **Failures.** If `owns` throws, the write is refused with a generic 503.
+
+A refusal is a 403 that names every item, and it is audited as `denied`. `GET /permissions` reports
+the caller's `tags`, and the console hides Edit and Delete on items the caller doesn't own. Without
+`owns` (or `tagMap`), nothing changes, and `publish` and `pin` rights are all there is.
 
 ### Audit export
 
