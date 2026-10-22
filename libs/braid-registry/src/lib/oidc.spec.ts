@@ -84,6 +84,20 @@ describe('createOidcAuthorizer', () => {
     expect(await auth.authorize(request(viewerAskingForMore), 'publish')).toBe(false);
   });
 
+  it('maps groups to the tags they own through tagMap, unioned', async () => {
+    const auth = authorizer({ tagMap: { payments: ['finance'], storefront: ['react', 'growth'], platform: '*' } });
+
+    expect(await auth.owns!(request(await token({ groups: ['payments'] })))).toEqual(['finance']);
+    expect(await auth.owns!(request(await token({ groups: ['payments', 'storefront'] })))).toEqual(['finance', 'react', 'growth']);
+    expect(await auth.owns!(request(await token({ groups: ['payments', 'platform'] })))).toBe('*');
+    expect(await auth.owns!(request(await token({ groups: ['constructor'] })))).toEqual([]);
+    expect(await auth.owns!(request())).toEqual([]);
+  });
+
+  it('has no ownership without a tagMap, so publish and pin rights are all there is', () => {
+    expect(authorizer().owns).toBeUndefined();
+  });
+
   it('refuses a token without exp, which would never expire', async () => {
     const forever = await new SignJWT({ groups: ['braid-editors'] })
       .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
@@ -231,7 +245,7 @@ describe('createOidcAuthorizer', () => {
       const response = await api.handle(new Request(`${BASE}/permissions`));
 
       expect(response?.status).toBe(200);
-      expect(await response!.json()).toEqual({ read: false, publish: false, pin: false, actor: null });
+      expect(await response!.json()).toEqual({ read: false, publish: false, pin: false, actor: null, tags: null });
     });
 
         it('reports permissions for the caller', async () => {
@@ -240,7 +254,7 @@ describe('createOidcAuthorizer', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`, { headers: { authorization: `Bearer ${viewer}` } })))!.json();
 
-      expect(body).toEqual({ read: true, publish: false, pin: false, actor: 'dana@example.com' });
+      expect(body).toEqual({ read: true, publish: false, pin: false, actor: 'dana@example.com', tags: null });
     });
   });
 });

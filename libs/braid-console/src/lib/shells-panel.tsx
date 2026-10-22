@@ -11,6 +11,7 @@ import {
   type ShellManifest,
   type ShellRoute,
 } from '@braidlabs/registry';
+import type { OwnedTags } from '@braidlabs/registry';
 import {
   fetchHead,
   fetchPermissions,
@@ -26,6 +27,7 @@ import { ensureStyles } from './styles.js';
 import { TagChip } from './tag-chip.js';
 import { tagColor } from './tags.js';
 import { tagQuery } from './registry-console.js';
+import { canChange, startingTags } from './ownership.js';
 
 export interface ShellsPanelProps {
   /** Needs the registry write API: shells live in snapshots, which discovery does not serve. */
@@ -191,6 +193,8 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
 
   const { permissions } = workspace;
   const canEdit = permissions.publish;
+  /** Per-tag ownership: publishing rights, narrowed to the shells whose tags the caller owns. */
+  const owned = permissions.tags ?? null;
   const errors = findings.filter((finding) => finding.severity === 'error');
 
   const update = (shells: ShellManifest[]) => {
@@ -199,7 +203,7 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
   };
 
   const create = () => {
-    const shells = [...workspace.shells, newShell(workspace.shells)];
+    const shells = [...workspace.shells, newShell(workspace.shells, startingTags(owned))];
     update(shells);
     setOwnOpen(shells.length - 1);
     onSelect?.(shells[shells.length - 1]?.id ?? null);
@@ -243,7 +247,7 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
           shell={shell}
           manifests={workspace.manifests}
           findings={findings.filter((finding) => finding.shellIds?.includes(shell.id))}
-          readOnly={!canEdit}
+          readOnly={!(canEdit && canChange(workspace.base.find((base) => base.id === shell.id)?.tags ?? shell.tags, owned))}
           onChange={(next) => {
             update(workspace.shells.map((current, position) => (position === open ? next : current)));
             if (next.id !== shell.id) {
@@ -262,6 +266,8 @@ export function ShellsPanel({ api, theme, className, selected, onSelect, onPubli
           query={query}
           onQuery={setQuery}
           canEdit={canEdit}
+          owned={owned}
+          base={workspace.base}
           onOpen={choose}
           onCreate={create}
           onDelete={remove}
@@ -296,6 +302,8 @@ function ShellList({
   query,
   onQuery,
   canEdit,
+  owned,
+  base,
   onOpen,
   onCreate,
   onDelete,
@@ -304,6 +312,9 @@ function ShellList({
   query: string;
   onQuery: (query: string) => void;
   canEdit: boolean;
+  owned: OwnedTags | null;
+  /** The published shells: ownership is judged by the tags an item was published with. */
+  base: readonly ShellManifest[];
   onOpen: (index: number) => void;
   onCreate: () => void;
   onDelete: (index: number) => void;
@@ -368,9 +379,9 @@ function ShellList({
                 </td>
                 <td className="braid-console__actions">
                   <button type="button" className="braid-console__ghost" onClick={() => onOpen(index)}>
-                    {canEdit ? 'Edit' : 'View'}
+                    {canEdit && canChange((base.find((b) => b.id === shell.id) ?? shell).tags, owned) ? 'Edit' : 'View'}
                   </button>
-                  {canEdit && (
+                  {canEdit && canChange((base.find((b) => b.id === shell.id) ?? shell).tags, owned) && (
                     <button type="button" className="braid-console__ghost" onClick={() => onDelete(index)} aria-label={`Delete ${shell.id}`}>
                       Delete
                     </button>
@@ -886,7 +897,7 @@ function RemoveButton({ label, onClick }: { label: string; onClick: () => void }
  * A starting shell: a three-row page. Its id and its route are both unique, so two new shells
  * never collide — a page has one shell, and validation refuses two on the same route.
  */
-export function newShell(existing: readonly ShellManifest[]): ShellManifest {
+export function newShell(existing: readonly ShellManifest[], tags?: string[]): ShellManifest {
   const ids = new Set(existing.map((shell) => shell.id));
   const paths = new Set(existing.flatMap((shell) => shell.routes.map((route) => route.path)));
   let id = 'new-shell';
@@ -894,6 +905,7 @@ export function newShell(existing: readonly ShellManifest[]): ShellManifest {
   return {
     id,
     framework: 'react',
+    ...(tags ? { tags } : {}),
     routes: [{ path: `/${id}`, layout: { areas: 'header header\nnav main\nfooter footer', columns: '220px 1fr', rows: 'auto 1fr auto' }, slots: {} }],
   };
 }

@@ -175,8 +175,8 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
-Planned: named environments with promotion and approvals, a GitOps mode that opens a pull request
-instead of publishing, and per-tag ownership in RBAC.
+Planned: named environments with promotion and approvals, and a GitOps mode that opens a pull request
+instead of publishing.
 
 ---
 

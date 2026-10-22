@@ -19,8 +19,8 @@ const storefront: ShellManifest = {
   routes: [{ path: '/billing/*', layout: { areas: 'header header\nnav main' }, slots: { main: 'billing' } }],
 };
 
-const EDITOR: RegistryPermissions = { read: true, publish: true, pin: true, actor: 'dana@example.com' };
-const VIEWER: RegistryPermissions = { read: true, publish: false, pin: false, actor: 'viewer@example.com' };
+const EDITOR: RegistryPermissions = { read: true, publish: true, pin: true, actor: 'dana@example.com', tags: null };
+const VIEWER: RegistryPermissions = { read: true, publish: false, pin: false, actor: 'viewer@example.com', tags: null };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -205,6 +205,30 @@ describe('<ShellsPanel>', () => {
     await click(button('Publish as candidate'));
 
     expect(api.calls.find((call) => call.method === 'POST')?.body?.['pin']).toBe(false);
+  });
+
+  it('offers editing only on shells carrying a tag the caller owns', async () => {
+    const growth = { ...storefront, id: 'growth', tags: ['growth'], routes: [{ path: '/promo', layout: { areas: 'main' } }] };
+    await render(
+      server({
+        permissions: { ...EDITOR, tags: ['growth'] },
+        head: { id: 'reg_a', snapshot: { id: 'reg_a', createdAt: '', manifests, shells: [storefront, growth] } },
+      }),
+    );
+
+    expect(container.querySelector('button[aria-label="Delete growth"]')).not.toBeNull();
+    // storefront is tagged core, which this caller does not own
+    expect(container.querySelector('button[aria-label="Delete storefront"]')).toBeNull();
+  });
+
+  it('tags a new shell with the caller\'s own tag, so they can still edit what they made', async () => {
+    const api = server({ permissions: { ...EDITOR, tags: ['growth'] } });
+    await render(api);
+    await click(button('New shell'));
+    await click(button('Publish & pin'));
+
+    const sent = api.calls.find((call) => call.method === 'POST')?.body?.['shells'] as { id: string; tags?: string[] }[];
+    expect(sent.find((shell) => shell.id === 'new-shell')?.tags).toEqual(['growth']);
   });
 
   it('shows a viewer the shells but no way to change them', async () => {

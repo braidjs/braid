@@ -171,7 +171,7 @@ export async function fetchPermissions(api: ConsoleApi = {}, signal?: AbortSigna
   try {
     return await apiRequest<RegistryPermissions>(api, '/permissions', { method: 'GET' }, signal);
   } catch (error) {
-    if (error instanceof RegistryApiError && error.status === 404) return { read: true, publish: true, pin: true, actor: null };
+    if (error instanceof RegistryApiError && error.status === 404) return { read: true, publish: true, pin: true, actor: null, tags: null };
     throw error;
   }
 }

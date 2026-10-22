@@ -59,10 +59,10 @@ export function updateFragment(draft: Draft, index: number, patch: Partial<Fragm
   return { ...draft, manifests };
 }
 
-export function addFragment(draft: Draft): Draft {
+export function addFragment(draft: Draft, tags?: string[]): Draft {
   return {
     ...draft,
-    manifests: [...draft.manifests, { id: uniqueId(draft.manifests), endpoint: '' }],
+    manifests: [...draft.manifests, { id: uniqueId(draft.manifests), endpoint: '', ...(tags ? { tags } : {}) }],
   };
 }
 

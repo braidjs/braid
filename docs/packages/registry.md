@@ -227,6 +227,49 @@ const response = await api.handle(request); // null when the path is not the API
 - **Omitted `shells` carry HEAD's forward**, so a client that only edits fragments cannot delete
   every shell by accident; `[]` removes them.
 
+### Per-tag ownership
+
+A registry is shared by many teams, and "may publish" is too coarse a right for it. With `owns`,
+the API limits each caller to the fragments and shells carrying a tag they own:
+
+```ts
+createRegistryApi({
+  store,
+  ...createOidcAuthorizer({
+    issuer,
+    audience,
+    roleMap: { 'braid-editors': ['read', 'publish', 'pin'] },
+    // group → the tags its members own; '*' for everything
+    tagMap: { payments: ['finance'], storefront: ['react', 'growth'], platform: '*' },
+  }),
+});
+```
+
+The rule applies to every fragment or shell a publish adds, changes or removes, compared with
+HEAD. The caller must own **one of its old tags and one of its new ones**:
+
+- Checking only the old tags would let a team retag its fragment into someone else's area.
+- Checking only the new tags would let a team claim someone else's fragment by tagging it.
+- An untagged item belongs to no team, so it needs `'*'`.
+
+A pin is checked the same way, by what it changes about what is being served, so pinning someone
+else's edit is not a way around it. Further rules:
+
+- **Routes.** Owning a fragment doesn't mean owning every URL it can claim. A change that makes a
+  fragment pierce pages already pierced by a fragment the caller doesn't own is refused. Overlaps
+  that already existed in HEAD are not the caller's doing and don't block their edits.
+- **Races.** HEAD is re-checked just before it moves, with or without `baseId`. A publish or pin
+  checked against one HEAD therefore can't replace a newer one and silently revert another team's
+  change.
+- **Co-owned items.** A fragment tagged `[finance, react]` can be changed by either team, and that
+  includes removing the other team's tag.
+- **Descriptors.** Ownership is judged on what the caller sent, before descriptors are merged.
+- **Failures.** If `owns` throws, the write is refused with a generic 503.
+
+A refusal is a 403 that names every item, and it is audited as `denied`. `GET /permissions` reports
+the caller's `tags`, and the console hides Edit and Delete on items the caller doesn't own. Without
+`owns` (or `tagMap`), nothing changes, and `publish` and `pin` rights are all there is.
+
 ### Audit export
 
 Every attempted publish and pin produces one audit event, with one of four outcomes:
@@ -289,3 +332,5 @@ pin). It needs the optional peer dependency `jose`.
    authorization server's access policy. Service tokens have no groups, and a scope any client may
    request is a scope any signed-in user may hold.
 4. Set `audience` to the authorization server's audience (`api://default` unless you changed it).
+5. For per-tag ownership, map groups to tags with `tagMap` (see [Per-tag ownership](#per-tag-ownership)).
+   A caller in no mapped group owns nothing.
