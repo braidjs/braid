@@ -41,8 +41,15 @@ contacted during the first request that needs a manifest and never again.
 Two consequences worth stating plainly:
 
 1. The request path does not depend on the store past boot. That is the point.
-2. **Re-pinning takes effect on restart.** A config change is a deploy, visible wherever deploys
-   are visible. There is no hot re-pin.
+2. **Re-pinning takes effect on restart, unless you ask for hot re-pin.** By default a config
+   change is a deploy, visible wherever deploys are visible. Give the gateway `registryRefreshMs`
+   and a source that follows HEAD (no `pinned`), and a re-pin goes live within that interval
+   instead. A reload that finds HEAD unmoved costs one `head()` call. One that fails keeps the
+   current snapshot serving, and a `pinned` source never moves.
+
+   ```ts
+   createGateway({ registry: snapshotRegistry({ store }), registryRefreshMs: 15_000 });
+   ```
 
 ## Falling back
 

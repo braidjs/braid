@@ -58,6 +58,8 @@ export interface Breaker {
   succeeded(fragmentId: string): void;
   failed(fragmentId: string): void;
   stateOf(fragmentId: string): BreakerState;
+  /** Drops a fragment's circuit — after a registry refresh removed it or changed its endpoint. */
+  forget(fragmentId: string): void;
 }
 
 /**
@@ -110,6 +112,10 @@ export function createBreaker(
       if (circuit.probing) return false;
       circuit.probing = true;
       return true;
+    },
+
+    forget(fragmentId) {
+      circuits.delete(fragmentId);
     },
 
     succeeded(fragmentId) {

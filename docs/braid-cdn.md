@@ -25,7 +25,7 @@ different content depending on request headers:
 | Path | Serves | How to cache it |
 | --- | --- | --- |
 | `/__braid/frag/:id/*` | the fragment's own endpoint: JS, CSS, images, data | **Aggressively.** This is the bulk of your traffic. If the fragment's build hashes filenames, cache immutably; the fragment id is in the path, so two fragments' assets can never collide. |
-| `/__braid/realm/:id/*` | the realm stub each fragment's hidden iframe boots from | **Aggressively.** Tiny, identical for a given URL, already marked `max-age=3600, stale-while-revalidate`. Caching it removes a round trip from every fragment boot. |
+| `/__braid/realm/:id/*` | the realm stub each fragment's hidden iframe boots from | **Aggressively.** Tiny, and marked `public, max-age=300, s-maxage=60, stale-while-revalidate=86400` with an ETag, so the edge follows a re-pin within a minute and a returning visitor's boot never waits on it. Caching it removes a round trip from every fragment boot. |
 | `/__braid/doc/:id/*` | the fragment's document, prepared for the host page's DOM | **Follow the fragment's own headers.** It is the fragment team's call, and it often reflects a signed-in user. |
 | `/__braid/registry` | the discovery listing, if enabled | **Never.** Already `no-store`; it depends on who asked. |
 

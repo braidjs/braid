@@ -27,6 +27,7 @@ export type {
   WebVitalEvent,
   WebVitalName,
   BreakerEvent,
+  RegistryEvent,
 } from './telemetry.js';
 export {
   DEFAULT_ADAPTER,
@@ -42,6 +43,7 @@ export type {
   AccessRule,
   Principal,
   RegistrySource,
+  RegistryRefresh,
 } from './registry.js';
 export { satisfies, canList, canFetch } from './registry.js';
 export { DEFAULT_DISCOVERY_PATH, DEFAULT_DISCOVERY_PAGE_SIZE } from './discovery.js';

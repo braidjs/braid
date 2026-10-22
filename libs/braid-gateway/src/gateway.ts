@@ -20,6 +20,7 @@ import {
   hasAccessRules,
   Principal,
   Registry,
+  RegistryRefresh,
   RegistrySource,
   FragmentManifest,
   ResolvedFragmentManifest,
@@ -69,6 +70,19 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export interface GatewayOptions {
   /** The fragment registry: inline manifests, a JSON URL, or an async loader. */
   registry: RegistrySource;
+  /**
+   * Reload the registry source every this many milliseconds, and serve what it returns from then
+   * on — a re-pin goes live without a restart.
+   *
+   * Off by default, which keeps the snapshot model's "a re-pin is a deploy". With a source that
+   * follows a moving pointer (`snapshotRegistry` without `pinned`, a URL), this is hot re-pin; with
+   * a pinned source it is a cheap no-op. Each reload is all-or-nothing, and one that fails leaves
+   * the current registry serving and is reported as a `registry` telemetry event.
+   *
+   * Instances poll independently, so a fleet converges within one interval rather than at one
+   * instant. Not allowed with inline manifests, which cannot change.
+   */
+  registryRefreshMs?: number;
   /** 'development' enables verbose error bodies; defaults to 'development'. */
   mode?: 'production' | 'development';
   /**
@@ -336,10 +350,27 @@ export interface BraidGateway {
    *          crossed too many gateways.
    */
   resolveUpgrade(request: Request): Promise<UpgradeTarget | null>;
+
+  /**
+   * Reloads the registry source now and swaps in what it returns. Resolves once the new registry
+   * is serving; rejects, leaving the current one serving, when the source fails.
+   */
+  refreshRegistry(): Promise<RegistryRefresh>;
+
+  /** Stops the `registryRefreshMs` timer. Nothing else holds resources between requests. */
+  close(): void;
 }
 
 export function createGateway(options: GatewayOptions): BraidGateway {
   const registry = new Registry(options.registry);
+  if (options.registryRefreshMs !== undefined) {
+    if (!registry.refreshable) {
+      throw new Error('braid-gateway: registryRefreshMs needs a registry that can change — a URL or a loader function, not inline manifests');
+    }
+    if (!(options.registryRefreshMs > 0)) {
+      throw new Error(`braid-gateway: registryRefreshMs must be a positive number of milliseconds, got ${options.registryRefreshMs}`);
+    }
+  }
   const mode = options.mode ?? 'development';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
   const additionalHeaders = options.additionalHeaders ?? {};
@@ -383,6 +414,45 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     : null;
   const allowedRedirectOrigins = parseOriginRules(options.redirectOrigins ?? []);
   const warnedNoIdentity = new Set<string>();
+
+  /**
+   * Reloads the registry and resets what belonged to the old one: a circuit that opened against a
+   * fragment's previous endpoint says nothing about its new one, and a removed fragment's circuit
+   * is just memory.
+   */
+  async function refreshRegistry(): Promise<RegistryRefresh> {
+    let result: RegistryRefresh;
+    try {
+      result = await registry.refresh();
+    } catch (error) {
+      emit({ kind: 'registry', outcome: 'failed', error: error instanceof Error ? error.message : String(error), at: Date.now() });
+      throw error;
+    }
+    // A request still in flight to an old endpoint may report its outcome after this, against the
+    // fresh circuit. One stray result against a threshold of several is not worth a generation
+    // counter per circuit.
+    for (const id of [...result.removed, ...result.endpointChanged]) breaker?.forget(id);
+    if (result.changed) {
+      emit({ kind: 'registry', outcome: 'refreshed', fragmentCount: result.fragmentCount, at: Date.now() });
+    }
+    return result;
+  }
+
+  // Sequential, not setInterval: the next reload is scheduled only once this one has finished, so
+  // a slow store can never stack reloads on top of each other. Unref'd, so it never keeps a
+  // process alive that would otherwise exit.
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const scheduleRefresh = (): void => {
+    if (closed || options.registryRefreshMs === undefined) return;
+    refreshTimer = setTimeout(() => {
+      refreshRegistry()
+        .catch(() => undefined) // reported as telemetry; the current registry keeps serving
+        .finally(scheduleRefresh);
+    }, options.registryRefreshMs);
+    (refreshTimer as { unref?: () => void }).unref?.();
+  };
+  scheduleRefresh();
 
   /**
    * A fragment that redirects when it cannot tell who the user is will redirect again after the
@@ -454,6 +524,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const discovery = createDiscoveryHandler(registry, options.discovery, mode, resolvePrincipal);
 
   return {
+    refreshRegistry,
+
+    close() {
+      closed = true;
+      clearTimeout(refreshTimer);
+    },
+
     async handle(request: Request, next?: () => Promise<Response>): Promise<Response | null> {
       const requestUrl = new URL(request.url);
 
@@ -529,20 +606,29 @@ export function createGateway(options: GatewayOptions): BraidGateway {
          * made from the fragment's JS context resolve to the fragment's own assets even after
          * the route-url illusion is restored.
          */
-        case 'realm':
-          return htmlResponse(
+        case 'realm': {
+          const stub =
             `<!doctype html><title>Braid realm</title>` +
-              `<meta name="${BRAID_PROTOCOL_META}" content="${BRAID_PROTOCOL_VERSION}">` +
-              `<meta name="${BRAID_ADAPTER_META}" content="${escapeHtml(fragment.adapter)}">` +
-              adapterOptionsMeta(fragment, basePath) +
-              `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`,
-            200,
-            {
-              [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
-              // identical for a given url, and now varies on nothing: safe to cache anywhere
-              'Cache-Control': 'max-age=3600, public, stale-while-revalidate=31536000',
-            },
-          );
+            `<meta name="${BRAID_PROTOCOL_META}" content="${BRAID_PROTOCOL_VERSION}">` +
+            `<meta name="${BRAID_ADAPTER_META}" content="${escapeHtml(fragment.adapter)}">` +
+            adapterOptionsMeta(fragment, basePath) +
+            `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`;
+          // The stub is generated from the manifest, so it changes when a re-pin changes the
+          // fragment's adapter, entry or capabilities. Fresh for five minutes in the browser and one
+          // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
+          // returning visitor's fragment boot never waits on it — the cost is that the first boot
+          // after a re-pin may use the previous stub once, while the new one is fetched.
+          const etag = await stubEtag(stub);
+          const cacheHeaders = {
+            [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
+            ETag: etag,
+            'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
+          };
+          if (etagMatches(request.headers.get('if-none-match'), etag)) {
+            return new Response(null, { status: 304, headers: cacheHeaders });
+          }
+          return htmlResponse(stub, 200, cacheHeaders);
+        }
 
         /**
          * The fragment's document, prepared for the host page's DOM: singletons renamed, scripts
@@ -1507,4 +1593,33 @@ function appendHop(request: Request): string {
 function hopCount(request: Request): number {
   const via = request.headers.get(BRAID_VIA_HEADER);
   return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
+}
+
+/** Realm stub ETags by stub content, so a hot path does not hash the same few hundred bytes twice. */
+const stubEtags = new Map<string, string>();
+
+/** A strong ETag over a realm stub's content. */
+async function stubEtag(stub: string): Promise<string> {
+  const cached = stubEtags.get(stub);
+  if (cached) return cached;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stub));
+  const etag = `"${btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 12)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')}"`;
+  // Bounded by the registry's size times its realm paths; cleared wholesale if something unusual
+  // (a fragment generating endless distinct stubs) ever grows it.
+  if (stubEtags.size > 10_000) stubEtags.clear();
+  stubEtags.set(stub, etag);
+  return etag;
+}
+
+/**
+ * If-None-Match, compared weakly as RFC 9110 requires: a CDN that compresses at the edge turns a
+ * strong `"x"` into `W/"x"`, and the header may list several tags or be `*`.
+ */
+function etagMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').some((candidate) => candidate.trim().replace(/^W\//, '') === etag);
 }
