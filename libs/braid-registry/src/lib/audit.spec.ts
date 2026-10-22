@@ -95,6 +95,47 @@ describe('registry audit events', () => {
     ]);
   });
 
+  it('records a write that failed partway, with what it got as far as', async () => {
+    const { api, events, store } = auditedApi();
+    vi.spyOn(store, 'setHead').mockRejectedValue(new Error('disk full'));
+
+    const response = await api.handle(request('POST', '/snapshots', { manifests }));
+
+    expect(response!.status).toBe(500);
+    expect(events).toEqual([
+      expect.objectContaining({ action: 'publish', outcome: 'error', status: 500, reason: 'disk full', pinned: false, snapshotId: expect.any(String) }),
+    ]);
+  });
+
+  it('records a cross-site write attempt as denied', async () => {
+    const { api, events } = auditedApi();
+
+    const response = await api.handle(
+      new Request(`${BASE}/head`, { method: 'POST', headers: { 'sec-fetch-site': 'cross-site', 'x-actor': 'victim@example.com' }, body: '{}' }),
+    );
+
+    expect(response!.status).toBe(403);
+    expect(events).toEqual([expect.objectContaining({ action: 'pin', outcome: 'denied', status: 403, actor: 'victim@example.com' })]);
+  });
+
+  it('asks who the caller is once per write', async () => {
+    const identify = vi.fn((request: Request) => request.headers.get('x-actor'));
+    const api = createRegistryApi({ store: memorySnapshotStore(), authorize: () => true, identify, audit: () => undefined });
+
+    await api.handle(request('POST', '/snapshots', { manifests }));
+
+    expect(identify).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses ids that are not short strings, rather than echoing them into the audit trail', async () => {
+    const { api, events } = auditedApi();
+
+    expect((await api.handle(request('POST', '/head', { id: { not: 'a string' } })))!.status).toBe(400);
+    expect((await api.handle(request('POST', '/head', { id: 'x'.repeat(500) })))!.status).toBe(400);
+    expect((await api.handle(request('POST', '/snapshots', { manifests, baseId: ['x'] })))!.status).toBe(400);
+    expect(events.every((event) => (event.reason ?? '').length < 300)).toBe(true);
+  });
+
   it('does not audit reads, or the permissions probe that asks about writes', async () => {
     const { api, events } = auditedApi((_request, action) => action === 'read');
 
@@ -198,6 +239,51 @@ describe('webhookAuditSink()', () => {
       'user4',
     ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped 2'));
+  });
+
+  it('sends at most batchSize events per POST', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const sink = webhookAuditSink({ url: 'https://siem.example/ingest', batchSize: 2, flushMs: 60_000, fetch });
+
+    [1, 2, 3, 4, 5].forEach((n) => sink(event(n)));
+    await sink.flush();
+
+    const sizes = fetch.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).length);
+    expect(sizes.every((size) => size <= 2)).toBe(true);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(5);
+  });
+
+  it('backs off while the endpoint is down, instead of retrying on every new event', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    const sink = webhookAuditSink({ url: 'https://siem.example/ingest', batchSize: 3, flushMs: 1000, fetch });
+
+    for (let n = 0; n < 10; n++) sink(event(n));
+    await vi.advanceTimersByTimeAsync(0);
+    const duringOutage = fetch.mock.calls.length;
+
+    expect(duringOutage).toBe(1);
+    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+
+    // and it retries on its own, without waiting for another event to arrive
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch.mock.calls.length).toBeGreaterThan(duringOutage);
+  });
+
+  it('gives up on a send that hangs, and keeps its events', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetch = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason))),
+    );
+    const sink = webhookAuditSink({ url: 'https://siem.example/ingest', batchSize: 1, timeoutMs: 500, fetch });
+
+    sink(event(1));
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(sink.pending).toBe(1);
   });
 
   it('keeps a batch the endpoint refused, to send with the next flush', async () => {

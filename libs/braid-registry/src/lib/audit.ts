@@ -23,8 +23,10 @@ export interface AuditEvent {
    * - `denied` — the caller lacked the right; nothing was attempted.
    * - `rejected` — the caller had the right, but the server refused the change: a registry with
    *   errors, a HEAD that moved since the draft began, a snapshot that does not exist.
+   * - `error` — the server failed partway (a store that threw). `snapshotId` and `pinned` say how
+   *   far the write got: a stored but unpinned snapshot is harmless, and worth knowing about.
    */
-  outcome: 'success' | 'denied' | 'rejected';
+  outcome: 'success' | 'denied' | 'rejected' | 'error';
   /** Who, as `identify` resolved them from a verified credential. Null when it cannot say. */
   actor: string | null;
   /** The HTTP status the caller received. */
@@ -64,12 +66,14 @@ export function jsonLinesAuditSink(write: (line: string) => void): AuditSink {
 export interface WebhookAuditSinkOptions {
   /** Where to POST batches: an HTTP event collector, a SIEM ingest URL, a queue's HTTP endpoint. */
   url: string;
-  /** Sent with every batch — typically the collector's token. */
+  /** Sent with every batch — typically the collector's token. Keep tokens out of the URL. */
   headers?: Record<string, string>;
-  /** Send as soon as this many events are queued. Defaults to 50. */
+  /** The most events per POST, and how many queued events trigger a send. Defaults to 50. */
   batchSize?: number;
   /** Send a partial batch after this long. Defaults to 5000ms. */
   flushMs?: number;
+  /** Abandon a POST that has not answered after this long, and keep its events. Defaults to 10 000ms. */
+  timeoutMs?: number;
   /**
    * The most events held while the endpoint is slow or down. Defaults to 10 000. When full, the
    * oldest are dropped and counted — memory is the thing a request handler must not run out of.
@@ -79,75 +83,112 @@ export interface WebhookAuditSinkOptions {
 }
 
 export interface WebhookAuditSink extends AuditSink {
-  /** Sends whatever is queued now. Resolves when the attempt finishes, whether or not it succeeded. */
+  /**
+   * Sends everything queued now, batch by batch, stopping at the first failure. Call it on
+   * shutdown: the timer is unref'd, so a process that exits can otherwise leave up to `flushMs` of
+   * events unsent. On Workers, pass it to `ctx.waitUntil`.
+   */
   flush(): Promise<void>;
+  /** Events waiting to be sent. */
+  readonly pending: number;
 }
 
 /**
  * POSTs events in batches, as a JSON array, to an HTTP collector.
  *
- * A batch the endpoint refuses (or that fails to send) goes back to the front of the queue for
- * the next flush, so an outage delays events rather than losing them — until `maxQueue`, past
- * which the oldest are dropped and the count is logged.
+ * One request is in flight at a time, carrying at most `batchSize` events. A batch the endpoint
+ * refuses, or that does not answer within `timeoutMs`, goes back to the front of the queue, and
+ * the sink backs off — doubling from `flushMs` up to a minute — rather than retrying on every new
+ * event: an outage costs one request per backoff period and one warning, however busy the API is.
+ * Past `maxQueue`, the oldest events are dropped and the count is logged.
  */
 export function webhookAuditSink(options: WebhookAuditSinkOptions): WebhookAuditSink {
-  const { url, headers = {}, batchSize = 50, flushMs = 5000, maxQueue = 10_000 } = options;
+  const { url, headers = {}, batchSize = 50, flushMs = 5000, timeoutMs = 10_000, maxQueue = 10_000 } = options;
   const send = options.fetch ?? globalThis.fetch;
+  const MAX_BACKOFF_MS = 60_000;
 
-  let queue: AuditEvent[] = [];
+  const queue: AuditEvent[] = [];
   let dropped = 0;
+  let failures = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let sending: Promise<void> | undefined;
+  let inFlight: Promise<boolean> | undefined;
 
-  const enqueue = (events: readonly AuditEvent[], front = false): void => {
-    queue = front ? [...events, ...queue] : [...queue, ...events];
-    if (queue.length > maxQueue) {
-      dropped += queue.length - maxQueue;
-      queue = queue.slice(queue.length - maxQueue);
-    }
+  const trim = (): void => {
+    if (queue.length <= maxQueue) return;
+    const excess = queue.length - maxQueue;
+    queue.splice(0, excess);
+    dropped += excess;
   };
 
-  async function flush(): Promise<void> {
-    if (sending) await sending;
-    clearTimeout(timer);
-    timer = undefined;
-    if (queue.length === 0) return;
+  const schedule = (delay: number): void => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void flush();
+    }, delay);
+    (timer as { unref?: () => void }).unref?.();
+  };
 
-    const batch = queue;
-    queue = [];
+  /** Sends one batch. Resolves true when it was accepted. */
+  async function sendBatch(): Promise<boolean> {
+    const batch = queue.splice(0, batchSize);
     if (dropped > 0) {
       console.warn(`[braid-registry] audit webhook queue was full: dropped ${dropped} oldest event(s)`);
       dropped = 0;
     }
-
-    sending = (async () => {
-      try {
-        const response = await send(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...headers },
-          body: JSON.stringify(batch),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      } catch (error) {
-        console.warn(`[braid-registry] audit webhook failed (${String(error)}); ${batch.length} event(s) kept for the next flush`);
-        enqueue(batch, true);
+    const abort = new AbortController();
+    const deadline = setTimeout(() => abort.abort(new Error(`no answer after ${timeoutMs}ms`)), timeoutMs);
+    try {
+      const response = await send(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(batch),
+        signal: abort.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (failures > 0) console.warn(`[braid-registry] audit webhook recovered after ${failures} failed attempt(s)`);
+      failures = 0;
+      return true;
+    } catch (error) {
+      // Warned once per outage, not per attempt.
+      if (failures === 0) {
+        console.warn(`[braid-registry] audit webhook failed (${String(error)}); events are kept and retried with backoff`);
       }
-    })();
-    await sending;
-    sending = undefined;
+      failures += 1;
+      queue.unshift(...batch);
+      trim();
+      return false;
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+
+  async function flush(): Promise<void> {
+    while (inFlight) await inFlight;
+    clearTimeout(timer);
+    timer = undefined;
+    while (queue.length > 0) {
+      inFlight = sendBatch();
+      const ok = await inFlight;
+      inFlight = undefined;
+      if (!ok) {
+        schedule(Math.min(flushMs * 2 ** failures, MAX_BACKOFF_MS));
+        return;
+      }
+    }
   }
 
   const sink = (event: AuditEvent): void => {
-    enqueue([event]);
-    if (queue.length >= batchSize) {
-      void flush();
-    } else if (!timer) {
-      timer = setTimeout(() => void flush(), flushMs);
-      (timer as { unref?: () => void }).unref?.();
-    }
+    queue.push(event);
+    trim();
+    // While backing off, new events wait for the retry rather than each forcing a send.
+    if (failures > 0 || inFlight) return schedule(flushMs);
+    if (queue.length >= batchSize) void flush();
+    else schedule(flushMs);
   };
 
-  return Object.assign(sink, { flush });
+  // defineProperty, not Object.assign: assign would copy the getter's value once, freezing it at 0
+  return Object.defineProperty(Object.assign(sink, { flush }), 'pending', { get: () => queue.length, enumerable: true }) as WebhookAuditSink;
 }
 
 /**

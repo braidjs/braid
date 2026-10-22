@@ -170,10 +170,15 @@ const response = await api.handle(request); // null when the path is not the API
 
 ### Audit export
 
-Every attempted write produces one audit event: a publish or pin that succeeded, one refused for
-lack of rights (`denied`), or one the server rejected (`rejected`), such as a registry with errors
-or a HEAD that moved. Each event carries the verified actor (from `identify`), the HTTP status, the
-snapshot ids involved and, for a refusal, the reason. Reads are not audited.
+Every attempted publish and pin produces one audit event, with one of four outcomes:
+
+- `success`: the write went through.
+- `denied`: the caller lacked the right, or the request was a cross-site browser write.
+- `rejected`: the server refused it, such as a registry with errors or a HEAD that moved.
+- `error`: the server failed partway. `snapshotId` and `pinned` say how far the write got.
+
+Each event carries the verified actor (from `identify`, resolved once per request), the HTTP status,
+the snapshot ids involved and, for anything but a success, the reason. Reads are not audited.
 
 ```ts
 import { createRegistryApi, jsonLinesAuditSink, webhookAuditSink } from '@braidlabs/registry';
@@ -196,10 +201,20 @@ createRegistryApi({
 
 Sinks are best effort. They run after the response is decided, and a sink that throws or rejects
 is logged once and never changes what the caller gets. That way an audit pipeline that is down
-cannot stop someone rolling back a broken page. `webhookAuditSink` batches events (50 per POST,
-or every 5 seconds). A batch the endpoint refuses is kept for the next flush. When the queue
-reaches 10 000 events, the oldest are dropped and the count is logged. For fail-closed auditing,
-ship the JSON-lines output with a durable log agent.
+cannot stop someone rolling back a broken page. For fail-closed auditing, ship the JSON-lines
+output with a durable log agent.
+
+`webhookAuditSink` behaves as follows:
+
+- **Batching:** at most 50 events per POST, sent when 50 are queued or after 5 seconds, with one
+  request in flight at a time.
+- **Failures:** a batch the endpoint refuses, or that gets no answer within 10 seconds, is kept,
+  and the sink backs off, doubling up to a minute. An outage therefore costs one request per
+  backoff period and one warning, however busy the API is.
+- **Overflow:** when the queue reaches 10 000 events, the oldest are dropped and the count is
+  logged.
+- **Shutdown:** the timer does not keep the process alive, so call `sink.flush()` on shutdown or
+  up to 5 seconds of events are lost. On Workers, pass `flush()` to `ctx.waitUntil`.
 
 ### Okta
 

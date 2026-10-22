@@ -115,8 +115,11 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
   const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
 
-  /** What a write handler learned on its way to a response, for the audit event that describes it. */
-  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff'>;
+  /**
+   * What a write handler learned on its way to a response, for the audit event that describes it —
+   * and who the caller is, resolved once and used for both the event and `labels.publishedBy`.
+   */
+  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff'> & { actor: string | null };
 
   /**
    * Runs a write and audits it from the response it produced, so every path out of the handler —
@@ -126,32 +129,42 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   async function audited(
     request: Request,
     action: AuditAction,
-    run: (detail: AuditDetail) => Promise<Response>,
+    run: (detail: AuditDetail) => Response | Promise<Response>,
   ): Promise<Response> {
-    const detail: AuditDetail = {};
-    const response = await run(detail);
-    if (!emitAudit) return response;
-
-    const { status } = response;
-    const outcome = status < 300 ? 'success' : status === 401 || status === 403 ? 'denied' : 'rejected';
-    const reason = outcome === 'success' ? undefined : await errorOf(response);
     let actor: string | null = null;
     try {
       actor = (await identify?.(request)) ?? null;
     } catch {
-      // an unidentifiable caller is recorded as such, not as a failed request
+      // an unidentifiable caller is recorded as such; authorize decides whether that is allowed
     }
+    const detail: AuditDetail = { actor };
 
-    emitAudit({
-      version: 1,
-      at: new Date().toISOString(),
-      action,
-      outcome,
-      actor,
-      status,
-      ...detail,
-      ...(reason === undefined ? {} : { reason }),
-    });
+    const record = (status: number, reason: string | undefined): void => {
+      if (!emitAudit) return;
+      const outcome = status >= 500 ? 'error' : status < 300 ? 'success' : status === 401 || status === 403 ? 'denied' : 'rejected';
+      const { actor: who, ...rest } = detail;
+      emitAudit({
+        version: 1,
+        at: new Date().toISOString(),
+        action,
+        outcome,
+        actor: who,
+        status,
+        ...rest,
+        ...(reason === undefined ? {} : { reason: reason.slice(0, 500) }),
+      });
+    };
+
+    let response: Response;
+    try {
+      response = await run(detail);
+    } catch (error) {
+      // A write that failed partway — the snapshot stored, HEAD not yet moved — is exactly the
+      // event an auditor needs, so it is recorded before the error becomes a 500.
+      record(500, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    record(response.status, response.status < 300 ? undefined : await errorOf(response));
     return response;
   }
 
@@ -162,13 +175,6 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
       const route = url.pathname.slice(basePath.length) || '/';
 
-      // A browser marks a request another site made with Sec-Fetch-Site: cross-site. Refusing those
-      // writes closes CSRF for an `authorize` hook that reads a cookie; bearer tokens are immune
-      // anyway, and clients that are not browsers do not send the header.
-      if (request.method === 'POST' && request.headers.get('sec-fetch-site') === 'cross-site') {
-        return json({ error: 'cross-site writes are refused' }, 403);
-      }
-
       try {
         if (request.method === 'GET' && route === '/snapshots') return await listSnapshots(request, url);
         if (request.method === 'GET' && route.startsWith('/snapshots/')) {
@@ -176,8 +182,13 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
         }
         if (request.method === 'GET' && route === '/head') return await getHead(request);
         if (request.method === 'GET' && route === '/permissions') return await permissions(request);
-        if (request.method === 'POST' && route === '/snapshots') return await audited(request, 'publish', (d) => publish(request, d));
-        if (request.method === 'POST' && route === '/head') return await audited(request, 'pin', (d) => pin(request, d));
+        if (request.method === 'POST' && route === '/snapshots') {
+          return await audited(request, 'publish', (d) => crossSite(request) ?? publish(request, d));
+        }
+        if (request.method === 'POST' && route === '/head') {
+          return await audited(request, 'pin', (d) => crossSite(request) ?? pin(request, d));
+        }
+        if (request.method === 'POST' && crossSite(request)) return crossSite(request)!;
 
         return json({ error: `no route for ${request.method} ${route}` }, 404);
       } catch (error) {
@@ -220,6 +231,16 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * validates as you type because that is good to use, not because it is trusted; this is the
    * check that decides whether a snapshot exists.
    */
+  /**
+   * A browser marks a request another site made with Sec-Fetch-Site: cross-site. Refusing those
+   * writes closes CSRF for an `authorize` hook that reads a cookie; bearer tokens are immune
+   * anyway, and clients that are not browsers do not send the header. Refused inside `audited`,
+   * because a forged write is the refusal an auditor most wants to see.
+   */
+  function crossSite(request: Request): Response | null {
+    return request.headers.get('sec-fetch-site') === 'cross-site' ? json({ error: 'cross-site writes are refused' }, 403) : null;
+  }
+
   async function publish(request: Request, audit: AuditDetail): Promise<Response> {
     const denied = await refuse(request, 'publish');
     if (denied) return denied;
@@ -228,6 +249,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     if (body instanceof Response) return body;
     if (!Array.isArray(body?.manifests)) {
       return json({ error: 'expected { manifests: FragmentManifest[] }' }, 400);
+    }
+    if (body.baseId !== undefined && body.baseId !== null && !isSnapshotId(body.baseId)) {
+      return json({ error: 'expected baseId to be a snapshot id or null' }, 400);
     }
     if (body.shells !== undefined && !Array.isArray(body.shells)) {
       return json({ error: 'expected shells to be an array of ShellManifest' }, 400);
@@ -274,7 +298,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
     }
 
-    const labels = identify ? await attributed(request, body.labels) : body.labels;
+    const labels = identify ? attributed(audit.actor, body.labels) : body.labels;
 
     const snapshot = await createSnapshot({
       manifests,
@@ -320,7 +344,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const body = await readJson<{ id?: string }>(request);
     if (body instanceof Response) return body;
     const id = body?.id;
-    if (!id) return json({ error: 'expected { id }' }, 400);
+    if (!isSnapshotId(id)) return json({ error: 'expected { id } with a snapshot id' }, 400);
 
     const snapshot: RegistrySnapshot | null = await store.get(id);
     if (!snapshot) return json({ error: `no snapshot "${id}" — cannot pin what is not stored` }, 404);
@@ -338,9 +362,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * the client — not even when the server cannot identify the caller, since a claimed author on an
    * anonymous publish is exactly the forgery this exists to prevent.
    */
-  async function attributed(request: Request, labels: Record<string, string> | undefined): Promise<Record<string, string> | undefined> {
+  function attributed(actor: string | null, labels: Record<string, string> | undefined): Record<string, string> | undefined {
     const rest = Object.fromEntries(Object.entries(labels ?? {}).filter(([key]) => key !== 'publishedBy'));
-    const actor = (await identify?.(request)) ?? null;
     const result = actor ? { ...rest, publishedBy: actor } : rest;
     return Object.keys(result).length > 0 ? result : undefined;
   }
@@ -396,8 +419,17 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** The `error` a refusal carried, for the audit record of why. */
+/** A snapshot id as the API mints them — checked before one is echoed into an error or an audit record. */
+function isSnapshotId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128;
+}
+
+/**
+ * The `error` a refusal carried, for the audit record of why. Read only from a JSON body: an
+ * `authorize` hook may return its own Response, and a streamed one must not hold the request open.
+ */
 async function errorOf(response: Response): Promise<string | undefined> {
+  if (!response.headers.get('content-type')?.includes('json')) return undefined;
   try {
     const body = (await response.clone().json()) as { error?: unknown };
     return typeof body?.error === 'string' ? body.error : undefined;
