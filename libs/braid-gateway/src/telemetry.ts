@@ -65,7 +65,15 @@ export interface BreakerEvent {
   at: number;
 }
 
-export type TelemetryEvent = FragmentFetchEvent | WebVitalEvent | BreakerEvent;
+export type TelemetryEvent = FragmentFetchEvent | WebVitalEvent | BreakerEvent | RegistryEvent;
+
+/**
+ * Fires when a `registryRefreshMs` reload swaps in a changed registry, or fails. An unchanged
+ * reload is silent: on a short interval it would be a heartbeat, not an event.
+ */
+export type RegistryEvent =
+  | { kind: 'registry'; outcome: 'refreshed'; fragmentCount: number; at: number }
+  | { kind: 'registry'; outcome: 'failed'; error: string; at: number };
 
 export interface TelemetryOptions {
   /**

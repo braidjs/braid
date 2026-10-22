@@ -99,8 +99,10 @@ undoing anything is pinning an earlier snapshot in **History**.
 - Removing a fragment that a shell still slots is refused, naming the shell.
 - Roles that may publish but not pin publish **candidates**, which someone with pin rights promotes
   from History.
-- A gateway loads its pinned snapshot when it starts, so a new pin goes live on its next restart or
-  deploy.
+- A gateway with `registryRefreshMs` and a source that follows HEAD serves a new pin within that
+  interval, with no restart (hot re-pin). Without it, a gateway loads its snapshot when it starts,
+  so a new pin goes live on its next restart or deploy. Instances poll independently, so a fleet
+  converges within one interval rather than at one instant.
 
 ---
 
@@ -169,7 +171,7 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
-Planned: the gateway serving shells from their definition with no rebuild, hot re-pin, named
+Planned: the gateway serving shells from their definition with no rebuild, named
 environments with promotion and approvals, a GitOps mode that opens a pull request instead of
 publishing, per-tag ownership in RBAC, and audit export to a SIEM.
 

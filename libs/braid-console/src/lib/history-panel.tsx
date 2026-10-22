@@ -97,8 +97,8 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
             <span className="braid-console__count">{state.items.length}</span>
           </div>
           <p className="braid-console__notice braid-console__notice--quiet">
-            To roll back, pin an earlier snapshot. A gateway loads its pinned snapshot when it starts, so a new pin goes
-            live on its next restart or deploy.
+            To roll back, pin an earlier snapshot. A gateway that follows HEAD with a refresh interval serves the new pin
+            within that interval; one without it picks the pin up on its next restart or deploy.
           </p>
           {error && (
             <p className="braid-console__barstate--error" role="alert">

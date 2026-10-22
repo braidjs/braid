@@ -321,22 +321,48 @@ interface CompiledPierceRoute {
   matches(pathname: string): boolean;
 }
 
+/** What a refresh changed, so the gateway can reset per-fragment state that no longer applies. */
+export interface RegistryRefresh {
+  /** False when the source returned the very manifests already being served. */
+  changed: boolean;
+  fragmentCount: number;
+  /** Fragments no longer registered. */
+  removed: string[];
+  /** Fragments still registered whose endpoint is different now. */
+  endpointChanged: string[];
+}
+
+/** One loaded registry: manifests and the routes compiled from them, always replaced together. */
+interface RegistryState {
+  /** What the source returned, kept to tell an unchanged reload from a new one cheaply. */
+  raw: readonly FragmentManifest[];
+  manifests: Map<string, ResolvedFragmentManifest>;
+  pierceRoutes: CompiledPierceRoute[];
+}
+
 export class Registry {
   #source: RegistrySource;
-  #manifests: Map<string, ResolvedFragmentManifest> | undefined;
-  #pierceRoutes: CompiledPierceRoute[] | undefined;
+  #state: RegistryState | undefined;
+  /** The first load, shared by every request that arrives before it finishes. */
+  #loading: Promise<RegistryState> | undefined;
+  /** A refresh in flight, shared by every caller that asks for one meanwhile. */
+  #refreshing: Promise<RegistryRefresh> | undefined;
 
   constructor(source: RegistrySource) {
     this.#source = source;
     if (Array.isArray(source)) {
       // inline manifests fail fast at construction
-      this.#manifests = indexManifests(source);
-      this.#pierceRoutes = compilePierceRoutes(this.#manifests);
+      this.#state = compileState(source);
     }
   }
 
+  /** Whether the source can return something different on a later load. Inline manifests cannot. */
+  get refreshable(): boolean {
+    return !Array.isArray(this.#source);
+  }
+
   async getFragment(fragmentId: string): Promise<ResolvedFragmentManifest | undefined> {
-    const manifests = await this.#load();
+    const { manifests } = await this.#load();
     return manifests.get(fragmentId);
   }
 
@@ -347,7 +373,8 @@ export class Registry {
    * that names it.
    */
   async matchPierceRoutes(pathname: string): Promise<ResolvedFragmentManifest[]> {
-    await this.#load();
+    // One state for the whole match: a refresh landing mid-loop cannot mix two registries.
+    const { pierceRoutes } = await this.#load();
 
     // Deduplicated by fragment. Routes are compiled one per *pattern*, so a fragment declaring
     // both `/billing` and `/billing/*` matches `/billing` twice — the second through the
@@ -355,7 +382,7 @@ export class Registry {
     // and pierce two copies of it into one slot; callers want the set of fragments that match,
     // not the set of patterns that did.
     const matched = new Map<string, ResolvedFragmentManifest>();
-    for (const route of this.#pierceRoutes!) {
+    for (const route of pierceRoutes) {
       if (route.matches(pathname) && !matched.has(route.manifest.id)) {
         matched.set(route.manifest.id, route.manifest);
       }
@@ -365,31 +392,72 @@ export class Registry {
 
   /** Every registered fragment, ordered by id so pagination is deterministic. */
   async listFragments(): Promise<ResolvedFragmentManifest[]> {
-    const manifests = await this.#load();
+    const { manifests } = await this.#load();
     return [...manifests.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
-  async #load(): Promise<Map<string, ResolvedFragmentManifest>> {
-    if (this.#manifests) return this.#manifests;
+  /**
+   * Loads the source again and, if it returned something new, swaps it in.
+   *
+   * All or nothing: the new manifests are normalized and their routes compiled before anything is
+   * replaced, and the replacement is one assignment, so a request sees one registry or the other,
+   * never parts of both. A source that throws, or returns a registry that does not compile, leaves
+   * the current one serving — the error is the caller's to report, not the next request's to fail.
+   */
+  refresh(): Promise<RegistryRefresh> {
+    this.#refreshing ??= this.#reload().finally(() => {
+      this.#refreshing = undefined;
+    });
+    return this.#refreshing;
+  }
 
-    const source = this.#source;
-    let manifests: FragmentManifest[];
-    if (typeof source === 'function') {
-      manifests = await source();
-    } else if (typeof source === 'string') {
-      const response = await fetch(source);
-      if (!response.ok) {
-        throw new Error(`braid-gateway: loading the registry from "${source}" failed with HTTP ${response.status}`);
-      }
-      manifests = (await response.json()) as FragmentManifest[];
-    } else {
-      manifests = source;
+  async #reload(): Promise<RegistryRefresh> {
+    const previous = this.#state ?? (await this.#load());
+    const raw = await loadSource(this.#source);
+    if (raw === previous.raw) {
+      return { changed: false, fragmentCount: previous.manifests.size, removed: [], endpointChanged: [] };
     }
 
-    this.#manifests = indexManifests(manifests);
-    this.#pierceRoutes = compilePierceRoutes(this.#manifests);
-    return this.#manifests;
+    const next = compileState(raw);
+    this.#state = next;
+
+    const removed: string[] = [];
+    const endpointChanged: string[] = [];
+    for (const [id, manifest] of previous.manifests) {
+      const now = next.manifests.get(id);
+      if (!now) removed.push(id);
+      else if (now.endpoint !== manifest.endpoint) endpointChanged.push(id);
+    }
+    return { changed: true, fragmentCount: next.manifests.size, removed, endpointChanged };
   }
+
+  #load(): Promise<RegistryState> {
+    if (this.#state) return Promise.resolve(this.#state);
+    // A failed first load is not cached: the next request tries again.
+    this.#loading ??= loadSource(this.#source)
+      .then((raw) => (this.#state = compileState(raw)))
+      .finally(() => {
+        this.#loading = undefined;
+      });
+    return this.#loading;
+  }
+}
+
+async function loadSource(source: RegistrySource): Promise<readonly FragmentManifest[]> {
+  if (typeof source === 'function') return source();
+  if (typeof source === 'string') {
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(`braid-gateway: loading the registry from "${source}" failed with HTTP ${response.status}`);
+    }
+    return (await response.json()) as FragmentManifest[];
+  }
+  return source;
+}
+
+function compileState(raw: readonly FragmentManifest[]): RegistryState {
+  const manifests = indexManifests(raw);
+  return { raw, manifests, pierceRoutes: compilePierceRoutes(manifests) };
 }
 
 /**
@@ -448,7 +516,7 @@ function assertURLPatternAvailable(): void {
   );
 }
 
-function indexManifests(manifests: FragmentManifest[]): Map<string, ResolvedFragmentManifest> {
+function indexManifests(manifests: readonly FragmentManifest[]): Map<string, ResolvedFragmentManifest> {
   const indexed = new Map<string, ResolvedFragmentManifest>();
   for (const manifest of manifests) {
     const resolved = normalizeManifest(manifest);

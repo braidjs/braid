@@ -57,22 +57,31 @@ export interface SnapshotDiagnostic {
  * });
  * ```
  *
- * **This runs once.** The gateway's `Registry` memoizes its source after the first load, so the
- * store is contacted during the first request that needs a manifest and never again. Two
- * consequences worth being explicit about:
+ * **When it runs.** The gateway's `Registry` loads its source on the first request that needs a
+ * manifest, and then only when it is told to reload — on its `registryRefreshMs` timer, or a call
+ * to `gateway.refreshRegistry()`. So:
  *
  * 1. The request path does not depend on the store's availability past boot, which is the point.
- * 2. Re-pinning takes effect on **restart**. That is the deliberate propagation the snapshot model
- *    asks for — a config change is a deploy, visible in whatever records deploys — but it does
- *    mean there is no hot re-pin, and adding one would require an invalidation hook on the
- *    gateway's `Registry`.
+ * 2. Without `registryRefreshMs`, a re-pin takes effect on **restart** — the snapshot model's "a
+ *    config change is a deploy". With it, a gateway following HEAD picks up a re-pin on its next
+ *    reload (hot re-pin), and a `pinned` gateway stays exactly where it is.
+ * 3. A reload while HEAD has not moved costs one `head()` call: the snapshot already being served
+ *    is not fetched or verified again, and the gateway sees the same manifests and changes nothing.
+ * 4. A reload that fails — the store is down, the new snapshot does not verify — leaves the
+ *    current snapshot serving. It never falls back to an older cached one.
  */
 export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promise<FragmentManifest[]> {
   const { store, pinned, cache, fallback = 'last-known-good', verify = true, onDiagnostic } = options;
 
+  /** The snapshot being served, and the manifests handed to the gateway for it. */
+  let current: { snapshot: RegistrySnapshot; manifests: FragmentManifest[] } | undefined;
+
   return async () => {
     const snapshot = await resolve();
-    return [...snapshot.manifests];
+    // The same array for the same snapshot, which is how the gateway tells "nothing changed" apart
+    // from a re-pin without comparing manifests.
+    if (current?.snapshot.id !== snapshot.id) current = { snapshot, manifests: [...snapshot.manifests] };
+    return current.manifests;
   };
 
   async function resolve(): Promise<RegistrySnapshot> {
@@ -88,8 +97,15 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promis
               'pass `pinned` with a snapshot id, or publish one first',
           );
         }
-        report({ level: 'info', event: 'head-followed', snapshotId: id, message: `following store head ${id}` });
+        // Reported when HEAD moves, not on every reload: on a short refresh interval this would
+        // otherwise be a heartbeat in the log.
+        if (current?.snapshot.id !== id) {
+          report({ level: 'info', event: 'head-followed', snapshotId: id, message: `following store head ${id}` });
+        }
       }
+
+      // Already serving it: nothing to fetch or verify again.
+      if (current?.snapshot.id === id) return current.snapshot;
 
       const snapshot = await store.get(id);
       if (!snapshot) throw new Error(`braid-registry: snapshot "${id}" is not in the store`);
