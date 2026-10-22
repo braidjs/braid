@@ -24,7 +24,7 @@ file to import.
 | **Fragments** | the gateway's `/__braid/registry` | every registered fragment, filterable with the query syntax below |
 | **Topology** | the same | shells → routes → fragments → origins: the only real couplings between fragments |
 | **Shells** | the registry write API | list, design, generate code for, publish and delete shells |
-| **History** | the write API | who published what, and rollback by re-pinning |
+| **History** | the write API | who published what, rollback by re-pinning, and promotion through environments with approvals |
 | **Edit fragments** | the write API | add, change and remove fragment manifests, with a diff and an access preview |
 
 Viewing fragments needs nothing deployed. Everything else needs `createRegistryApi` from
@@ -175,8 +175,7 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
-Planned: named environments with promotion and approvals, and a GitOps mode that opens a pull request
-instead of publishing.
+Planned: a GitOps mode that opens a pull request instead of publishing.
 
 ---
 

@@ -82,6 +82,8 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
+export { isEnvironmentName } from './lib/store.js';
+export type { RefMove, PendingPromotion } from './lib/store.js';
 export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';
 export { ownershipViolations } from './lib/ownership.js';
 export type { OwnedTags, OwnershipViolation } from './lib/ownership.js';
@@ -94,6 +96,8 @@ export type {
   RegistryAction,
   AuthorizeResult,
   RegistryPermissions,
+  EnvironmentConfig,
+  AuthorizeContext,
 } from './lib/api.js';
 export type {
   RegistryFinding,

@@ -1,7 +1,7 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SnapshotStore, SnapshotRef } from './store.js';
-import { toRef } from './store.js';
+import type { PendingPromotion, RefMove, SnapshotStore, SnapshotRef } from './store.js';
+import { isEnvironmentName, toRef } from './store.js';
 import { parseSnapshot, serializeSnapshot, SNAPSHOT_ID_PREFIX } from './snapshot.js';
 import type { RegistrySnapshot } from './snapshot.js';
 
@@ -80,7 +80,68 @@ export function fileSnapshotStore(options: FileSnapshotStoreOptions): SnapshotSt
       await mkdir(directory, { recursive: true });
       await writeAtomic(join(directory, 'HEAD'), `${id}\n`);
     },
+
+    // Environments live beside HEAD: refs/<env> is the current id, refs/<env>.log one JSON move per
+    // line (newest last on disk, newest first when read), pending/<env>.json an awaited approval.
+    async ref(environment) {
+      if (!isEnvironmentName(environment)) return null;
+      return (await readOptional(join(directory, 'refs', environment)))?.trim() || null;
+    },
+
+    async setRef(environment, id, by = null) {
+      if (!isEnvironmentName(environment)) throw new Error(`braid-registry: invalid environment name "${environment}"`);
+      if (!isSafeId(id)) throw new Error(`braid-registry: invalid snapshot id "${id}"`);
+      if (!(await readOptional(pathFor(id)))) throw new Error(`braid-registry: cannot point ${environment} at unknown snapshot "${id}"`);
+      await mkdir(join(directory, 'refs'), { recursive: true });
+      // The ref first: a crash between the two then loses a log line, rather than logging a move
+      // that never happened — which a rollback would trust as "served before".
+      await writeAtomic(join(directory, 'refs', environment), `${id}\n`);
+      await appendFile(join(directory, 'refs', `${environment}.log`), `${JSON.stringify({ id, at: new Date().toISOString(), by })}\n`);
+    },
+
+    async refLog(environment, { limit } = {}) {
+      if (!isEnvironmentName(environment)) return [];
+      const text = await readOptional(join(directory, 'refs', `${environment}.log`));
+      const moves = (text ?? '')
+        .split('\n')
+        .filter(Boolean)
+        .flatMap((line): RefMove[] => {
+          try {
+            return [JSON.parse(line) as RefMove];
+          } catch {
+            return []; // a torn last line from a crash is not the whole log
+          }
+        })
+        .reverse();
+      return limit === undefined ? moves : moves.slice(0, limit);
+    },
+
+    async pending(environment) {
+      if (!isEnvironmentName(environment)) return null;
+      const text = await readOptional(join(directory, 'pending', `${environment}.json`));
+      return text ? (JSON.parse(text) as PendingPromotion) : null;
+    },
+
+    async setPending(environment, value) {
+      if (!isEnvironmentName(environment)) throw new Error(`braid-registry: invalid environment name "${environment}"`);
+      const path = join(directory, 'pending', `${environment}.json`);
+      if (!value) {
+        await rm(path, { force: true });
+        return;
+      }
+      await mkdir(join(directory, 'pending'), { recursive: true });
+      await writeAtomic(path, JSON.stringify(value));
+    },
   };
+
+  async function readOptional(path: string): Promise<string | null> {
+    try {
+      return await readFile(path, 'utf8');
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
+  }
 
   function pathFor(id: string): string {
     return join(directory, `${id}.json`);

@@ -12,6 +12,12 @@ export interface SnapshotRegistryOptions {
    */
   pinned?: string;
   /**
+   * Follow a named environment instead of HEAD — `'production'` serves what was promoted to
+   * production, not what was last published. With `registryRefreshMs`, a promotion goes live on
+   * the next reload. Ignored when `pinned` is set.
+   */
+  environment?: string;
+  /**
    * A second store, written through on every successful resolve and read from when the primary
    * store cannot be reached.
    *
@@ -86,7 +92,10 @@ export type SnapshotRegistrySource = (() => Promise<FragmentManifest[]>) & {
 };
 
 export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegistrySource {
-  const { store, pinned, cache, fallback = 'last-known-good', verify = true, onDiagnostic } = options;
+  const { store, pinned, environment, cache, fallback = 'last-known-good', verify = true, onDiagnostic } = options;
+  if (environment !== undefined && !pinned && !store.ref) {
+    throw new Error(`braid-registry: following environment "${environment}" needs a store with environment support`);
+  }
 
   /** The snapshot being served, and the manifests handed to the gateway for it. */
   let current: { snapshot: RegistrySnapshot; manifests: FragmentManifest[] } | undefined;
@@ -122,17 +131,24 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegi
 
     try {
       if (!id) {
-        id = (await store.head?.()) ?? undefined;
+        id = (environment !== undefined ? await store.ref!(environment) : await store.head?.()) ?? undefined;
         if (!id) {
           throw new Error(
-            'braid-registry: no snapshot pinned and the store reports no head — ' +
-              'pass `pinned` with a snapshot id, or publish one first',
+            environment !== undefined
+              ? `braid-registry: environment "${environment}" points at nothing yet — promote a snapshot into it first`
+              : 'braid-registry: no snapshot pinned and the store reports no head — ' +
+                  'pass `pinned` with a snapshot id, or publish one first',
           );
         }
         // Reported when HEAD moves, not on every reload: on a short refresh interval this would
         // otherwise be a heartbeat in the log.
         if (current?.snapshot.id !== id) {
-          report({ level: 'info', event: 'head-followed', snapshotId: id, message: `following store head ${id}` });
+          report({
+            level: 'info',
+            event: 'head-followed',
+            snapshotId: id,
+            message: environment !== undefined ? `following environment ${environment} at ${id}` : `following store head ${id}`,
+          });
         }
       }
 
@@ -182,7 +198,8 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): SnapshotRegi
     if (!cache) return;
     try {
       await cache.put(snapshot);
-      await cache.setHead?.(snapshot.id);
+      // the cache's HEAD mirrors the store's; an environment's pointer is not HEAD
+      if (environment === undefined) await cache.setHead?.(snapshot.id);
     } catch (cause) {
       // A cache that cannot be written is a degraded fallback, not a failed boot.
       report({
