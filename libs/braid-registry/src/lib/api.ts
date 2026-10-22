@@ -77,7 +77,7 @@ export interface RegistryApiOptions {
    * ownership-checked, minted exactly as it would be stored — is handed to the publisher (a GitHub
    * pull request with `githubPublisher`), the store and HEAD are left alone, and the answer is 202
    * with the pull request. Merging is what publishes, through whatever deploys the registry from
-   * the repository. Pins and promotions still act directly.
+   * the repository. Pins still act directly on the store, so under GitOps leave pinning to merges.
    */
   publisher?: SnapshotPublisher;
 }
@@ -169,7 +169,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     const record = (status: number, reason: string | undefined): void => {
       if (!emitAudit) return;
-      const outcome = status >= 500 ? 'error' : status < 300 ? 'success' : status === 401 || status === 403 ? 'denied' : 'rejected';
+      const outcome =
+        status >= 500 ? 'error' : detail.pullRequest ? 'proposed' : status < 300 ? 'success' : status === 401 || status === 403 ? 'denied' : 'rejected';
       const { actor: who, ...rest } = detail;
       emitAudit({
         version: 1,
@@ -336,7 +337,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
     }
 
-    const labels = identify ? attributed(audit.actor, body.labels) : body.labels;
+    // Server-owned whenever it is a record: with identify, and always under GitOps, where the
+    // snapshot file in the repository is the record of who published it.
+    const labels = identify || options.publisher ? attributed(audit.actor, body.labels) : body.labels;
 
     const snapshot = await createSnapshot({
       manifests,
@@ -356,6 +359,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
         return json({ error: error instanceof Error ? error.message : String(error) }, 502);
       }
       audit.pullRequest = proposed.pullRequest.url;
+      if (diff) audit.diff = { added: diff.added.length, removed: diff.removed.length, changed: diff.changed.length };
       return json(
         {
           snapshot: { id: snapshot.id, createdAt: snapshot.createdAt, fragmentCount: snapshot.manifests.length },

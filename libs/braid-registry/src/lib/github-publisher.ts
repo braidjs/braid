@@ -52,6 +52,9 @@ export interface GitHubPublisherOptions {
  */
 export function githubPublisher(options: GitHubPublisherOptions): SnapshotPublisher {
   const { owner, repo, token, base = 'main', directory = 'registry', apiUrl = 'https://api.github.com' } = options;
+  if (!/^https:\/\//i.test(apiUrl)) {
+    throw new Error(`braid-registry: githubPublisher apiUrl "${apiUrl}" must be https — the token would otherwise travel in cleartext`);
+  }
   const send = options.fetch ?? globalThis.fetch;
   const root = `${apiUrl.replace(/\/$/, '')}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const dir = directory.replace(/^\/+|\/+$/g, '');
@@ -77,21 +80,37 @@ export function githubPublisher(options: GitHubPublisherOptions): SnapshotPublis
   }
 
   const contentPath = (name: string) => `/contents/${[...dir.split('/').filter(Boolean), name].map(encodeURIComponent).join('/')}`;
-  const base64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+  /** A branch name in a URL path: its slashes stay slashes (`release/1.x`), everything else is encoded. */
+  const refPath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
 
   return {
     async propose({ snapshot, pin, actor, diff, findings }) {
       const branch = `braid/publish-${snapshot.id.replace(/^reg_/, '').slice(0, 12)}-${Date.now().toString(36)}`;
       const who = actor ?? 'an unidentified caller';
 
-      const ref = await github<{ object: { sha: string } }>('GET', `/git/ref/heads/${encodeURIComponent(base)}`);
+      const ref = await github<{ object: { sha: string } }>('GET', `/git/ref/heads/${refPath(base)}`);
       await github('POST', '/git/refs', { ref: `refs/heads/${branch}`, sha: ref!.object.sha });
 
-      await github('PUT', contentPath(`${snapshot.id}.json`), {
-        message: `registry: add snapshot ${snapshot.id}`,
-        content: base64(serializeSnapshot(snapshot)),
-        branch,
-      });
+      try {
+        return await proposeOnBranch(branch);
+      } catch (error) {
+        // Leave nothing behind for a proposal that did not happen. Best effort: the original error
+        // is the one worth reporting.
+        await github('DELETE', `/git/refs/heads/${refPath(branch)}`).catch(() => undefined);
+        throw error;
+      }
+
+      async function proposeOnBranch(branch: string) {
+      // A snapshot's id is its content, so a file already there is this file: republishing it (a
+      // re-pin of an old candidate, a rollback by content) only needs HEAD to move.
+      const existingSnapshot = await github<{ sha: string }>('GET', `${contentPath(`${snapshot.id}.json`)}?ref=${encodeURIComponent(branch)}`, undefined, true);
+      if (!existingSnapshot) {
+        await github('PUT', contentPath(`${snapshot.id}.json`), {
+          message: `registry: add snapshot ${snapshot.id}`,
+          content: base64(serializeSnapshot(snapshot)),
+          branch,
+        });
+      }
 
       if (pin) {
         const existing = await github<{ sha: string }>('GET', `${contentPath('HEAD')}?ref=${encodeURIComponent(branch)}`, undefined, true);
@@ -112,16 +131,19 @@ export function githubPublisher(options: GitHubPublisherOptions): SnapshotPublis
         head: branch,
         base,
         body: [
-          `Requested by **${who}** through the Braid registry API.`,
+          `Requested by ${code(who)} through the Braid registry API.`,
           '',
           `- Snapshot: \`${snapshot.id}\` (${snapshot.manifests.length} fragments, ${(snapshot.shells ?? []).length} shells)`,
           `- Changes: ${changes}`,
           `- ${pin ? 'Merging moves HEAD to this snapshot.' : 'A candidate: merging stores it without moving HEAD.'}`,
-          ...(warnings.length > 0 ? ['', '**Warnings**', ...warnings.map((finding) => `- ${finding.message}`)] : []),
+          // Warnings quote fragment ids and patterns, which are publisher text: kept inside code
+          // spans on one line, so they cannot add lines, mention people or link anywhere.
+          ...(warnings.length > 0 ? ['', '**Warnings**', ...warnings.map((finding) => `- ${code(finding.message)}`)] : []),
         ].join('\n'),
       });
 
       return { pullRequest: { url: pull!.html_url, number: pull!.number } };
+      }
     },
   };
 }
@@ -132,4 +154,22 @@ export class GitHubPublishError extends Error {
     super(message);
     this.name = 'GitHubPublishError';
   }
+}
+
+/** Base64 of a string's UTF-8 bytes, in chunks: spreading a large snapshot into one call overflows the stack. */
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** Text as an inline Markdown code span: one line, fenced by more backticks than it contains. */
+function code(text: string): string {
+  const line = text.replace(/[\r\n]+/g, ' ');
+  const longestRun = Math.max(0, ...(line.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence} ${line} ${fence}`;
 }

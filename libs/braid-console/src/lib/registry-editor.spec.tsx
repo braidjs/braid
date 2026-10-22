@@ -134,6 +134,31 @@ describe('<RegistryEditor>', () => {
     expect(container.textContent).toContain('now pinned');
   });
 
+  it('links the pull request for a GitOps publish, and keeps the draft based on HEAD', async () => {
+    const api = fakeApi({
+      publish: () =>
+        json(
+          {
+            snapshot: { id: 'reg_proposed', createdAt: '2026-10-22', fragmentCount: 0 },
+            findings: [],
+            descriptorNotes: [],
+            pinned: false,
+            pullRequest: { url: 'https://github.com/acme/registry/pull/7', number: 7 },
+          },
+          202,
+        ),
+    });
+    await render(api);
+
+    await click(byLabel('Remove billing'));
+    await click(button('Publish'));
+
+    expect(container.querySelector('a[href="https://github.com/acme/registry/pull/7"]')?.textContent).toBe('pull request #7');
+    // nothing is published until the pull request merges, so the change is still a change
+    expect(container.textContent).toContain('reg_base');
+    expect(isDisabled('Publish')).toBe(false);
+  });
+
   it('re-bases after publishing, so the same content is not offered again', async () => {
     const api = fakeApi();
     await render(api);

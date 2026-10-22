@@ -260,12 +260,21 @@ Merging is therefore publishing for anything that reads the directory with `file
 
 A few more details:
 
-- An invalid registry is still a 422, and GitHub is never called.
-- A GitHub failure is a 502 that carries GitHub's message, never the token.
-- The audit event records the pull request URL.
-- The console links the pull request.
-- Pins and promotions still act directly.
-- For GitHub Enterprise Server, set `apiUrl`.
+- **Errors.** An invalid registry is still a 422, and GitHub is never called. A GitHub failure is a
+  502 that carries GitHub's message, never the token, and the branch it created is deleted.
+- **Republishing** content already in the repository, such as a re-pin of a merged candidate,
+  reuses the file, since a snapshot's id is its content. Only `HEAD` changes.
+- **The pull request body** says who asked (the verified actor, and never a client-claimed
+  `publishedBy`), what changes, and any warnings. Text that came from a publisher sits in code
+  spans, so it can't add lines, mention people or link anywhere.
+- **Audit** records the publish as outcome `proposed`, with the pull request URL. The console links
+  the pull request.
+- **Judged against the store.** `baseId`, ownership and diffs compare with the store, which lags
+  the repository until it syncs. Two pull requests from the same base are each checked against
+  the old HEAD. For a pin, the conflict on the `HEAD` file shows up in review, and resolving it is a
+  review decision.
+- **Pins** (`POST /head`) still act directly on the store, so under GitOps leave pinning to merges.
+- **GitHub Enterprise Server:** set `apiUrl`, which must be https.
 
 Without a publisher API, CI can still publish from git: `braid registry publish --source` in a
 pipeline that runs on merge.
