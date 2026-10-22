@@ -153,6 +153,23 @@ describe('fetchDescriptors', () => {
     }
   });
 
+  it('refuses a response its fetch followed a redirect to, whatever it was asked', async () => {
+    const followed = Object.defineProperty(ok({ title: 'from the redirect target' }), 'redirected', { value: true });
+    const fetchMock = vi.fn(async () => followed);
+
+    const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+
+    expect((result.get('billing') as Error).message).toMatch(/redirected/);
+  });
+
+  it('does not quote a body that is not JSON back in its error', async () => {
+    const fetchMock = vi.fn(async () => new Response('root:x:0:0:root:/root:/bin/bash'));
+
+    const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+
+    expect((result.get('billing') as Error).message).toBe('the descriptor is not valid JSON');
+  });
+
   it('records a non-object body as invalid', async () => {
     const fetchMock = vi.fn(async () => ok('just a string'));
 

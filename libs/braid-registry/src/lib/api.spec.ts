@@ -314,6 +314,44 @@ describe('registry write API', () => {
       expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
     });
 
+    it('never probes an endpoint outside endpointOrigins, so a refused one is not fetched at all', async () => {
+      const probed: string[] = [];
+      const fetchMock = async (url: string | URL | Request) => {
+        probed.push(String(url));
+        // the allowed endpoint publishes no descriptor; anything else would answer with secrets
+        if (String(url).startsWith('https://billing.internal/')) return new Response(null, { status: 404 });
+        return new Response(JSON.stringify({ title: 'leaked', AWS_SECRET_ACCESS_KEY: 'x' }), { headers: { 'content-type': 'application/json' } });
+      };
+      const api = createRegistryApi({
+        store: memorySnapshotStore(),
+        authorize: allow,
+        fetchDescriptors: true,
+        fetch: fetchMock as typeof fetch,
+        endpointOrigins: ['https://billing.internal'],
+      });
+
+      const refused = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'meta', endpoint: 'http://169.254.169.254/latest/meta-data/' }] }));
+
+      expect(refused!.status).toBe(422);
+      expect(probed.every((url) => url.startsWith('https://billing.internal/'))).toBe(true);
+      expect(JSON.stringify(await refused!.json())).not.toContain('leaked');
+    });
+
+    it('will not pin or promote a stored snapshot whose endpoints endpointOrigins now refuses', async () => {
+      const old = await createSnapshot({ manifests: [...manifests, { id: 'admin', endpoint: 'http://internal-admin:8080/' }] });
+      const store = memorySnapshotStore([old]);
+      const api = createRegistryApi({
+        store,
+        authorize: allow,
+        endpointOrigins: ['https://billing.internal'],
+        environments: [{ name: 'production' }],
+      });
+
+      expect((await api.handle(post('/head', { id: old.id })))!.status).toBe(422);
+      expect((await api.handle(post('/environments/production/promote', { id: old.id })))!.status).toBe(422);
+      expect(await store.ref!('production')).toBeNull();
+    });
+
     it('refuses a misconfigured endpointOrigins at startup', () => {
       for (const origin of ['billing.internal', 'https://billing.internal/path']) {
         expect(() => createRegistryApi({ store: memorySnapshotStore(), authorize: allow, endpointOrigins: [origin] })).toThrow(/must be an origin/);

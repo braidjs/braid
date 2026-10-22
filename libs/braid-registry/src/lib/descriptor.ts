@@ -243,7 +243,8 @@ export async function fetchDescriptors(
           redirect: 'manual',
         });
 
-        if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        // `redirected` too: an injected fetch may follow redirects whatever it was asked.
+        if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
           results.set(manifest.id, new Error(`${url} redirected; descriptors are read from the endpoint itself, not followed`));
           return;
         }
@@ -254,7 +255,15 @@ export async function fetchDescriptors(
           return;
         }
 
-        results.set(manifest.id, parseDescriptor(JSON.parse(await readCapped(response, MAX_DESCRIPTOR_BYTES))));
+        const text = await readCapped(response, MAX_DESCRIPTOR_BYTES);
+        let value: unknown;
+        try {
+          value = JSON.parse(text);
+        } catch {
+          // Not the parser's message: it quotes the start of the body, which is not ours to repeat.
+          throw new Error('the descriptor is not valid JSON');
+        }
+        results.set(manifest.id, parseDescriptor(value));
       } catch (cause) {
         results.set(manifest.id, new Error(cause instanceof Error ? cause.message : String(cause)));
       }

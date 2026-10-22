@@ -200,6 +200,26 @@ export interface RegistryApi {
 export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
   const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const allowedOrigins = options.endpointOrigins ? new Set(options.endpointOrigins.map((origin) => origin.replace(/\/+$/, ''))) : null;
+  /** Whether a manifest's URL endpoint is on an allowed origin; null when every origin is allowed. */
+  const endpointAllowed = allowedOrigins
+    ? (manifest: FragmentManifest) => {
+        if (typeof manifest.endpoint !== 'string') return true;
+        try {
+          return allowedOrigins.has(new URL(manifest.endpoint).origin);
+        } catch {
+          return false;
+        }
+      }
+    : null;
+  /** A 422 when a snapshot about to be served has an endpoint outside endpointOrigins. */
+  const refuseEndpoints = (snapshot: { manifests: readonly FragmentManifest[] }): Response | null => {
+    if (!endpointAllowed) return null;
+    const outside = snapshot.manifests.filter((manifest) => !endpointAllowed(manifest)).map((manifest) => manifest.id);
+    return outside.length > 0
+      ? json({ error: `fragments ${outside.join(', ')} have endpoints outside endpointOrigins; this snapshot cannot be served` }, 422)
+      : null;
+  };
   const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
   const environments = new Map((options.environments ?? []).map((environment) => [environment.name, environment]));
 
@@ -342,7 +362,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
             return crossSite(request) ?? serialized(environment.name, () => handler(request, environment, d));
           });
         }
-        if (request.method === 'POST' && crossSite(request)) return crossSite(request)!;
+        if (request.method === 'POST' && request.headers.get('sec-fetch-site') === 'cross-site') return crossSite(request)!;
 
         return json({ error: `no route for ${request.method} ${route}` }, 404);
       } catch (error) {
@@ -470,9 +490,12 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     let descriptorNotes: DescriptorNote[] = [];
 
     if (probe) {
+      // Only endpoints the operator allows are probed. The probe is a request from this server, so
+      // probing first and validating after would let a refused endpoint be fetched anyway.
+      const probeable = endpointAllowed ? manifests.filter((manifest) => endpointAllowed(manifest)) : manifests;
       const merged = mergeDescriptors(
         manifests,
-        await fetchDescriptors(manifests, options.fetch ? { fetch: options.fetch } : {}),
+        await fetchDescriptors(probeable, options.fetch ? { fetch: options.fetch } : {}),
       );
       manifests = merged.manifests;
       descriptorNotes = merged.notes;
@@ -570,6 +593,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     const snapshot: RegistrySnapshot | null = await store.get(id);
     if (!snapshot) return json({ error: `no snapshot "${id}" — cannot pin what is not stored` }, 404);
+    // Snapshots stored before endpointOrigins was set are not grandfathered back into service.
+    const pinEndpoints = refuseEndpoints(snapshot);
+    if (pinEndpoints) return pinEndpoints;
 
     if (!store.setHead) return json({ error: 'this store does not track a head' }, 501);
     audit.previousId = (await store.head?.()) ?? null;
@@ -680,6 +706,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const target = await store.get(id);
     if (!target) return json({ error: `no snapshot "${id}"` }, 404);
     audit.snapshotId = id;
+    const promoteEndpoints = refuseEndpoints(target);
+    if (promoteEndpoints) return promoteEndpoints;
 
     const before = current ? await store.get(current) : null;
     const ownership = await ownershipRefusal(
