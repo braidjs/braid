@@ -23,7 +23,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGateway } from '../../libs/braid-gateway/src/index.ts';
 import { toNodeMiddleware } from '../../libs/braid-gateway/src/node.ts';
-import { createRegistryApi, createSnapshot, jsonLinesAuditSink, memorySnapshotStore } from '../../libs/braid-registry/src/index.ts';
+import { createRegistryApi, createSnapshot, jsonLinesAuditSink, memorySnapshotStore, snapshotRegistry } from '../../libs/braid-registry/src/index.ts';
 import { createOidcAuthorizer } from '../../libs/braid-registry/src/oidc.ts';
 import { createMockOidc, MOCK_AUDIENCE, MOCK_CLIENT_ID, MOCK_ROLE_MAP } from './mock-oidc.mjs';
 
@@ -73,13 +73,6 @@ const REGISTRY = [
   },
 ];
 
-const gateway = createGateway({
-  mode: process.env.GATEWAY_MODE === 'production' ? 'production' : 'development',
-  discovery: { includeEndpoints: false },
-  registry: REGISTRY,
-  principal: () => ({ roles: ['finance'], scopes: [] }),
-});
-
 // One shell, so the designer and the map have something to show: the billing page as a grid.
 const SHELLS = [
   {
@@ -103,6 +96,16 @@ const store = memorySnapshotStore();
 const seeded = await createSnapshot({ manifests: REGISTRY, shells: SHELLS, labels: { publishedBy: 'demo-seed' } });
 await store.put(seeded);
 await store.setHead(seeded.id);
+
+// The gateway serves the store the console publishes to, and follows its HEAD: publish or pin in
+// the console and the next page load shows it, with no restart (hot re-pin).
+const gateway = createGateway({
+  mode: process.env.GATEWAY_MODE === 'production' ? 'production' : 'development',
+  discovery: { includeEndpoints: false },
+  registry: snapshotRegistry({ store }),
+  registryRefreshMs: 1000,
+  principal: () => ({ roles: ['finance'], scopes: [] }),
+});
 
 const oidc = MOCK_AUTH ? await createMockOidc({ origin: ORIGIN }) : null;
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,5 +73,70 @@ describe('snapshots as a gateway registry', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Hot re-pin, end to end: a gateway that follows the store's HEAD serves a newly pinned snapshot
+ * on its next reload, with no restart — and keeps serving the old one when the store is down.
+ */
+describe('hot re-pin', () => {
+  const billing: FragmentManifest[] = [{ id: 'billing', endpoint: 'https://billing.internal' }];
+  const orders: FragmentManifest[] = [{ id: 'orders', endpoint: 'https://orders.internal' }];
+  const realm = (gateway: ReturnType<typeof createGateway>, id: string) =>
+    gateway.handle(new Request(`https://shell.example/__braid/realm/${id}/`)).then((response) => response?.status);
+
+  it('serves a re-pinned snapshot on the next reload', async () => {
+    const a = await createSnapshot({ manifests: billing });
+    const b = await createSnapshot({ manifests: orders });
+    const store = memorySnapshotStore([a, b]);
+    await store.setHead?.(a.id);
+    const gateway = createGateway({ mode: 'production', registry: snapshotRegistry({ store }) });
+
+    expect(await realm(gateway, 'billing')).toBe(200);
+    await store.setHead?.(b.id);
+    await gateway.refreshRegistry();
+
+    expect(await realm(gateway, 'billing')).toBe(404);
+    expect(await realm(gateway, 'orders')).toBe(200);
+  });
+
+  it('costs one head lookup per reload while nothing has been re-pinned', async () => {
+    const a = await createSnapshot({ manifests: billing });
+    const store = memorySnapshotStore([a]);
+    const get = vi.spyOn(store, 'get');
+    const gateway = createGateway({ mode: 'production', registry: snapshotRegistry({ store }) });
+    await realm(gateway, 'billing');
+
+    const result = await gateway.refreshRegistry();
+
+    expect(result.changed).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('never moves a pinned gateway', async () => {
+    const a = await createSnapshot({ manifests: billing });
+    const b = await createSnapshot({ manifests: orders });
+    const store = memorySnapshotStore([a, b]);
+    const gateway = createGateway({ mode: 'production', registry: snapshotRegistry({ store, pinned: a.id }) });
+    await realm(gateway, 'billing');
+
+    await store.setHead?.(b.id);
+    await gateway.refreshRegistry();
+
+    expect(await realm(gateway, 'billing')).toBe(200);
+    expect(await realm(gateway, 'orders')).toBe(404);
+  });
+
+  it('keeps the current snapshot when the store cannot be reached', async () => {
+    const a = await createSnapshot({ manifests: billing });
+    const store = memorySnapshotStore([a]);
+    const gateway = createGateway({ mode: 'production', registry: snapshotRegistry({ store }) });
+    await realm(gateway, 'billing');
+
+    vi.spyOn(store, 'head').mockRejectedValue(new Error('store down'));
+    await expect(gateway.refreshRegistry()).rejects.toThrow('store down');
+
+    expect(await realm(gateway, 'billing')).toBe(200);
   });
 });
