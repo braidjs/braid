@@ -128,6 +128,8 @@ export interface PublishOutcome {
   descriptorNotes: DescriptorNote[];
   pinned: boolean;
   diff?: RegistryDiff;
+  /** Set when the registry proposes changes as pull requests (GitOps) rather than publishing them. */
+  pullRequest?: { url: string; number: number };
 }
 
 /** The currently pinned snapshot, or `{ id: null }` when nothing has been published. */

@@ -23,10 +23,11 @@ export interface AuditEvent {
    * - `denied` — the caller lacked the right; nothing was attempted.
    * - `rejected` — the caller had the right, but the server refused the change: a registry with
    *   errors, a HEAD that moved since the draft began, a snapshot that does not exist.
+   * - `proposed` — a GitOps publish opened a pull request; nothing is published until it merges.
    * - `error` — the server failed partway (a store that threw). `snapshotId` and `pinned` say how
    *   far the write got: a stored but unpinned snapshot is harmless, and worth knowing about.
    */
-  outcome: 'success' | 'denied' | 'rejected' | 'error';
+  outcome: 'success' | 'denied' | 'rejected' | 'error' | 'proposed';
   /** Who, as `identify` resolved them from a verified credential. Null when it cannot say. */
   actor: string | null;
   /** The HTTP status the caller received. */
@@ -41,6 +42,8 @@ export interface AuditEvent {
   reason?: string;
   /** How much a successful publish changed, by fragment count — the detail is in the snapshots. */
   diff?: { added: number; removed: number; changed: number };
+  /** The pull request a GitOps publish opened instead of publishing. */
+  pullRequest?: string;
   /** The environment a promotion, approval or rejection was in. */
   environment?: string;
   /** A promotion that is now waiting for approval rather than done. */

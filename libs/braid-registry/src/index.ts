@@ -82,6 +82,8 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
+export { githubPublisher, GitHubPublishError } from './lib/github-publisher.js';
+export type { SnapshotPublisher, SnapshotProposal, GitHubPublisherOptions } from './lib/github-publisher.js';
 export { isEnvironmentName } from './lib/store.js';
 export type { RefMove, PendingPromotion } from './lib/store.js';
 export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';

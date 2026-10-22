@@ -231,6 +231,19 @@ describe('<ShellsPanel>', () => {
     expect(sent.find((shell) => shell.id === 'new-shell')?.tags).toEqual(['growth']);
   });
 
+  it('links the pull request when the registry proposes changes instead of publishing them', async () => {
+    const api = server({
+      publish: () => json({ snapshot: { id: 'reg_b', createdAt: '', fragmentCount: 2 }, findings: [], descriptorNotes: [], pinned: false, pullRequest: { url: 'https://github.com/acme/registry/pull/7', number: 7 } }, 202),
+    });
+    await render(api);
+    await click(button('New shell'));
+    await click(button('Publish & pin'));
+
+    const link = container.querySelector('a[href="https://github.com/acme/registry/pull/7"]');
+    expect(link?.textContent).toBe('pull request #7');
+    expect(container.textContent).toContain('published when the pull request is merged');
+  });
+
   it('shows a viewer the shells but no way to change them', async () => {
     await render(server({ permissions: VIEWER }));
 

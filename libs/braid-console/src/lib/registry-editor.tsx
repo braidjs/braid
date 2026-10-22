@@ -128,8 +128,9 @@ export function RegistryEditor({
     try {
       const outcome = await publishSnapshot(api ?? {}, { manifests: draft.manifests });
       // Re-base on what was actually published, so the diff resets and a second publish of the
-      // same content is correctly reported as no change.
-      setDraft(createDraft(draft.manifests, outcome.snapshot.id));
+      // same content is correctly reported as no change. A proposal is not published yet: HEAD is
+      // where it was, so the draft stays based on it.
+      if (!outcome.pullRequest) setDraft(createDraft(draft.manifests, outcome.snapshot.id));
       setPhase({ status: 'published', outcome });
       onPublished?.(outcome);
     } catch (error) {
@@ -530,6 +531,20 @@ function PublishBar({
 }
 
 function PublishedPanel({ outcome }: { outcome: PublishOutcome }) {
+  if (outcome.pullRequest) {
+    return (
+      <div className="braid-console__notice braid-console__notice--ok" role="status">
+        <span aria-hidden="true">✓</span>
+        <span>
+          Proposed as{' '}
+          <a href={outcome.pullRequest.url} target="_blank" rel="noreferrer">
+            pull request #{outcome.pullRequest.number}
+          </a>
+          . It is published when the pull request is merged.
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="braid-console__notice braid-console__notice--ok" role="status">
       <span aria-hidden="true">✓</span>
@@ -537,7 +552,7 @@ function PublishedPanel({ outcome }: { outcome: PublishOutcome }) {
         Published <code className="braid-console__mono">{outcome.snapshot.id}</code> —{' '}
         {outcome.snapshot.fragmentCount} fragment{outcome.snapshot.fragmentCount === 1 ? '' : 's'}
         {outcome.pinned ? ', now pinned.' : ', not pinned.'}{' '}
-        {outcome.pinned && 'Gateways pick it up on restart.'}
+        {outcome.pinned && 'A gateway following HEAD serves it within its refresh interval, or on restart without one.'}
       </span>
     </div>
   );
