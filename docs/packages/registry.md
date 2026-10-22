@@ -175,8 +175,13 @@ createGateway({
     default only root-relative assets load, because a script a shell names runs on this origin,
     beside every pierced fragment, every cookie and the registry API.
   - `paths` lists the path prefixes shells may be served at. Without it, a route that claims the
-    whole site (`/`, `/*`, a leading parameter) is not served and is logged. List `'/'` to allow
-    those.
+    whole site is not served and is logged. That is `/`, and any route whose first segment does not
+    start with a literal character (`/*`, `/:page`, `/{*}`, `/(.*)`): a pattern there can only be
+    shown to match some pages, never that it matches no more. List `'/'`, or the route's own
+    prefix, to allow one. A route is judged as URLPattern compiles it, so `/billing/../login` is
+    `/login`, not a path under `/billing`. Set `paths` whenever publishers are not all trusted
+    operators: a served shell answers ahead of the app, so an unlisted route is a claim on any page
+    the app serves, `/login` included.
 - **HEAD.** A HEAD request gets the same status and headers without the body, so monitors and link
   checkers see what a browser does.
 - **No CSP header.** Served pages carry no Content-Security-Policy. A strict `style-src` would block
@@ -215,7 +220,7 @@ const response = await api.handle(request); // null when the path is not the API
 | Route | Does |
 | :--- | :--- |
 | `GET /head` | the pinned snapshot, shells included |
-| `GET /snapshots`, `GET /snapshots/:id` | history and one snapshot |
+| `GET /snapshots`, `GET /snapshots/:id` | a page of history (`?limit=`, up to 100, and `?before=` a previous page's `next`), and one snapshot |
 | `GET /permissions` | the caller's `{ read, publish, pin, actor }` |
 | `POST /snapshots` | `{ manifests, shells?, labels?, pin?, baseId? }` → validate, mint, store, pin |
 | `POST /head` | `{ id }` — re-pin. Rollback is this. |
@@ -226,6 +231,20 @@ const response = await api.handle(request); // null when the path is not the API
 - **`baseId`** makes a stale publish fail with 409 instead of overwriting someone else's.
 - **Omitted `shells` carry HEAD's forward**, so a client that only edits fragments cannot delete
   every shell by accident; `[]` removes them.
+- **`endpointOrigins`** lists the origins a fragment endpoint may be on. The gateway proxies
+  `/__braid/frag/:id/*` to a fragment's endpoint, so without it anyone who may publish decides what
+  part of your network that path opens to the internet. A publish outside the list is refused with
+  422 (`endpoint-not-allowed`); `validateRegistry` takes the same option for CI. With
+  `fetchDescriptors`, only allowed endpoints are probed. A pin or promotion of a snapshot stored
+  before the list was set is refused too. Set it whenever `fetchDescriptors` is on and publishers
+  are not all trusted: the probe is a request from the registry server, so without the list a
+  publisher chooses where that server sends it.
+- **Bodies are capped** at `maxBodyBytes` (5 MB by default) and refused with 413 beyond it.
+- **Browsers must send JSON.** A write carrying `Origin` or `Sec-Fetch-Site` must be
+  `application/json` or is refused with 415, so a page cannot send a form or `text/plain` write
+  without a CORS preflight. Cross-site browser writes are refused outright. Pipelines are unaffected.
+- **Paging** is stable: newest first, by id within a millisecond. A custom store should honor
+  `list({ before })` with `isAfterCursor`; one that ignores it ends the listing after one page.
 
 ### GitOps: publish by pull request
 
@@ -361,8 +380,13 @@ A pin is checked the same way, by what it changes about what is being served, so
 else's edit is not a way around it. Further rules:
 
 - **Routes.** Owning a fragment doesn't mean owning every URL it can claim. A change that makes a
-  fragment pierce pages already pierced by a fragment the caller doesn't own is refused. Overlaps
-  that already existed in HEAD are not the caller's doing and don't block their edits.
+  fragment pierce pages already pierced by a fragment the caller doesn't own is refused. So is a
+  change that makes a shell's routes answer pages a shell the caller doesn't own answers, which
+  would otherwise win them outright by sorting first. Shell routes are compared conservatively:
+  two patterns are presumed to overlap when one's literal prefix is a prefix of the other's, since
+  sampling can't prove two patterns disjoint. Overlaps that already existed in HEAD are not the
+  caller's doing and don't block their edits, but that is per pair of routes: widening a route
+  that overlapped a little is a new claim.
 - **Races.** HEAD is re-checked just before it moves, with or without `baseId`. A publish or pin
   checked against one HEAD therefore can't replace a newer one and silently revert another team's
   change.

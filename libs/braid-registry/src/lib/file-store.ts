@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PendingPromotion, RefMove, SnapshotStore, SnapshotRef } from './store.js';
-import { isEnvironmentName, toRef } from './store.js';
+import { compareRefs, isAfterCursor, isEnvironmentName, toRef } from './store.js';
 import { parseSnapshot, serializeSnapshot, SNAPSHOT_ID_PREFIX } from './snapshot.js';
 import type { RegistrySnapshot } from './snapshot.js';
 
@@ -42,7 +42,7 @@ export function fileSnapshotStore(options: FileSnapshotStoreOptions): SnapshotSt
       await writeAtomic(pathFor(snapshot.id), serializeSnapshot(snapshot));
     },
 
-    async list({ limit } = {}) {
+    async list({ limit, before } = {}) {
       let entries: string[];
       try {
         entries = await readdir(directory);
@@ -62,8 +62,9 @@ export function fileSnapshotStore(options: FileSnapshotStoreOptions): SnapshotSt
         }
       }
 
-      refs.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
-      return limit === undefined ? refs : refs.slice(0, limit);
+      refs.sort(compareRefs);
+      const page = before === undefined ? refs : refs.filter((ref) => isAfterCursor(ref, before));
+      return limit === undefined ? page : page.slice(0, limit);
     },
 
     async head() {

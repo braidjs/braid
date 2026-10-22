@@ -1,5 +1,6 @@
 import type { FragmentManifest, RegistrySource } from '@braidlabs/gateway';
 import { validateRegistry } from './analysis.js';
+import { claimsWholeSite, withinPrefixes } from './route-scope.js';
 
 /**
  * Gateway federation: a team's Braid gateway joins an org gateway as a **subgraph**, and the org
@@ -118,13 +119,11 @@ export function subgraph(options: SubgraphOptions): SubgraphSource {
 /** Why a subgraph may not pierce `pattern`, or undefined when it may. */
 function routeProblem(pattern: string, routes: readonly string[] | undefined): string | undefined {
   if (routes) {
-    const allowed = routes.some(
-      (route) => route === '/' || pattern === route || pattern.startsWith(`${route}/`),
-    );
+    const allowed = withinPrefixes(pattern, routes);
     return allowed ? undefined : `outside its routes (${routes.join(', ')})`;
   }
   // No declared routes: still refuse a claim on every page of the org's site.
-  return pattern === '/' || /^\/[*:(]/.test(pattern)
+  return claimsWholeSite(pattern)
     ? 'which claims the whole site — declare the subgraph\'s routes to allow it'
     : undefined;
 }

@@ -89,6 +89,9 @@ describe('renderShellDocument()', () => {
     const hostile = [manifests[0]!, { ...manifests[1]!, src: '//evil.example/x' }];
 
     expect(renderShellDocument(storefront, storefront.routes[0], hostile, { runtimeSrc: RUNTIME })).not.toContain('evil.example');
+    // browsers drop the tab, which would leave //evil.example
+    const tabbed = [manifests[0]!, { ...manifests[1]!, src: '/\t/evil.example/x' }];
+    expect(renderShellDocument(storefront, storefront.routes[0], tabbed, { runtimeSrc: RUNTIME })).not.toContain('evil.example');
   });
 
   it('drops a layout value that is not a track list rather than writing it into a style rule', () => {
@@ -138,6 +141,27 @@ describe('shellDocuments()', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('claims the whole site'));
     expect(await shellDocuments({ registry, runtimeSrc: RUNTIME, paths: ['/'] })(documentRequest('/anything'))).not.toBeNull();
     expect(await shellDocuments({ registry, runtimeSrc: RUNTIME, paths: ['/promo'] })(documentRequest('/anything'))).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('reads a route as URLPattern does, so group syntax and dot segments cannot escape the guard', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const serving = async (path: string, paths?: string[]) => {
+      const shell = { ...storefront, id: 'sneaky', routes: [{ ...storefront.routes[0]!, path }] };
+      const registry = snapshotRegistry({ store: memorySnapshotStore([await createSnapshot({ manifests, shells: [shell] })]) });
+      return shellDocuments({ registry, runtimeSrc: RUNTIME, ...(paths ? { paths } : {}) })(documentRequest('/login'));
+    };
+
+    // every page of the site, spelled so the leading character is not * : or (
+    expect(await serving('/{*}')).toBeNull();
+    expect(await serving('/{:page}')).toBeNull();
+    // inside /billing as written, /login as matched
+    for (const path of ['/billing/../login', '/billing/%2e%2e/login', '/billing{/..}/login']) {
+      expect(await serving(path, ['/billing'])).toBeNull();
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('outside the paths shellDocuments allows'));
+    // the honest spelling of the same claim is still served where it is allowed
+    expect(await serving('/login', ['/login'])).not.toBeNull();
     warn.mockRestore();
   });
 

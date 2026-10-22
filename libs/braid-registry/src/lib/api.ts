@@ -1,6 +1,6 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createSnapshot, type RegistrySnapshot } from './snapshot.js';
-import { isEnvironmentName, type SnapshotStore } from './store.js';
+import { isAfterCursor, isEnvironmentName, refCursor, type SnapshotStore } from './store.js';
 import { diffRegistries, validateRegistry, type RegistryFinding } from './analysis.js';
 import { fetchDescriptors, mergeDescriptors, type DescriptorNote } from './descriptor.js';
 import type { ShellManifest } from './shell.js';
@@ -60,6 +60,20 @@ export interface RegistryApiOptions {
    */
   fetchDescriptors?: boolean;
   fetch?: typeof fetch;
+  /**
+   * Origins a fragment's URL endpoint may be on, e.g. `['https://billing.internal']`. A publish
+   * with an endpoint anywhere else is refused (422, `endpoint-not-allowed`). Omit to allow any.
+   *
+   * Worth setting whenever publishers are not all trusted operators: the gateway proxies
+   * `/__braid/frag/:id/*` to a fragment's endpoint, so whoever registers one decides what part of
+   * the internal network that path opens to the internet.
+   */
+  endpointOrigins?: readonly string[];
+  /**
+   * The largest request body a write accepts, in bytes. Defaults to 5 MB — a registry of a few
+   * thousand fragments. Larger is refused with 413 before it is parsed.
+   */
+  maxBodyBytes?: number;
   /**
    * Where audit events go — one per attempted write, whether it succeeded, was refused for lack of
    * rights, or was rejected by the server. Reads are not audited. See `audit.ts` for the event and
@@ -185,6 +199,27 @@ export interface RegistryApi {
 
 export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
   const { store, authorize, identify, basePath = '/__braid/registry-api', fetchDescriptors: probe = false } = options;
+  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const allowedOrigins = options.endpointOrigins ? new Set(options.endpointOrigins.map((origin) => origin.replace(/\/+$/, ''))) : null;
+  /** Whether a manifest's URL endpoint is on an allowed origin; null when every origin is allowed. */
+  const endpointAllowed = allowedOrigins
+    ? (manifest: FragmentManifest) => {
+        if (typeof manifest.endpoint !== 'string') return true;
+        try {
+          return allowedOrigins.has(new URL(manifest.endpoint).origin);
+        } catch {
+          return false;
+        }
+      }
+    : null;
+  /** A 422 when a snapshot about to be served has an endpoint outside endpointOrigins. */
+  const refuseEndpoints = (snapshot: { manifests: readonly FragmentManifest[] }): Response | null => {
+    if (!endpointAllowed) return null;
+    const outside = snapshot.manifests.filter((manifest) => !endpointAllowed(manifest)).map((manifest) => manifest.id);
+    return outside.length > 0
+      ? json({ error: `fragments ${outside.join(', ')} have endpoints outside endpointOrigins; this snapshot cannot be served` }, 422)
+      : null;
+  };
   const emitAudit = options.audit === undefined ? null : createAuditEmitter(options.audit);
   const environments = new Map((options.environments ?? []).map((environment) => [environment.name, environment]));
 
@@ -198,6 +233,17 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     }
     if (environment.approvals && !identify) {
       throw new Error(`braid-registry: environment "${environment.name}" requires approval, which needs identify — an approval must come from someone other than the requester`);
+    }
+  }
+  for (const origin of options.endpointOrigins ?? []) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      // reported below
+    }
+    if (!parsed || parsed.origin !== origin.replace(/\/+$/, '')) {
+      throw new Error(`braid-registry: endpointOrigins entry "${origin}" must be an origin like https://billing.internal`);
     }
   }
   if (environments.size > 0 && (!store.ref || !store.setRef || !store.refLog || !store.pending || !store.setPending)) {
@@ -316,7 +362,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
             return crossSite(request) ?? serialized(environment.name, () => handler(request, environment, d));
           });
         }
-        if (request.method === 'POST' && crossSite(request)) return crossSite(request)!;
+        if (request.method === 'POST' && request.headers.get('sec-fetch-site') === 'cross-site') return crossSite(request)!;
 
         return json({ error: `no route for ${request.method} ${route}` }, 404);
       } catch (error) {
@@ -330,9 +376,23 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     if (denied) return denied;
 
     const limitParam = Number(url.searchParams.get('limit'));
-    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25;
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 100) : 25;
+    const before = url.searchParams.get('before') ?? undefined;
+    if (before !== undefined && (before.length > 200 || !before.includes('~'))) {
+      return json({ error: 'expected before to be a cursor from a previous page\'s next' }, 400);
+    }
 
-    return json({ items: await store.list({ limit }), head: (await store.head?.()) ?? null });
+    // Filtered here too: a custom store from before paging ignores `before`, and would otherwise
+    // answer every page with the first one. It then ends the listing rather than looping.
+    const items = (await store.list({ limit, ...(before !== undefined ? { before } : {}) })).filter(
+      (ref) => before === undefined || isAfterCursor(ref, before),
+    );
+    const last = items.at(-1);
+    return json({
+      items,
+      head: (await store.head?.()) ?? null,
+      next: items.length === limit && last ? refCursor(last) : null,
+    });
   }
 
   async function getSnapshot(request: Request, id: string): Promise<Response> {
@@ -366,14 +426,24 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * because a forged write is the refusal an auditor most wants to see.
    */
   function crossSite(request: Request): Response | null {
-    return request.headers.get('sec-fetch-site') === 'cross-site' ? json({ error: 'cross-site writes are refused' }, 403) : null;
+    if (request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'cross-site writes are refused' }, 403);
+    // A browser can send a text/plain or form POST to another origin without a preflight, from a
+    // sibling subdomain as easily as from the same site. Requiring JSON from browsers makes every
+    // write one the API's CORS policy has to approve first. Non-browser clients (no Origin, no
+    // Sec-Fetch-Site) are unaffected — they cannot be forged by a page.
+    const fromBrowser = request.headers.has('sec-fetch-site') || request.headers.has('origin');
+    const type = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+    if (fromBrowser && type !== 'application/json') {
+      return json({ error: 'writes from a browser must be sent as application/json' }, 415);
+    }
+    return null;
   }
 
   async function publish(request: Request, audit: AuditDetail): Promise<Response> {
     const denied = await refuse(request, 'publish');
     if (denied) return denied;
 
-    const body = await readJson<PublishRequestBody>(request);
+    const body = await readJson<PublishRequestBody>(request, maxBody);
     if (body instanceof Response) return body;
     if (!Array.isArray(body?.manifests)) {
       return json({ error: 'expected { manifests: FragmentManifest[] }' }, 400);
@@ -420,9 +490,12 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     let descriptorNotes: DescriptorNote[] = [];
 
     if (probe) {
+      // Only endpoints the operator allows are probed. The probe is a request from this server, so
+      // probing first and validating after would let a refused endpoint be fetched anyway.
+      const probeable = endpointAllowed ? manifests.filter((manifest) => endpointAllowed(manifest)) : manifests;
       const merged = mergeDescriptors(
         manifests,
-        await fetchDescriptors(manifests, options.fetch ? { fetch: options.fetch } : {}),
+        await fetchDescriptors(probeable, options.fetch ? { fetch: options.fetch } : {}),
       );
       manifests = merged.manifests;
       descriptorNotes = merged.notes;
@@ -430,7 +503,10 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     // Carried-forward shells are validated too: deleting a fragment a shell still slots is refused
     // here, by name, rather than publishing a shell with a hole in it.
-    const findings = validateRegistry(manifests, { shells });
+    const findings = validateRegistry(manifests, {
+      shells,
+      ...(options.endpointOrigins ? { endpointOrigins: options.endpointOrigins } : {}),
+    });
     if (findings.some((finding) => finding.severity === 'error')) {
       // Nothing is written, so nothing needs undoing — the snapshot model makes refusal cheap.
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
@@ -510,13 +586,16 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const denied = await refuse(request, 'pin');
     if (denied) return denied;
 
-    const body = await readJson<{ id?: string }>(request);
+    const body = await readJson<{ id?: string }>(request, maxBody);
     if (body instanceof Response) return body;
     const id = body?.id;
     if (!isSnapshotId(id)) return json({ error: 'expected { id } with a snapshot id' }, 400);
 
     const snapshot: RegistrySnapshot | null = await store.get(id);
     if (!snapshot) return json({ error: `no snapshot "${id}" — cannot pin what is not stored` }, 404);
+    // Snapshots stored before endpointOrigins was set are not grandfathered back into service.
+    const pinEndpoints = refuseEndpoints(snapshot);
+    if (pinEndpoints) return pinEndpoints;
 
     if (!store.setHead) return json({ error: 'this store does not track a head' }, 501);
     audit.previousId = (await store.head?.()) ?? null;
@@ -604,7 +683,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const denied = await refuse(request, 'promote', { environment: environment.name });
     if (denied) return denied;
 
-    const body = await readJson<{ id?: unknown }>(request);
+    const body = await readJson<{ id?: unknown }>(request, maxBody);
     if (body instanceof Response) return body;
     if (body?.id !== undefined && !isSnapshotId(body.id)) return json({ error: 'expected { id } to be a snapshot id' }, 400);
 
@@ -627,6 +706,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const target = await store.get(id);
     if (!target) return json({ error: `no snapshot "${id}"` }, 404);
     audit.snapshotId = id;
+    const promoteEndpoints = refuseEndpoints(target);
+    if (promoteEndpoints) return promoteEndpoints;
 
     const before = current ? await store.get(current) : null;
     const ownership = await ownershipRefusal(
@@ -673,7 +754,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     // An approval names what it approves. Without this, a requester could withdraw the request the
     // approver reviewed and ask for something else, and the approval would land on that instead.
-    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request);
+    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request, maxBody);
     if (body instanceof Response) return body;
     if (body?.id !== pending.id || body?.requestedAt !== pending.requestedAt) {
       return json({ error: 'that is not the promotion waiting for approval — reload and review the current one', pending }, 409);
@@ -751,13 +832,36 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 }
 
 /** The body as JSON, or a 400 — malformed input is the client's error, not the server's. */
-async function readJson<T>(request: Request): Promise<T | Response> {
+async function readJson<T>(request: Request, limit: number): Promise<T | Response> {
+  const tooLarge = () => json({ error: `the request body is larger than ${limit} bytes` }, 413);
+  if (Number(request.headers.get('content-length')) > limit) return tooLarge();
+
+  // Read with a running count rather than trusting content-length, which a chunked body omits.
+  let text = '';
+  if (request.body) {
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        return tooLarge();
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  }
   try {
-    return (await request.json()) as T;
+    return JSON.parse(text) as T;
   } catch {
     return json({ error: 'the request body is not valid JSON' }, 400);
   }
 }
+
+const DEFAULT_MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

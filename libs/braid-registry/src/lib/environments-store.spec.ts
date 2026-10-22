@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { memorySnapshotStore, type SnapshotStore } from './store.js';
+import { memorySnapshotStore, refCursor, type SnapshotStore } from './store.js';
 import { fileSnapshotStore } from './file-store.js';
 import { createSnapshot } from './snapshot.js';
 
@@ -63,5 +63,29 @@ describe.each(stores)('%s store environments', (_name, make) => {
 
     await expect(store.setRef!('../HEAD', a.id)).rejects.toThrow(/invalid environment/);
     expect(await store.ref!('../HEAD')).toBeNull();
+  });
+});
+
+describe.each(stores)('%s store history paging', (_name, make) => {
+  it('pages through every snapshot exactly once, including several minted in the same millisecond', async () => {
+    const store = await make();
+    const times = ['2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z', '2026-01-05T00:00:00.000Z'];
+    const minted = await Promise.all(
+      times.map((createdAt, i) => createSnapshot({ manifests: [{ id: `f${i}`, endpoint: 'https://f.internal' }], createdAt })),
+    );
+    for (const snapshot of minted) await store.put(snapshot);
+
+    const seen: string[] = [];
+    let before: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const items = await store.list({ limit: 3, ...(before ? { before } : {}) });
+      seen.push(...items.map((ref) => ref.id));
+      if (items.length < 3) break;
+      before = refCursor(items.at(-1)!);
+    }
+
+    expect(seen).toHaveLength(minted.length);
+    expect(new Set(seen).size).toBe(minted.length);
+    expect(seen).toEqual((await store.list()).map((ref) => ref.id));
   });
 });

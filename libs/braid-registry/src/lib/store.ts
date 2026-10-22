@@ -18,8 +18,11 @@ export interface SnapshotStore {
    * conflict.
    */
   put(snapshot: RegistrySnapshot): Promise<void>;
-  /** Snapshot references, newest first. */
-  list(options?: { limit?: number }): Promise<SnapshotRef[]>;
+  /**
+   * Snapshot references, newest first (ties by id, see {@link compareRefs}). `before` is a cursor
+   * from {@link refCursor}: list only what comes after that ref, for the next page of history.
+   */
+  list(options?: { limit?: number; before?: string }): Promise<SnapshotRef[]>;
   /** The most recently published snapshot id, when the store tracks one. */
   head?(): Promise<string | null>;
   setHead?(id: string): Promise<void>;
@@ -73,6 +76,27 @@ export interface SnapshotRef {
   labels?: Readonly<Record<string, string>>;
 }
 
+/**
+ * Listing order: newest first, and by id among snapshots minted in the same millisecond — so a
+ * page boundary falls in the same place every time and paging neither skips nor repeats one.
+ */
+export function compareRefs(a: Pick<SnapshotRef, 'createdAt' | 'id'>, b: Pick<SnapshotRef, 'createdAt' | 'id'>): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+  return a.id === b.id ? 0 : a.id < b.id ? 1 : -1;
+}
+
+/** A cursor that resumes a listing after `ref`. Opaque to clients. */
+export function refCursor(ref: Pick<SnapshotRef, 'createdAt' | 'id'>): string {
+  return `${ref.createdAt}~${ref.id}`;
+}
+
+/** Whether `ref` lists after the cursor — older, or the same instant and a lower id. */
+export function isAfterCursor(ref: Pick<SnapshotRef, 'createdAt' | 'id'>, cursor: string): boolean {
+  const split = cursor.lastIndexOf('~');
+  if (split < 0) return false;
+  return compareRefs(ref, { createdAt: cursor.slice(0, split), id: cursor.slice(split + 1) }) > 0;
+}
+
 export function toRef(snapshot: RegistrySnapshot): SnapshotRef {
   return {
     id: snapshot.id,
@@ -104,10 +128,11 @@ export function memorySnapshotStore(seed: readonly RegistrySnapshot[] = []): Sna
     async put(snapshot) {
       snapshots.set(snapshot.id, snapshot);
     },
-    async list({ limit } = {}) {
+    async list({ limit, before } = {}) {
       const refs = [...snapshots.values()]
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-        .map(toRef);
+        .map(toRef)
+        .sort(compareRefs)
+        .filter((ref) => before === undefined || isAfterCursor(ref, before));
       return limit === undefined ? refs : refs.slice(0, limit);
     },
     async head() {

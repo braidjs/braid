@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RegistryPermissions, SnapshotRef } from '@braidlabs/registry';
 import {
   approvePromotion,
@@ -26,7 +26,15 @@ type State =
   | { status: 'loading' }
   | { status: 'empty'; kind: EmptyKind }
   | { status: 'failed'; error: Error }
-  | { status: 'ready'; items: SnapshotRef[]; head: string | null; permissions: RegistryPermissions; environments: EnvironmentState[] };
+  | {
+      status: 'ready';
+      items: SnapshotRef[];
+      head: string | null;
+      /** Cursor for the next older page; null when this is all of it. */
+      next: string | null;
+      permissions: RegistryPermissions;
+      environments: EnvironmentState[];
+    };
 
 /**
  * Published snapshots, newest first, and who published each.
@@ -55,7 +63,8 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
     setState({ status: 'loading' });
 
     Promise.all([listSnapshots(api, controller.signal), fetchPermissions(api, controller.signal), fetchEnvironments(api, controller.signal)]).then(
-      ([{ items, head }, permissions, environments]) => current && setState({ status: 'ready', items, head, permissions, environments }),
+      ([{ items, head, next }, permissions, environments]) =>
+        current && setState({ status: 'ready', items, head, next: next ?? null, permissions, environments }),
       (reason: unknown) => {
         if (!current || controller.signal.aborted) return;
         const kind = emptyKindOf(reason);
@@ -71,6 +80,29 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
   }, [apiKey, reloadToken]);
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // The listing an older page belongs to; a reload in the meantime makes the page stale.
+  const listing = useRef(0);
+  listing.current = reloadToken;
+
+  /** Appends the next older page. Rollback is only as far back as the history the panel can show. */
+  const loadOlder = async () => {
+    if (state.status !== 'ready' || !state.next) return;
+    setLoadingOlder(true);
+    setError(null);
+    try {
+      const startedOn = listing.current;
+      const page = await listSnapshots(api, undefined, { before: state.next });
+      if (listing.current !== startedOn) return;
+      setState((current) =>
+        current.status === 'ready' ? { ...current, items: [...current.items, ...page.items], next: page.next ?? null } : current,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   /** Runs one write at a time, reporting its error in the panel and reloading on success. */
   const act = async (key: string, write: () => Promise<unknown>) => {
@@ -224,6 +256,11 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                 ))}
               </tbody>
             </table>
+          )}
+          {state.next && (
+            <button type="button" className="braid-console__ghost" onClick={() => void loadOlder()} disabled={loadingOlder}>
+              {loadingOlder ? 'Loading…' : 'Load older'}
+            </button>
           )}
         </div>
       )}

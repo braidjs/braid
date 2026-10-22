@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { DescriptorNote, FieldChange, NamedPrincipal, RegistryFinding } from '@braidlabs/registry';
 import { AccessPanel } from './access-panel.js';
@@ -41,6 +41,8 @@ export interface RegistryEditorProps {
    */
   principals?: NamedPrincipal[];
   onPrincipalsChange?: (principals: NamedPrincipal[]) => void;
+  /** Told whether there are unpublished edits, for a host that warns before leaving the page. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 type Phase =
@@ -48,7 +50,7 @@ type Phase =
   | { status: 'ready' }
   | { status: 'publishing' }
   | { status: 'published'; outcome: PublishOutcome }
-  | { status: 'error'; error: Error; findings: RegistryFinding[]; notes: DescriptorNote[] };
+  | { status: 'error'; error: Error; findings: RegistryFinding[]; notes: DescriptorNote[]; conflict?: boolean };
 
 /**
  * Edit the registry and publish it as a new immutable snapshot.
@@ -64,6 +66,7 @@ export function RegistryEditor({
   onPublished,
   principals,
   onPrincipalsChange,
+  onDirtyChange,
 }: RegistryEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => createDraft([]));
   const [phase, setPhase] = useState<Phase>({ status: 'loading' });
@@ -73,6 +76,9 @@ export function RegistryEditor({
   const [ownPrincipals, setOwnPrincipals] = useState<NamedPrincipal[]>([]);
   /** Per-tag ownership from /permissions; null when the registry has none, or did not say. */
   const [owned, setOwned] = useState<OwnedTags | null>(null);
+  /** Whether a publish may also pin. Unknown reads as yes: the server refuses what it refuses. */
+  const [canPin, setCanPin] = useState(true);
+  const [loadToken, setLoadToken] = useState(0);
 
   // Controlled when the host supplies them, uncontrolled otherwise — the same shape as any input.
   const testPrincipals = principals ?? ownPrincipals;
@@ -92,7 +98,11 @@ export function RegistryEditor({
     // Ownership only narrows what the editor offers; if it cannot be read, offer everything and let
     // the server refuse what it refuses.
     fetchPermissions(api, controller.signal).then(
-      (permissions) => current && setOwned(permissions.tags ?? null),
+      (permissions) => {
+        if (!current) return;
+        setOwned(permissions.tags ?? null);
+        setCanPin(permissions.pin !== false);
+      },
       () => undefined,
     );
     fetchHead(api, controller.signal).then(
@@ -112,9 +122,18 @@ export function RegistryEditor({
       controller.abort();
     };
     // apiKey stands in for the api object, which is usually a fresh literal each render
-  }, [apiKey]);
+  }, [apiKey, loadToken]);
 
   const status = useMemo(() => draftStatus(draft), [draft]);
+
+  // Through a ref, so a host passing an inline callback hears only real changes, not one per render.
+  const dirtyListener = useRef(onDirtyChange);
+  dirtyListener.current = onDirtyChange;
+  useEffect(() => {
+    dirtyListener.current?.(!status.clean);
+  }, [status.clean]);
+  // Once unmounted the editor holds no draft, so there is nothing left for the host to warn about.
+  useEffect(() => () => dirtyListener.current?.(false), []);
 
   // Computed whether or not the panel is open: an access loss is a finding, and a finding hidden
   // behind a toggle nobody pressed is not a finding.
@@ -126,11 +145,14 @@ export function RegistryEditor({
   const publish = useCallback(async () => {
     setPhase({ status: 'publishing' });
     try {
-      const outcome = await publishSnapshot(api ?? {}, { manifests: draft.manifests });
+      // baseId makes the server refuse (409) a publish that would replace a HEAD someone else moved
+      // since this draft started — otherwise it would silently revert their change. A caller who
+      // may not pin publishes a candidate, which leaves HEAD for someone who may.
+      const outcome = await publishSnapshot(api ?? {}, { manifests: draft.manifests, baseId: draft.baseId, pin: canPin });
       // Re-base on what was actually published, so the diff resets and a second publish of the
-      // same content is correctly reported as no change. A proposal is not published yet: HEAD is
-      // where it was, so the draft stays based on it.
-      if (!outcome.pullRequest) setDraft(createDraft(draft.manifests, outcome.snapshot.id));
+      // same content is correctly reported as no change. A proposal or a candidate does not move
+      // HEAD, so the draft stays based on it.
+      if (outcome.pinned) setDraft(createDraft(draft.manifests, outcome.snapshot.id));
       setPhase({ status: 'published', outcome });
       onPublished?.(outcome);
     } catch (error) {
@@ -140,9 +162,10 @@ export function RegistryEditor({
         error: asError(error),
         findings: apiError?.findings ?? [],
         notes: apiError?.descriptorNotes ?? [],
+        conflict: apiError?.status === 409,
       });
     }
-  }, [api, draft.manifests, onPublished]);
+  }, [api, draft.manifests, draft.baseId, canPin, onPublished]);
 
   if (phase.status === 'loading') {
     return (
@@ -171,7 +194,7 @@ export function RegistryEditor({
         </button>
       </div>
 
-      {phase.status === 'error' && <ErrorPanel phase={phase} />}
+      {phase.status === 'error' && <ErrorPanel phase={phase} onReload={() => setLoadToken((token) => token + 1)} />}
       {phase.status === 'published' && <PublishedPanel outcome={phase.outcome} />}
 
       {draft.manifests.length === 0 ? (
@@ -217,6 +240,7 @@ export function RegistryEditor({
         accessLosses={accessLosses}
         onReset={() => setDraft(resetDraft(draft))}
         onPublish={publish}
+        canPin={canPin}
       />
     </div>
   );
@@ -480,6 +504,7 @@ function PublishBar({
   accessLosses,
   onReset,
   onPublish,
+  canPin,
 }: {
   status: ReturnType<typeof draftStatus>;
   phase: Phase;
@@ -490,6 +515,7 @@ function PublishBar({
   accessLosses: number;
   onReset: () => void;
   onPublish: () => void;
+  canPin: boolean;
 }) {
   const errors = status.findings.filter((finding) => finding.severity === 'error').length;
   const warnings = status.findings.length - errors;
@@ -523,8 +549,9 @@ function PublishBar({
         type="button"
         onClick={onPublish}
         disabled={status.blocked || status.clean || phase.status === 'publishing'}
+        {...(canPin ? {} : { title: 'Your role may publish but not pin; a publisher pins the candidate.' })}
       >
-        {phase.status === 'publishing' ? 'Publishing…' : 'Publish'}
+        {phase.status === 'publishing' ? 'Publishing…' : canPin ? 'Publish' : 'Publish as candidate'}
       </button>
     </div>
   );
@@ -558,11 +585,16 @@ function PublishedPanel({ outcome }: { outcome: PublishOutcome }) {
   );
 }
 
-function ErrorPanel({ phase }: { phase: Extract<Phase, { status: 'error' }> }) {
+function ErrorPanel({ phase, onReload }: { phase: Extract<Phase, { status: 'error' }>; onReload: () => void }) {
   return (
     <div className="braid-console__error" role="alert">
-      <h3>Could not publish</h3>
+      <h3>{phase.conflict ? 'Someone published since you started' : 'Could not publish'}</h3>
       <p>{phase.error.message}</p>
+      {phase.conflict && (
+        <button type="button" className="braid-console__retry" onClick={onReload}>
+          Reload pinned (discards this draft)
+        </button>
+      )}
       {phase.findings.length > 0 && (
         <ul className="braid-console__findings">
           {phase.findings.map((finding, index) => (

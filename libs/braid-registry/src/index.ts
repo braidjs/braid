@@ -18,7 +18,7 @@
 export { createSnapshot, verifySnapshot, serializeSnapshot, parseSnapshot, SNAPSHOT_ID_PREFIX } from './lib/snapshot.js';
 export type { RegistrySnapshot, SnapshotInput } from './lib/snapshot.js';
 
-export { memorySnapshotStore, toRef } from './lib/store.js';
+export { memorySnapshotStore, toRef, compareRefs, refCursor, isAfterCursor } from './lib/store.js';
 export type { SnapshotStore, SnapshotRef } from './lib/store.js';
 
 export { snapshotRegistry } from './lib/source.js';

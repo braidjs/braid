@@ -1,6 +1,7 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { ShellManifest } from './shell.js';
 import { findPierceOverlaps } from './analysis.js';
+import { routesMayOverlap } from './route-scope.js';
 
 /**
  * Per-tag ownership: which fragments and shells a caller may change, by the tags they carry.
@@ -26,9 +27,10 @@ export type OwnedTags = readonly string[] | '*';
 export interface OwnershipViolation {
   /**
    * `route` is a fragment the caller may change, made to pierce pages that a fragment they do not
-   * own already pierces — owning an item is not owning every URL it can claim.
+   * own already pierces — owning an item is not owning every URL it can claim. `shell-route` is the
+   * same for a shell: a route that would answer pages another team's shell answers.
    */
-  kind: 'fragment' | 'shell' | 'route';
+  kind: 'fragment' | 'shell' | 'route' | 'shell-route';
   id: string;
   /** The tags that decide who may change it — what it carried before, or carries now if new. */
   tags: string[];
@@ -46,7 +48,63 @@ export function ownershipViolations(before: RegistryContent, after: RegistryCont
     ...violations('fragment', before.manifests, after.manifests, owned),
     ...violations('shell', before.shells, after.shells, owned),
     ...routeViolations(before.manifests, after.manifests, owned),
+    ...shellRouteViolations(before.shells, after.shells, owned),
   ];
+}
+
+/**
+ * Shell routes that would answer pages a shell the caller does not own answers.
+ *
+ * A served shell answers a page ahead of the app behind the gateway, and where two shells' routes
+ * overlap the one with the earlier id wins. Without this, a team could publish a shell of its own
+ * whose route lands on another team's pages — and win them by choosing an id that sorts first.
+ *
+ * Judged per pair of routes with {@link routesMayOverlap}, which presumes an overlap it cannot rule
+ * out, rather than by sampling, which a crafted pattern slips past. A pair that already overlapped
+ * in HEAD is not the caller's doing and does not lock them out — but it is the pair of *routes*
+ * that is grandfathered, not the pair of shells, so widening a route that overlapped a little into
+ * one that overlaps a lot is a new claim.
+ */
+function shellRouteViolations(
+  before: readonly ShellManifest[],
+  after: readonly ShellManifest[],
+  owned: readonly string[],
+): OwnershipViolation[] {
+  const routesOf = (shells: readonly ShellManifest[]) =>
+    shells.flatMap((shell) =>
+      (Array.isArray(shell?.routes) ? shell.routes : [])
+        .filter((route) => typeof route?.path === 'string')
+        .map((route) => ({ shell, path: route.path })),
+    );
+  const pairKey = (a: { shell: ShellManifest; path: string }, b: { shell: ShellManifest; path: string }) =>
+    [`${a.shell.id}\u0000${a.path}`, `${b.shell.id}\u0000${b.path}`].sort().join('\u0001');
+
+  const overlappingPairs = (shells: readonly ShellManifest[]) => {
+    const routes = routesOf(shells);
+    const pairs: [(typeof routes)[number], (typeof routes)[number]][] = [];
+    for (let i = 0; i < routes.length; i++) {
+      for (let j = i + 1; j < routes.length; j++) {
+        if (routes[i]!.shell.id !== routes[j]!.shell.id && routesMayOverlap(routes[i]!.path, routes[j]!.path)) {
+          pairs.push([routes[i]!, routes[j]!]);
+        }
+      }
+    }
+    return pairs;
+  };
+
+  const existing = new Set(overlappingPairs(before).map(([a, b]) => pairKey(a, b)));
+  const ownsOneOf = (tags: unknown) => tagsOf(tags).some((tag) => owned.includes(tag));
+
+  const found = new Map<string, OwnershipViolation>();
+  for (const [a, b] of overlappingPairs(after)) {
+    if (existing.has(pairKey(a, b))) continue;
+    for (const [mine, theirs] of [[a.shell, b.shell], [b.shell, a.shell]] as const) {
+      if (ownsOneOf(mine.tags) && !ownsOneOf(theirs.tags)) {
+        found.set(mine.id, { kind: 'shell-route', id: mine.id, tags: tagsOf(theirs.tags) });
+      }
+    }
+  }
+  return [...found.values()];
 }
 
 /**
@@ -130,7 +188,9 @@ export function describeViolations(found: readonly OwnershipViolation[]): string
   const names = found.map((item) =>
     item.kind === 'route'
       ? `fragment "${item.id}", whose pierce patterns would claim pages a fragment tagged ${item.tags.join(', ') || '(untagged)'} already pierces`
-      : `${item.kind} "${item.id}" (${item.tags.length ? `tags: ${item.tags.join(', ')}` : 'untagged'})`,
+      : item.kind === 'shell-route'
+        ? `shell "${item.id}", whose routes would answer pages a shell tagged ${item.tags.join(', ') || '(untagged)'} already answers`
+        : `${item.kind} "${item.id}" (${item.tags.length ? `tags: ${item.tags.join(', ')}` : 'untagged'})`,
   );
   return `you may not change ${names.join('; ')} — only items carrying a tag you own`;
 }

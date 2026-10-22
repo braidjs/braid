@@ -208,6 +208,73 @@ describe('<RegistryEditor>', () => {
     expect(alert?.textContent).toContain('server says no');
   });
 
+  it('publishes against the snapshot it branched from, so it cannot overwrite a newer HEAD', async () => {
+    const api = fakeApi();
+    await render(api);
+    await click(byLabel('Remove billing'));
+    await click(button('Publish'));
+
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({ baseId: 'reg_base', pin: true });
+  });
+
+  it('says someone else published on a 409, and offers to reload rather than overwrite', async () => {
+    const api = fakeApi({ publish: () => json({ error: 'HEAD moved to reg_other since this draft was branched from reg_base', head: 'reg_other' }, 409) });
+    await render(api);
+    await click(byLabel('Remove billing'));
+    await click(button('Publish'));
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Someone published since you started');
+    const headLoads = () => api.calls.filter((call) => call.url.endsWith('/head')).length;
+    const before = headLoads();
+    await click(button('Reload pinned (discards this draft)'));
+    expect(headLoads()).toBe(before + 1);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('publishes a candidate for a role that may publish but not pin, and stays based on HEAD', async () => {
+    const api = fakeApi({
+      permissions: { read: true, publish: true, pin: false, actor: null, tags: null },
+      publish: () => json({ snapshot: { id: 'reg_cand', createdAt: '2026-08-14', fragmentCount: 0 }, findings: [], descriptorNotes: [], pinned: false }, 201),
+    });
+    await render(api);
+    await click(byLabel('Remove billing'));
+
+    expect(button('Publish')).toBeUndefined();
+    await click(button('Publish as candidate'));
+
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({ pin: false, baseId: 'reg_base' });
+    expect(container.textContent).toContain('not pinned');
+    // HEAD did not move, so the draft still differs from it and Discard still means "back to HEAD"
+    expect(isDisabled('Discard')).toBe(false);
+  });
+
+  it('tells the host when there are unpublished edits, so it can warn before the page closes', async () => {
+    const api = fakeApi();
+    const dirty = vi.fn();
+    await act(async () => root.render(<RegistryEditor api={api} onDirtyChange={dirty} />));
+
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    await click(byLabel('Remove billing'));
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    await click(button('Discard'));
+    expect(dirty).toHaveBeenLastCalledWith(false);
+  });
+
+  it('reports dirtiness only when it changes, even given a fresh callback every render', async () => {
+    const api = fakeApi();
+    const seen: boolean[] = [];
+    const renderWith = () => act(async () => root.render(<RegistryEditor api={api} onDirtyChange={(dirty) => seen.push(dirty)} />));
+    await renderWith();
+    await click(byLabel('Remove billing'));
+    seen.length = 0;
+
+    await renderWith();
+    await renderWith();
+
+    expect(seen).toEqual([]);
+  });
+
   it('reports an authorization refusal in the server’s own words', async () => {
     const api = fakeApi({ publish: () => json({ error: 'not authorized to publish' }, 403) });
     await render(api);

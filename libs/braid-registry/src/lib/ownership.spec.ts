@@ -127,6 +127,72 @@ describe('per-tag ownership', () => {
     void api;
   });
 
+  it("refuses a shell of the caller's own whose routes would answer another team's pages", async () => {
+    const { api } = await ownedApi();
+    // react owns this shell, and an id sorting before "storefront" would win /billing/:id
+    const intruder: ShellManifest = {
+      id: 'aaa',
+      framework: 'vanilla',
+      tags: ['react'],
+      routes: [{ path: '/billing/:id', layout: { areas: 'main' }, slots: { main: 'reviews' } }],
+    };
+
+    const response = await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [storefront, intruder] }));
+
+    expect(response!.status).toBe(403);
+    const body = await response!.json();
+    expect(body.items).toEqual([{ kind: 'shell-route', id: 'aaa', tags: ['finance'] }]);
+    expect(body.error).toContain('shell "aaa", whose routes would answer pages a shell tagged finance already answers');
+
+    // a route of its own, overlapping nothing, is fine
+    const own = { ...intruder, routes: [{ ...intruder.routes[0]!, path: '/reviews/*' }] };
+    expect((await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [storefront, own] })))!.status).toBe(201);
+  });
+
+  it('refuses shell routes crafted to slip past a sampled overlap check', async () => {
+    const { api } = await ownedApi();
+    // finance's storefront answers /billing/*; each of these also answers a page under it
+    for (const path of ['/bill{ing}/:x(\\d+)', '/(billing)/:x(\\d+)', '/billing/:x(\\d+)/:y?']) {
+      const intruder: ShellManifest = { id: 'aaa', framework: 'vanilla', tags: ['react'], routes: [{ path, layout: { areas: 'main' }, slots: { main: 'reviews' } }] };
+      const response = await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [storefront, intruder] }));
+      expect(response!.status, path).toBe(403);
+    }
+  });
+
+  it('refuses a route that differs from another team\'s only by a trailing slash', async () => {
+    const exact: ShellManifest = { ...storefront, id: 'zbilling', routes: [{ ...storefront.routes[0]!, path: '/billing' }] };
+    const base = await createSnapshot({ manifests: [billing, reviews, legacy], shells: [exact] });
+    const api = createRegistryApi({ store: memorySnapshotStore([base]), authorize: () => true, owns: (r) => (r.headers.get('x-tags') ?? '').split(',') });
+    const slashed: ShellManifest = { id: 'aaa', framework: 'vanilla', tags: ['react'], routes: [{ path: '/billing/', layout: { areas: 'main' }, slots: { main: 'reviews' } }] };
+
+    expect((await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [exact, slashed] })))!.status).toBe(403);
+  });
+
+  it('treats widening a route that already overlapped as a new claim', async () => {
+    const promo: ShellManifest = { id: 'apromo', framework: 'vanilla', tags: ['react'], routes: [{ path: '/billing/promo', layout: { areas: 'main' }, slots: { main: 'reviews' } }] };
+    const base = await createSnapshot({ manifests: [billing, reviews, legacy], shells: [storefront, promo] });
+    const api = createRegistryApi({ store: memorySnapshotStore([base]), authorize: () => true, owns: (r) => (r.headers.get('x-tags') ?? '').split(',') });
+    const widen = (path: string) => ({ ...promo, routes: [{ ...promo.routes[0]!, path }] });
+
+    // the overlap that was already there is grandfathered: changing something else is fine
+    expect((await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [storefront, { ...promo, title: 'Promo' }] })))!.status).toBe(201);
+    for (const path of ['/billing/:any', '/*']) {
+      expect((await api.handle(publish('react', { manifests: [billing, reviews, legacy], shells: [storefront, widen(path)] })))!.status, path).toBe(403);
+    }
+  });
+
+  it('does not lock a team out of its shell over an overlap that was already in HEAD', async () => {
+    const theirs: ShellManifest = { ...storefront, id: 'promo', tags: ['react'], routes: [{ ...storefront.routes[0]!, path: '/billing/:id' }] };
+    const base = await createSnapshot({ manifests: [billing, reviews, legacy], shells: [storefront, theirs] });
+    const api = createRegistryApi({ store: memorySnapshotStore([base]), authorize: () => true, owns: (r) => (r.headers.get('x-tags') ?? '').split(',') });
+
+    const response = await api.handle(
+      publish('finance', { manifests: [billing, reviews, legacy], shells: [{ ...storefront, title: 'Storefront v2' }, theirs] }),
+    );
+
+    expect(response!.status).toBe(201);
+  });
+
   it('refuses a publish that would replace a HEAD that moved meanwhile, even without baseId', async () => {
     const { api, store, base } = await ownedApi();
     const theirs = await createSnapshot({ manifests: [billing, { ...reviews, title: 'React team hotfix' }, legacy], shells: [storefront] });

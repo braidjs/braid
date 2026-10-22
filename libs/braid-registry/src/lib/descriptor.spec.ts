@@ -55,6 +55,8 @@ describe('mergeDescriptors', () => {
       );
       expect(notes[0]).toMatchObject({ kind: 'rejected-field', field });
       expect(notes[0]?.message).toMatch(/only the gateway may set/);
+      // never echoed: the probe runs inside the server's network
+      expect(notes[0]).not.toHaveProperty('descriptorValue');
     },
   );
 
@@ -128,6 +130,44 @@ describe('fetchDescriptors', () => {
     const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
 
     expect(result.get('billing')).toBeInstanceOf(Error);
+  });
+
+  it('does not follow a redirect, which could point the probe anywhere on the server network', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' } }));
+
+    const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ redirect: 'manual' }));
+    expect((result.get('billing') as Error).message).toMatch(/redirected/);
+  });
+
+  it('refuses a descriptor larger than a descriptor could be, without reading it all', async () => {
+    const huge = JSON.stringify({ title: 'x'.repeat(100 * 1024) });
+    const declared = vi.fn(async () => new Response(huge, { headers: { 'content-length': String(huge.length) } }));
+    // no content-length: caught while streaming
+    const streamed = vi.fn(async () => new Response(new Blob([huge]).stream()));
+
+    for (const fetchMock of [declared, streamed]) {
+      const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+      expect((result.get('billing') as Error).message).toMatch(/limit is|exceeds/);
+    }
+  });
+
+  it('refuses a response its fetch followed a redirect to, whatever it was asked', async () => {
+    const followed = Object.defineProperty(ok({ title: 'from the redirect target' }), 'redirected', { value: true });
+    const fetchMock = vi.fn(async () => followed);
+
+    const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+
+    expect((result.get('billing') as Error).message).toMatch(/redirected/);
+  });
+
+  it('does not quote a body that is not JSON back in its error', async () => {
+    const fetchMock = vi.fn(async () => new Response('root:x:0:0:root:/root:/bin/bash'));
+
+    const result = await fetchDescriptors([billing], { fetch: fetchMock as unknown as typeof fetch });
+
+    expect((result.get('billing') as Error).message).toBe('the descriptor is not valid JSON');
   });
 
   it('records a non-object body as invalid', async () => {

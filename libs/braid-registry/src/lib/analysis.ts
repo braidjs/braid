@@ -28,6 +28,7 @@ export type FindingCode =
   | 'invalid-id'
   | 'missing-endpoint'
   | 'invalid-endpoint'
+  | 'endpoint-not-allowed'
   | 'invalid-pierce-pattern'
   | 'urlpattern-unavailable'
   | 'pierce-overlap'
@@ -53,8 +54,17 @@ export type FindingCode =
  */
 export function validateRegistry(
   manifests: readonly FragmentManifest[],
-  options: { shells?: readonly ShellManifest[] } = {},
+  options: {
+    shells?: readonly ShellManifest[];
+    /**
+     * Origins a URL endpoint may be on — `['https://billing.internal', 'https://cdn.example']`.
+     * Omit to allow any. The gateway proxies `/__braid/frag/:id/*` to a fragment's endpoint, so an
+     * endpoint is a door from the internet into wherever it points; this is the list of rooms.
+     */
+    endpointOrigins?: readonly string[];
+  } = {},
 ): RegistryFinding[] {
+  const allowedOrigins = options.endpointOrigins ? new Set(options.endpointOrigins.map((origin) => new URL(origin).origin)) : null;
   const findings: RegistryFinding[] = [];
   const seen = new Set<string>();
 
@@ -80,7 +90,7 @@ export function validateRegistry(
     }
     if (id) seen.add(id);
 
-    findings.push(...validateEndpoint(manifest));
+    findings.push(...validateEndpoint(manifest, allowedOrigins));
     findings.push(...validatePierce(manifest));
     findings.push(...validateAdapter(manifest));
     findings.push(...validateAccess(manifest));
@@ -94,7 +104,7 @@ export function validateRegistry(
   return findings;
 }
 
-function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
+function validateEndpoint(manifest: FragmentManifest, allowedOrigins: ReadonlySet<string> | null = null): RegistryFinding[] {
   if (!manifest.endpoint) {
     return [
       {
@@ -109,9 +119,9 @@ function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
 
   if (typeof manifest.endpoint !== 'string') return [];
 
+  let origin: string;
   try {
-    new URL(manifest.endpoint);
-    return [];
+    origin = new URL(manifest.endpoint).origin;
   } catch {
     return [
       {
@@ -123,6 +133,18 @@ function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
       },
     ];
   }
+  if (allowedOrigins && !allowedOrigins.has(origin)) {
+    return [
+      {
+        severity: 'error',
+        code: 'endpoint-not-allowed',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" has an endpoint on ${origin}, which is not an allowed endpoint origin`,
+        hint: `endpoints may be on: ${[...allowedOrigins].join(', ')}`,
+      },
+    ];
+  }
+  return [];
 }
 
 function validatePierce(manifest: FragmentManifest): RegistryFinding[] {
