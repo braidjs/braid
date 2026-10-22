@@ -43,6 +43,10 @@ export interface AuditEvent {
   diff?: { added: number; removed: number; changed: number };
   /** The environment a promotion, approval or rejection was in. */
   environment?: string;
+  /** A promotion that is now waiting for approval rather than done. */
+  pending?: boolean;
+  /** For an approval or rejection: who requested the promotion — four-eyes in one event. */
+  requestedBy?: string;
 }
 
 export type AuditAction = 'publish' | 'pin' | 'promote' | 'approve' | 'reject';

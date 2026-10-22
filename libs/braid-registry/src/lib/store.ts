@@ -51,7 +51,13 @@ export interface PendingPromotion {
   id: string;
   /** What the environment pointed at when this was requested — approval is refused if it moved. */
   base: string | null;
+  /** Who asked, as `identify` names them — for display. */
   requestedBy: string;
+  /**
+   * Who asked, as `subject` identifies them — stable across clients, and what four-eyes is checked
+   * against. Absent when the API has no `subject` hook, in which case `requestedBy` is used.
+   */
+  requestedSubject?: string;
   requestedAt: string;
 }
 

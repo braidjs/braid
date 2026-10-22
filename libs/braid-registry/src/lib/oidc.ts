@@ -94,6 +94,8 @@ export interface OidcAuthorizer {
   identify(request: Request): Promise<string | null>;
   /** Present only with a `tagMap`. */
   owns?: (request: Request) => Promise<OwnedTags>;
+  /** `iss` and `sub`, for comparisons that display names would fool — four-eyes approval. */
+  subject(request: Request): Promise<string | null>;
 }
 
 export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthorizer {
@@ -194,6 +196,13 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
       if (!result.ok) return result.response;
       const granted = grants(result.claims, rolesClaim, roleMap, scopeMap);
       return granted.has(action) || (context?.environment !== undefined && granted.has(`${action}:${context.environment}` as RegistryGrant));
+    },
+
+    async subject(request) {
+      const result = await verify(request);
+      if (!result.ok) return null;
+      const { iss, sub } = result.claims;
+      return typeof iss === 'string' && typeof sub === 'string' && sub ? `${iss}|${sub}` : null;
     },
 
     async identify(request) {

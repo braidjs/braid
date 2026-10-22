@@ -203,8 +203,15 @@ export async function promoteSnapshot(api: ConsoleApi, environment: string, id: 
   return apiRequest(api, `/environments/${encodeURIComponent(environment)}/promote`, { method: 'POST', body: JSON.stringify({ id }) });
 }
 
-export async function approvePromotion(api: ConsoleApi, environment: string): Promise<void> {
-  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/approve`, { method: 'POST', body: '{}' });
+/**
+ * Approves the promotion the approver was shown. The server refuses (409) if what is pending is
+ * not that one any more, so an approval cannot land on a request swapped in after review.
+ */
+export async function approvePromotion(api: ConsoleApi, environment: string, shown: { id: string; requestedAt: string }): Promise<void> {
+  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ id: shown.id, requestedAt: shown.requestedAt }),
+  });
 }
 
 export async function rejectPromotion(api: ConsoleApi, environment: string): Promise<void> {

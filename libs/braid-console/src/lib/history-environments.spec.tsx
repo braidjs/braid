@@ -15,17 +15,19 @@ const items = [
 
 function server(environments: EnvironmentState[], permissions: RegistryPermissions) {
   const calls: { method: string; path: string }[] = [];
+  const bodies: unknown[] = [];
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
     const path = new URL(url, 'https://x.example').pathname.replace('/__braid/registry-api', '');
     const method = init.method ?? 'GET';
     calls.push({ method, path });
+    if (init.body) bodies.push(JSON.parse(String(init.body)));
     if (path === '/snapshots') return json({ items, head: 'reg_b' });
     if (path === '/permissions') return json(permissions);
     if (path === '/environments') return json({ items: environments });
     if (method === 'POST') return json({}, 200);
     return json({ error: 'no route' }, 404);
   });
-  return { fetch: fetchMock as unknown as typeof fetch, calls };
+  return { fetch: fetchMock as unknown as typeof fetch, calls, bodies };
 }
 
 const staging: EnvironmentState = { name: 'staging', from: null, approvals: 0, id: 'reg_b', pending: null };
@@ -91,6 +93,8 @@ describe('<HistoryPanel> environments', () => {
     expect(byLabel('Promote reg_b to production')).toBeNull();
     await act(async () => button('Approve')!.click());
     expect(approverApi.calls).toContainEqual({ method: 'POST', path: '/environments/production/approve' });
+    // and it names the request it approves, so a swapped one is refused rather than approved
+    expect(approverApi.bodies.at(-1)).toEqual({ id: 'reg_b', requestedAt: '2026-10-22T11:00:00Z' });
 
     act(() => root.unmount());
     root = createRoot(container);

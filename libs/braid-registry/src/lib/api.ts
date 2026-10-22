@@ -43,6 +43,13 @@ export interface RegistryApiOptions {
    * rather than a note.
    */
   identify?: (request: Request) => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * A stable identifier for the caller — the token's issuer and subject, say — for comparisons that
+   * must not be fooled by display names. `identify` returns whatever a token carries (an email from
+   * one client, a username from another), so the same person can look like two; approval compares
+   * this instead when it is set. `createOidcAuthorizer` provides it.
+   */
+  subject?: (request: Request) => string | null | undefined | Promise<string | null | undefined>;
   /** Path the API is mounted at. Defaults to `/__braid/registry-api`. */
   basePath?: string;
   /**
@@ -190,7 +197,33 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    * What a write handler learned on its way to a response, for the audit event that describes it —
    * and who the caller is, resolved once and used for both the event and `labels.publishedBy`.
    */
-  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff' | 'environment'> & { actor: string | null };
+  type AuditDetail = Pick<AuditEvent, 'snapshotId' | 'previousId' | 'pinned' | 'diff' | 'environment' | 'pending' | 'requestedBy'> & {
+    actor: string | null;
+  };
+
+  /**
+   * One promotion step at a time per environment. Promote, approve and reject are each a read, a
+   * check and a write; interleaved, two promotes could both see "nothing pending", or an approval
+   * could apply a request that was just withdrawn. This serializes them in-process; across several
+   * API instances, a store with compare-and-set is what closes it.
+   */
+  const locks = new Map<string, Promise<unknown>>();
+  function serialized<T>(environment: string, step: () => Promise<T>): Promise<T> {
+    const previous = locks.get(environment) ?? Promise.resolve();
+    const next = previous.then(step, step);
+    locks.set(environment, next.catch(() => undefined));
+    return next;
+  }
+
+  /** The caller's stable identity for four-eyes: `subject` when configured, else the actor. */
+  async function subjectOf(request: Request, actor: string | null): Promise<string | null> {
+    if (!options.subject) return actor;
+    try {
+      return (await options.subject(request)) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Runs a write and audits it from the response it produced, so every path out of the handler —
@@ -267,7 +300,8 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
           if (!environment) return json({ error: `no environment "${decodeURIComponent(name)}"` }, 404);
           return await audited(request, step, (d) => {
             d.environment = environment.name;
-            return crossSite(request) ?? (step === 'promote' ? promote : step === 'approve' ? approve : reject)(request, environment, d);
+            const handler = step === 'promote' ? promote : step === 'approve' ? approve : reject;
+            return crossSite(request) ?? serialized(environment.name, () => handler(request, environment, d));
           });
         }
         if (request.method === 'POST' && crossSite(request)) return crossSite(request)!;
@@ -565,9 +599,19 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       if (await store.pending!(environment.name)) {
         return json({ error: `a promotion into "${environment.name}" is already waiting for approval — approve or reject it first` }, 409);
       }
-      const pending = { id, base: current, requestedBy: audit.actor ?? '', requestedAt: new Date().toISOString() };
-      if (!pending.requestedBy) return json({ error: 'a promotion that needs approval needs an identified requester' }, 403);
+      const requestedSubject = await subjectOf(request, audit.actor);
+      if (!audit.actor || !requestedSubject) {
+        return json({ error: 'a promotion that needs approval needs an identified requester' }, 403);
+      }
+      const pending = {
+        id,
+        base: current,
+        requestedBy: audit.actor,
+        ...(options.subject ? { requestedSubject } : {}),
+        requestedAt: new Date().toISOString(),
+      };
       await store.setPending!(environment.name, pending);
+      audit.pending = true;
       return json({ environment: environment.name, pending }, 202);
     }
 
@@ -584,8 +628,19 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     if (!pending) return json({ error: `nothing is waiting for approval in "${environment.name}"` }, 404);
     audit.snapshotId = pending.id;
     audit.previousId = pending.base;
+    audit.requestedBy = pending.requestedBy;
 
-    if (!audit.actor || audit.actor === pending.requestedBy) {
+    // An approval names what it approves. Without this, a requester could withdraw the request the
+    // approver reviewed and ask for something else, and the approval would land on that instead.
+    const body = await readJson<{ id?: unknown; requestedAt?: unknown }>(request);
+    if (body instanceof Response) return body;
+    if (body?.id !== pending.id || body?.requestedAt !== pending.requestedAt) {
+      return json({ error: 'that is not the promotion waiting for approval — reload and review the current one', pending }, 409);
+    }
+
+    const approver = await subjectOf(request, audit.actor);
+    const requester = pending.requestedSubject ?? pending.requestedBy;
+    if (!audit.actor || !approver || approver === requester) {
       return json({ error: 'a promotion must be approved by someone other than whoever requested it' }, 403);
     }
     // The approver saw a change from `base`. If the environment has moved since, that is no
@@ -604,12 +659,15 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const pending = await store.pending!(environment.name);
     if (!pending) return json({ error: `nothing is waiting for approval in "${environment.name}"` }, 404);
     audit.snapshotId = pending.id;
+    audit.previousId = pending.base;
+    audit.requestedBy = pending.requestedBy;
 
-    const isRequester = audit.actor !== null && audit.actor === pending.requestedBy;
-    if (!isRequester) {
-      const denied = await refuse(request, 'approve', { environment: environment.name });
-      if (denied) return denied;
-    }
+    // The requester may withdraw — while they still hold the right to promote there; anyone else
+    // needs the right to approve.
+    const caller = await subjectOf(request, audit.actor);
+    const isRequester = caller !== null && caller === (pending.requestedSubject ?? pending.requestedBy);
+    const denied = await refuse(request, isRequester ? 'promote' : 'approve', { environment: environment.name });
+    if (denied) return denied;
 
     await store.setPending!(environment.name, null);
     return json({ environment: environment.name, rejected: pending.id });

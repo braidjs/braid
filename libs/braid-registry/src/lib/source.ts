@@ -111,7 +111,12 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promis
         // Reported when HEAD moves, not on every reload: on a short refresh interval this would
         // otherwise be a heartbeat in the log.
         if (current?.snapshot.id !== id) {
-          report({ level: 'info', event: 'head-followed', snapshotId: id, message: `following store head ${id}` });
+          report({
+            level: 'info',
+            event: 'head-followed',
+            snapshotId: id,
+            message: environment !== undefined ? `following environment ${environment} at ${id}` : `following store head ${id}`,
+          });
         }
       }
 
@@ -161,7 +166,8 @@ export function snapshotRegistry(options: SnapshotRegistryOptions): () => Promis
     if (!cache) return;
     try {
       await cache.put(snapshot);
-      await cache.setHead?.(snapshot.id);
+      // the cache's HEAD mirrors the store's; an environment's pointer is not HEAD
+      if (environment === undefined) await cache.setHead?.(snapshot.id);
     } catch (cause) {
       // A cache that cannot be written is a degraded fallback, not a failed boot.
       report({

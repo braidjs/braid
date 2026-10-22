@@ -136,7 +136,7 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                       type="button"
                       className="braid-console__ghost"
                       disabled={pinning !== null}
-                      onClick={() => void act(`approve:${environment.name}`, () => approvePromotion(api ?? {}, environment.name))}
+                      onClick={() => void act(`approve:${environment.name}`, () => approvePromotion(api ?? {}, environment.name, pending))}
                     >
                       Approve
                     </button>
@@ -202,10 +202,10 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                           type="button"
                           className="braid-console__ghost"
                           disabled={pinning !== null}
-                          onClick={() => void act(`promote:${environment.name}`, () => promoteSnapshot(api ?? {}, environment.name, item.id))}
+                          onClick={() => void act(`promote:${environment.name}:${item.id}`, () => promoteSnapshot(api ?? {}, environment.name, item.id))}
                           aria-label={`Promote ${item.id} to ${environment.name}`}
                         >
-                          {pinning === `promote:${environment.name}` ? 'Promoting…' : `Promote to ${environment.name}`}
+                          {pinning === `promote:${environment.name}:${item.id}` ? 'Promoting…' : `Promote to ${environment.name}`}
                         </button>
                       ))}
                       {item.id !== state.head && state.permissions.pin && (

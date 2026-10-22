@@ -91,9 +91,12 @@ export function fileSnapshotStore(options: FileSnapshotStoreOptions): SnapshotSt
     async setRef(environment, id, by = null) {
       if (!isEnvironmentName(environment)) throw new Error(`braid-registry: invalid environment name "${environment}"`);
       if (!isSafeId(id)) throw new Error(`braid-registry: invalid snapshot id "${id}"`);
+      if (!(await readOptional(pathFor(id)))) throw new Error(`braid-registry: cannot point ${environment} at unknown snapshot "${id}"`);
       await mkdir(join(directory, 'refs'), { recursive: true });
-      await appendFile(join(directory, 'refs', `${environment}.log`), `${JSON.stringify({ id, at: new Date().toISOString(), by })}\n`);
+      // The ref first: a crash between the two then loses a log line, rather than logging a move
+      // that never happened — which a rollback would trust as "served before".
       await writeAtomic(join(directory, 'refs', environment), `${id}\n`);
+      await appendFile(join(directory, 'refs', `${environment}.log`), `${JSON.stringify({ id, at: new Date().toISOString(), by })}\n`);
     },
 
     async refLog(environment, { limit } = {}) {

@@ -200,12 +200,22 @@ createGateway({ registry: snapshotRegistry({ store, environment: 'production' })
   snapshot named.
 - **Approvals.** With `approvals: 1`, a promotion waits until someone other than the requester
   approves it. The API refuses to start without `identify`, because an approval that can't tell
-  people apart isn't one. If the environment moved after the request, the approval is refused:
-  the approver would be approving a change they never saw.
+  people apart isn't one. Several rules keep the approval honest:
+  - **People are compared by `subject`,** a stable identity. `createOidcAuthorizer` supplies
+    issuer plus subject, so one person showing up under different display names on different
+    clients is still one person.
+  - **An approval names the request it approves** (`{ id, requestedAt }`, which the console
+    sends). It is refused if that request was withdrawn and replaced after review, or if the
+    environment moved since the request.
+  - **Steps are serialized.** Promote, approve and reject run one at a time per environment within
+    one API instance. Across instances, a store with compare-and-set would be needed.
+  - **Withdrawing** is the requester's, while they still hold the right to promote there.
 - **Rights per environment.** `promote` and `approve` are actions, and `authorize` receives the
   environment. With `createOidcAuthorizer`, `roleMap` can grant `'promote:staging'` or
-  `'approve:production'`, and the bare action grants it everywhere. `/permissions` reports both
-  rights for each environment.
+  `'approve:production'`, and the bare action grants it everywhere. `DEFAULT_ROLE_MAP` grants
+  neither. `/permissions` reports both rights for each environment. If your own `authorize` returns
+  true for every action other than `read`, it now grants `promote` and `approve` too. Check it
+  before turning environments on.
 - **Ownership and audit.** Under per-tag ownership, a promotion is checked like a pin, by what it
   changes. Every promotion, approval and rejection is an audit event carrying its `environment`.
 - **Storage.** Both bundled stores keep environments: memory, and the file store's `refs/` and
