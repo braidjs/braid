@@ -174,6 +174,15 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
   [audit export](./registry.md#audit-export)).
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
+- **On its own origin.** Serve the standalone console and the registry API from a dedicated origin
+  (`registry.example.com`), not the origin your composed pages are on. Sign-in tokens are kept in
+  `sessionStorage`, and any script on the same origin (a pierced fragment, a served shell) can open
+  the console in a window and read them. The built `index.html` carries a Content-Security-Policy
+  that only lets its own bundle run; add `frame-ancestors 'none'` as a response header (a meta tag
+  can't carry it), and narrow `connect-src` to your API and issuer there if you can.
+- **Hardened API.** Set `endpointOrigins` on the registry API so fragment endpoints can only point
+  where you allow, and `paths` on `shellDocuments` so served shells can only answer the parts of the
+  site you allow (see [the write API](./registry.md#the-write-api)).
 
 ---
 
