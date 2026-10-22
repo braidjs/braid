@@ -1,3 +1,68 @@
+## 0.4.0 (2026-10-22)
+
+### 🚀 Features
+
+- **cli:** read the registry from a module with --source ([6ff452c](https://github.com/braidjs/braid/commit/6ff452c))
+- **console:** query language and stable tag colors ([fbb81c1](https://github.com/braidjs/braid/commit/fbb81c1))
+- **console:** generate host code for a shell in four frameworks ([136abb7](https://github.com/braidjs/braid/commit/136abb7))
+- **console:** shells on the composition map ([f92c238](https://github.com/braidjs/braid/commit/f92c238))
+- **console:** shell designer, history and rollback, and setup states ([de117d9](https://github.com/braidjs/braid/commit/de117d9))
+- **console:** Shells and History tabs, and OIDC sign-in for the standalone app ([b0e5239](https://github.com/braidjs/braid/commit/b0e5239))
+- **console:** mock Okta demo mode, seeded shell, and topology fixes ([90cd2c0](https://github.com/braidjs/braid/commit/90cd2c0))
+- **core:** share named host globals with trusted fragments ([db93c14](https://github.com/braidjs/braid/commit/db93c14))
+- **core:** share host globals with custom-element fragments ([32d18aa](https://github.com/braidjs/braid/commit/32d18aa))
+- **gateway:** decide credential forwarding per fragment ([d6c0195](https://github.com/braidjs/braid/commit/d6c0195))
+- **gateway:** cut off fragment requests that loop through gateways ([b41bb9d](https://github.com/braidjs/braid/commit/b41bb9d))
+- **gateway:** pierce a page's routed fragment into an outlet slot ([8cdd204](https://github.com/braidjs/braid/commit/8cdd204))
+- **gateway,registry:** hot re-pin — serve a new pin without a restart ([d0b52ec](https://github.com/braidjs/braid/commit/d0b52ec))
+- **gateway,registry:** serve shells straight from their definition ([fda09e4](https://github.com/braidjs/braid/commit/fda09e4))
+- **registry:** shells as data in snapshots, with ASCII grid layouts ([c9ee9de](https://github.com/braidjs/braid/commit/c9ee9de))
+- **registry:** verified publisher, conflict check, permissions, and pin enforcement ([c7ab920](https://github.com/braidjs/braid/commit/c7ab920))
+- **registry:** OIDC authorizer for the registry API (Okta and any JWKS issuer) ([021bdca](https://github.com/braidjs/braid/commit/021bdca))
+- **registry:** compose team gateways into an org supergraph ([51713d4](https://github.com/braidjs/braid/commit/51713d4))
+- **registry:** audit export — one event per attempted write, for a SIEM ([a37a55d](https://github.com/braidjs/braid/commit/a37a55d))
+- **registry,console:** per-tag ownership — teams change only what carries their tag ([5b8f2bc](https://github.com/braidjs/braid/commit/5b8f2bc))
+- **registry,console:** environments with promotion and approvals ([719a999](https://github.com/braidjs/braid/commit/719a999))
+- **registry,console:** GitOps — publish by pull request ([c58ce0b](https://github.com/braidjs/braid/commit/c58ce0b))
+
+### 🩹 Fixes
+
+- one-line grid templates pasted from CSS, and half-typed query keys ([38d1b8a](https://github.com/braidjs/braid/commit/38d1b8a))
+- stale HEAD after rollback, 401-only re-sign-in, mixed-row grid parsing ([d537aa9](https://github.com/braidjs/braid/commit/d537aa9))
+- **cli:** keep --source runs from borrowing braid.config ([3ec4b2f](https://github.com/braidjs/braid/commit/3ec4b2f))
+- **console:** HEAD badge spacing and a note on the plain-JS bare import ([1027451](https://github.com/braidjs/braid/commit/1027451))
+- **console:** close codegen escapes, keep drafts, renew sessions, lazy panels ([3282093](https://github.com/braidjs/braid/commit/3282093))
+- **core:** validate shared-global grants and pin boot order ([afaa3a2](https://github.com/braidjs/braid/commit/afaa3a2))
+- **deps:** refresh in-range transitive dependencies with known CVEs ([b0a28bd](https://github.com/braidjs/braid/commit/b0a28bd))
+- **deps:** upgrade Angular 22.2, Nx 23.3 and Nest to clear critical/high CVEs ([5da8ead](https://github.com/braidjs/braid/commit/5da8ead))
+- **deps:** clear three high advisories published since the last audit ([695cbf9](https://github.com/braidjs/braid/commit/695cbf9))
+- **docs:** contain mermaid render failures inside the diagram's component ([f846669](https://github.com/braidjs/braid/commit/f846669))
+- **gateway:** keep credentials off websocket upgrades unless forwarded ([c8385f7](https://github.com/braidjs/braid/commit/c8385f7))
+- **gateway:** name a proxied fragment once, not once per gateway ([ad2a098](https://github.com/braidjs/braid/commit/ad2a098))
+- **gateway:** close the remaining credential and loop gaps ([6150a10](https://github.com/braidjs/braid/commit/6150a10))
+- **gateway:** keep a late named slot from booting a second copy of the outlet's fragment ([d1f4ec1](https://github.com/braidjs/braid/commit/d1f4ec1))
+- ⚠️  **gateway:** quiet unchanged reloads, and keep realm stubs off the boot path ([715c773](https://github.com/braidjs/braid/commit/715c773))
+- **gateway,registry:** bound what a served shell may claim and load ([51524b7](https://github.com/braidjs/braid/commit/51524b7))
+- **registry:** harden shells, OIDC and the write API after review ([c46e4c2](https://github.com/braidjs/braid/commit/c46e4c2))
+- **registry:** bound what a subgraph's registry can declare ([8fde69f](https://github.com/braidjs/braid/commit/8fde69f))
+- **registry:** audit every write path, and keep the webhook sink calm in an outage ([1632622](https://github.com/braidjs/braid/commit/1632622))
+- **registry,console:** close ownership's race, route and input gaps ([a73f42c](https://github.com/braidjs/braid/commit/a73f42c))
+- **registry,console:** make four-eyes approval hold ([6660784](https://github.com/braidjs/braid/commit/6660784))
+- **registry,console:** GitOps publishing survives republish, size and hostile text ([cd7c9fb](https://github.com/braidjs/braid/commit/cd7c9fb))
+- **security:** address review — vue/Nest fixes, isolate and fail-closed scanner ([5f81329](https://github.com/braidjs/braid/commit/5f81329))
+
+### ⚠️  Breaking Changes
+
+- **gateway:** quiet unchanged reloads, and keep realm stubs off the boot path  ([715c773](https://github.com/braidjs/braid/commit/715c773))
+  BraidGateway gains required refreshRegistry() and
+  close(), Breaker gains required forget(), and TelemetryEvent gains the
+  'registry' kind. Code that implements or mocks BraidGateway or Breaker,
+  or switches exhaustively over TelemetryEvent kinds, must add them.
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.3.0 (2026-10-14)
 
 ### 🩹 Fixes
