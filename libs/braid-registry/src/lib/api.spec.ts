@@ -232,6 +232,26 @@ describe('registry write API', () => {
       }
     });
 
+    it('refuses an endpoint outside endpointOrigins, which the gateway would open to the internet', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, endpointOrigins: ['https://billing.internal'] });
+
+      const refused = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'admin', endpoint: 'http://internal-admin:8080/' }] }));
+
+      expect(refused!.status).toBe(422);
+      expect((await refused!.json()).findings).toEqual([
+        expect.objectContaining({ code: 'endpoint-not-allowed', fragmentIds: ['admin'], severity: 'error' }),
+      ]);
+      expect(await store.list()).toEqual([]);
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
+    it('refuses a misconfigured endpointOrigins at startup', () => {
+      for (const origin of ['billing.internal', 'https://billing.internal/path']) {
+        expect(() => createRegistryApi({ store: memorySnapshotStore(), authorize: allow, endpointOrigins: [origin] })).toThrow(/must be an origin/);
+      }
+    });
+
     it('refuses a publish whose base is stale, and says where HEAD is', async () => {
       const store = memorySnapshotStore();
       const api = createRegistryApi({ store, authorize: allow });

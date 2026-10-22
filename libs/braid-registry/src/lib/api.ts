@@ -61,6 +61,15 @@ export interface RegistryApiOptions {
   fetchDescriptors?: boolean;
   fetch?: typeof fetch;
   /**
+   * Origins a fragment's URL endpoint may be on, e.g. `['https://billing.internal']`. A publish
+   * with an endpoint anywhere else is refused (422, `endpoint-not-allowed`). Omit to allow any.
+   *
+   * Worth setting whenever publishers are not all trusted operators: the gateway proxies
+   * `/__braid/frag/:id/*` to a fragment's endpoint, so whoever registers one decides what part of
+   * the internal network that path opens to the internet.
+   */
+  endpointOrigins?: readonly string[];
+  /**
    * Where audit events go — one per attempted write, whether it succeeded, was refused for lack of
    * rights, or was rejected by the server. Reads are not audited. See `audit.ts` for the event and
    * the `jsonLinesAuditSink` and `webhookAuditSink` helpers.
@@ -198,6 +207,17 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     }
     if (environment.approvals && !identify) {
       throw new Error(`braid-registry: environment "${environment.name}" requires approval, which needs identify — an approval must come from someone other than the requester`);
+    }
+  }
+  for (const origin of options.endpointOrigins ?? []) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      // reported below
+    }
+    if (!parsed || parsed.origin !== origin.replace(/\/+$/, '')) {
+      throw new Error(`braid-registry: endpointOrigins entry "${origin}" must be an origin like https://billing.internal`);
     }
   }
   if (environments.size > 0 && (!store.ref || !store.setRef || !store.refLog || !store.pending || !store.setPending)) {
@@ -430,7 +450,10 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
 
     // Carried-forward shells are validated too: deleting a fragment a shell still slots is refused
     // here, by name, rather than publishing a shell with a hole in it.
-    const findings = validateRegistry(manifests, { shells });
+    const findings = validateRegistry(manifests, {
+      shells,
+      ...(options.endpointOrigins ? { endpointOrigins: options.endpointOrigins } : {}),
+    });
     if (findings.some((finding) => finding.severity === 'error')) {
       // Nothing is written, so nothing needs undoing — the snapshot model makes refusal cheap.
       return json({ error: 'the registry has errors and was not published', findings, descriptorNotes }, 422);
