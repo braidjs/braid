@@ -61,7 +61,9 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
     let current = true;
     fetchPermissions(api).then(
       (result) => current && setPermissions(result),
-      () => current && setPermissions(null),
+      // A failed refetch keeps what was known: dropping to null would hide the Edit tab and unmount
+      // the editor, discarding its draft over a blip.
+      () => undefined,
     );
     fetchHead(api).then(
       (head) => current && setShells(head.snapshot?.shells ?? []),

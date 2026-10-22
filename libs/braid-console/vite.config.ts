@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
  * `script-src 'self'` is the point: only the hashed bundle runs, so markup that reached the page
  * some other way cannot execute. Styles stay inline-capable because the console injects one
  * scoped stylesheet and positions the layout preview with style attributes. `connect-src` allows
- * any https origin because the API and the OIDC issuer are runtime configuration — one artifact
+ * any origin because the API and the OIDC issuer are runtime configuration — one artifact
  * serves every environment — so tighten it, and add `frame-ancestors 'none'` (which a meta tag
  * cannot carry), with a response header where the console is served.
  *
@@ -19,8 +19,9 @@ export const CONSOLE_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https:",
-  "frame-src 'none'",
+  "connect-src 'self' https: http:",
+  // oidc-client-ts renews in a hidden iframe on the issuer when it holds no refresh token
+  "frame-src 'self' https: http:",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'self'",

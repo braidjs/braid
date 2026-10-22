@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RegistryPermissions, SnapshotRef } from '@braidlabs/registry';
 import {
   approvePromotion,
@@ -81,6 +81,9 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // The listing an older page belongs to; a reload in the meantime makes the page stale.
+  const listing = useRef(0);
+  listing.current = reloadToken;
 
   /** Appends the next older page. Rollback is only as far back as the history the panel can show. */
   const loadOlder = async () => {
@@ -88,7 +91,9 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
     setLoadingOlder(true);
     setError(null);
     try {
+      const startedOn = listing.current;
       const page = await listSnapshots(api, undefined, { before: state.next });
+      if (listing.current !== startedOn) return;
       setState((current) =>
         current.status === 'ready' ? { ...current, items: [...current.items, ...page.items], next: page.next ?? null } : current,
       );
