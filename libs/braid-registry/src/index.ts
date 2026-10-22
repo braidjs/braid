@@ -22,7 +22,10 @@ export { memorySnapshotStore, toRef } from './lib/store.js';
 export type { SnapshotStore, SnapshotRef } from './lib/store.js';
 
 export { snapshotRegistry } from './lib/source.js';
-export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.js';
+export type { SnapshotRegistryOptions, SnapshotDiagnostic, SnapshotRegistrySource } from './lib/source.js';
+
+export { renderShellDocument, shellDocuments } from './lib/shell-render.js';
+export type { RenderShellOptions, ShellDocumentsOptions } from './lib/shell-render.js';
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
 

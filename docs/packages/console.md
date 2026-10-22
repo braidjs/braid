@@ -62,9 +62,11 @@ The **Code** tab generates the host for each framework a shell can be:
 | Angular SSR | the Angular files plus `server.ts` with the gateway mounted in front of the SSR handler |
 | Plain JS | one HTML page per route with `<fragment-slot>`s |
 
-Every value is escaped for where it lands. Today the framework decides which code you get. The
-gateway still serves the HTML your shell app returns, and serving shells straight from the
-definition is planned.
+Every value is escaped for where it lands. A **Plain JS** shell needs no code at all: the gateway
+can serve it straight from its definition, so publishing it puts the page live with no rebuild (see
+[serving shells from their definition](./registry.md#serving-shells-from-their-definition)). For
+the other frameworks, the code is yours to build and serve, and the gateway pierces fragments into
+what your app returns.
 
 ---
 
@@ -173,9 +175,8 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
 
-Planned: the gateway serving shells from their definition with no rebuild, named
-environments with promotion and approvals, a GitOps mode that opens a pull request instead of
-publishing, and per-tag ownership in RBAC.
+Planned: named environments with promotion and approvals, a GitOps mode that opens a pull request
+instead of publishing, and per-tag ownership in RBAC.
 
 ---
 
