@@ -198,11 +198,11 @@ describe('one bad subscriber', () => {
 
 
 describe('late subscribers', () => {
-  it('replays the current value to a subscriber that asks, then every later change', () => {
+  it('replays the current value to a new subscriber, then every later change', () => {
     braidContext.set('session', { userId: 'u1' });
     const seen = vi.fn();
 
-    braidContext.subscribe('session', seen, { replay: true });
+    braidContext.subscribe('session', seen);
     expect(seen).toHaveBeenCalledTimes(1);
     expect(seen).toHaveBeenLastCalledWith({ userId: 'u1' });
 
@@ -216,21 +216,23 @@ describe('late subscribers', () => {
     braidContext.set('instrument', { ticker: 'IBM', market: 'XNYS' });
     const behind = vi.fn();
 
-    braidContext.subscribe('instrument', behind, { as: 1, replay: true });
+    braidContext.subscribe('instrument', behind, { as: 1 });
 
     expect(behind).toHaveBeenCalledWith({ ticker: 'IBM' });
   });
 
-  it('replays nothing for a key with no value yet, and nothing without asking', () => {
+  it('replays nothing for a key with no value yet, or when told not to', () => {
     braidContext.set('session', { userId: 'u1' });
-    const unasked = vi.fn();
+    const optedOut = vi.fn();
     const empty = vi.fn();
 
-    braidContext.subscribe('session', unasked);
-    braidContext.subscribe('promo', empty, { replay: true });
+    braidContext.subscribe('session', optedOut, { replay: false });
+    braidContext.subscribe('promo', empty);
 
-    expect(unasked).not.toHaveBeenCalled();
+    expect(optedOut).not.toHaveBeenCalled();
     expect(empty).not.toHaveBeenCalled();
+    braidContext.set('session', { userId: 'u2' });
+    expect(optedOut).toHaveBeenCalledWith({ userId: 'u2' });
   });
 
   it('isolates a listener that throws on replay, and keeps it subscribed', () => {
@@ -265,5 +267,16 @@ describe('late subscribers', () => {
     braidContext.set('session', { userId: 'u2' });
 
     expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('lets a listener stop itself through its signal, even on the replayed value', () => {
+    braidContext.set('job', { finished: true });
+    const stop = new AbortController();
+    const seen = vi.fn((job: { finished: boolean }) => job.finished && stop.abort());
+
+    braidContext.subscribe('job', seen as (value: unknown) => void, { signal: stop.signal });
+    braidContext.set('job', { finished: true });
+
+    expect(seen).toHaveBeenCalledTimes(1);
   });
 });

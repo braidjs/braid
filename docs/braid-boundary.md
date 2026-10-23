@@ -122,7 +122,7 @@ const session = await connectToBraidHost({
   contract: { version: '1.0.0', requires: { host: '>=1.4.0' } },
 });
 
-session.context.subscribe('user', renderUser, { replay: true }); // the current user now, then changes
+session.context.subscribe('user', renderUser); // the current user now, then changes
 session.onClosing(() => flushImpressions());
 session.emit('impression', { slot: 'sidebar' });
 ```

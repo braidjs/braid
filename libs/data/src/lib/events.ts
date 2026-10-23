@@ -2,14 +2,18 @@ import type { VersionedSchema } from '@braidlabs/skew';
 import { drainOutbox, type FlushResult } from './flush.js';
 import { sharedInvalidator, type BroadcastChannelLike, type Invalidator } from './invalidation.js';
 import { createOutbox, type Outbox } from './outbox.js';
-import type { RecordDriver } from './record-store.js';
+import { storageKey, type RecordDriver } from './record-store.js';
 import type { Conflict, ConflictPolicy } from './query.js';
 import {
   createIntentRegistry,
+  NoIntentHandlerError,
+  type IntentCandidate,
   type IntentHandlerOptions,
   type IntentRegistry,
   type IntentResult,
+  type LocalIntentHandler,
   type RaiseOptions,
+  type RemoteIntentHandler,
 } from './intents.js';
 
 /**
@@ -85,6 +89,11 @@ export interface EventBusOptions {
    * channel stays within this bus unless one is named here.
    */
   page?: string;
+  /**
+   * How long a raised intent waits for a handler in another context to answer before it fails.
+   * Defaults to 30 seconds. A context that closes answers its pending calls at once.
+   */
+  intentTimeoutMs?: number;
   /** Attempts before a queued event is abandoned. */
   maxAttempts?: number;
   /** Never silent: retention drops and abandoned handlers are reported here. */
@@ -122,6 +131,17 @@ export interface ChannelOptions {
    * different partition, and then none of this applies because the storage differs too.
    */
   entity?: string;
+  /**
+   * Keep this channel's state across reloads, in the bus's `driver`: the last value this context
+   * broadcast is stored, and a bus that opens the channel later — after a reload, with no other
+   * context alive to ask — starts from it. Stored per partition, as a versioned envelope when a
+   * contract is registered for the channel, so a newer or older build reads it at its own version.
+   *
+   * A stored value is a fallback, not the truth: a value broadcast since, or a fresher one another
+   * context holds, wins over it. Needs a `driver`, and is refused without one rather than quietly
+   * not persisting.
+   */
+  persist?: boolean;
 }
 
 export interface SubscribeOptions {
@@ -166,6 +186,14 @@ export interface EventBus extends Pick<IntentRegistry, 'candidates'> {
 }
 
 const EVENT_COLLECTION = 'skew-events';
+/** Where `persist` channels keep their state between reloads: one record per channel per partition. */
+const STATE_COLLECTION = 'skew-channel-state';
+
+/**
+ * The collections an event bus writes to its `driver`: durable event queues and persisted channel
+ * state. A driver that must declare its collections up front — IndexedDB — needs these among them.
+ */
+export const EVENT_BUS_COLLECTIONS = [EVENT_COLLECTION, STATE_COLLECTION] as const;
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_DEPTH = 500;
 
@@ -178,10 +206,22 @@ const runnerId = (channel: string, type: string) => `event:${channel}:${type}`;
 
 /** What crosses a channel's wire between contexts. */
 type WireMessage =
-  | { kind: 'state'; value: unknown }
+  | { kind: 'state'; value: unknown; at: number }
   | { kind: 'event'; event: BusEvent }
   | { kind: 'state-request'; request: string }
-  | { kind: 'state-reply'; request: string; value: unknown };
+  | { kind: 'state-reply'; request: string; value: unknown; at: number };
+
+/** How long a new bus's directory of other realms' intent handlers may take to fill. */
+const INTENT_DISCOVERY_MS = 100;
+
+/** What crosses a page's intents wire: each bus's handlers, and calls to run one. */
+type IntentWireMessage =
+  | { kind: 'intents-hello'; from: string }
+  | { kind: 'intents-list'; from: string; handlers: LocalIntentHandler[] }
+  | { kind: 'intents-bye'; from: string }
+  | { kind: 'intent-call'; call: string; from: string; to: string; handler: string; payload: unknown }
+  | { kind: 'intent-return'; call: string; from: string; to: string; ok: true; result: unknown }
+  | { kind: 'intent-return'; call: string; from: string; to: string; ok: false; error: string; name?: string };
 
 /**
  * How long a context that holds state it did not publish waits before answering a state request,
@@ -249,6 +289,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
     published: unknown;
     /** Whether any state has been set here or heard from elsewhere, `undefined` included. */
     heard: boolean;
+    /** Whether the current state was set live — here, or broadcast by another context — rather than caught up. */
+    live: boolean;
+    /** When the current state was set, by its publisher's clock; how a caught-up value is judged. */
+    at: number | undefined;
     /** Whether the current state is this context's own broadcast, so it answers requests at once. */
     authored: boolean;
     /** The request this context sent for state, until it is answered or state arrives otherwise. */
@@ -299,7 +343,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * channel used only for events never asks.
    */
   function askForState(channel: ChannelState): void {
-    if (!channel.wire || channel.heard || channel.asked !== undefined) return;
+    if (!channel.wire || channel.live || channel.asked !== undefined) return;
     channel.asked = crypto.randomUUID();
     post(channel, { kind: 'state-request', request: channel.asked });
   }
@@ -308,7 +352,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     if (!channel.heard || channel.state === undefined || channel.replying.has(request) || channel.answered.has(request)) return;
     const reply = () => {
       channel.replying.delete(request);
-      post(channel, { kind: 'state-reply', request, value: channel.state });
+      post(channel, { kind: 'state-reply', request, value: channel.state, at: channel.at ?? 0 });
     };
     if (channel.authored) return reply();
     const timer = setTimeout(reply, Math.random() * FALLBACK_REPLY_MS);
@@ -321,7 +365,17 @@ export function createEventBus(options: EventBusOptions): EventBus {
     // registered under the logical name, because every fund's selection has the same shape.
     const key = channelOptions.entity ? `${name}@${channelOptions.entity}` : name;
     const existing = channels.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // the first call decides a channel's reach and storage; a later one asking for different
+      // ones would otherwise get them silently ignored
+      if ((existing.options.scope ?? 'page') !== (channelOptions.scope ?? 'page') || Boolean(existing.options.persist) !== Boolean(channelOptions.persist)) {
+        throw new TypeError(
+          `[skew/data] channel "${key}" is already open with scope "${existing.options.scope ?? 'page'}"` +
+            `${existing.options.persist ? ' and persist' : ''}; open it with the same options everywhere in this context`,
+        );
+      }
+      return existing;
+    }
 
     const scope = channelOptions.scope ?? 'page';
     const wire = scope === 'origin' ? openWire(key) : page === undefined ? undefined : openWire(`page:${page}:${key}`);
@@ -332,6 +386,8 @@ export function createEventBus(options: EventBusOptions): EventBus {
       state: undefined,
       published: undefined,
       heard: false,
+      live: false,
+      at: undefined,
       authored: false,
       replying: new Map(),
       answered: new Set(),
@@ -344,7 +400,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     // another context — no de-duplication needed, which is the same property invalidation relies on.
     wire?.addEventListener('message', (event) => {
       const message = event.data as WireMessage | undefined;
-      if (message?.kind === 'state') applyState(created, message.value, { local: false });
+      if (message?.kind === 'state') applyState(created, message.value, { local: false, at: message.at });
       if (message?.kind === 'event' && message.event) deliverLive(message.event);
       // A context that reads the channel after its state was set asks for it once (askForState).
       if (message?.kind === 'state-request') answer(created, message.request);
@@ -355,13 +411,14 @@ export function createEventBus(options: EventBusOptions): EventBus {
         created.answered.add(message.request);
         // a few recent ones are enough: a request is answered within FALLBACK_REPLY_MS
         if (created.answered.size > 64) created.answered.delete(created.answered.values().next().value as string);
-        // Only the asker takes it, and only while it still has heard nothing: a reply that arrives
-        // after a newer broadcast, or after state was cleared, must not set it back.
-        if (message.request === created.asked && !created.heard) applyState(created, message.value, { local: false });
+        // Only the asker takes it, and only as a catch-up: a reply that arrives after a newer
+        // broadcast, or after state was cleared, must not set it back.
+        if (message.request === created.asked) catchUp(created, message.value, message.at);
       }
     });
 
     channels.set(key, created);
+    if (channelOptions.persist) restore(created);
     return created;
   }
 
@@ -372,7 +429,11 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * news, not a disagreement. Two publishers racing end in last-write-wins, and the policy decides
    * whether anyone is told — the same contract, and the same words, as a mutation's confirmation.
    */
-  function applyState(channel: ChannelState, value: unknown, { local }: { local: boolean }): void {
+  function applyState(
+    channel: ChannelState,
+    value: unknown,
+    { local, at = Date.now(), live = true }: { local: boolean; at?: number; live?: boolean },
+  ): void {
     const previous = channel.published;
     let stored = value;
 
@@ -390,8 +451,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
     channel.state = stored;
     channel.heard = true;
+    channel.live = channel.live || live;
+    channel.at = at;
     channel.authored = local;
-    channel.asked = undefined;
+    if (live) channel.asked = undefined;
     if (local) channel.published = stored;
 
     for (const subscription of [...channel.stateListeners]) {
@@ -403,6 +466,85 @@ export function createEventBus(options: EventBusOptions): EventBus {
         options.onEventError?.(`[skew/data] a "${channel.name}" state subscriber threw`, error);
       }
     }
+  }
+
+  /**
+   * A value from somewhere other than a live broadcast — a peer's answer to a state request, or
+   * what was stored before a reload. Taken only while nothing live has arrived, and only when it is
+   * newer than what this context already caught up to.
+   */
+  function catchUp(channel: ChannelState, value: unknown, at: number): void {
+    if (channel.live || (channel.at !== undefined && at <= channel.at)) return;
+    applyState(channel, value, { local: false, at, live: false });
+  }
+
+  function storedId(channel: ChannelState): string {
+    return storageKey(partition(), channel.key);
+  }
+
+  /**
+   * Writes the channel's state to the driver. Runs after the value has reached this context's
+   * subscribers, and never throws: a value that cannot be stored — not cloneable, no active
+   * partition, a failing driver — is reported, not allowed to undo a broadcast that already happened.
+   */
+  function store(channel: ChannelState): void {
+    const report = (error: unknown) => options.onEventError?.(`[skew/data] "${channel.name}" state could not be stored`, error);
+    try {
+      const driver = options.driver!;
+      const id = storedId(channel);
+      const write =
+        channel.state === undefined
+          ? driver.delete(STATE_COLLECTION, id)
+          : driver.put(STATE_COLLECTION, {
+              id,
+              key: channel.key,
+              partition: partition(),
+              seq: channel.at ?? Date.now(),
+              envelope: envelopeOf(channel.name, channel.state),
+              owner: options.consumer,
+            });
+      write.catch(report);
+    } catch (error) {
+      report(error);
+    }
+  }
+
+  function restore(channel: ChannelState): void {
+    let id: string;
+    try {
+      id = storedId(channel);
+    } catch (error) {
+      options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, error);
+      return;
+    }
+    options
+      .driver!.get(STATE_COLLECTION, id)
+      .then((record) => {
+        if (!record) return;
+        const value = valueOf(channel.name, record.envelope);
+        if (value.ok) catchUp(channel, value.value, record.seq);
+        else options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, value.error);
+      })
+      .catch((error: unknown) => options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, error));
+  }
+
+  /** The stored form: a versioned envelope under the channel's contract, when it has one. */
+  function envelopeOf(type: string, value: unknown) {
+    const schema = schemas.get(type);
+    // without a contract, written as v1 — what a contract registered later reads it as
+    return schema ? schema.write(value) : { v: 1, payload: structuredClone(value) };
+  }
+
+  function valueOf(type: string, envelope: { v: number; n?: string; payload: unknown }): { ok: true; value: unknown } | { ok: false; error: unknown } {
+    const schema = schemas.get(type);
+    if (!schema && envelope.n !== undefined) {
+      // written under a contract this build has not registered (yet): handing over the raw payload
+      // could give it a shape from another version
+      return { ok: false, error: new Error(`stored under the "${envelope.n}" contract; register it before opening the channel`) };
+    }
+    if (!schema) return { ok: true, value: envelope.payload };
+    const result = schema.read(envelope);
+    return result.ok ? { ok: true, value: result.value } : { ok: false, error: result };
   }
 
   /** Fan-out to handlers in this context. Used by at-most-once, and by the queue drain. */
@@ -546,13 +688,210 @@ export function createEventBus(options: EventBusOptions): EventBus {
     });
   }
 
+  /**
+   * Intents across this page's realms. Each bus announces its own handlers and keeps a directory of
+   * everyone else's, so `candidates()` stays synchronous; a raise that picks a handler in another
+   * realm calls it over the wire. Page scope only: an intent is "somebody on this page handle
+   * this", and a handler in another tab is not on the page.
+   */
+  const busId = crypto.randomUUID();
+  // `#` keeps it apart from a page-scoped channel that happens to be named "intents"
+  const intentWire = page === undefined ? undefined : openWire(`page:${page}:#intents`);
+  const directory = new Map<string, LocalIntentHandler[]>();
+  const calls = new Map<string, { to: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  const intentTimeoutMs = options.intentTimeoutMs ?? 30_000;
+  let intentsClosed = false;
+
+  function sendIntents(message: IntentWireMessage): void {
+    if (intentsClosed && message.kind !== 'intents-bye') return;
+    try {
+      intentWire?.postMessage(message);
+    } catch (error) {
+      options.onEventError?.('[skew/data] an intent message could not be sent to other contexts', error);
+    }
+  }
+
+  /** Several registrations in one task — a fragment mounting — are announced once. */
+  let announcing = false;
+  function announce(): void {
+    if (announcing) return;
+    announcing = true;
+    queueMicrotask(() => {
+      announcing = false;
+      sendIntents({ kind: 'intents-list', from: busId, handlers: intents.local() });
+    });
+  }
+
+  /**
+   * Another realm's handlers, as far as they can be read. Any same-origin script on the page can
+   * write to the wire, so an entry of the wrong shape is dropped rather than allowed to break every
+   * raise on the page.
+   */
+  function readHandlers(handlers: unknown): LocalIntentHandler[] {
+    if (!Array.isArray(handlers)) return [];
+    return handlers.filter(
+      (handler): handler is LocalIntentHandler =>
+        typeof handler === 'object' &&
+        handler !== null &&
+        typeof handler.id === 'string' &&
+        typeof handler.intent === 'string' &&
+        typeof handler.consumer === 'string' &&
+        typeof handler.label === 'string' &&
+        Number.isFinite(handler.priority) &&
+        (handler.as === undefined || Number.isInteger(handler.as)),
+    );
+  }
+
+  function remoteHandlers(intent: string): RemoteIntentHandler[] {
+    return [...directory].flatMap(([source, handlers]) =>
+      handlers
+        .filter((handler) => handler.intent === intent)
+        .map(({ id, ...candidate }) => ({ ...candidate, source, run: (payload: unknown) => callRemote(source, id, payload, candidate) })),
+    );
+  }
+
+  /** A realm that no longer answers — crashed, frozen, gone without a word — is dropped, and its calls fail now. */
+  function forget(source: string, reason: string): void {
+    directory.delete(source);
+    for (const [call, pending] of calls) {
+      if (pending.to === source) settle(call, { ok: false, error: new Error(`[skew/data] ${reason}`) });
+    }
+  }
+
+  function callRemote(to: string, handler: string, payload: unknown, candidate: IntentCandidate): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const call = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        calls.delete(call);
+        reject(new Error(`[skew/data] the "${candidate.intent}" handler in ${candidate.consumer} did not answer within ${intentTimeoutMs}ms`));
+        // a realm that cannot answer one call will not answer the next: stop offering its handlers
+        forget(to, `the context handling "${candidate.intent}" stopped answering`);
+      }, intentTimeoutMs);
+      (timer as unknown as { unref?: () => void }).unref?.();
+      calls.set(call, { to, resolve, reject, timer });
+      try {
+        intentWire!.postMessage({ kind: 'intent-call', call, from: busId, to, handler, payload } satisfies IntentWireMessage);
+      } catch (error) {
+        clearTimeout(timer);
+        calls.delete(call);
+        // `cause` set by hand: Angular builds of this package compile against a lib without Error options
+        reject(Object.assign(new Error(`[skew/data] the "${candidate.intent}" payload could not be sent to ${candidate.consumer}`), { cause: error }));
+      }
+    });
+  }
+
+  function settle(call: string, outcome: { ok: true; result: unknown } | { ok: false; error: Error }): void {
+    const pending = calls.get(call);
+    if (!pending) return;
+    calls.delete(call);
+    clearTimeout(pending.timer);
+    if (outcome.ok) pending.resolve(outcome.result);
+    else pending.reject(outcome.error);
+  }
+
+  /** Runs a call from another realm and answers it. Never throws: the answer is the only output. */
+  function answerCall(message: Extract<IntentWireMessage, { kind: 'intent-call' }>): void {
+    const reply = (outcome: { ok: true; result: unknown } | { ok: false; error: string; name?: string }) => {
+      if (intentsClosed) return;
+      try {
+        intentWire?.postMessage({ kind: 'intent-return', call: message.call, from: busId, to: message.from, ...outcome } as IntentWireMessage);
+      } catch (error) {
+        sendIntents({
+          kind: 'intent-return',
+          call: message.call,
+          from: busId,
+          to: message.from,
+          ok: false,
+          error: `the handler's result could not be sent back: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    };
+    intents
+      .runLocal(message.handler, message.payload)
+      .then(
+        (result) => reply({ ok: true, result }),
+        (error: unknown) =>
+          reply({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof Error ? { name: error.name } : {}) }),
+      )
+      .catch((error: unknown) => options.onEventError?.('[skew/data] an intent call could not be answered', error));
+  }
+
+  intentWire?.addEventListener('message', (event) => {
+    const message = event.data as IntentWireMessage | undefined;
+    if (intentsClosed || typeof message !== 'object' || message === null || typeof (message as { from?: unknown }).from !== 'string') return;
+    try {
+      switch (message.kind) {
+        case 'intents-hello':
+          // a context that just arrived: tell it what is here
+          if (intents.local().length > 0) announce();
+          return;
+        case 'intents-list': {
+          const handlers = readHandlers(message.handlers);
+          if (handlers.length > 0) directory.set(message.from, handlers);
+          else directory.delete(message.from);
+          return;
+        }
+        case 'intents-bye':
+          forget(message.from, 'the context handling this intent closed');
+          return;
+        case 'intent-call':
+          if (message.to === busId && typeof message.call === 'string' && typeof message.handler === 'string') answerCall(message);
+          return;
+        case 'intent-return': {
+          // only the realm the call went to can answer it
+          if (message.to !== busId || calls.get(message.call)?.to !== message.from) return;
+          const error = message.ok
+            ? undefined
+            : message.name === 'NoIntentHandlerError'
+              ? new NoIntentHandlerError(message.error, [])
+              : new Error(message.error);
+          settle(message.call, error ? { ok: false, error } : { ok: true, result: (message as { result: unknown }).result });
+          return;
+        }
+      }
+    } catch (error) {
+      options.onEventError?.('[skew/data] an intent message from another context could not be handled', error);
+    }
+  });
+
   const intents = createIntentRegistry({
     consumer: options.consumer,
     // Intents project through the same registered contracts state and events do, so an application
     // declares a shape once and every path respects it.
     schemaFor: (intent) => schemas.get(intent),
     ...(options.onEventError === undefined ? {} : { onEventError: options.onEventError }),
+    ...(intentWire ? { remote: remoteHandlers, onChange: announce } : {}),
   });
+  sendIntents({ kind: 'intents-hello', from: busId });
+  /** Until then, other realms' answers to the hello may still be on their way. */
+  const directoryReadyAt = intentWire ? Date.now() + INTENT_DISCOVERY_MS : 0;
+
+  /**
+   * A raise in the bus's first moments that finds nobody waits for the directory before choosing,
+   * so a fragment that raises as it mounts is not told "nothing can handle this" while the other
+   * realms' answers are still in flight. It waits *before* running anything, so no handler runs twice.
+   */
+  async function raiseIntent<R>(intent: string, payload: unknown, raiseOptions?: RaiseOptions): Promise<IntentResult<R>> {
+    const wait = directoryReadyAt - Date.now();
+    if (wait > 0 && intents.candidates(intent).eligible.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    return intents.raiseIntent<R>(intent, payload, raiseOptions);
+  }
+
+  // A realm going away — its iframe removed, the tab closing, or entering the back-forward cache —
+  // says so; one coming back from that cache says hello again.
+  const sayBye = () => sendIntents({ kind: 'intents-bye', from: busId });
+  const sayHelloAgain = (event: Event) => {
+    if (!(event as PageTransitionEvent).persisted) return;
+    sendIntents({ kind: 'intents-hello', from: busId });
+    if (intents.local().length > 0) announce();
+  };
+  const listensToPage = Boolean(intentWire) && typeof window !== 'undefined' && typeof window.addEventListener === 'function';
+  if (listensToPage) {
+    window.addEventListener('pagehide', sayBye);
+    window.addEventListener('pageshow', sayHelloAgain);
+  }
 
   // Woken by any context that queued something for us — including our own emit.
   const stopWaking = invalidator.subscribe(
@@ -562,6 +901,12 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
   return {
     channel<S>(name: string, channelOptions: ChannelOptions = {}): Channel<S> {
+      if (channelOptions.persist && !options.driver) {
+        throw new TypeError(
+          `[skew/data] channel "${name}" asks to persist its state, which needs a \`driver\` on the bus — ` +
+            'without one it would quietly forget on reload',
+        );
+      }
       const channel = channelState(name, channelOptions);
 
       return {
@@ -569,7 +914,8 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
         broadcast(value: S): void {
           applyState(channel, value, { local: true });
-          post(channel, { kind: 'state', value: channel.state });
+          post(channel, { kind: 'state', value: channel.state, at: channel.at ?? Date.now() });
+          if (channel.options.persist) store(channel);
         },
 
         state(readOptions): S | undefined {
@@ -658,13 +1004,21 @@ export function createEventBus(options: EventBusOptions): EventBus {
     },
 
     addIntentListener: intents.addIntentListener,
-    raiseIntent: intents.raiseIntent,
+    raiseIntent,
     candidates: intents.candidates,
 
     flush,
 
     close(): void {
       stopWaking();
+      sayBye();
+      intentsClosed = true;
+      if (listensToPage) {
+        window.removeEventListener('pagehide', sayBye);
+        window.removeEventListener('pageshow', sayHelloAgain);
+      }
+      for (const call of [...calls.keys()]) settle(call, { ok: false, error: new Error('[skew/data] the bus closed before the intent was answered') });
+      intentWire?.close();
       for (const channel of channels.values()) {
         channel.replying.forEach((timer) => clearTimeout(timer));
         channel.wire?.close();
