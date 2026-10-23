@@ -136,6 +136,12 @@ export type RegistryAction = 'read' | 'publish' | 'pin' | 'promote' | 'approve';
 /** What an action is about, for rights scoped narrower than the action — `promote` to `production`. */
 export interface AuthorizeContext {
   environment?: string;
+  /**
+   * Set on a `read` of the App Directory (`appd`) alone, so a hook can open the directory to
+   * desktop agents without opening `/head` and `/snapshots`, which return manifests whole.
+   * `createOidcAuthorizer` grants it to `'read:directory'` as well as to `'read'`.
+   */
+  resource?: 'directory';
 }
 
 /**
@@ -457,7 +463,7 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
    */
   async function appDirectory(request: Request, appd: RegistryAppdOptions, requested: string): Promise<Response> {
     // `refuse`, with AppD's ErrorDTO body; an authorize hook's own Response (a 401 challenge) is kept
-    const outcome = authorize ? await authorize(request, 'read') : true;
+    const outcome = authorize ? await authorize(request, 'read', { resource: 'directory' }) : true;
     if (outcome instanceof Response) return outcome;
     if (!outcome) return json({ code: 403, message: 'not authorized to read' }, 403);
 

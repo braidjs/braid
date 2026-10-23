@@ -118,4 +118,13 @@ describe('the registry as an FDC3 App Directory', () => {
       /appd.environment/,
     );
   });
+
+  it('asks for the directory alone, so it can be opened without opening /head', async () => {
+    const { get } = await setup({
+      authorize: (request, action, context) => action === 'read' && context?.resource === 'directory',
+    });
+
+    expect((await get('/appd/v2/apps'))!.status).toBe(200);
+    expect((await get('/head'))!.status).toBe(403);
+  });
 });

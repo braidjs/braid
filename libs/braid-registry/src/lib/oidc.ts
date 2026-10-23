@@ -38,7 +38,8 @@ export interface OidcAuthorizerOptions {
    * group they hold. Defaults to {@link DEFAULT_ROLE_MAP}.
    *
    * `promote` and `approve` may be scoped to one environment: `'promote:staging'`,
-   * `'approve:production'`. The bare action grants it in every environment.
+   * `'approve:production'`. The bare action grants it in every environment. `'read:directory'`
+   * grants the App Directory (`appd`) and nothing else of `read`.
    */
   roleMap?: Record<string, readonly RegistryGrant[]>;
   /**
@@ -72,7 +73,7 @@ export interface OidcAuthorizerOptions {
 }
 
 /** An action, or `promote` and `approve` scoped to one environment. */
-export type RegistryGrant = RegistryAction | `promote:${string}` | `approve:${string}`;
+export type RegistryGrant = RegistryAction | `promote:${string}` | `approve:${string}` | 'read:directory';
 
 export const DEFAULT_ROLE_MAP: Readonly<Record<string, readonly RegistryGrant[]>> = {
   'braid-viewers': ['read'],
@@ -195,7 +196,11 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
       const result = await verify(request);
       if (!result.ok) return result.response;
       const granted = grants(result.claims, rolesClaim, roleMap, scopeMap);
-      return granted.has(action) || (context?.environment !== undefined && granted.has(`${action}:${context.environment}` as RegistryGrant));
+      return (
+        granted.has(action) ||
+        (context?.environment !== undefined && granted.has(`${action}:${context.environment}` as RegistryGrant)) ||
+        (context?.resource !== undefined && granted.has(`${action}:${context.resource}` as RegistryGrant))
+      );
     },
 
     async subject(request) {

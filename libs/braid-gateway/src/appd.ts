@@ -113,10 +113,15 @@ export function appdResponse(options: {
   const { manifests, origin, appId } = options;
 
   if (appId === undefined) {
-    return {
-      status: 200,
-      body: { applications: manifests.map((manifest) => toAppdApplication(manifest, origin)), message: 'OK' },
-    };
+    // one manifest the projection cannot read is left out, not allowed to fail everyone's listing
+    const applications = manifests.flatMap((manifest) => {
+      try {
+        return [toAppdApplication(manifest, origin)];
+      } catch {
+        return [];
+      }
+    });
+    return { status: 200, body: { applications, message: 'OK' } };
   }
 
   const match = manifests.find((manifest) => manifest.id === appId);
@@ -161,11 +166,16 @@ export function toAppdApplication(manifest: ResolvedFragmentManifest, origin: st
   if (appd?.publisher) application.publisher = appd.publisher;
   if (appd?.contactEmail) application.contactEmail = appd.contactEmail;
   if (appd?.supportEmail) application.supportEmail = appd.supportEmail;
-  if (appd?.moreInfo) application.moreInfo = appd.moreInfo;
+  const moreInfo = appd?.moreInfo ? webUrl(appd.moreInfo, origin) : null;
+  if (moreInfo) application.moreInfo = moreInfo;
   if (appd?.version) application.version = appd.version;
   if (appd?.tooltip) application.tooltip = appd.tooltip;
   // AppD requires an absolute icon url; a manifest may name one relative to the shell
-  if (appd?.icons?.length) application.icons = appd.icons.map((icon) => ({ ...icon, src: new URL(icon.src, origin).href }));
+  const icons = (appd?.icons ?? []).flatMap((icon) => {
+    const src = webUrl(icon.src, origin);
+    return src ? [{ ...icon, src }] : [];
+  });
+  if (icons.length) application.icons = icons;
 
   const interop = toInterop(manifest.fdc3);
   if (interop) application.interop = interop;
@@ -199,6 +209,21 @@ function toInterop(fdc3: FragmentFdc3Metadata | undefined): AppdApplication['int
   };
 
   return Object.keys(interop).length > 0 ? interop : undefined;
+}
+
+/**
+ * A manifest-supplied link, absolute on `origin`, or null when it is not an http(s) URL. Dropping
+ * a bad one keeps one manifest's typo from failing the whole listing, and keeps `javascript:` out
+ * of every launcher that renders the directory.
+ */
+function webUrl(value: unknown, origin: string): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value, origin);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

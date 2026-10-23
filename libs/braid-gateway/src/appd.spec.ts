@@ -125,6 +125,20 @@ describe('toAppdApplication', () => {
     });
   });
 
+  it('drops a link that is malformed or not http(s), rather than failing the listing or passing it on', () => {
+    const application = project({
+      ...billing,
+      appd: {
+        moreInfo: 'javascript:alert(1)',
+        icons: [{ src: 'http://[' }, { src: 'javascript:alert(1)' }, { src: '/ok.png' }],
+      },
+    });
+
+    expect(application.moreInfo).toBeUndefined();
+    expect(application.icons).toEqual([{ src: 'https://shell.example/ok.png' }]);
+    expect(project({ ...billing, appd: { icons: [{ src: 'http://[' }] } }).icons).toBeUndefined();
+  });
+
   describe('against the FDC3 2.2 App Directory schema', () => {
     const full: FragmentManifest = {
       ...billing,

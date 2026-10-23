@@ -46,7 +46,8 @@ createGateway({ registry, discovery: { appd: true } });
 ```
 
 Serves the same registry as an FDC3 2.2 App Directory: `/__braid/registry/appd/v2/apps` lists
-`{ applications, message }`, and `/appd/v2/apps/{appId}` returns the bare `Application` record. It is a **projection, not a second directory** — same manifests, same
+`{ applications, message }`, and `/appd/v2/apps/{appId}` returns the bare `Application` record.
+It is a **projection, not a second directory** — same manifests, same
 `access.list` rules — so a caller can never see through AppD a resolver that discovery would have
 hidden. `findIntent` becomes a registry query, and a user only sees resolvers they may use.
 
@@ -74,7 +75,8 @@ unregistered one does — distinguishing them would let an unauthorized caller e
 one id at a time.
 
 Records are validated in the test suite against FDC3 2.2's own App Directory schema. Relative icon
-`src` values are resolved against the origin, since AppD requires absolute URLs. Optional members
+`src` values are resolved against the origin, since AppD requires absolute URLs, and a link that is
+not http(s) is dropped rather than passed on. Optional members
 Braid has no data for (`lang`, `screenshots`, `localizedVersions`, `interop.appChannels`) are not
 produced. To serve the same directory from the governed registry instead of a gateway, see
 `createRegistryApi({ appd })` in `@braidlabs/registry`; to give fragments `window.fdc3`, see
