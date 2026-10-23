@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createGateway } from './gateway.js';
 import { normalizeManifest, type FragmentManifest } from './registry.js';
 import { toAppdApplication } from './appd.js';
+import { appdErrors } from '../../../tools/fdc3/validate-appd.js';
 
 const ORIGIN = 'https://shell.example';
 
@@ -22,7 +23,6 @@ describe('toAppdApplication', () => {
 
     expect(application).toMatchObject({
       appId: 'billing',
-      name: 'billing',
       type: 'web',
       title: 'Billing',
       description: 'Invoices and payment methods.',
@@ -65,7 +65,7 @@ describe('toAppdApplication', () => {
   });
 
   describe('interop', () => {
-    it('projects intents, filling each record’s name from its key', () => {
+    it('projects intents keyed by name, with no name member of their own', () => {
       const application = project({
         ...billing,
         fdc3: {
@@ -75,7 +75,6 @@ describe('toAppdApplication', () => {
       });
 
       expect(application.interop?.intents?.listensFor?.['ViewOrderTicket']).toEqual({
-        name: 'ViewOrderTicket',
         displayName: 'View order ticket',
         contexts: ['fdc3.instrument'],
       });
@@ -121,7 +120,61 @@ describe('toAppdApplication', () => {
       publisher: 'Payments',
       contactEmail: 'pay@example.com',
       version: '3.1.0',
-      icons: [{ src: '/i.png' }],
+      // AppD requires an absolute url
+      icons: [{ src: 'https://shell.example/i.png' }],
+    });
+  });
+
+  describe('against the FDC3 2.2 App Directory schema', () => {
+    const full: FragmentManifest = {
+      ...billing,
+      adapter: 'custom-element',
+      entry: '/w.js',
+      element: 'billing-app',
+      fdc3: {
+        apiVersion: '2.2',
+        contexts: { 'fdc3.instrument': 2 },
+        listensFor: {
+          ViewInvoice: { contexts: ['fdc3.instrument'], displayName: 'View invoice', resultType: 'fdc3.invoice' },
+          StartCall: {},
+        },
+        raises: { ViewChart: ['fdc3.instrument'] },
+        defaultChannel: 'fdc3.channel.1',
+        userChannels: { broadcasts: ['fdc3.instrument'], listensFor: ['fdc3.order'] },
+      },
+      appd: {
+        publisher: 'Payments',
+        contactEmail: 'pay@example.com',
+        supportEmail: 'help@example.com',
+        moreInfo: 'https://docs.example/billing',
+        version: '3.1.0',
+        tooltip: 'Invoices',
+        icons: [{ src: '/i.png', size: '64x64', type: 'image/png' }, { src: 'https://cdn.example/i.svg' }],
+      },
+    };
+
+    it.each([
+      ['a bare manifest', { id: 'rating', endpoint: 'https://w.internal' }],
+      ['a described manifest', billing],
+      ['a manifest with full fdc3 and appd blocks', full],
+    ] as const)('produces a valid Application from %s', (_, manifest) => {
+      expect(appdErrors('Application', project(manifest))).toEqual([]);
+    });
+
+    it('is a real check: the schema refuses a record without a title or with a relative icon', () => {
+      const { title: _title, ...untitled } = project(billing);
+
+      expect(appdErrors('Application', untitled)).not.toEqual([]);
+      expect(appdErrors('Application', { ...project(billing), icons: [{ src: '/i.png' }] })).not.toEqual([]);
+    });
+
+    it('sets neither the deprecated application name nor a name on any intent', () => {
+      const application = project(full);
+
+      expect(application).not.toHaveProperty('name');
+      for (const intent of Object.values(application.interop?.intents?.listensFor ?? {})) {
+        expect(intent).not.toHaveProperty('name');
+      }
     });
   });
 });
@@ -148,14 +201,19 @@ describe('the App Directory endpoint', () => {
     const body = await response!.json();
 
     expect(response!.status).toBe(200);
+    expect(appdErrors('AllApplicationsResponse', body)).toEqual([]);
     expect(body.message).toBe('OK');
     expect(body.applications.map((a: { appId: string }) => a.appId)).toEqual(['billing']);
   });
 
-  it('serves a single application by appId', async () => {
-    const body = await (await get('/__braid/registry/appd/v2/apps/billing'))!.json();
+  it('serves a single application by appId as the bare record, as the spec has it', async () => {
+    const response = await get('/__braid/registry/appd/v2/apps/billing');
+    const body = await response!.json();
 
-    expect(body.application.appId).toBe('billing');
+    expect(response!.status).toBe(200);
+    expect(body.appId).toBe('billing');
+    expect(body).not.toHaveProperty('application');
+    expect(appdErrors('Application', body)).toEqual([]);
   });
 
   it('applies the same access.list rules as discovery', async () => {
@@ -173,6 +231,14 @@ describe('the App Directory endpoint', () => {
 
     expect(hidden!.status).toBe(404);
     expect(missing!.status).toBe(404);
+    // AppD's ErrorDTO, and the same body either way
+    expect(await hidden!.json()).toEqual({ code: 404, message: 'No application with appId "payroll"' });
+    expect(await missing!.json()).toEqual({ code: 404, message: 'No application with appId "nope"' });
+    expect(appdErrors('ErrorDTO', { code: 404, message: 'x' })).toEqual([]);
+  });
+
+  it('404s a malformed escape rather than throwing', async () => {
+    expect((await get('/__braid/registry/appd/v2/apps/%E0%A4%A'))!.status).toBe(404);
   });
 
   it('is off unless asked for', async () => {

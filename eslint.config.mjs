@@ -23,7 +23,9 @@ export default [
                 {
                     enforceBuildableLibDependency: true,
                     allow: [
-                        "^.*/eslint(\\.base)?\\.config\\.[cm]?[jt]s$"
+                        "^.*/eslint(\\.base)?\\.config\\.[cm]?[jt]s$",
+                        // test-only: validates AppD records against the vendored FDC3 schema
+                        "^.*/tools/fdc3/validate-appd\\.js$"
                     ],
                     depConstraints: [
                         {

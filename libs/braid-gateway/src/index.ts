@@ -48,11 +48,11 @@ export type {
 export { satisfies, canList, canFetch } from './registry.js';
 export { DEFAULT_DISCOVERY_PATH, DEFAULT_DISCOVERY_PAGE_SIZE } from './discovery.js';
 export type { DiscoveryOptions, DiscoveryEntry, DiscoveryPage } from './discovery.js';
-export { toAppdApplication } from './appd.js';
+export { appdResponse, toAppdApplication } from './appd.js';
 export type {
   AppdApplication,
   AppdListResponse,
-  AppdAppResponse,
+  AppdError,
   FragmentFdc3Metadata,
   FragmentAppdMetadata,
 } from './appd.js';
