@@ -196,3 +196,73 @@ describe('one bad subscriber', () => {
   });
 });
 
+
+describe('late subscribers', () => {
+  it('replays the current value to a subscriber that asks, then every later change', () => {
+    braidContext.set('session', { userId: 'u1' });
+    const seen = vi.fn();
+
+    braidContext.subscribe('session', seen, { replay: true });
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenLastCalledWith({ userId: 'u1' });
+
+    braidContext.set('session', { userId: 'u2' });
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveBeenLastCalledWith({ userId: 'u2' });
+  });
+
+  it('replays at the version the subscriber asked for', () => {
+    braidContext.register('instrument', Instrument);
+    braidContext.set('instrument', { ticker: 'IBM', market: 'XNYS' });
+    const behind = vi.fn();
+
+    braidContext.subscribe('instrument', behind, { as: 1, replay: true });
+
+    expect(behind).toHaveBeenCalledWith({ ticker: 'IBM' });
+  });
+
+  it('replays nothing for a key with no value yet, and nothing without asking', () => {
+    braidContext.set('session', { userId: 'u1' });
+    const unasked = vi.fn();
+    const empty = vi.fn();
+
+    braidContext.subscribe('session', unasked);
+    braidContext.subscribe('promo', empty, { replay: true });
+
+    expect(unasked).not.toHaveBeenCalled();
+    expect(empty).not.toHaveBeenCalled();
+  });
+
+  it('isolates a listener that throws on replay, and keeps it subscribed', () => {
+    braidContext.set('session', { userId: 'u1' });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let calls = 0;
+
+    expect(() =>
+      braidContext.subscribe(
+        'session',
+        () => {
+          calls += 1;
+          if (calls === 1) throw new Error('first render failed');
+        },
+        { replay: true },
+      ),
+    ).not.toThrow();
+    braidContext.set('session', { userId: 'u2' });
+
+    expect(calls).toBe(2);
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it('does not replay to a subscription whose signal already aborted', () => {
+    braidContext.set('session', { userId: 'u1' });
+    const seen = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    braidContext.subscribe('session', seen, { replay: true, signal: controller.signal });
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+});

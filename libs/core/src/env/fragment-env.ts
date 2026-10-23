@@ -41,7 +41,19 @@ export interface EnvHistory {
 
 export interface EnvContext {
   get(key: string): unknown;
-  subscribe(key: string, listener: (value: unknown) => void, options?: { signal?: AbortSignal }): () => void;
+  /**
+   * Calls `listener` on every later change to `key`. With `replay: true`, also calls it at once
+   * with the current value when there is one — the fragment's view of the host's context is
+   * complete before its code runs, so `subscribe(key, render, { replay: true })` alone renders what
+   * is true now and every change after it.
+   */
+  subscribe(key: string, listener: (value: unknown) => void, options?: EnvSubscribeOptions): () => void;
+}
+
+export interface EnvSubscribeOptions {
+  signal?: AbortSignal;
+  /** Call the listener at once with the current value, when there is one. */
+  replay?: boolean;
 }
 
 export interface FragmentEnv {

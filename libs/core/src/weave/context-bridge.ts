@@ -189,6 +189,17 @@ export function createContextMirror(
       const unsubscribe = () => void keyListeners.delete(listener);
       subscribeOptions?.signal?.addEventListener('abort', unsubscribe, { once: true });
       channel.closed.addEventListener('abort', unsubscribe, { once: true });
+
+      // the mirror was seeded at OPEN, before the fragment's code ran, so this is the current value
+      // whenever the fragment subscribes
+      const current = values.get(key);
+      if (subscribeOptions?.replay && current !== undefined && !subscribeOptions.signal?.aborted) {
+        try {
+          listener(current);
+        } catch (error) {
+          console.error(`braid: a "${key}" context subscriber threw on replay`, error);
+        }
+      }
       return unsubscribe;
     },
   };
