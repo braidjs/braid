@@ -373,9 +373,12 @@ createRegistryApi({
 - **The same records as the gateway.** Manifests' `fdc3` and `appd` blocks are projected by the
   gateway's `toAppdApplication`, validated in tests against FDC3's own schema. `origin` is the shell
   the apps appear on; `details.url` and icons are absolute on it.
-- **Not per-user.** `read` already returns every manifest whole from `/head`, so the directory is
-  not filtered by `access.list`. For the per-user view, serve `discovery: { appd: true }` from the
-  gateway instead.
+- **Not per-user.** This is the governance view: it is not filtered by `access.list`. For a page's
+  own agent, where each user should see only what they may list, serve
+  `discovery: { appd: true }` from the gateway instead.
+- **Its own right.** The directory asks `authorize` for `read` with `{ resource: 'directory' }`, so
+  it can be opened to desktop agents without opening `/head` and `/snapshots`, which return whole
+  manifests. `createOidcAuthorizer` grants it to `'read:directory'` as well as `'read'`.
 - Errors are AppD's `{ code, message }`: 404 for an unknown app, 403 when `authorize` refuses `read`.
   A `Response` from `authorize` (a 401 bearer challenge) is passed through.
 

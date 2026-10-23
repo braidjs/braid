@@ -41,7 +41,7 @@ flowchart TD
   ReactPkg --> Core
   AngularPkg --> Core
   GW --> Registry
-  FDC3 --> Core
+  FDC3 -. realmGlobals .-> Core
   Core --> Skew
   Data --> Skew
   AngData --> Data

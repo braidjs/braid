@@ -141,7 +141,7 @@ Compat-mode realms boot from a real URL under the gateway namespace (`/__braid/f
 
 ### 3. Host Purity as an Invariant
 
-Braid never modifies global variables or prototypes on the host page. Even when running legacy applications in compat mode, prototype modifications and DOM intercepts are restricted entirely to the fragment's own realm and its shadow root subtree. The host's `sharedGlobals` are the one deliberate channel back: accessors on the fragment's realm for host globals the host named itself.
+Braid never modifies global variables or prototypes on the host page. Even when running legacy applications in compat mode, prototype modifications and DOM intercepts are restricted entirely to the fragment's own realm and its shadow root subtree. Two deliberate channels cross the boundary. The host's `sharedGlobals` are accessors on the fragment's realm for host globals the host named itself. Its `realmGlobals` hook defines per-fragment values on the realm before the fragment's code runs, such as the `window.fdc3` of `@braidlabs/fdc3`.
 
 What checks this today is narrower than the claim. Unit specs assert that installing shared globals leaves the host window's own properties and the DOM prototypes unchanged (`custom-element-adapter.spec.ts`), and the full compat patches are exercised in a real browser, where you can check by hand with `Node.prototype.appendChild.toString().includes('[native code]')`. There is no automated browser suite for the whole compat layer yet; jsdom cannot run it.
 
