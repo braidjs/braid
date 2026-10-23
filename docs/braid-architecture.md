@@ -7,7 +7,7 @@
 
 - **Status:** Draft for review.
 - **Name:** **Braid** — independent strands composed into one strong cord, where every strand keeps its own identity and dependencies, while remaining unbraidable (incremental migration is completely reversible).
-- **Positioning:** Braid is a **composition layer with skew handling built in**. Its thesis is the elimination of version-skew errors across independently deployed frontend applications. It removes *dependency skew* structurally (isolated JavaScript realms and per-fragment import maps prevent co-deployed apps from colliding) and surfaces *contract skew* at the fragment boundary, where the contract-migration engine in `@braidlabs/skew` bridges version differences over the context bus.
+- **Positioning:** Braid is a **composition layer with skew handling built in**. Its thesis is the elimination of version-skew errors across independently deployed frontend applications. It removes *dependency skew* structurally (isolated JavaScript realms prevent co-deployed apps from colliding) and surfaces *contract skew* at the fragment boundary, where the contract-migration engine in `@braidlabs/skew` bridges version differences over the context bus.
 - **Provenance:** Successor concept to [web-fragments](https://github.com/web-fragments/web-fragments) (MIT, Cloudflare-sponsored). Key subsystems were rebuilt and matrix-tested in our research forks (document facade, strict host isolation, exact gateway routing), and empirical results from those tests inform the architecture below.
 
 ---
@@ -32,7 +32,7 @@ Earlier experiments attempted to emulate the entire browser environment so that 
 
 Independently deployed frontends naturally introduce version skew: pages compose artifacts built at different times, against different dependency trees, and with different data contracts. Braid handles these two types of skew deliberately:
 
-- **Dependency Skew is Eliminated Structurally:** Realm-per-fragment isolation and independent import maps ensure that conflicting libraries (e.g. React 18 alongside React 19, or zoneless Angular alongside zoned Angular) never share global scope.
+- **Dependency Skew is Eliminated Structurally:** Realm-per-fragment isolation ensures that conflicting libraries (e.g. React 18 alongside React 19, or zoneless Angular alongside zoned Angular) never share global scope: each realm evaluates its own copy of every dependency it loads, whether bundled or fetched.
 - **Contract Skew is Explicitly Typed and Migrated:** Props, custom events, and shared state cross fragment boundaries as versioned schemas. When a fragment expects schema v2 but the host publishes v3, the bidirectional migration engine in `@braidlabs/skew` bridges the gap on the fly across the context bus.
 
 ---
@@ -135,7 +135,7 @@ For legacy applications that cannot be altered during a migration, the **Compat 
 
 A hidden, same-origin `iframe` remains the only browser primitive capable of providing a synchronous, DOM-capable secondary JavaScript execution context. Workers force asynchronous communication, and `ShadowRealm` does not expose DOM APIs.
 
-For contract-mode fragments, realms boot instantly from an in-memory `blob:` URL created by the runtime. This eliminates network round trips, avoids creating extraneous session history entries, and allows each fragment to declare its own `<base>` URL and import map.
+For contract-mode fragments, realms boot instantly from an in-memory `blob:` URL created by the runtime. This eliminates network round trips, avoids creating extraneous session history entries, and gives each realm its own `<base>` URL (the entry module's directory, for a gateway-free fragment). A realm document can also carry an import map, which `createRealm()` accepts, but no slot attribute or manifest field exposes one to fragment authors yet; bundled fragments, the usual case, have nothing for one to resolve.
 
 Compat-mode realms boot from a real URL under the gateway namespace (`/__braid/frag/:id/`), ensuring that standard browser `location` and `history` behaviors remain truthful for legacy code.
 
