@@ -2,7 +2,7 @@ import type { VersionedSchema } from '@braidlabs/skew';
 import { drainOutbox, type FlushResult } from './flush.js';
 import { sharedInvalidator, type BroadcastChannelLike, type Invalidator } from './invalidation.js';
 import { createOutbox, type Outbox } from './outbox.js';
-import type { RecordDriver } from './record-store.js';
+import { storageKey, type RecordDriver } from './record-store.js';
 import type { Conflict, ConflictPolicy } from './query.js';
 import {
   createIntentRegistry,
@@ -122,6 +122,17 @@ export interface ChannelOptions {
    * different partition, and then none of this applies because the storage differs too.
    */
   entity?: string;
+  /**
+   * Keep this channel's state across reloads, in the bus's `driver`: the last value this context
+   * broadcast is stored, and a bus that opens the channel later — after a reload, with no other
+   * context alive to ask — starts from it. Stored per partition, as a versioned envelope when a
+   * contract is registered for the channel, so a newer or older build reads it at its own version.
+   *
+   * A stored value is a fallback, not the truth: a value broadcast since, or a fresher one another
+   * context holds, wins over it. Needs a `driver`, and is refused without one rather than quietly
+   * not persisting.
+   */
+  persist?: boolean;
 }
 
 export interface SubscribeOptions {
@@ -166,6 +177,8 @@ export interface EventBus extends Pick<IntentRegistry, 'candidates'> {
 }
 
 const EVENT_COLLECTION = 'skew-events';
+/** Where `persist` channels keep their state between reloads: one record per channel per partition. */
+const STATE_COLLECTION = 'skew-channel-state';
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_DEPTH = 500;
 
@@ -178,10 +191,10 @@ const runnerId = (channel: string, type: string) => `event:${channel}:${type}`;
 
 /** What crosses a channel's wire between contexts. */
 type WireMessage =
-  | { kind: 'state'; value: unknown }
+  | { kind: 'state'; value: unknown; at: number }
   | { kind: 'event'; event: BusEvent }
   | { kind: 'state-request'; request: string }
-  | { kind: 'state-reply'; request: string; value: unknown };
+  | { kind: 'state-reply'; request: string; value: unknown; at: number };
 
 /**
  * How long a context that holds state it did not publish waits before answering a state request,
@@ -249,6 +262,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
     published: unknown;
     /** Whether any state has been set here or heard from elsewhere, `undefined` included. */
     heard: boolean;
+    /** Whether the current state was set live — here, or broadcast by another context — rather than caught up. */
+    live: boolean;
+    /** When the current state was set, by its publisher's clock; how a caught-up value is judged. */
+    at: number | undefined;
     /** Whether the current state is this context's own broadcast, so it answers requests at once. */
     authored: boolean;
     /** The request this context sent for state, until it is answered or state arrives otherwise. */
@@ -299,7 +316,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * channel used only for events never asks.
    */
   function askForState(channel: ChannelState): void {
-    if (!channel.wire || channel.heard || channel.asked !== undefined) return;
+    if (!channel.wire || channel.live || channel.asked !== undefined) return;
     channel.asked = crypto.randomUUID();
     post(channel, { kind: 'state-request', request: channel.asked });
   }
@@ -308,7 +325,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     if (!channel.heard || channel.state === undefined || channel.replying.has(request) || channel.answered.has(request)) return;
     const reply = () => {
       channel.replying.delete(request);
-      post(channel, { kind: 'state-reply', request, value: channel.state });
+      post(channel, { kind: 'state-reply', request, value: channel.state, at: channel.at ?? 0 });
     };
     if (channel.authored) return reply();
     const timer = setTimeout(reply, Math.random() * FALLBACK_REPLY_MS);
@@ -332,6 +349,8 @@ export function createEventBus(options: EventBusOptions): EventBus {
       state: undefined,
       published: undefined,
       heard: false,
+      live: false,
+      at: undefined,
       authored: false,
       replying: new Map(),
       answered: new Set(),
@@ -344,7 +363,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     // another context — no de-duplication needed, which is the same property invalidation relies on.
     wire?.addEventListener('message', (event) => {
       const message = event.data as WireMessage | undefined;
-      if (message?.kind === 'state') applyState(created, message.value, { local: false });
+      if (message?.kind === 'state') applyState(created, message.value, { local: false, at: message.at });
       if (message?.kind === 'event' && message.event) deliverLive(message.event);
       // A context that reads the channel after its state was set asks for it once (askForState).
       if (message?.kind === 'state-request') answer(created, message.request);
@@ -355,13 +374,14 @@ export function createEventBus(options: EventBusOptions): EventBus {
         created.answered.add(message.request);
         // a few recent ones are enough: a request is answered within FALLBACK_REPLY_MS
         if (created.answered.size > 64) created.answered.delete(created.answered.values().next().value as string);
-        // Only the asker takes it, and only while it still has heard nothing: a reply that arrives
-        // after a newer broadcast, or after state was cleared, must not set it back.
-        if (message.request === created.asked && !created.heard) applyState(created, message.value, { local: false });
+        // Only the asker takes it, and only as a catch-up: a reply that arrives after a newer
+        // broadcast, or after state was cleared, must not set it back.
+        if (message.request === created.asked) catchUp(created, message.value, message.at);
       }
     });
 
     channels.set(key, created);
+    if (channelOptions.persist) restore(created);
     return created;
   }
 
@@ -372,7 +392,11 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * news, not a disagreement. Two publishers racing end in last-write-wins, and the policy decides
    * whether anyone is told — the same contract, and the same words, as a mutation's confirmation.
    */
-  function applyState(channel: ChannelState, value: unknown, { local }: { local: boolean }): void {
+  function applyState(
+    channel: ChannelState,
+    value: unknown,
+    { local, at = Date.now(), live = true }: { local: boolean; at?: number; live?: boolean },
+  ): void {
     const previous = channel.published;
     let stored = value;
 
@@ -390,9 +414,14 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
     channel.state = stored;
     channel.heard = true;
+    channel.live = channel.live || live;
+    channel.at = at;
     channel.authored = local;
-    channel.asked = undefined;
-    if (local) channel.published = stored;
+    if (live) channel.asked = undefined;
+    if (local) {
+      channel.published = stored;
+      if (channel.options.persist) store(channel);
+    }
 
     for (const subscription of [...channel.stateListeners]) {
       // Isolated per subscriber: one application's bad deploy must not present as a different
@@ -403,6 +432,61 @@ export function createEventBus(options: EventBusOptions): EventBus {
         options.onEventError?.(`[skew/data] a "${channel.name}" state subscriber threw`, error);
       }
     }
+  }
+
+  /**
+   * A value from somewhere other than a live broadcast — a peer's answer to a state request, or
+   * what was stored before a reload. Taken only while nothing live has arrived, and only when it is
+   * newer than what this context already caught up to.
+   */
+  function catchUp(channel: ChannelState, value: unknown, at: number): void {
+    if (channel.live || (channel.at !== undefined && at <= channel.at)) return;
+    applyState(channel, value, { local: false, at, live: false });
+  }
+
+  function storedId(channel: ChannelState): string {
+    return storageKey(partition(), channel.key);
+  }
+
+  function store(channel: ChannelState): void {
+    const driver = options.driver!;
+    const write =
+      channel.state === undefined
+        ? driver.delete(STATE_COLLECTION, storedId(channel))
+        : driver.put(STATE_COLLECTION, {
+            id: storedId(channel),
+            key: channel.key,
+            partition: partition(),
+            seq: channel.at ?? Date.now(),
+            envelope: envelopeOf(channel.name, channel.state),
+            owner: options.consumer,
+          });
+    write.catch((error: unknown) => options.onEventError?.(`[skew/data] "${channel.name}" state could not be stored`, error));
+  }
+
+  function restore(channel: ChannelState): void {
+    options
+      .driver!.get(STATE_COLLECTION, storedId(channel))
+      .then((record) => {
+        if (!record) return;
+        const value = valueOf(channel.name, record.envelope);
+        if (value.ok) catchUp(channel, value.value, record.seq);
+        else options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, value.error);
+      })
+      .catch((error: unknown) => options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, error));
+  }
+
+  /** The stored form: a versioned envelope under the channel's contract, when it has one. */
+  function envelopeOf(type: string, value: unknown) {
+    const schema = schemas.get(type);
+    return schema ? schema.write(value) : { v: 0, payload: structuredClone(value) };
+  }
+
+  function valueOf(type: string, envelope: { v: number; payload: unknown }): { ok: true; value: unknown } | { ok: false; error: unknown } {
+    const schema = schemas.get(type);
+    if (!schema) return { ok: true, value: envelope.payload };
+    const result = schema.read(envelope);
+    return result.ok ? { ok: true, value: result.value } : { ok: false, error: result };
   }
 
   /** Fan-out to handlers in this context. Used by at-most-once, and by the queue drain. */
@@ -562,6 +646,12 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
   return {
     channel<S>(name: string, channelOptions: ChannelOptions = {}): Channel<S> {
+      if (channelOptions.persist && !options.driver) {
+        throw new TypeError(
+          `[skew/data] channel "${name}" asks to persist its state, which needs a \`driver\` on the bus — ` +
+            'without one it would quietly forget on reload',
+        );
+      }
       const channel = channelState(name, channelOptions);
 
       return {
@@ -569,7 +659,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
         broadcast(value: S): void {
           applyState(channel, value, { local: true });
-          post(channel, { kind: 'state', value: channel.state });
+          post(channel, { kind: 'state', value: channel.state, at: channel.at ?? Date.now() });
         },
 
         state(readOptions): S | undefined {

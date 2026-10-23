@@ -820,3 +820,125 @@ describe('late join, without a storm or a false conflict', () => {
     bus.close();
   });
 });
+
+describe('state that persists across reloads', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const busWith = (driver: ReturnType<typeof memoryRecordDriver>, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer: 'blotter', driver, invalidator: createInvalidator({ partition: 'p' }), ...extra });
+
+  it('restores the last broadcast into a bus opened after a reload, with no other context alive', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.channel('selection', { persist: true }).broadcast({ id: 'row-7' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const seen = vi.fn();
+    after.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).toHaveBeenCalledWith({ id: 'row-7' });
+    expect(after.channel('selection', { persist: true }).state()).toEqual({ id: 'row-7' });
+    after.close();
+  });
+
+  it('forgets state that was cleared', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    const selection = before.channel('selection', { persist: true });
+    selection.broadcast({ id: 'row-7' });
+    selection.broadcast(undefined);
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const seen = vi.fn();
+    after.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).not.toHaveBeenCalled();
+    after.close();
+  });
+
+  it('lets a value broadcast since the reload win over the stored one', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.channel('selection', { persist: true }).broadcast({ id: 'old' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const selection = after.channel('selection', { persist: true });
+    // the user picks a row before storage answers
+    selection.broadcast({ id: 'new' });
+    await tick();
+
+    expect(selection.state()).toEqual({ id: 'new' });
+    after.close();
+  });
+
+  it('prefers a fresher value another context holds over the stored one', async () => {
+    const driver = memoryRecordDriver();
+    const wire = wirePair();
+    const stale = busWith(driver, { page: 'tab-1', broadcastChannel: wire });
+    stale.channel('selection', { persist: true }).broadcast({ id: 'stored' });
+    await tick();
+    stale.close();
+
+    // another realm, without persistence, moved on since
+    const other = createEventBus({ consumer: 'chart', invalidator: createInvalidator({ partition: 'p' }), page: 'tab-1', broadcastChannel: wire });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    other.channel('selection').broadcast({ id: 'fresh' });
+
+    const reloaded = busWith(driver, { page: 'tab-1', broadcastChannel: wire });
+    const selection = reloaded.channel('selection', { persist: true });
+    selection.subscribe(vi.fn());
+    await tick();
+
+    expect(selection.state()).toEqual({ id: 'fresh' });
+    other.close();
+    reloaded.close();
+  });
+
+  it('stores under the contract, so a reader at an older version gets the older shape', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.register('orders', Order);
+    before.channel('orders', { persist: true }).broadcast({ id: 'o1', quantity: 2, currency: 'EUR' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    after.register('orders', Order);
+    const behind = vi.fn();
+    after.channel('orders', { persist: true }).subscribe(behind, { as: 1 });
+    await tick();
+
+    expect(behind).toHaveBeenCalledWith({ id: 'o1', quantity: 2 });
+    after.close();
+  });
+
+  it('keeps one partition\'s state from another', async () => {
+    const driver = memoryRecordDriver();
+    const ana = busWith(driver, { partition: () => 'user:ana' });
+    ana.channel('selection', { persist: true }).broadcast({ id: 'ana-row' });
+    await tick();
+    ana.close();
+
+    const bo = busWith(driver, { partition: () => 'user:bo' });
+    const seen = vi.fn();
+    bo.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).not.toHaveBeenCalled();
+    bo.close();
+  });
+
+  it('refuses to persist without a driver rather than quietly forgetting', () => {
+    const bus = createEventBus({ consumer: 'blotter', invalidator: createInvalidator({ partition: 'p' }) });
+
+    expect(() => bus.channel('selection', { persist: true })).toThrow(/driver/);
+    bus.close();
+  });
+});
