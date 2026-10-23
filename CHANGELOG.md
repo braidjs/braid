@@ -1,3 +1,47 @@
+## 0.5.0 (2026-10-23)
+
+### 🚀 Features
+
+- **core:** realmGlobals — per-fragment values on a trusted fragment's realm ([e5ebf03](https://github.com/braidjs/braid/commit/e5ebf03))
+- **core:** replay the current context value to a subscriber that asks ([ae2a7ac](https://github.com/braidjs/braid/commit/ae2a7ac))
+- ⚠️  **core:** context subscribe replays the current value by default ([a251ab5](https://github.com/braidjs/braid/commit/a251ab5))
+- **data:** channel state that persists across reloads ([42d6cbd](https://github.com/braidjs/braid/commit/42d6cbd))
+- **data:** intents reach handlers in other realms on the page ([00659e2](https://github.com/braidjs/braid/commit/00659e2))
+- **fdc3:** @braidlabs/fdc3, an FDC3 2.2 Desktop Agent for Braid pages ([7b2688a](https://github.com/braidjs/braid/commit/7b2688a))
+- **registry:** endpointOrigins — an allowlist for where fragment endpoints may point ([fa39e58](https://github.com/braidjs/braid/commit/fa39e58))
+- **registry:** serve the registry as an FDC3 App Directory ([7beef57](https://github.com/braidjs/braid/commit/7beef57))
+- **registry,console:** page snapshot history, so rollback reaches past 25 ([7f7795d](https://github.com/braidjs/braid/commit/7f7795d))
+
+### 🩹 Fixes
+
+- **appd:** drop bad links instead of failing the listing; a directory-only read right ([144c648](https://github.com/braidjs/braid/commit/144c648))
+- **console:** the fragment editor no longer overwrites newer publishes ([339ae03](https://github.com/braidjs/braid/commit/339ae03))
+- **console:** keep fragment drafts across tabs, and ask before closing ([7a2a2a6](https://github.com/braidjs/braid/commit/7a2a2a6))
+- **console:** ship the standalone app with a Content-Security-Policy ([08fa397](https://github.com/braidjs/braid/commit/08fa397))
+- **console:** report editor dirtiness only when it changes ([3845303](https://github.com/braidjs/braid/commit/3845303))
+- **console:** review fixes for CSP, permissions refetch and history paging ([eb32df6](https://github.com/braidjs/braid/commit/eb32df6))
+- **core:** call the realmGlobals hook only for adapters that install it ([a1288ba](https://github.com/braidjs/braid/commit/a1288ba))
+- **data:** page scope crosses a page's realms; late joiners get current state ([18023f2](https://github.com/braidjs/braid/commit/18023f2))
+- **data:** set an intent call's error cause by hand for older TS libs ([25c7fb5](https://github.com/braidjs/braid/commit/25c7fb5))
+- **data,core:** late join without a storm or false conflict; review fixes ([529792c](https://github.com/braidjs/braid/commit/529792c))
+- **data,core:** harden cross-realm intents and persisted state from review ([203c566](https://github.com/braidjs/braid/commit/203c566))
+- **fdc3:** harden the agent against review findings ([aabd608](https://github.com/braidjs/braid/commit/aabd608))
+- **gateway:** make the App Directory projection conform to FDC3 2.2 AppD ([aeaa39a](https://github.com/braidjs/braid/commit/aeaa39a))
+- **registry:** own shell routes, so a team cannot answer another team's pages ([8db6143](https://github.com/braidjs/braid/commit/8db6143))
+- **registry:** judge route scope as URLPattern reads it, not as written ([23e5619](https://github.com/braidjs/braid/commit/23e5619))
+- **registry:** descriptor probes no longer read the server's network out ([7621528](https://github.com/braidjs/braid/commit/7621528))
+- **registry:** cap write bodies, and require JSON from browsers ([e837d20](https://github.com/braidjs/braid/commit/e837d20))
+- **registry:** judge shell-route ownership conservatively, not by sampling ([bec45cc](https://github.com/braidjs/braid/commit/bec45cc))
+- **registry:** probe only allowed endpoints, and keep refused snapshots unservable ([78a9943](https://github.com/braidjs/braid/commit/78a9943))
+
+### ⚠️  Breaking Changes
+
+- **core:** context subscribe replays the current value by default  ([a251ab5](https://github.com/braidjs/braid/commit/a251ab5))
+  code that called get() and then subscribe() handles the
+  first value twice. Drop the get(), or pass { replay: false }.
+  Also fixes the replay path reading `options.as` when no options were passed,
+  which threw inside the guarded call and was only logged.
+
 ## 0.4.0 (2026-10-22)
 
 ### 🚀 Features
