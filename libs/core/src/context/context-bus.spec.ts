@@ -268,4 +268,15 @@ describe('late subscribers', () => {
 
     expect(seen).not.toHaveBeenCalled();
   });
+
+  it('lets a listener stop itself through its signal, even on the replayed value', () => {
+    braidContext.set('job', { finished: true });
+    const stop = new AbortController();
+    const seen = vi.fn((job: { finished: boolean }) => job.finished && stop.abort());
+
+    braidContext.subscribe('job', seen as (value: unknown) => void, { signal: stop.signal });
+    braidContext.set('job', { finished: true });
+
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
 });

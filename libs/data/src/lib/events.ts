@@ -220,8 +220,8 @@ type IntentWireMessage =
   | { kind: 'intents-list'; from: string; handlers: LocalIntentHandler[] }
   | { kind: 'intents-bye'; from: string }
   | { kind: 'intent-call'; call: string; from: string; to: string; handler: string; payload: unknown }
-  | { kind: 'intent-return'; call: string; to: string; ok: true; result: unknown }
-  | { kind: 'intent-return'; call: string; to: string; ok: false; error: string };
+  | { kind: 'intent-return'; call: string; from: string; to: string; ok: true; result: unknown }
+  | { kind: 'intent-return'; call: string; from: string; to: string; ok: false; error: string; name?: string };
 
 /**
  * How long a context that holds state it did not publish waits before answering a state request,
@@ -365,7 +365,17 @@ export function createEventBus(options: EventBusOptions): EventBus {
     // registered under the logical name, because every fund's selection has the same shape.
     const key = channelOptions.entity ? `${name}@${channelOptions.entity}` : name;
     const existing = channels.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // the first call decides a channel's reach and storage; a later one asking for different
+      // ones would otherwise get them silently ignored
+      if ((existing.options.scope ?? 'page') !== (channelOptions.scope ?? 'page') || Boolean(existing.options.persist) !== Boolean(channelOptions.persist)) {
+        throw new TypeError(
+          `[skew/data] channel "${key}" is already open with scope "${existing.options.scope ?? 'page'}"` +
+            `${existing.options.persist ? ' and persist' : ''}; open it with the same options everywhere in this context`,
+        );
+      }
+      return existing;
+    }
 
     const scope = channelOptions.scope ?? 'page';
     const wire = scope === 'origin' ? openWire(key) : page === undefined ? undefined : openWire(`page:${page}:${key}`);
@@ -445,10 +455,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     channel.at = at;
     channel.authored = local;
     if (live) channel.asked = undefined;
-    if (local) {
-      channel.published = stored;
-      if (channel.options.persist) store(channel);
-    }
+    if (local) channel.published = stored;
 
     for (const subscription of [...channel.stateListeners]) {
       // Isolated per subscriber: one application's bad deploy must not present as a different
@@ -475,25 +482,43 @@ export function createEventBus(options: EventBusOptions): EventBus {
     return storageKey(partition(), channel.key);
   }
 
+  /**
+   * Writes the channel's state to the driver. Runs after the value has reached this context's
+   * subscribers, and never throws: a value that cannot be stored — not cloneable, no active
+   * partition, a failing driver — is reported, not allowed to undo a broadcast that already happened.
+   */
   function store(channel: ChannelState): void {
-    const driver = options.driver!;
-    const write =
-      channel.state === undefined
-        ? driver.delete(STATE_COLLECTION, storedId(channel))
-        : driver.put(STATE_COLLECTION, {
-            id: storedId(channel),
-            key: channel.key,
-            partition: partition(),
-            seq: channel.at ?? Date.now(),
-            envelope: envelopeOf(channel.name, channel.state),
-            owner: options.consumer,
-          });
-    write.catch((error: unknown) => options.onEventError?.(`[skew/data] "${channel.name}" state could not be stored`, error));
+    const report = (error: unknown) => options.onEventError?.(`[skew/data] "${channel.name}" state could not be stored`, error);
+    try {
+      const driver = options.driver!;
+      const id = storedId(channel);
+      const write =
+        channel.state === undefined
+          ? driver.delete(STATE_COLLECTION, id)
+          : driver.put(STATE_COLLECTION, {
+              id,
+              key: channel.key,
+              partition: partition(),
+              seq: channel.at ?? Date.now(),
+              envelope: envelopeOf(channel.name, channel.state),
+              owner: options.consumer,
+            });
+      write.catch(report);
+    } catch (error) {
+      report(error);
+    }
   }
 
   function restore(channel: ChannelState): void {
+    let id: string;
+    try {
+      id = storedId(channel);
+    } catch (error) {
+      options.onEventError?.(`[skew/data] stored "${channel.name}" state could not be read`, error);
+      return;
+    }
     options
-      .driver!.get(STATE_COLLECTION, storedId(channel))
+      .driver!.get(STATE_COLLECTION, id)
       .then((record) => {
         if (!record) return;
         const value = valueOf(channel.name, record.envelope);
@@ -506,11 +531,17 @@ export function createEventBus(options: EventBusOptions): EventBus {
   /** The stored form: a versioned envelope under the channel's contract, when it has one. */
   function envelopeOf(type: string, value: unknown) {
     const schema = schemas.get(type);
-    return schema ? schema.write(value) : { v: 0, payload: structuredClone(value) };
+    // without a contract, written as v1 — what a contract registered later reads it as
+    return schema ? schema.write(value) : { v: 1, payload: structuredClone(value) };
   }
 
-  function valueOf(type: string, envelope: { v: number; payload: unknown }): { ok: true; value: unknown } | { ok: false; error: unknown } {
+  function valueOf(type: string, envelope: { v: number; n?: string; payload: unknown }): { ok: true; value: unknown } | { ok: false; error: unknown } {
     const schema = schemas.get(type);
+    if (!schema && envelope.n !== undefined) {
+      // written under a contract this build has not registered (yet): handing over the raw payload
+      // could give it a shape from another version
+      return { ok: false, error: new Error(`stored under the "${envelope.n}" contract; register it before opening the channel`) };
+    }
     if (!schema) return { ok: true, value: envelope.payload };
     const result = schema.read(envelope);
     return result.ok ? { ok: true, value: result.value } : { ok: false, error: result };
@@ -664,12 +695,15 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * this", and a handler in another tab is not on the page.
    */
   const busId = crypto.randomUUID();
-  const intentWire = page === undefined ? undefined : openWire(`page:${page}:intents`);
+  // `#` keeps it apart from a page-scoped channel that happens to be named "intents"
+  const intentWire = page === undefined ? undefined : openWire(`page:${page}:#intents`);
   const directory = new Map<string, LocalIntentHandler[]>();
   const calls = new Map<string, { to: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const intentTimeoutMs = options.intentTimeoutMs ?? 30_000;
+  let intentsClosed = false;
 
   function sendIntents(message: IntentWireMessage): void {
+    if (intentsClosed && message.kind !== 'intents-bye') return;
     try {
       intentWire?.postMessage(message);
     } catch (error) {
@@ -677,8 +711,35 @@ export function createEventBus(options: EventBusOptions): EventBus {
     }
   }
 
+  /** Several registrations in one task — a fragment mounting — are announced once. */
+  let announcing = false;
   function announce(): void {
-    sendIntents({ kind: 'intents-list', from: busId, handlers: intents.local() });
+    if (announcing) return;
+    announcing = true;
+    queueMicrotask(() => {
+      announcing = false;
+      sendIntents({ kind: 'intents-list', from: busId, handlers: intents.local() });
+    });
+  }
+
+  /**
+   * Another realm's handlers, as far as they can be read. Any same-origin script on the page can
+   * write to the wire, so an entry of the wrong shape is dropped rather than allowed to break every
+   * raise on the page.
+   */
+  function readHandlers(handlers: unknown): LocalIntentHandler[] {
+    if (!Array.isArray(handlers)) return [];
+    return handlers.filter(
+      (handler): handler is LocalIntentHandler =>
+        typeof handler === 'object' &&
+        handler !== null &&
+        typeof handler.id === 'string' &&
+        typeof handler.intent === 'string' &&
+        typeof handler.consumer === 'string' &&
+        typeof handler.label === 'string' &&
+        Number.isFinite(handler.priority) &&
+        (handler.as === undefined || Number.isInteger(handler.as)),
+    );
   }
 
   function remoteHandlers(intent: string): RemoteIntentHandler[] {
@@ -689,12 +750,22 @@ export function createEventBus(options: EventBusOptions): EventBus {
     );
   }
 
+  /** A realm that no longer answers — crashed, frozen, gone without a word — is dropped, and its calls fail now. */
+  function forget(source: string, reason: string): void {
+    directory.delete(source);
+    for (const [call, pending] of calls) {
+      if (pending.to === source) settle(call, { ok: false, error: new Error(`[skew/data] ${reason}`) });
+    }
+  }
+
   function callRemote(to: string, handler: string, payload: unknown, candidate: IntentCandidate): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const call = crypto.randomUUID();
       const timer = setTimeout(() => {
         calls.delete(call);
         reject(new Error(`[skew/data] the "${candidate.intent}" handler in ${candidate.consumer} did not answer within ${intentTimeoutMs}ms`));
+        // a realm that cannot answer one call will not answer the next: stop offering its handlers
+        forget(to, `the context handling "${candidate.intent}" stopped answering`);
       }, intentTimeoutMs);
       (timer as unknown as { unref?: () => void }).unref?.();
       calls.set(call, { to, resolve, reject, timer });
@@ -718,43 +789,68 @@ export function createEventBus(options: EventBusOptions): EventBus {
     else pending.reject(outcome.error);
   }
 
+  /** Runs a call from another realm and answers it. Never throws: the answer is the only output. */
+  function answerCall(message: Extract<IntentWireMessage, { kind: 'intent-call' }>): void {
+    const reply = (outcome: { ok: true; result: unknown } | { ok: false; error: string; name?: string }) => {
+      if (intentsClosed) return;
+      try {
+        intentWire?.postMessage({ kind: 'intent-return', call: message.call, from: busId, to: message.from, ...outcome } as IntentWireMessage);
+      } catch (error) {
+        sendIntents({
+          kind: 'intent-return',
+          call: message.call,
+          from: busId,
+          to: message.from,
+          ok: false,
+          error: `the handler's result could not be sent back: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    };
+    intents
+      .runLocal(message.handler, message.payload)
+      .then(
+        (result) => reply({ ok: true, result }),
+        (error: unknown) =>
+          reply({ ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof Error ? { name: error.name } : {}) }),
+      )
+      .catch((error: unknown) => options.onEventError?.('[skew/data] an intent call could not be answered', error));
+  }
+
   intentWire?.addEventListener('message', (event) => {
     const message = event.data as IntentWireMessage | undefined;
-    switch (message?.kind) {
-      case 'intents-hello':
-        // a context that just arrived: tell it what is here
-        if (intents.local().length > 0) announce();
-        return;
-      case 'intents-list':
-        if (message.handlers.length > 0) directory.set(message.from, message.handlers);
-        else directory.delete(message.from);
-        return;
-      case 'intents-bye':
-        directory.delete(message.from);
-        // nobody there will answer these
-        for (const [call, pending] of calls) {
-          if (pending.to === message.from) settle(call, { ok: false, error: new Error('[skew/data] the context handling this intent closed') });
+    if (intentsClosed || typeof message !== 'object' || message === null || typeof (message as { from?: unknown }).from !== 'string') return;
+    try {
+      switch (message.kind) {
+        case 'intents-hello':
+          // a context that just arrived: tell it what is here
+          if (intents.local().length > 0) announce();
+          return;
+        case 'intents-list': {
+          const handlers = readHandlers(message.handlers);
+          if (handlers.length > 0) directory.set(message.from, handlers);
+          else directory.delete(message.from);
+          return;
         }
-        return;
-      case 'intent-call': {
-        if (message.to !== busId) return;
-        const reply = (outcome: { ok: true; result: unknown } | { ok: false; error: string }) => {
-          try {
-            intentWire?.postMessage({ kind: 'intent-return', call: message.call, to: message.from, ...outcome } as IntentWireMessage);
-          } catch {
-            intentWire?.postMessage({ kind: 'intent-return', call: message.call, to: message.from, ok: false, error: 'the handler returned a result that could not be sent back' } satisfies IntentWireMessage);
-          }
-        };
-        intents.runLocal(message.handler, message.payload).then(
-          (result) => reply({ ok: true, result }),
-          (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
-        );
-        return;
+        case 'intents-bye':
+          forget(message.from, 'the context handling this intent closed');
+          return;
+        case 'intent-call':
+          if (message.to === busId && typeof message.call === 'string' && typeof message.handler === 'string') answerCall(message);
+          return;
+        case 'intent-return': {
+          // only the realm the call went to can answer it
+          if (message.to !== busId || calls.get(message.call)?.to !== message.from) return;
+          const error = message.ok
+            ? undefined
+            : message.name === 'NoIntentHandlerError'
+              ? new NoIntentHandlerError(message.error, [])
+              : new Error(message.error);
+          settle(message.call, error ? { ok: false, error } : { ok: true, result: (message as { result: unknown }).result });
+          return;
+        }
       }
-      case 'intent-return':
-        if (message.to !== busId) return;
-        settle(message.call, message.ok ? { ok: true, result: message.result } : { ok: false, error: new Error(message.error) });
-        return;
+    } catch (error) {
+      options.onEventError?.('[skew/data] an intent message from another context could not be handled', error);
     }
   });
 
@@ -771,25 +867,30 @@ export function createEventBus(options: EventBusOptions): EventBus {
   const directoryReadyAt = intentWire ? Date.now() + INTENT_DISCOVERY_MS : 0;
 
   /**
-   * A raise that finds nobody in the bus's first moments waits for the directory once and retries,
+   * A raise in the bus's first moments that finds nobody waits for the directory before choosing,
    * so a fragment that raises as it mounts is not told "nothing can handle this" while the other
-   * realms' answers are still in flight.
+   * realms' answers are still in flight. It waits *before* running anything, so no handler runs twice.
    */
   async function raiseIntent<R>(intent: string, payload: unknown, raiseOptions?: RaiseOptions): Promise<IntentResult<R>> {
-    try {
-      return await intents.raiseIntent<R>(intent, payload, raiseOptions);
-    } catch (error) {
-      const wait = directoryReadyAt - Date.now();
-      if (!(error instanceof NoIntentHandlerError) || wait <= 0) throw error;
+    const wait = directoryReadyAt - Date.now();
+    if (wait > 0 && intents.candidates(intent).eligible.length === 0) {
       await new Promise((resolve) => setTimeout(resolve, wait));
-      return intents.raiseIntent<R>(intent, payload, raiseOptions);
     }
+    return intents.raiseIntent<R>(intent, payload, raiseOptions);
   }
 
-  // A realm that goes away without closing its bus — its iframe removed — still says so.
+  // A realm going away — its iframe removed, the tab closing, or entering the back-forward cache —
+  // says so; one coming back from that cache says hello again.
   const sayBye = () => sendIntents({ kind: 'intents-bye', from: busId });
-  if (intentWire && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  const sayHelloAgain = (event: Event) => {
+    if (!(event as PageTransitionEvent).persisted) return;
+    sendIntents({ kind: 'intents-hello', from: busId });
+    if (intents.local().length > 0) announce();
+  };
+  const listensToPage = Boolean(intentWire) && typeof window !== 'undefined' && typeof window.addEventListener === 'function';
+  if (listensToPage) {
     window.addEventListener('pagehide', sayBye);
+    window.addEventListener('pageshow', sayHelloAgain);
   }
 
   // Woken by any context that queued something for us — including our own emit.
@@ -814,6 +915,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
         broadcast(value: S): void {
           applyState(channel, value, { local: true });
           post(channel, { kind: 'state', value: channel.state, at: channel.at ?? Date.now() });
+          if (channel.options.persist) store(channel);
         },
 
         state(readOptions): S | undefined {
@@ -910,8 +1012,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
     close(): void {
       stopWaking();
       sayBye();
-      if (intentWire && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      intentsClosed = true;
+      if (listensToPage) {
         window.removeEventListener('pagehide', sayBye);
+        window.removeEventListener('pageshow', sayHelloAgain);
       }
       for (const call of [...calls.keys()]) settle(call, { ok: false, error: new Error('[skew/data] the bus closed before the intent was answered') });
       intentWire?.close();

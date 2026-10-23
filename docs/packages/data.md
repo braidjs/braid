@@ -96,8 +96,10 @@ await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
     fingerprinting resistance rounds it to 100 ms), two tabs opened in the same instant could
     share page scope. A host that must rule this out passes its own `createEventBus({ page })`.
   - Cross-origin `trust="untrusted"` fragments are not reached.
-- **A value that cannot be cloned** still reaches this context's subscribers and handlers. Its
-  failure to reach other contexts is reported to `onEventError` rather than thrown.
+- **Values are cloned.** Each subscriber, handler and other context gets its own structured clone,
+  so nobody can change what another sees. A value that cannot be cloned (one holding a function,
+  say) is not delivered, and the failure is reported to `onEventError` rather than thrown from
+  `broadcast` or `emit`.
 
 ### State that survives a reload
 
@@ -119,6 +121,17 @@ selection.subscribe((row) => highlight(row)); // after a reload: the row selecte
   `undefined` until then.
 - **Without a `driver`:** `persist` throws rather than quietly forgetting. An IndexedDB driver
   must list `EVENT_BUS_COLLECTIONS` among its collections, as durable events need too.
+- **Sign-out purges it only if told to.** Stored state can identify what someone was looking at.
+  List the same collections in `createTenancy({ collections: [...yours, ...EVENT_BUS_COLLECTIONS] })`
+  so `signOut()` removes them with everything else.
+- **Register contracts first.** Call `bus.register(name, contract)` before opening a persisted
+  channel. A value stored under a contract that this build hasn't registered is reported and not
+  handed over, because its shape could belong to another version.
+- **Open it the same way everywhere.** A channel's options are fixed by its first `channel()` call
+  in a context. Opening it again with a different `persist` or `scope` throws.
+- **Failures are reported, not thrown.** A value that can't be stored (not cloneable, no partition
+  active after sign-out, a failing driver) still goes out as a broadcast, and the failure goes to
+  `onEventError`.
 
 ## Intents across fragments
 
@@ -137,18 +150,32 @@ const { handled } = await bus.raiseIntent('ViewInvoice', { id: 'o1' });
   `'ask'` and custom policies, and `candidates()`, see one list. Each candidate from another realm
   carries a `source`.
 - **Versions are the raiser's call.** Whether a handler can read the payload, and the projection to
-  the version it declared with `as`, are decided where the intent is raised. An older fragment never
-  receives a shape it can't read, and never runs migration code.
+  the version it declared with `as`, are decided where the intent is raised, so register the
+  intent's contract (`bus.register`) in every fragment that raises it. A handler in another realm
+  that declares `as` isn't offered to a raiser with no contract to project with. An older fragment
+  never receives a shape it can't read, and never runs migration code.
 - **Results and errors come back.** A handler's return value resolves the raise, and a thrown error
-  rejects it. A handler that doesn't answer within `intentTimeoutMs` (default 30 seconds) rejects
-  too.
-- **A closing realm answers at once.** A bus that closes, or whose realm is removed, leaves the
-  directory, and raises waiting on it reject immediately.
+  rejects it. Both cross as structured clones: a result can't hold functions, and an error arrives
+  as its message, rebuilt as `NoIntentHandlerError` when it was one. A local handler's result is
+  returned as is.
+- **A realm that goes away stops being offered.** A bus that closes, or whose page is hidden or
+  unloaded (including into the back-forward cache, which says hello again on return), leaves the
+  directory, and raises waiting on it reject immediately. A realm that dies without a word (a
+  crashed or frozen frame) is dropped the first time a call to it times out, after
+  `intentTimeoutMs`, which defaults to 30 seconds.
 - **Discovery is asynchronous.** Each bus learns about the others' handlers by message. A raise that
   finds nobody in a bus's first 100 ms waits for the directory once before giving up, so a fragment
   can raise as it mounts.
-- **Page scope only.** Another tab's handlers are not candidates. Without a page (outside a
-  browser, unless `page` is passed) intents stay within the bus.
+- **Page scope only.** Another tab's handlers are not candidates, subject to the page-identity
+  caveat above; pass `page` to rule it out. Without a page (outside a browser, unless `page` is
+  passed), intents stay within the bus.
+- **The page's same-origin realms trust each other.** Any same-origin script can write to the
+  page's channels, so a call to a handler in another realm is code running on that realm's behalf.
+  Malformed messages are dropped and an answer is only taken from the realm the call went to, but
+  this is not a security boundary: put untrusted code in a `trust="untrusted"` fragment, which can't
+  reach these channels.
+- **One partition per bus.** A bus joins its partition's channels when it is created. After a
+  tenant switch, create a new bus for the new partition rather than reusing the old one.
 
 ---
 

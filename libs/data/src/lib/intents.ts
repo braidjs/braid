@@ -132,6 +132,11 @@ export function createIntentRegistry(options: IntentRegistryOptions): IntentRegi
    */
   function eligibility(registration: Registration): { ok: true } | { ok: false; reason: string } {
     const schema = options.schemaFor(registration.intent);
+    if (!schema && registration.source !== undefined && registration.as !== undefined) {
+      // In another realm, a handler that names a version is promised that version — and with no
+      // contract here, there is nothing to project the payload with.
+      return { ok: false, reason: `reads v${registration.as}, and this context registers no contract for "${registration.intent}" to project with` };
+    }
     if (!schema || registration.as === undefined || registration.as === schema.version) return { ok: true };
 
     if (registration.as > schema.version) {

@@ -127,6 +127,15 @@ when there is one, and then on every change, so there is no separate `get` to re
 **Upgrading:** before this, `subscribe` fired only on later changes. Code that called `get` and then
 `subscribe` now handles the first value twice. Drop the `get`, or pass `replay: false`.
 
+The replay runs inside `subscribe`, before it returns. A listener that unsubscribes itself through
+the returned function (`const off = subscribe(key, (v) => done(v) && off())`) has no `off` yet on
+that first call. Use a `signal` instead:
+
+```ts
+const stop = new AbortController();
+env.context.subscribe('job', (job) => job.finished && stop.abort(), { signal: stop.signal });
+```
+
 ---
 
 ## Custom Element Adapter
