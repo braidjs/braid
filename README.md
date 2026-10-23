@@ -23,22 +23,26 @@
 ## What Braid does
 
 - **Splits where code runs from where the DOM lives.** Each fragment's JavaScript runs in its own
-  hidden same-origin realm, with its own globals and import map. Its HTML renders into the host
-  page inside a shadow root, in normal layout flow. React 18 and React 19, or zoned and zoneless
-  Angular, can share a page without colliding.
+  hidden same-origin realm, with its own globals. Its HTML renders into the host page inside a
+  shadow root, in normal layout flow. React 18 and React 19, or zoned and zoneless Angular, can
+  share a page without colliding.
 - **Composes on the server.** The gateway sits in front of your host app and streams each
   fragment's HTML into the page as it is served ("piercing"), so content is there before any
-  JavaScript runs.
+  JavaScript runs. Contract-mode fragments can also run with no gateway at all (below).
 - **Routes fragment traffic deterministically.** Every fragment lives at its own path,
   `/__braid/frag/:id/`, so caching and nested fragments behave predictably.
-- **Keeps the host page untouched.** No globals or prototypes are patched on the host. Modern apps
-  get an explicit `FragmentEnv` through small framework adapters. Legacy apps can run unmodified
-  through a compat adapter, contained inside their own realm.
+- **Keeps the host page untouched.** No globals or prototypes are patched on the host. By default
+  an app runs unmodified through the compat adapter, whose emulation stays inside the app's own
+  realm. Apps that opt into contract mode (`defineAngularFragment()`, `defineReactFragment()`) are
+  handed an explicit `FragmentEnv` instead, and need no gateway.
+- **Offers a trust tier for third parties.** `trust="untrusted"` mounts a fragment in a real
+  cross-origin sandboxed iframe, behind the same `<fragment-slot>` API.
 - **Handles version skew.** Data crossing a fragment boundary is versioned and migrated in both
   directions, so independently deployed apps can disagree about a schema without breaking.
 - **Treats configuration as governed data.** The registry stores immutable, content-addressed
   snapshots with rollback, environments and approvals, per-team ownership, an audit trail and
-  publishing by pull request. The console edits all of it, including shells laid out as data.
+  publishing by pull request. The console edits fragments and shells (layouts as data), shows
+  history, and handles rollback, promotion and approval.
 
 Braid is a successor to [web-fragments](https://github.com/web-fragments/web-fragments), and builds
 on its core idea.
@@ -70,20 +74,30 @@ import '@braidlabs/core';
 The billing app changes nothing; it keeps building and serving itself as before. The
 [getting-started guide](https://braidjs.github.io/braid/getting-started) walks through it.
 
+**No gateway?** A fragment written in contract mode is loaded straight from its own origin. The
+host needs only the runtime and a slot, and can itself be a static site:
+
+```html
+<fragment-slot name="billing" adapter="contract" entry="https://billing.example/main.js"></fragment-slot>
+```
+
+You give up server-side rendering and the registry in exchange. See
+[using Braid without the gateway](https://braidjs.github.io/braid/braid-without-gateway).
+
 ## Packages
 
 All packages are published under [`@braidlabs`](https://www.npmjs.com/org/braidlabs) on npm.
 
 | Area                   | Package                                                | What it is                                                                      |
 | :--------------------- | :----------------------------------------------------- | :------------------------------------------------------------------------------ |
-| **Composition**        | [`@braidlabs/core`](libs/core)                         | Client runtime: `<fragment-slot>`, realms, the compat adapter                   |
+| **Composition**        | [`@braidlabs/core`](libs/core)                         | Client runtime: `<fragment-slot>`, realms, the compat and contract adapters     |
 |                        | [`@braidlabs/gateway`](libs/braid-gateway)             | Fetch-native middleware: routing under `/__braid/`, server-side piercing        |
 |                        | [`@braidlabs/sw`](libs/braid-sw)                       | Service worker that keeps each fragment's assets cached per build               |
 | **Framework bindings** | [`@braidlabs/angular`](libs/braid-angular)             | `<braid-fragment>`, `provideBraid()`, `defineAngularFragment()`                 |
-|                        | [`@braidlabs/react`](libs/braid-react)                 | `<BraidFragment>` and host-navigation wiring for any router                     |
+|                        | [`@braidlabs/react`](libs/braid-react)                 | `<BraidFragment>`, host-navigation wiring, `defineReactFragment()`              |
 | **Operations**         | [`@braidlabs/registry`](libs/braid-registry)           | Snapshots, validation, the write API, environments, ownership, audit, GitOps    |
 |                        | [`@braidlabs/console`](libs/braid-console)             | Registry console: fragments, shell designer, history and rollback               |
-|                        | [`@braidlabs/cli`](libs/braid-cli)                     | `braid dev` for local composition, scaffolding and registry commands            |
+|                        | [`@braidlabs/cli`](libs/braid-cli)                     | `braid dev`, scaffolding, registry commands, `detangle` off module federation   |
 | **Version skew**       | [`@braidlabs/skew`](libs/skew)                         | Versioned envelopes, migration chains, build identity. No dependencies          |
 |                        | [`@braidlabs/contract`](libs/contract)                 | Migrations published as a document an API serves and clients resolve            |
 |                        | [`@braidlabs/build`](libs/build)                       | `skew-stamp` and `skew-contract`: build identity and contract types             |
@@ -110,7 +124,7 @@ The version-skew and Angular packages stand alone: use them with or without the 
 ## Demos
 
 ```sh
-npm run braid:demo   # Braid: a host and three remotes composed on one page
+npm run braid:demo   # Braid: a host and four remotes on one page, one with no gateway route
 npm run demo:prod    # two production builds, real deploys, real version-skew failures
 npm run demo         # the simulated single-build demo
 ```

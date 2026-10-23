@@ -492,7 +492,8 @@ POC: a 2s widget against a 400ms budget delayed the page by 407ms, not 2s.
 
 **Do fragments share cookies and storage?** Under the trusted tier, yes — it is one origin. That is
 convenient (one session) and it is why the tier is called _trusted_. Storage isolation is what the
-untrusted tier is for, and it is not built yet.
+untrusted tier (`trust="untrusted"`, a cross-origin sandboxed iframe) is for — see
+[trust tiers](braid-boundary.md).
 
 **Can a fragment break the host?** Not by loading, and this is enforced rather than hoped for: its
 markup arrives inert, its code runs in another realm, and the host purity invariant is tested in CI.
@@ -502,8 +503,9 @@ It can still be slow, and it can still render something ugly.
 may only have one `<html>`, `<head>`, and `<body>`. A second set inside the page would be silently
 dropped by the parser, taking the fragment's content with it, so they are renamed on the way in.
 
-**Do I need the gateway?** For piercing and the namespace, yes. There is a client-only path with a
-smaller feature set — see [braid-without-gateway.md](braid-without-gateway.md).
+**Do I need the gateway?** For piercing, the namespace and compat mode, yes. Contract-mode
+fragments need none — the host loads them straight from their own origin, with a smaller feature
+set. See [braid-without-gateway.md](braid-without-gateway.md).
 
 ---
 
