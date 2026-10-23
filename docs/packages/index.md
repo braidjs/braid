@@ -74,7 +74,7 @@ Typed components and navigation connectors for popular UI frameworks.
 
 | Package | Description | Key APIs |
 | :--- | :--- | :--- |
-| [`@braidlabs/react`](./react.md) | React component and hooks for mounting and communicating with Braid fragments. | `<BraidFragment>`, `useBraidContext`, `useBraidEvent` |
+| [`@braidlabs/react`](./react.md) | React component for mounting Braid fragments, host-navigation wiring, and React contract fragments. | `<BraidFragment>`, `useBraidHostNavigation`, `defineReactFragment` |
 | [`@braidlabs/angular`](./angular.md) | Angular component and providers for embedding Braid fragments into Angular applications. | `<braid-fragment>`, `provideBraid()` |
 
 ---

@@ -104,6 +104,27 @@ Mounting in HTML:
 <fragment-slot name="billing" trust="trusted"></fragment-slot>
 ```
 
+### Shared context, and fragments that mount late
+
+The host publishes state on the context bus. Each fragment reads it at the contract version it
+declares:
+
+```ts
+// host
+braidContext.set('session', { userId: 'user:ana' });
+
+// fragment: the current value now, then every change
+env.context.subscribe('session', (session) => signIn(session), { replay: true });
+```
+
+The bus keeps the last value of each key. A fragment's view of it is complete before its code
+runs, so `env.context.get(key)` always returns what is true now, however late the fragment
+mounted. `subscribe` on its own fires only on later changes. Pass `replay: true` and it also fires
+at once with the current value, which removes the separate `get` that is easy to forget.
+
+`replay` is opt-in for now. A subscriber that already calls `get` first would otherwise handle the
+first value twice. Host code can use it on `braidContext.subscribe` the same way.
+
 ---
 
 ## Custom Element Adapter

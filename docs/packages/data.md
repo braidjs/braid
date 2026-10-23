@@ -63,6 +63,33 @@ if (user) {
 
 ---
 
+## Channels: state, events, and late joiners
+
+`createEventBus` gives each channel two halves, because state is not an event:
+
+```ts
+const bus = createEventBus({ consumer: 'blotter' });
+const selection = bus.channel<{ id: string }>('selection'); // scope: 'page' by default
+
+selection.broadcast({ id: 'row-1' });             // state: last value wins
+selection.subscribe((row) => highlight(row));      // called at once with the current value
+await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
+```
+
+- **State replays to late subscribers.** `subscribe` is called at once with the current value.
+  A context that opens the channel later, such as a fragment mounted on demand or a new tab, asks
+  the others for the current state once, so it doesn't wait for the next `broadcast`.
+- **Events do not replay.** A late listener does not see an `emit` that happened before it
+  subscribed, which is the safe default for anything with a verb. For an event a consumer must
+  not miss, use `emit(type, payload, { delivery: 'at-least-once' })` with a `driver` and the
+  `consumers` list: each consumer gets its own durable queue, delivered when it next mounts.
+- **Scope is how far it reaches.** `'page'` reaches every realm on this page and no other tab;
+  `'origin'` reaches every tab too. Each fragment runs in its own realm, a separate JavaScript
+  context, so both travel over a `BroadcastChannel`. A page is the top-level document; override it
+  with `createEventBus({ page })`.
+
+---
+
 ## Cross-Context Distributed Locks
 
 Coordinate actions (such as draining the mutation outbox or flushing cache) across multiple tabs and iframe realms without race conditions:
