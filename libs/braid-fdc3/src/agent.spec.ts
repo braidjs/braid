@@ -3,6 +3,7 @@ import type { Context } from '@finos/fdc3-context';
 import type { DesktopAgent } from '@finos/fdc3-standard';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createRegistryApi, createSnapshot, memorySnapshotStore } from '@braidlabs/registry';
+import { DefaultFDC3Server } from '@finos/fdc3-web-impl';
 import { createBraidDesktopAgent } from './agent.js';
 
 const instrument: Context = { type: 'fdc3.instrument', id: { ticker: 'AAPL' } };
@@ -194,5 +195,146 @@ describe('a Braid page as an FDC3 desktop', () => {
     controller.abort();
 
     expect(await agent.realmGlobals({ fragmentId: 'billing', signal: controller.signal })).toBeUndefined();
+  });
+
+  it('gives a fragment no path from its fdc3 to the agent, so it can only speak as itself', async () => {
+    const { mount } = await setup();
+    const { fdc3 } = await mount('blotter');
+
+    // every object reachable through properties, Map and Set entries, and prototypes' own fields
+    const seen = new Set<unknown>();
+    const queue: unknown[] = [fdc3];
+    while (queue.length > 0) {
+      const value = queue.shift();
+      if (value === null || (typeof value !== 'object' && typeof value !== 'function') || seen.has(value)) continue;
+      seen.add(value);
+      if (value instanceof Map || value instanceof Set) queue.push(...value.keys(), ...value.values());
+      for (const key of Reflect.ownKeys(value as object)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor && 'value' in descriptor) queue.push(descriptor.value);
+      }
+    }
+
+    expect(seen.size).toBeGreaterThan(10);
+    expect([...seen].some((value) => value instanceof DefaultFDC3Server)).toBe(false);
+  });
+
+  it('refuses a context that cannot be cloned at once, rather than timing out or throwing unhandled', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const { mount } = await setup();
+      const { fdc3 } = await mount('blotter');
+      await fdc3.joinUserChannel('fdc3.channel.1');
+      const started = Date.now();
+
+      await expect(fdc3.broadcast({ type: 'fdc3.instrument', format: () => 'AAPL' } as unknown as Context)).rejects.toThrow(
+        'MalformedContext',
+      );
+      expect(Date.now() - started).toBeLessThan(1_000);
+      await settle();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('answers a call made after teardown at once', async () => {
+    const { mount } = await setup();
+    const billing = await mount('billing');
+    billing.unmount();
+    const started = Date.now();
+
+    await expect(billing.fdc3.getInfo()).rejects.toThrow('AgentDisconnected');
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('gives nothing, promptly, to a fragment torn down while it connects', async () => {
+    const { agent } = await setup();
+    const controller = new AbortController();
+    const started = Date.now();
+
+    const pending = agent.realmGlobals({ fragmentId: 'billing', signal: controller.signal });
+    controller.abort();
+
+    expect(await pending).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('treats a directory that failed to load as empty', async () => {
+    const agent = createBraidDesktopAgent({ directory: undefined as never });
+
+    expect(await agent.realmGlobals({ fragmentId: 'billing', signal: new AbortController().signal })).toBeUndefined();
+  });
+
+  it('holds an intent for a mounted fragment until its listener arrives, rather than losing it', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const billing = (await mount('billing')).fdc3;
+
+    // billing is mounted, but its bundle has not added a listener yet
+    const raised = blotter.raiseIntent('ViewInvoice', instrument);
+    await settle();
+    const handled = vi.fn(async () => ({ type: 'fdc3.invoice', id: { invoice: 'INV-2' } }));
+    await billing.addIntentListener('ViewInvoice', handled);
+
+    const resolution = await raised;
+    await settle();
+    expect(resolution.source.appId).toBe('billing');
+    expect(handled).toHaveBeenCalledTimes(1);
+    expect(await resolution.getResult()).toEqual({ type: 'fdc3.invoice', id: { invoice: 'INV-2' } });
+  });
+
+  it('resolves a raise that names only the app to its live instance', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const billing = (await mount('billing')).fdc3;
+    const handled = vi.fn();
+    await billing.addIntentListener('ViewInvoice', handled);
+
+    const resolution = await blotter.raiseIntent('ViewInvoice', instrument, { appId: 'billing' });
+    await settle();
+
+    expect(resolution.source.appId).toBe('billing');
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses fdc3.open at once, since nothing can be launched yet', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const started = Date.now();
+
+    await expect(blotter.open({ appId: 'billing' })).rejects.toThrow('ErrorOnLaunch');
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('keeps delivering to the other listeners when one throws', async () => {
+    const reported = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const originalReportError = (globalThis as { reportError?: unknown }).reportError;
+    const errors: unknown[] = [];
+    (globalThis as { reportError?: unknown }).reportError = (error: unknown) => errors.push(error);
+    try {
+      const { mount } = await setup();
+      const blotter = (await mount('blotter')).fdc3;
+      const chart = (await mount('chart')).fdc3;
+      const second = vi.fn();
+      await chart.joinUserChannel('fdc3.channel.4');
+      await chart.addContextListener(null, () => {
+        throw new Error('handler bug');
+      });
+      await chart.addContextListener(null, second);
+      await blotter.joinUserChannel('fdc3.channel.4');
+
+      await blotter.broadcast(instrument);
+      await settle();
+
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(errors).toHaveLength(1);
+      // and the fragment's own requests still get their answers
+      expect((await chart.getInfo()).appMetadata.appId).toBe('chart');
+    } finally {
+      (globalThis as { reportError?: unknown }).reportError = originalReportError;
+      reported.mockRestore();
+    }
   });
 });
