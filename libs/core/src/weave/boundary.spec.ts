@@ -139,7 +139,7 @@ describe('context across the boundary', () => {
     const seen = vi.fn();
 
     // what a fragment that mounts after sign-in does: one call, no separate get
-    mounted.env.context.subscribe('session', seen, { replay: true });
+    mounted.env.context.subscribe('session', seen);
     expect(seen).toHaveBeenCalledWith({ userId: 'u1' });
 
     braidContext.set('session', { userId: 'u2' });
@@ -147,10 +147,10 @@ describe('context across the boundary', () => {
     expect(seen).toHaveBeenLastCalledWith({ userId: 'u2' });
     expect(seen).toHaveBeenCalledTimes(2);
 
-    // and without asking, the mirror does not replay
-    const unasked = vi.fn();
-    mounted.env.context.subscribe('session', unasked);
-    expect(unasked).not.toHaveBeenCalled();
+    // and told not to, the mirror does not replay
+    const optedOut = vi.fn();
+    mounted.env.context.subscribe('session', optedOut, { replay: false });
+    expect(optedOut).not.toHaveBeenCalled();
     mounted.dispose();
   });
 
@@ -269,7 +269,7 @@ describe('context across the boundary', () => {
     braidContext.set('cart', { items: 0 });
     const mounted = await mount();
     const seen = vi.fn();
-    mounted.env.context.subscribe('cart', seen);
+    mounted.env.context.subscribe('cart', seen, { replay: false });
 
     mounted.dispose();
     braidContext.set('cart', { items: 9 });

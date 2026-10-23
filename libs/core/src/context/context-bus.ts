@@ -39,9 +39,9 @@ export interface ContextSubscribeOptions {
   /** Names the fragment in any error raised. Falls back to the context key. */
   fragmentId?: string;
   /**
-   * Also call the listener at once with the key's current value, when it has one — so a fragment
-   * that mounts after the value was set still renders it, with no separate `get`. Off by default
-   * for now: a caller that already reads with `get` first would handle the value twice.
+   * Whether to call the listener at once with the key's current value, when it has one — so a
+   * fragment that mounts after the value was set still renders it, with no separate `get`. On by
+   * default; `false` hears only later changes.
    */
   replay?: boolean;
 }
@@ -163,9 +163,9 @@ class ContextBus {
     options?.signal?.addEventListener('abort', unsubscribe, { once: true });
 
     const current = this.#values.get(key);
-    if (options?.replay && current !== undefined) {
+    if ((options?.replay ?? true) && current !== undefined) {
       try {
-        listener(this.#project(key, current, options.as));
+        listener(this.#project(key, current, options?.as));
       } catch (error) {
         console.error(`braid: a "${key}" context subscriber threw on replay`, error);
       }

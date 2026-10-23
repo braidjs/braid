@@ -76,8 +76,8 @@ selection.subscribe((row) => highlight(row));      // called at once with the cu
 await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
 ```
 
-- **State replays to late subscribers.** `subscribe` is called at once with the current value,
-  always; core's context bus makes the same behaviour opt-in with `replay: true`.
+- **State replays to late subscribers.** `subscribe` is called at once with the current value, as
+  core's context bus does.
 - **A context that joins late is caught up.** A fragment mounted on demand, or a new tab on an
   `'origin'` channel, asks the others for the current state the first time it reads the channel.
   The context that published it answers. If that context is gone, whichever other holder answers

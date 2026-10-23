@@ -194,7 +194,7 @@ export function createContextMirror(
       // the mirror was seeded at OPEN, before the fragment's code ran, so this is the current value
       // whenever the fragment subscribes
       const current = values.get(key);
-      if (subscribeOptions?.replay && current !== undefined) {
+      if ((subscribeOptions?.replay ?? true) && current !== undefined) {
         try {
           listener(current);
         } catch (error) {
