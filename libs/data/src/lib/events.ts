@@ -703,7 +703,8 @@ export function createEventBus(options: EventBusOptions): EventBus {
       } catch (error) {
         clearTimeout(timer);
         calls.delete(call);
-        reject(new Error(`[skew/data] the "${candidate.intent}" payload could not be sent to ${candidate.consumer}`, { cause: error }));
+        // `cause` set by hand: Angular builds of this package compile against a lib without Error options
+        reject(Object.assign(new Error(`[skew/data] the "${candidate.intent}" payload could not be sent to ${candidate.consumer}`), { cause: error }));
       }
     });
   }
