@@ -21,6 +21,7 @@ import { isDevMode } from '../config.js';
 export const compatAdapter: InstalledAdapter = {
   name: 'compat',
   realmKind: 'compat-http',
+  installsRealmGlobals: true,
 
   async boot(ctx: AdapterBootContext): Promise<void> {
     const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, sharedGlobals, realmGlobals, signal } = ctx;

@@ -67,4 +67,10 @@ describe('compat adapter and shared globals', () => {
       delete (window as unknown as { fdc3?: unknown }).fdc3;
     }
   });
+
+  it('declares that it installs realm globals, so the slot calls the host hook for it', async () => {
+    const { customElementAdapter } = await import('./custom-element-adapter.js');
+    expect(compatAdapter.installsRealmGlobals).toBe(true);
+    expect(customElementAdapter.installsRealmGlobals).toBe(true);
+  });
 });

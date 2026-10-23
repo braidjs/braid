@@ -38,6 +38,7 @@ export const customElementAdapter: InstalledAdapter = {
    * that ships only a script is a complete fragment.
    */
   needsDocument: false,
+  installsRealmGlobals: true,
 
   async boot(ctx: AdapterBootContext): Promise<void> {
     const { fragmentId, realm, env, signal } = ctx;
