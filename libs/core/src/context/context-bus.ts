@@ -38,6 +38,12 @@ export interface ContextSubscribeOptions {
   as?: number;
   /** Names the fragment in any error raised. Falls back to the context key. */
   fragmentId?: string;
+  /**
+   * Also call the listener at once with the key's current value, when it has one — so a fragment
+   * that mounts after the value was set still renders it, with no separate `get`. Off by default
+   * for now: a caller that already reads with `get` first would handle the value twice.
+   */
+  replay?: boolean;
 }
 
 export interface ContextReadOptions {
@@ -139,6 +145,8 @@ class ContextBus {
 
   subscribe(key: string, listener: ContextListener, options?: ContextSubscribeOptions): () => void {
     this.#assertReachable(key, options?.as, options?.fragmentId);
+    // an already-aborted signal will never fire, so registering would leave a listener nobody can remove
+    if (options?.signal?.aborted) return () => undefined;
 
     let keySubscriptions = this.#subscriptions.get(key);
     if (!keySubscriptions) {
@@ -153,6 +161,15 @@ class ContextBus {
 
     const unsubscribe = () => void keySubscriptions.delete(subscription);
     options?.signal?.addEventListener('abort', unsubscribe, { once: true });
+
+    const current = this.#values.get(key);
+    if (options?.replay && current !== undefined) {
+      try {
+        listener(this.#project(key, current, options.as));
+      } catch (error) {
+        console.error(`braid: a "${key}" context subscriber threw on replay`, error);
+      }
+    }
     return unsubscribe;
   }
 

@@ -514,10 +514,18 @@ braidContext.set('session', { userId: 'user:ana', actingAs: 'acme' });
 
 ```ts
 // in every fragment, independently
-env.context.subscribe('session', async (session) => {
-  await tenancy.signIn({ userId: session.userId, actingAs: session.actingAs });
-});
+env.context.subscribe(
+  'session',
+  async (session) => {
+    await tenancy.signIn({ userId: session.userId, actingAs: session.actingAs });
+  },
+  // the host set the session before this fragment mounted; replay hands it over now
+  { replay: true },
+);
 ```
+
+`replay: true` matters here. Without it, `subscribe` fires only on the *next* change, and a fragment
+that mounts after sign-in, such as a lazy route or a slot rendered later, would never sign in.
 
 Same identity in, same partition out, in every realm, with no shared state and no handshake. Publish
 it on the **versioned** context bus rather than a bare event, because a fragment deployed months ago

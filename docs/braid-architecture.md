@@ -345,9 +345,14 @@ The Context Bus enables structured communication between host and fragments:
 // Host publishes shared context
 braidContext.set('locale', 'en-US');
 
-// Fragment consumes shared context
-env.context.subscribe('locale', (locale) => updateLocale(locale), { signal: env.signal });
+// Fragment consumes shared context: the current value now (replay), then every change
+env.context.subscribe('locale', (locale) => updateLocale(locale), { signal: env.signal, replay: true });
 ```
+
+A fragment's copy of the context is seeded before its code runs and kept current by messages, so
+`get(key)` returns the current value however late the fragment mounted.
+`subscribe` alone fires only on later changes. With `replay: true` it also fires at once with the
+current value, so a fragment that mounts after a value was set still renders it.
 
 When microfrontends are deployed with differing schema versions, Braid's contract migrations automatically translate payloads across versions upon delivery.
 
