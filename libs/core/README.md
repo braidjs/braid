@@ -52,13 +52,15 @@ ship yet, so nothing routes to them automatically.
 | Kind            | URL              | History involvement                        | Used by         |
 | --------------- | ---------------- | ------------------------------------------ | --------------- |
 | `compat-http`   | `/__braid/frag/…`| initial load only (`replaceState` after)   | compat adapter  |
-| `contract-blob` | `blob:`          | none, ever                                 | contract adapters (none yet) |
-| `sandbox`       | third-party      | —                                          | not in this build |
+| `contract-blob` | `blob:`          | none, ever                                 | contract adapter (`adapter="contract"`) |
+| `sandbox`       | third-party      | —                                          | untrusted tier, via `createSandboxRealm()` |
 
 Contract-blob realms boot from a `blob:` URL the runtime authors: no network round trip, no
-gateway stub, and zero interaction with the joint session history. Each carries a `<base>` into
-the fragment's namespace and its own import map, which is how two fragments ship different
-majors of the same dependency without a shared resolution namespace.
+gateway stub, and zero interaction with the joint session history. Each carries a `<base>`: the
+fragment's namespace by default, or the entry module's directory for a fragment loaded with no
+gateway. Two fragments can ship different majors of the same dependency because each realm
+evaluates its own copy. `createRealm()` also accepts a per-realm import map, but nothing exposes
+it to fragment authors yet.
 
 Verified empirically in Chromium: same-origin and DOM-capable, five realms add
 **zero** history entries, per-realm import maps resolve, module evaluation works, and globals do
