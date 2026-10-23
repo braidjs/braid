@@ -93,6 +93,7 @@ export type { AuditEvent, AuditAction, AuditSink, WebhookAuditSink, WebhookAudit
 export type {
   RegistryApi,
   RegistryApiOptions,
+  RegistryAppdOptions,
   PublishRequestBody,
   PublishResult,
   RegistryAction,

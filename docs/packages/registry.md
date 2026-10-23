@@ -351,6 +351,34 @@ createGateway({ registry: snapshotRegistry({ store, environment: 'production' })
 - **Storage.** Both bundled stores keep environments: memory, and the file store's `refs/` and
   `pending/` beside `HEAD`.
 
+### The registry as an FDC3 App Directory
+
+`appd` serves the registry as an FDC3 2.2 App Directory, from the same API, under the same `read`
+right — one URL to configure in any FDC3 desktop agent:
+
+```ts
+createRegistryApi({
+  store,
+  ...authorizer,
+  environments: [{ name: 'staging' }, { name: 'production', from: 'staging', approvals: 1 }],
+  appd: { origin: 'https://portal.example', environment: 'production' },
+});
+// GET /__braid/registry-api/appd/v2/apps          → { applications, message }
+// GET /__braid/registry-api/appd/v2/apps/billing  → the bare Application record
+```
+
+- **Governed.** With `environment`, the directory is that environment's pin, so an agent resolves
+  intents only to apps that were promoted — and approved, where production requires it. Without
+  it, HEAD is served.
+- **The same records as the gateway.** Manifests' `fdc3` and `appd` blocks are projected by the
+  gateway's `toAppdApplication`, validated in tests against FDC3's own schema. `origin` is the shell
+  the apps appear on; `details.url` and icons are absolute on it.
+- **Not per-user.** `read` already returns every manifest whole from `/head`, so the directory is
+  not filtered by `access.list`. For the per-user view, serve `discovery: { appd: true }` from the
+  gateway instead.
+- Errors are AppD's `{ code, message }`: 404 for an unknown app, 403 when `authorize` refuses `read`.
+  A `Response` from `authorize` (a 401 bearer challenge) is passed through.
+
 ### Per-tag ownership
 
 A registry is shared by many teams, and "may publish" is too coarse a right for it. With `owns`,
