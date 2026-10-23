@@ -31,6 +31,24 @@ export interface IntentCandidate {
   priority: number;
   /** The contract version it reads the payload at. */
   as?: number;
+  /**
+   * The bus in another JavaScript context — another fragment's realm on this page — that
+   * registered it. Absent for a handler registered here.
+   */
+  source?: string;
+}
+
+/** A handler registered in another context, as the event bus's directory knows it. */
+export interface RemoteIntentHandler extends IntentCandidate {
+  source: string;
+  /** Hands the payload — already projected to `as` here — to the other context and awaits its result. */
+  run: (payload: unknown) => Promise<unknown>;
+}
+
+/** A handler registered here, as the event bus announces it to other contexts. */
+export interface LocalIntentHandler extends IntentCandidate {
+  /** Stable for the registration's lifetime; how another context asks for this one to run. */
+  id: string;
 }
 
 /**
@@ -73,6 +91,7 @@ export class NoIntentHandlerError extends Error {
 }
 
 interface Registration extends IntentCandidate {
+  id?: string;
   run: (payload: unknown) => unknown | Promise<unknown>;
 }
 
@@ -81,6 +100,10 @@ export interface IntentRegistry {
   raiseIntent<R = unknown>(intent: string, payload: unknown, options?: RaiseOptions): Promise<IntentResult<R>>;
   /** Who could handle this intent right now, for a launcher or a chooser. */
   candidates(intent: string, payload?: unknown): { eligible: IntentCandidate[]; ineligible: IntentCandidate[] };
+  /** The handlers registered here, for announcing to other contexts. */
+  local(): LocalIntentHandler[];
+  /** Runs a handler registered here, for a call from another context. The payload is already projected. */
+  runLocal(id: string, payload: unknown): Promise<unknown>;
 }
 
 export interface IntentRegistryOptions {
@@ -88,6 +111,13 @@ export interface IntentRegistryOptions {
   /** Resolves the contract for an intent's payload, so eligibility can be decided. */
   schemaFor: (intent: string) => VersionedSchema<unknown> | undefined;
   onEventError?: (message: string, detail?: unknown) => void;
+  /**
+   * Handlers registered in other contexts, considered with this one's. Eligibility and projection
+   * are decided here, by the raiser's contract, exactly as for a local handler.
+   */
+  remote?: (intent: string) => readonly RemoteIntentHandler[];
+  /** Called when this context's own registrations change. */
+  onChange?: () => void;
 }
 
 export function createIntentRegistry(options: IntentRegistryOptions): IntentRegistry {
@@ -117,6 +147,11 @@ export function createIntentRegistry(options: IntentRegistryOptions): IntentRegi
       : { ok: false, reason: `v${registration.as} is unreachable — ${missing.join(', ')} declare no down migration` };
   }
 
+  /** This context's handlers for an intent, then other contexts'. */
+  function everyone(intent: string): Registration[] {
+    return [...(registrations.get(intent) ?? []), ...(options.remote?.(intent) ?? [])];
+  }
+
   function project(intent: string, payload: unknown, as: number | undefined): unknown {
     const schema = options.schemaFor(intent);
     if (!schema || as === undefined || as === schema.version) return payload;
@@ -137,20 +172,35 @@ export function createIntentRegistry(options: IntentRegistryOptions): IntentRegi
         label: handlerOptions.label ?? options.consumer,
         priority: handlerOptions.priority ?? 0,
         ...(handlerOptions.as === undefined ? {} : { as: handlerOptions.as }),
+        id: crypto.randomUUID(),
         run: handlerOptions.handler as (payload: unknown) => unknown,
       };
       forIntent.add(registration);
+      options.onChange?.();
 
-      const unsubscribe = () => void forIntent.delete(registration);
+      const unsubscribe = () => {
+        if (forIntent.delete(registration)) options.onChange?.();
+      };
       handlerOptions.signal?.addEventListener('abort', unsubscribe, { once: true });
       return unsubscribe;
+    },
+
+    local() {
+      return [...registrations.values()].flatMap((set) => [...set].map((registration) => ({ ...strip(registration), id: registration.id! })));
+    },
+
+    async runLocal(id: string, payload: unknown) {
+      for (const set of registrations.values()) {
+        for (const registration of set) if (registration.id === id) return registration.run(payload);
+      }
+      throw new NoIntentHandlerError('(removed handler)', []);
     },
 
     candidates(intent: string) {
       const eligible: IntentCandidate[] = [];
       const ineligible: IntentCandidate[] = [];
 
-      for (const registration of registrations.get(intent) ?? []) {
+      for (const registration of everyone(intent)) {
         (eligibility(registration).ok ? eligible : ineligible).push(strip(registration));
       }
 
@@ -161,7 +211,7 @@ export function createIntentRegistry(options: IntentRegistryOptions): IntentRegi
 
     async raiseIntent<R>(intent: string, payload: unknown, raiseOptions?: RaiseOptions): Promise<IntentResult<R>> {
       const policy = raiseOptions?.resolve ?? 'first';
-      const all = [...(registrations.get(intent) ?? [])];
+      const all = everyone(intent);
 
       const eligible: Registration[] = [];
       const ineligible: { candidate: IntentCandidate; reason: string }[] = [];
@@ -224,9 +274,11 @@ const strip = (registration: Registration): IntentCandidate => ({
   label: registration.label,
   priority: registration.priority,
   ...(registration.as === undefined ? {} : { as: registration.as }),
+  ...(registration.source === undefined ? {} : { source: registration.source }),
 });
 
 const matches = (registration: Registration, candidate: IntentCandidate): boolean =>
+  registration.source === candidate.source &&
   registration.consumer === candidate.consumer &&
   registration.label === candidate.label &&
   registration.priority === candidate.priority &&

@@ -767,7 +767,8 @@ describe('late join, without a storm or a false conflict', () => {
     bus.channel('orders').addEventListener('order.placed', vi.fn());
     await bus.channel('orders').emit('order.placed', { id: 'o1' });
 
-    expect(sent).toEqual(['event']);
+    expect(sent.filter((kind) => kind.startsWith('state'))).toEqual([]);
+    expect(sent).toContain('event');
     bus.close();
   });
 
@@ -939,6 +940,173 @@ describe('state that persists across reloads', () => {
     const bus = createEventBus({ consumer: 'blotter', invalidator: createInvalidator({ partition: 'p' }) });
 
     expect(() => bus.channel('selection', { persist: true })).toThrow(/driver/);
+    bus.close();
+  });
+});
+
+describe('intents across the realms of a page', () => {
+  const realm = (consumer: string, wire: (name: string) => BroadcastChannelLike, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1', ...extra });
+
+  it('offers a handler registered in another realm, and runs it there', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const handled = vi.fn(async (order: { id: string }) => ({ invoice: `INV-${order.id}` }));
+    billing.addIntentListener('ViewInvoice', { handler: handled });
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([
+      expect.objectContaining({ consumer: 'billing', source: expect.any(String) }),
+    ]);
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(handled).toHaveBeenCalledWith({ id: 'o1' });
+    expect(result.handled).toEqual([{ candidate: expect.objectContaining({ consumer: 'billing' }), result: { invoice: 'INV-o1' } }]);
+    blotter.close();
+    billing.close();
+  });
+
+  it('learns about handlers registered before it arrived', () => {
+    const wire = wirePair();
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+
+    const late = realm('blotter', wire);
+
+    expect(late.candidates('ViewInvoice').eligible.map((candidate) => candidate.consumer)).toEqual(['billing']);
+    billing.close();
+    late.close();
+  });
+
+  it('ranks this realm\'s handlers and others\' together for the first policy', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const local = vi.fn(() => 'local');
+    blotter.addIntentListener('ViewInvoice', { handler: local, priority: 1 });
+    billing.addIntentListener('ViewInvoice', { handler: () => 'remote', priority: 5 });
+
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(result.handled[0]!.result).toBe('remote');
+    expect(local).not.toHaveBeenCalled();
+    blotter.close();
+    billing.close();
+  });
+
+  it('projects the payload at the raiser, to the version the remote handler reads', async () => {
+    const wire = wirePair();
+    const checkout = realm('checkout', wire);
+    checkout.register('PlaceOrder', Order);
+    const legacy = realm('legacy', wire);
+    const handled = vi.fn();
+    legacy.addIntentListener('PlaceOrder', { handler: handled, as: 1 });
+
+    await checkout.raiseIntent('PlaceOrder', { id: 'o1', quantity: 3, currency: 'EUR' });
+
+    // the older realm never sees a shape it cannot read, and runs no migration code of its own
+    expect(handled).toHaveBeenCalledWith({ id: 'o1', quantity: 3 });
+    checkout.close();
+    legacy.close();
+  });
+
+  it('rejects the raise when the remote handler throws', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => { throw new Error('no such invoice'); } });
+
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toThrow('no such invoice');
+    blotter.close();
+    billing.close();
+  });
+
+  it('forgets a realm that closes, and answers its pending calls at once', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => new Promise(() => undefined) });
+
+    const pending = blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+    billing.close();
+
+    await expect(pending).rejects.toThrow('closed');
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toBeInstanceOf(NoIntentHandlerError);
+    blotter.close();
+  });
+
+  it('drops a handler from the directory when it is removed', () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const stop = billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    stop();
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    blotter.close();
+    billing.close();
+  });
+
+  it('times out a handler that never answers', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire, { intentTimeoutMs: 20 });
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => new Promise(() => undefined) });
+
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toThrow('did not answer');
+    blotter.close();
+    billing.close();
+  });
+
+  it('lets a raise made as the bus starts wait for the directory, as a real channel delivers later', async () => {
+    const sync = wirePair();
+    // a BroadcastChannel delivers on a later task, not during postMessage
+    const wire = (name: string) => {
+      const endpoint = sync(name);
+      return { ...endpoint, postMessage: (message: unknown) => void setTimeout(() => endpoint.postMessage(message), 1) };
+    };
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+
+    const blotter = realm('blotter', wire);
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(result.handled[0]!.result).toBe('ok');
+    blotter.close();
+    billing.close();
+  });
+
+  it('does not reach another tab, and without a page stays within the bus', () => {
+    const wire = wirePair();
+    const otherTab = realm('billing', wire, { page: 'tab-2' });
+    otherTab.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    const noPage = createEventBus({ consumer: 'cli', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    noPage.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+
+    const blotter = realm('blotter', wire);
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    [otherTab, noPage, blotter].forEach((bus) => bus.close());
+  });
+});
+
+describe('the collections a bus needs', () => {
+  it('names every collection the bus writes, for drivers that declare them up front', async () => {
+    const { EVENT_BUS_COLLECTIONS } = await import('./events.js');
+    const touched = new Set<string>();
+    const memory = memoryRecordDriver();
+    const driver = new Proxy(memory, {
+      get: (target, prop) => (typeof (target as never)[prop] === 'function'
+        ? (collection: string, ...rest: unknown[]) => (touched.add(collection), ((target as never)[prop] as (...args: unknown[]) => unknown)(collection, ...rest))
+        : (target as never)[prop]),
+    });
+    const bus = createEventBus({ consumer: 'a', driver, consumers: ['a'], invalidator: createInvalidator({ partition: 'p' }) });
+    bus.channel('selection', { persist: true }).broadcast({ id: 1 });
+    await bus.channel('orders').emit('placed', { id: 1 }, { delivery: 'at-least-once' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect([...touched].sort()).toEqual([...EVENT_BUS_COLLECTIONS].sort());
     bus.close();
   });
 });

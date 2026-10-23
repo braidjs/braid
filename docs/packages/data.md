@@ -99,6 +99,57 @@ await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
 - **A value that cannot be cloned** still reaches this context's subscribers and handlers. Its
   failure to reach other contexts is reported to `onEventError` rather than thrown.
 
+### State that survives a reload
+
+`persist: true` keeps a channel's state in the bus's `driver`, for example IndexedDB:
+
+```ts
+const driver = indexedDbRecordDriver({ database: 'app', collections: [...EVENT_BUS_COLLECTIONS] });
+const bus = createEventBus({ consumer: 'blotter', driver });
+const selection = bus.channel('selection', { persist: true });
+selection.subscribe((row) => highlight(row)); // after a reload: the row selected before it
+```
+
+- **What's stored:** the last value this context broadcast, per partition. When a contract is
+  registered for the channel (`bus.register`), it's stored as a versioned envelope, so a newer or
+  older build reads it at its own version. `broadcast(undefined)` clears it.
+- **Freshness:** a stored value is a fallback. A value broadcast since the reload wins over it, and
+  so does a fresher value another context holds.
+- **Timing:** restoring is asynchronous. `subscribe` fires when the value is read, and `state()` is
+  `undefined` until then.
+- **Without a `driver`:** `persist` throws rather than quietly forgetting. An IndexedDB driver
+  must list `EVENT_BUS_COLLECTIONS` among its collections, as durable events need too.
+
+## Intents across fragments
+
+`addIntentListener` and `raiseIntent` mean "somebody on this page, handle this". With a page (see
+scope above), a handler registered in one fragment's realm is a candidate for a raise in another's:
+
+```ts
+// in the billing fragment
+bus.addIntentListener('ViewInvoice', { handler: async ({ id }) => openInvoice(id), priority: 1 });
+
+// in the blotter fragment, a separate realm
+const { handled } = await bus.raiseIntent('ViewInvoice', { id: 'o1' });
+```
+
+- **One ranking.** Handlers here and in other realms are ranked together. The `'first'`, `'all'`,
+  `'ask'` and custom policies, and `candidates()`, see one list. Each candidate from another realm
+  carries a `source`.
+- **Versions are the raiser's call.** Whether a handler can read the payload, and the projection to
+  the version it declared with `as`, are decided where the intent is raised. An older fragment never
+  receives a shape it can't read, and never runs migration code.
+- **Results and errors come back.** A handler's return value resolves the raise, and a thrown error
+  rejects it. A handler that doesn't answer within `intentTimeoutMs` (default 30 seconds) rejects
+  too.
+- **A closing realm answers at once.** A bus that closes, or whose realm is removed, leaves the
+  directory, and raises waiting on it reject immediately.
+- **Discovery is asynchronous.** Each bus learns about the others' handlers by message. A raise that
+  finds nobody in a bus's first 100 ms waits for the directory once before giving up, so a fragment
+  can raise as it mounts.
+- **Page scope only.** Another tab's handlers are not candidates. Without a page (outside a
+  browser, unless `page` is passed) intents stay within the bus.
+
 ---
 
 ## Cross-Context Distributed Locks
