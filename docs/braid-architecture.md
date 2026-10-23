@@ -349,7 +349,8 @@ braidContext.set('locale', 'en-US');
 env.context.subscribe('locale', (locale) => updateLocale(locale), { signal: env.signal, replay: true });
 ```
 
-A fragment's view of the context is complete before its code runs, so `get(key)` always answers.
+A fragment's copy of the context is seeded before its code runs and kept current by messages, so
+`get(key)` returns the current value however late the fragment mounted.
 `subscribe` alone fires only on later changes. With `replay: true` it also fires at once with the
 current value, so a fragment that mounts after a value was set still renders it.
 

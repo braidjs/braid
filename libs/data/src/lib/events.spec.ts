@@ -237,17 +237,24 @@ describe('at-most-once events', () => {
 describe('which page a bus is on, by default', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  /** A bus in a context whose top-level document started at `timeOrigin`. */
-  function busUnder(top: unknown, wire: (name: string) => BroadcastChannelLike, consumer: string) {
-    vi.stubGlobal('window', { top });
+  /** A document that started at `timeOrigin`, under `parent` (itself, for a top-level one). */
+  function documentAt(timeOrigin: number, parent?: object): { parent: object; performance: { timeOrigin: number } } {
+    const doc = { performance: { timeOrigin } } as { parent: object; performance: { timeOrigin: number } };
+    doc.parent = parent ?? doc;
+    return doc;
+  }
+
+  function busIn(context: object, wire: (name: string) => BroadcastChannelLike, consumer: string) {
+    vi.stubGlobal('window', context);
     return createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
   }
 
-  it('is the top-level document, so realms under one top share page scope and other tabs do not', () => {
+  it('is the top document, so realms of one page share page scope and other tabs do not', () => {
     const wire = wirePair();
-    const realmA = busUnder({ performance: { timeOrigin: 1000.5 } }, wire, 'a');
-    const realmB = busUnder({ performance: { timeOrigin: 1000.5 } }, wire, 'b');
-    const otherTab = busUnder({ performance: { timeOrigin: 2000.25 } }, wire, 'c');
+    const host = documentAt(1000.5);
+    const realmA = busIn(documentAt(1001, host), wire, 'a');
+    const realmB = busIn(documentAt(1002, host), wire, 'b');
+    const otherTab = busIn(documentAt(1003, documentAt(2000.25)), wire, 'c');
     const inB = vi.fn();
     const inOtherTab = vi.fn();
     realmB.channel('selection').subscribe(inB);
@@ -260,14 +267,25 @@ describe('which page a bus is on, by default', () => {
     [realmA, realmB, otherTab].forEach((bus) => bus.close());
   });
 
-  it('falls back to this document when the top one cannot be read', () => {
-    const crossOrigin = {
+  it('stops at the last same-origin document when the app is embedded in another site', () => {
+    const wire = wirePair();
+    const crossOriginTop = {
       get performance(): never {
         throw new DOMException('Blocked a frame from accessing a cross-origin frame', 'SecurityError');
       },
     };
+    const host = documentAt(1000.5, crossOriginTop);
+    const realmA = busIn(documentAt(1001, host), wire, 'a');
+    const realmB = busIn(documentAt(1002, host), wire, 'b');
+    const inB = vi.fn();
+    realmB.channel('selection').subscribe(inB);
 
-    expect(() => busUnder(crossOrigin, wirePair(), 'a').close()).not.toThrow();
+    realmA.channel('selection').broadcast({ id: 'row-1' });
+
+    // the composed page is still one page, though its top cannot be read
+    expect(inB).toHaveBeenCalledWith({ id: 'row-1' });
+    realmA.close();
+    realmB.close();
   });
 });
 
@@ -299,7 +317,7 @@ describe('a context that opens a channel late', () => {
 
     // a third context answers a state request with what it held before the newer broadcast
     const stale = wire('skew:events:default:page:tab-1:session');
-    stale.postMessage({ kind: 'state-reply', value: { userId: 'old' } });
+    stale.postMessage({ kind: 'state-reply', request: 'any', value: { userId: 'old' } });
 
     expect(two.channel('session').state()).toEqual({ userId: 'new' });
     expect(one.channel('session').state()).toEqual({ userId: 'new' });
@@ -673,3 +691,132 @@ describe('a context per entity', () => {
   });
 });
 
+describe('late join, without a storm or a false conflict', () => {
+  /** A wire that counts what crosses it. */
+  function countingWire() {
+    const wire = wirePair();
+    const sent: string[] = [];
+    return {
+      sent,
+      wire: (name: string) => {
+        const endpoint = wire(name);
+        return { ...endpoint, postMessage: (message: unknown) => (sent.push((message as { kind: string }).kind), endpoint.postMessage(message)) };
+      },
+    };
+  }
+  const busOn = (consumer: string, wire: (name: string) => BroadcastChannelLike, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1', ...extra });
+
+  it('does not count adopting another context\'s state, then moving on from it, as a conflict', () => {
+    const { wire } = countingWire();
+    const one = busOn('checkout', wire);
+    one.channel('selection').broadcast({ row: 1 });
+    const two = busOn('account', wire);
+    two.channel('selection').subscribe(vi.fn());
+
+    // an ordinary next selection, not two writers racing
+    two.channel('selection').broadcast({ row: 2 });
+
+    expect(two.channel('selection').conflict()).toBeNull();
+    expect(one.channel('selection').state()).toEqual({ row: 2 });
+    one.close();
+    two.close();
+  });
+
+  it('sends one reply to a late joiner, from the context that published, however many hold the state', () => {
+    const { wire, sent } = countingWire();
+    const publisher = busOn('a', wire);
+    publisher.channel('selection').broadcast({ row: 1 });
+    const holders = ['b', 'c', 'd', 'e'].map((consumer) => busOn(consumer, wire));
+    holders.forEach((bus) => bus.channel('selection').subscribe(vi.fn()));
+    sent.length = 0;
+
+    const late = busOn('late', wire);
+    const seen = vi.fn();
+    late.channel('selection').subscribe(seen);
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    expect(sent.filter((kind) => kind === 'state-reply')).toHaveLength(1);
+    [publisher, ...holders, late].forEach((bus) => bus.close());
+  });
+
+  it('still answers when the publisher is gone, from whoever holds the state', async () => {
+    const { wire, sent } = countingWire();
+    const publisher = busOn('a', wire);
+    publisher.channel('selection').broadcast({ row: 1 });
+    const holders = ['b', 'c', 'd'].map((consumer) => busOn(consumer, wire));
+    holders.forEach((bus) => bus.channel('selection').subscribe(vi.fn()));
+    publisher.close();
+    sent.length = 0;
+
+    const late = busOn('late', wire);
+    const seen = vi.fn();
+    late.channel('selection').subscribe(seen);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    // the first fallback answer cancels the others
+    expect(sent.filter((kind) => kind === 'state-reply')).toHaveLength(1);
+    [...holders, late].forEach((bus) => bus.close());
+  });
+
+  it('asks nothing for a channel used only for events', async () => {
+    const { wire, sent } = countingWire();
+    const bus = busOn('a', wire);
+
+    bus.channel('orders').addEventListener('order.placed', vi.fn());
+    await bus.channel('orders').emit('order.placed', { id: 'o1' });
+
+    expect(sent).toEqual(['event']);
+    bus.close();
+  });
+
+  it('does not bring back state that was cleared', () => {
+    const { wire } = countingWire();
+    const one = busOn('a', wire);
+    const two = busOn('b', wire);
+    two.channel('selection').subscribe(vi.fn());
+    one.channel('selection').broadcast({ row: 1 });
+    two.channel('selection').broadcast(undefined);
+
+    // a reply to somebody else's request reaches every context
+    wire('skew:events:default:page:tab-1:selection').postMessage({ kind: 'state-reply', request: 'someone-else', value: { row: 1 } });
+
+    expect(two.channel('selection').state()).toBeUndefined();
+    one.close();
+    two.close();
+  });
+
+  it('reports a value that cannot be sent to other contexts, after delivering it here', async () => {
+    const reported = vi.fn();
+    const bus = busOn('a', (name) => ({ ...wirePair()(name), postMessage: () => { throw new DOMException('could not be cloned', 'DataCloneError'); } }), {
+      onEventError: reported,
+    });
+    const seen = vi.fn();
+    const handled = vi.fn();
+    bus.channel('selection').subscribe(seen);
+    bus.channel('selection').addEventListener('row.clicked', handled);
+
+    expect(() => bus.channel('selection').broadcast({ row: 1 })).not.toThrow();
+    await expect(bus.channel('selection').emit('row.clicked', { row: 1 })).resolves.toBeUndefined();
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    expect(handled).toHaveBeenCalled();
+    expect(reported).toHaveBeenCalled();
+    bus.close();
+  });
+
+  it('registers nothing for a subscription whose signal already aborted', () => {
+    const bus = createEventBus({ consumer: 'a', invalidator: createInvalidator({ partition: 'p' }) });
+    bus.channel('selection').broadcast({ row: 1 });
+    const seen = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    bus.channel('selection').subscribe(seen, { signal: controller.signal });
+    bus.channel('selection').broadcast({ row: 2 });
+
+    expect(seen).not.toHaveBeenCalled();
+    bus.close();
+  });
+});

@@ -180,21 +180,42 @@ const runnerId = (channel: string, type: string) => `event:${channel}:${type}`;
 type WireMessage =
   | { kind: 'state'; value: unknown }
   | { kind: 'event'; event: BusEvent }
-  | { kind: 'state-request' }
-  | { kind: 'state-reply'; value: unknown };
+  | { kind: 'state-request'; request: string }
+  | { kind: 'state-reply'; request: string; value: unknown };
 
 /**
- * The top-level document this context is on, named by when it started — shared by every realm
- * composed onto the page, and by no other tab. Read, never written: nothing is installed on the
- * host. Undefined outside a browser.
+ * How long a context that holds state it did not publish waits before answering a state request,
+ * at most — in case the publisher is gone. The publisher answers at once, and any answer cancels
+ * the rest, so a page of many realms sends one reply, not one per realm.
+ */
+const FALLBACK_REPLY_MS = 60;
+
+/**
+ * The page this context is on, named by when its document started: the highest ancestor document
+ * this context can read, which every same-origin realm composed onto the page reaches and no
+ * other tab does. Read, never written: nothing is installed on the host. A cross-origin ancestor
+ * (the whole app embedded in another site) stops the walk at the last same-origin one, which is
+ * still the composed page. Undefined outside a browser.
  */
 function currentPage(): string | undefined {
-  if (typeof window === 'undefined' || typeof performance === 'undefined') return undefined;
+  if (typeof window === 'undefined') return undefined;
+  let page: Window = window;
+  for (let depth = 0; depth < 32; depth += 1) {
+    let parent: Window;
+    try {
+      parent = page.parent;
+      if (!parent || parent === page) break;
+      // throws for a cross-origin parent
+      void parent.performance.timeOrigin;
+    } catch {
+      break;
+    }
+    page = parent;
+  }
   try {
-    return String(window.top?.performance.timeOrigin ?? performance.timeOrigin);
+    return String(page.performance.timeOrigin);
   } catch {
-    // a cross-origin top cannot be read; this document is then the widest page there is
-    return String(performance.timeOrigin);
+    return undefined;
   }
 }
 
@@ -224,6 +245,18 @@ export function createEventBus(options: EventBusOptions): EventBus {
     readonly key: string;
     readonly options: ChannelOptions;
     state: unknown;
+    /** What this context last broadcast — what a conflict is judged against. */
+    published: unknown;
+    /** Whether any state has been set here or heard from elsewhere, `undefined` included. */
+    heard: boolean;
+    /** Whether the current state is this context's own broadcast, so it answers requests at once. */
+    authored: boolean;
+    /** The request this context sent for state, until it is answered or state arrives otherwise. */
+    asked?: string;
+    /** Fallback replies waiting to go out, cancelled when someone else answers first. */
+    readonly replying: Map<string, ReturnType<typeof setTimeout>>;
+    /** Requests already answered, so one that arrives after its answer is not answered again. */
+    readonly answered: Set<string>;
     conflict: Conflict<unknown> | null;
     readonly stateListeners: Set<{ listener: (value: unknown) => void; as?: number }>;
     /** To other contexts: every tab for origin scope, this page's realms for page scope. */
@@ -242,9 +275,45 @@ export function createEventBus(options: EventBusOptions): EventBus {
   function openWire(name: string): BroadcastChannelLike | undefined {
     const wireName = `skew:events:${partition()}:${name}`;
     if (options.broadcastChannel) return options.broadcastChannel(wireName);
-    return typeof BroadcastChannel === 'undefined'
-      ? undefined
-      : (new BroadcastChannel(wireName) as unknown as BroadcastChannelLike);
+    if (typeof BroadcastChannel === 'undefined') return undefined;
+    const channel = new BroadcastChannel(wireName);
+    // Node — a test environment with a `window` — would otherwise stay alive for an open channel
+    (channel as unknown as { unref?: () => void }).unref?.();
+    return channel as unknown as BroadcastChannelLike;
+  }
+
+  /**
+   * Sends to other contexts. A value that cannot be cloned has already reached this context's
+   * subscribers and handlers, so the failure is reported rather than thrown after the fact.
+   */
+  function post(channel: ChannelState, message: WireMessage): void {
+    try {
+      channel.wire?.postMessage(message);
+    } catch (error) {
+      options.onEventError?.(`[skew/data] "${channel.name}" could not be sent to other contexts`, error);
+    }
+  }
+
+  /**
+   * Asks other contexts for the channel's state, once, the first time this context reads it. A
+   * channel used only for events never asks.
+   */
+  function askForState(channel: ChannelState): void {
+    if (!channel.wire || channel.heard || channel.asked !== undefined) return;
+    channel.asked = crypto.randomUUID();
+    post(channel, { kind: 'state-request', request: channel.asked });
+  }
+
+  function answer(channel: ChannelState, request: string): void {
+    if (!channel.heard || channel.state === undefined || channel.replying.has(request) || channel.answered.has(request)) return;
+    const reply = () => {
+      channel.replying.delete(request);
+      post(channel, { kind: 'state-reply', request, value: channel.state });
+    };
+    if (channel.authored) return reply();
+    const timer = setTimeout(reply, Math.random() * FALLBACK_REPLY_MS);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    channel.replying.set(request, timer);
   }
 
   function channelState(name: string, channelOptions: ChannelOptions): ChannelState {
@@ -261,6 +330,11 @@ export function createEventBus(options: EventBusOptions): EventBus {
       key,
       options: channelOptions,
       state: undefined,
+      published: undefined,
+      heard: false,
+      authored: false,
+      replying: new Map(),
+      answered: new Set(),
       conflict: null,
       stateListeners: new Set(),
       wire,
@@ -272,17 +346,22 @@ export function createEventBus(options: EventBusOptions): EventBus {
       const message = event.data as WireMessage | undefined;
       if (message?.kind === 'state') applyState(created, message.value, { local: false });
       if (message?.kind === 'event' && message.event) deliverLive(message.event);
-      // A context that opened the channel after state was set asks for it once. Every holder
-      // answers, and the asker takes an answer only while it still has nothing: a reply that
-      // arrives after it has heard a newer broadcast must not set it back.
-      if (message?.kind === 'state-request' && created.state !== undefined) {
-        wire?.postMessage({ kind: 'state-reply', value: created.state } satisfies WireMessage);
+      // A context that reads the channel after its state was set asks for it once (askForState).
+      if (message?.kind === 'state-request') answer(created, message.request);
+      if (message?.kind === 'state-reply') {
+        // someone answered: nobody else needs to
+        clearTimeout(created.replying.get(message.request));
+        created.replying.delete(message.request);
+        created.answered.add(message.request);
+        // a few recent ones are enough: a request is answered within FALLBACK_REPLY_MS
+        if (created.answered.size > 64) created.answered.delete(created.answered.values().next().value as string);
+        // Only the asker takes it, and only while it still has heard nothing: a reply that arrives
+        // after a newer broadcast, or after state was cleared, must not set it back.
+        if (message.request === created.asked && !created.heard) applyState(created, message.value, { local: false });
       }
-      if (message?.kind === 'state-reply' && created.state === undefined) applyState(created, message.value, { local: false });
     });
 
     channels.set(key, created);
-    wire?.postMessage({ kind: 'state-request' } satisfies WireMessage);
     return created;
   }
 
@@ -294,7 +373,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
    * whether anyone is told — the same contract, and the same words, as a mutation's confirmation.
    */
   function applyState(channel: ChannelState, value: unknown, { local }: { local: boolean }): void {
-    const previous = channel.state;
+    const previous = channel.published;
     let stored = value;
 
     if (local && previous !== undefined && !same(previous, value)) {
@@ -310,6 +389,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
     }
 
     channel.state = stored;
+    channel.heard = true;
+    channel.authored = local;
+    channel.asked = undefined;
+    if (local) channel.published = stored;
 
     for (const subscription of [...channel.stateListeners]) {
       // Isolated per subscriber: one application's bad deploy must not present as a different
@@ -486,14 +569,16 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
         broadcast(value: S): void {
           applyState(channel, value, { local: true });
-          channel.wire?.postMessage({ kind: 'state', value: channel.state });
+          post(channel, { kind: 'state', value: channel.state });
         },
 
         state(readOptions): S | undefined {
+          askForState(channel);
           return channel.state === undefined ? undefined : (project(name, channel.state, readOptions?.as) as S);
         },
 
         subscribe(listener, subscribeOptions): () => void {
+          if (subscribeOptions?.signal?.aborted) return () => undefined;
           const subscription = {
             listener: listener as (value: unknown) => void,
             ...(subscribeOptions?.as === undefined ? {} : { as: subscribeOptions.as }),
@@ -512,6 +597,8 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
           const unsubscribe = () => void channel.stateListeners.delete(subscription);
           subscribeOptions?.signal?.addEventListener('abort', unsubscribe, { once: true });
+          // nothing here yet: another context may hold it, and its answer arrives as an update
+          askForState(channel);
           return unsubscribe;
         },
 
@@ -533,7 +620,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
           }
 
           deliverLive(event as BusEvent);
-          channel.wire?.postMessage({ kind: 'event', event });
+          post(channel, { kind: 'event', event: event as BusEvent });
         },
 
         addEventListener<T>(
@@ -578,7 +665,10 @@ export function createEventBus(options: EventBusOptions): EventBus {
 
     close(): void {
       stopWaking();
-      for (const channel of channels.values()) channel.wire?.close();
+      for (const channel of channels.values()) {
+        channel.replying.forEach((timer) => clearTimeout(timer));
+        channel.wire?.close();
+      }
       channels.clear();
       handlers.clear();
       invalidator.close();

@@ -179,6 +179,7 @@ export function createContextMirror(
     },
 
     subscribe(key, listener, subscribeOptions) {
+      if (subscribeOptions?.signal?.aborted || channel.closed.aborted) return () => undefined;
       let keyListeners = listeners.get(key);
       if (!keyListeners) {
         keyListeners = new Set();
@@ -193,7 +194,7 @@ export function createContextMirror(
       // the mirror was seeded at OPEN, before the fragment's code ran, so this is the current value
       // whenever the fragment subscribes
       const current = values.get(key);
-      if (subscribeOptions?.replay && current !== undefined && !subscribeOptions.signal?.aborted) {
+      if (subscribeOptions?.replay && current !== undefined) {
         try {
           listener(current);
         } catch (error) {

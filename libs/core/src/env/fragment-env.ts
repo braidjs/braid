@@ -43,9 +43,9 @@ export interface EnvContext {
   get(key: string): unknown;
   /**
    * Calls `listener` on every later change to `key`. With `replay: true`, also calls it at once
-   * with the current value when there is one — the fragment's view of the host's context is
-   * complete before its code runs, so `subscribe(key, render, { replay: true })` alone renders what
-   * is true now and every change after it.
+   * with the current value when there is one. The fragment's copy of the host's context is seeded
+   * before its code runs, so `subscribe(key, render, { replay: true })` alone renders the current
+   * value and every change after it.
    */
   subscribe(key: string, listener: (value: unknown) => void, options?: EnvSubscribeOptions): () => void;
 }

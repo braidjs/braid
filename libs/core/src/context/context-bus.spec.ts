@@ -255,13 +255,14 @@ describe('late subscribers', () => {
     error.mockRestore();
   });
 
-  it('does not replay to a subscription whose signal already aborted', () => {
+  it('registers nothing for a subscription whose signal already aborted', () => {
     braidContext.set('session', { userId: 'u1' });
     const seen = vi.fn();
     const controller = new AbortController();
     controller.abort();
 
     braidContext.subscribe('session', seen, { replay: true, signal: controller.signal });
+    braidContext.set('session', { userId: 'u2' });
 
     expect(seen).not.toHaveBeenCalled();
   });

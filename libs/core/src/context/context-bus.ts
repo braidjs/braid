@@ -145,6 +145,8 @@ class ContextBus {
 
   subscribe(key: string, listener: ContextListener, options?: ContextSubscribeOptions): () => void {
     this.#assertReachable(key, options?.as, options?.fragmentId);
+    // an already-aborted signal will never fire, so registering would leave a listener nobody can remove
+    if (options?.signal?.aborted) return () => undefined;
 
     let keySubscriptions = this.#subscriptions.get(key);
     if (!keySubscriptions) {
@@ -161,7 +163,7 @@ class ContextBus {
     options?.signal?.addEventListener('abort', unsubscribe, { once: true });
 
     const current = this.#values.get(key);
-    if (options?.replay && current !== undefined && !options.signal?.aborted) {
+    if (options?.replay && current !== undefined) {
       try {
         listener(this.#project(key, current, options.as));
       } catch (error) {

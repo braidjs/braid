@@ -76,17 +76,28 @@ selection.subscribe((row) => highlight(row));      // called at once with the cu
 await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
 ```
 
-- **State replays to late subscribers.** `subscribe` is called at once with the current value.
-  A context that opens the channel later, such as a fragment mounted on demand or a new tab, asks
-  the others for the current state once, so it doesn't wait for the next `broadcast`.
+- **State replays to late subscribers.** `subscribe` is called at once with the current value,
+  always; core's context bus makes the same behaviour opt-in with `replay: true`.
+- **A context that joins late is caught up.** A fragment mounted on demand, or a new tab on an
+  `'origin'` channel, asks the others for the current state the first time it reads the channel.
+  The context that published it answers. If that context is gone, whichever other holder answers
+  first does. The answer arrives asynchronously: `subscribe` fires when it lands, and `state()`
+  returns `undefined` until then. A channel used only for events never asks.
 - **Events do not replay.** A late listener does not see an `emit` that happened before it
   subscribed, which is the safe default for anything with a verb. For an event a consumer must
   not miss, use `emit(type, payload, { delivery: 'at-least-once' })` with a `driver` and the
   `consumers` list: each consumer gets its own durable queue, delivered when it next mounts.
-- **Scope is how far it reaches.** `'page'` reaches every realm on this page and no other tab;
-  `'origin'` reaches every tab too. Each fragment runs in its own realm, a separate JavaScript
-  context, so both travel over a `BroadcastChannel`. A page is the top-level document; override it
-  with `createEventBus({ page })`.
+- **Scope is how far it reaches.** `'page'` reaches every same-origin realm on this page, and no
+  other tab. `'origin'` reaches every tab too. Each fragment runs in its own realm, a separate
+  JavaScript context, so both travel over a `BroadcastChannel`.
+  - The page is the highest same-origin document above the bus: the composed page, even when the
+    app is embedded in another site.
+  - It is named by when that document started. If browsers coarsen that time (Firefox's
+    fingerprinting resistance rounds it to 100 ms), two tabs opened in the same instant could
+    share page scope. A host that must rule this out passes its own `createEventBus({ page })`.
+  - Cross-origin `trust="untrusted"` fragments are not reached.
+- **A value that cannot be cloned** still reaches this context's subscribers and handlers. Its
+  failure to reach other contexts is reported to `onEventError` rather than thrown.
 
 ---
 
