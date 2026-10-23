@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Context, DesktopAgent } from '@finos/fdc3-standard';
+import type { Context } from '@finos/fdc3-context';
+import type { DesktopAgent } from '@finos/fdc3-standard';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createRegistryApi, createSnapshot, memorySnapshotStore } from '@braidlabs/registry';
 import { createBraidDesktopAgent } from './agent.js';
