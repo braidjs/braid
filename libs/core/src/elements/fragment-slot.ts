@@ -11,6 +11,7 @@ import { resolveAdapter } from '../adapters/adapter.js';
 import { parseFragmentContent } from '../adapters/compat-adapter.js';
 import { createFragmentEnv } from '../env/create-env.js';
 import { getBraidConfig, isDevMode } from '../config.js';
+import { resolveRealmGlobals } from '../compat/shared-globals.js';
 import { braidContext } from '../context/context-bus.js';
 import { createBoundaryChannel } from '../weave/channel.js';
 import { createSameRealmBackingPair } from '../weave/same-realm-backing.js';
@@ -563,6 +564,9 @@ export class FragmentSlot extends HTMLElement {
 
       if (signal.aborted) return;
 
+      const realmGlobals = await resolveRealmGlobals(fragmentId, signal);
+      if (signal.aborted) return;
+
       await adapter.boot({
         fragmentId,
         shadowRoot,
@@ -575,6 +579,7 @@ export class FragmentSlot extends HTMLElement {
         bound,
         env,
         sharedGlobals: resolveSharedGlobals(capabilities),
+        ...(realmGlobals ? { realmGlobals } : {}),
         signal,
       });
 

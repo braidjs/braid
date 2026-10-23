@@ -22,7 +22,7 @@ in language that implies more than it delivers. The correction, stated plainly:
 | Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
 | Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
 | Cookies & storage | **the host's** | its own, partitioned |
-| Host globals | its own realm's, plus any the host lists in `sharedGlobals` | its own |
+| Host globals | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own |
 | Layout | participates in host layout | a rectangle the host sizes |
 | Accessibility | one tree | nested documents |
 | Overlays | can escape the fragment's box | clipped by the frame |
@@ -45,6 +45,13 @@ fragment. A fragment's `capabilities.sharedGlobals` **replaces** the list for th
 narrow the list, opt out with `[]`, or add names `initBraid` never listed. Whoever controls the
 registry therefore controls this, so review manifest changes to `sharedGlobals` the way you review
 host config. The untrusted tier ignores it, because there is nothing same-origin to share.
+
+**Realm globals are per-fragment values, not host ones.** `initBraid({ realmGlobals })` is a hook
+called once per trusted fragment boot with `{ fragmentId, signal }`; what it returns is defined on
+that fragment's realm window before its code runs. It is how `@braidlabs/fdc3` gives each fragment a
+`window.fdc3` bound to its own app identity. Nothing is shared or written back: the host decides the
+value per fragment, and the signal says when to release it. Contract and untrusted fragments ignore
+it, as they do `sharedGlobals`.
 
 ## What the untrusted tier is
 

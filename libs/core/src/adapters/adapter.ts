@@ -60,6 +60,11 @@ export interface AdapterBootContext {
    * sharing needs a same-origin realm, and the contract adapter's host API is the contract itself.
    */
   sharedGlobals?: readonly string[];
+  /**
+   * Values the host's `realmGlobals` hook gave this fragment, already resolved. Installed by the
+   * compat and custom-element adapters before the fragment's code runs.
+   */
+  realmGlobals?: Readonly<Record<string, unknown>>;
   /** Aborts when the fragment is being torn down. */
   signal: AbortSignal;
 }

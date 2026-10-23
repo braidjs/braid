@@ -56,6 +56,23 @@ export interface BraidOptions {
   sharedGlobals?: string[];
 
   /**
+   * Values to define on each trusted fragment's realm window before any of its code runs — a
+   * per-fragment global, where `sharedGlobals` can only forward a host one:
+   *
+   * ```ts
+   * initBraid({ realmGlobals: braidDesktopAgent.realmGlobals }); // window.fdc3, bound to each fragment
+   * ```
+   *
+   * Called once per boot with the fragment's id and a signal that aborts when it is torn down, so
+   * whatever was handed out can be released. Return `undefined` to give a fragment nothing. A hook
+   * that throws or rejects gives that fragment nothing and does not fail its boot. Names the realm
+   * already defines are skipped, as with `sharedGlobals`.
+   *
+   * Trusted fragments only (compat and custom-element); contract and untrusted fragments ignore it.
+   */
+  realmGlobals?: RealmGlobalsHook;
+
+  /**
    * Enables development-mode diagnostics: unaudited-API warnings from the compat document
    * facade, boundary-bypass reports, and verbose boot logging. Defaults to false.
    */
@@ -84,6 +101,12 @@ export interface BraidOptions {
   basePath?: string;
 }
 
+/** See {@link BraidOptions.realmGlobals}. */
+export type RealmGlobalsHook = (fragment: {
+  fragmentId: string;
+  signal: AbortSignal;
+}) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
+
 interface ResolvedBraidConfig {
   dev: boolean;
   /** Empty, or an absolute path with no trailing slash. */
@@ -91,6 +114,7 @@ interface ResolvedBraidConfig {
   contract?: HostContract;
   capabilities?: Record<string, FragmentCapabilities>;
   sharedGlobals?: string[];
+  realmGlobals?: RealmGlobalsHook;
   onHostNavigation?: (notify: () => void) => void;
 }
 
@@ -111,6 +135,9 @@ export function setBraidConfig(options: BraidOptions = {}): void {
   }
   if (options.sharedGlobals) {
     config.sharedGlobals = options.sharedGlobals;
+  }
+  if (options.realmGlobals) {
+    config.realmGlobals = options.realmGlobals;
   }
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;

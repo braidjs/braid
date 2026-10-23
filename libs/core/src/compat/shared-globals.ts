@@ -1,4 +1,4 @@
-import { isDevMode } from '../config.js';
+import { getBraidConfig, isDevMode } from '../config.js';
 
 /**
  * Lets a trusted fragment use globals the host has explicitly shared — its analytics data layer,
@@ -46,5 +46,38 @@ export function installSharedGlobals(
         host[name] = value;
       },
     });
+  }
+}
+
+/**
+ * The host's `realmGlobals` for one fragment, or nothing. A hook that throws or rejects must not
+ * take the fragment down with it: the fragment boots without them, and dev mode says why.
+ */
+export async function resolveRealmGlobals(fragmentId: string, signal: AbortSignal): Promise<Record<string, unknown> | undefined> {
+  const hook = getBraidConfig().realmGlobals;
+  if (!hook) return undefined;
+  try {
+    const globals = await hook({ fragmentId, signal });
+    return globals && typeof globals === 'object' ? globals : undefined;
+  } catch (error) {
+    if (isDevMode()) console.warn(`[braid:${fragmentId}] realmGlobals hook failed; the fragment boots without them.`, error);
+    return undefined;
+  }
+}
+
+/**
+ * Defines each of `globals` on the fragment's realm window — plain values, writable and
+ * configurable, so a fragment that declares the name shadows it rather than failing to run.
+ * Names the realm window already has are skipped, by the same rule as {@link installSharedGlobals}.
+ */
+export function installRealmGlobals(realmWindow: Window, globals: Readonly<Record<string, unknown>>, fragmentId: string): void {
+  for (const [name, value] of Object.entries(globals)) {
+    if (name in realmWindow) {
+      if (isDevMode()) {
+        console.warn(`[braid:${fragmentId}] realm global "${name}" was not installed: the fragment's realm already defines it.`);
+      }
+      continue;
+    }
+    Object.defineProperty(realmWindow, name, { configurable: true, enumerable: true, writable: true, value });
   }
 }

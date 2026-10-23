@@ -1,7 +1,7 @@
 import { AdapterBootContext, InstalledAdapter } from './adapter.js';
 import { BraidError } from '../errors.js';
 import { isDevMode } from '../config.js';
-import { installSharedGlobals } from '../compat/shared-globals.js';
+import { installRealmGlobals, installSharedGlobals } from '../compat/shared-globals.js';
 
 /**
  * The custom-element adapter — a fragment that ships an ordinary custom element.
@@ -49,6 +49,7 @@ export const customElementAdapter: InstalledAdapter = {
     if (mainWindow && ctx.sharedGlobals?.length) {
       installSharedGlobals(realm.window, mainWindow, ctx.sharedGlobals, fragmentId);
     }
+    if (ctx.realmGlobals) installRealmGlobals(realm.window, ctx.realmGlobals, fragmentId);
 
     // define the element inside the fragment's own realm
     await realm.evaluate(options.entry);

@@ -156,7 +156,7 @@ describe('custom-element adapter and shared globals', () => {
     delete host._satellite;
   });
 
-  function realmContext(sharedGlobals: readonly string[] | undefined, script: string) {
+  function realmContext(sharedGlobals: readonly string[] | undefined, script: string, realmGlobals?: Record<string, unknown>) {
     const frame = document.createElement('iframe');
     document.body.append(frame);
     const realmWindow = frame.contentWindow as Window & typeof globalThis;
@@ -187,6 +187,7 @@ describe('custom-element adapter and shared globals', () => {
       contentRoot: root,
       signal: new AbortController().signal,
       ...(sharedGlobals === undefined ? {} : { sharedGlobals }),
+      ...(realmGlobals === undefined ? {} : { realmGlobals }),
       env: { root, props: {}, onPropsChanged: () => () => undefined, emit: () => undefined },
     } as unknown as AdapterBootContext;
 
@@ -230,5 +231,17 @@ describe('custom-element adapter and shared globals', () => {
 
     expect(host.dataLayer).toEqual([]);
     expect((realmWindow as unknown as { dataLayer: unknown[] }).dataLayer).toEqual([{ event: 'local' }]);
+  });
+
+  it("defines realm globals before the entry module runs, on the realm and not the host", async () => {
+    const seen: unknown[] = [];
+    const agent = { report: (value: unknown) => seen.push(value) };
+    const { ctx, realmWindow } = realmContext(undefined, `fdc3.report(typeof fdc3);`, { fdc3: agent });
+
+    await customElementAdapter.boot(ctx);
+
+    expect(seen).toEqual(['object']);
+    expect((realmWindow as unknown as { fdc3: unknown }).fdc3).toBe(agent);
+    expect('fdc3' in window).toBe(false);
   });
 });
