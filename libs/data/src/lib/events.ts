@@ -72,8 +72,19 @@ export interface EventBusOptions {
   consumers?: readonly string[];
   /** Cross-context wake-up and page-scoped fan-out. Defaults to the shared one for the partition. */
   invalidator?: Invalidator;
-  /** Origin-scope transport. Injectable for tests; defaults to a `BroadcastChannel`. */
+  /** The transport between contexts. Injectable for tests; defaults to a `BroadcastChannel`. */
   broadcastChannel?: (name: string) => BroadcastChannelLike | undefined;
+  /**
+   * Which page this bus is on, for `scope: 'page'` channels: buses that name the same page share
+   * them, and a bus on another page — another tab — does not.
+   *
+   * In a browser it defaults to the top-level document, which every Braid realm on the page shares
+   * and no other tab does: each fragment's realm is its own JavaScript context, as isolated from
+   * the others in memory as a tab is, so without a transport a page-scoped channel would reach no
+   * further than the bus that wrote to it. Outside a browser there is no page, and a page-scoped
+   * channel stays within this bus unless one is named here.
+   */
+  page?: string;
   /** Attempts before a queued event is abandoned. */
   maxAttempts?: number;
   /** Never silent: retention drops and abandoned handlers are reported here. */
@@ -165,8 +176,31 @@ const wakeTag = (consumer: string) => `skew:events#${consumer}`;
 /** One mutation id per channel+type, so `drainOutbox` can find the handler by name after a reload. */
 const runnerId = (channel: string, type: string) => `event:${channel}:${type}`;
 
+/** What crosses a channel's wire between contexts. */
+type WireMessage =
+  | { kind: 'state'; value: unknown }
+  | { kind: 'event'; event: BusEvent }
+  | { kind: 'state-request' }
+  | { kind: 'state-reply'; value: unknown };
+
+/**
+ * The top-level document this context is on, named by when it started — shared by every realm
+ * composed onto the page, and by no other tab. Read, never written: nothing is installed on the
+ * host. Undefined outside a browser.
+ */
+function currentPage(): string | undefined {
+  if (typeof window === 'undefined' || typeof performance === 'undefined') return undefined;
+  try {
+    return String(window.top?.performance.timeOrigin ?? performance.timeOrigin);
+  } catch {
+    // a cross-origin top cannot be read; this document is then the widest page there is
+    return String(performance.timeOrigin);
+  }
+}
+
 export function createEventBus(options: EventBusOptions): EventBus {
   const partition = options.partition ?? (() => 'default');
+  const page = options.page ?? currentPage();
   const invalidator = options.invalidator ?? sharedInvalidator({ partition: partition() });
   const schemas = new Map<string, VersionedSchema<unknown>>();
   const channels = new Map<string, ChannelState>();
@@ -192,7 +226,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     state: unknown;
     conflict: Conflict<unknown> | null;
     readonly stateListeners: Set<{ listener: (value: unknown) => void; as?: number }>;
-    /** Only origin-scoped channels open one. */
+    /** To other contexts: every tab for origin scope, this page's realms for page scope. */
     readonly wire?: BroadcastChannelLike | undefined;
   }
 
@@ -221,7 +255,7 @@ export function createEventBus(options: EventBusOptions): EventBus {
     if (existing) return existing;
 
     const scope = channelOptions.scope ?? 'page';
-    const wire = scope === 'origin' ? openWire(key) : undefined;
+    const wire = scope === 'origin' ? openWire(key) : page === undefined ? undefined : openWire(`page:${page}:${key}`);
     const created: ChannelState = {
       name,
       key,
@@ -235,12 +269,20 @@ export function createEventBus(options: EventBusOptions): EventBus {
     // A BroadcastChannel never delivers to its own sender, so a message arriving here is always from
     // another context — no de-duplication needed, which is the same property invalidation relies on.
     wire?.addEventListener('message', (event) => {
-      const message = event.data as { kind: 'state' | 'event'; value?: unknown; event?: BusEvent } | undefined;
+      const message = event.data as WireMessage | undefined;
       if (message?.kind === 'state') applyState(created, message.value, { local: false });
       if (message?.kind === 'event' && message.event) deliverLive(message.event);
+      // A context that opened the channel after state was set asks for it once. Every holder
+      // answers, and the asker takes an answer only while it still has nothing: a reply that
+      // arrives after it has heard a newer broadcast must not set it back.
+      if (message?.kind === 'state-request' && created.state !== undefined) {
+        wire?.postMessage({ kind: 'state-reply', value: created.state } satisfies WireMessage);
+      }
+      if (message?.kind === 'state-reply' && created.state === undefined) applyState(created, message.value, { local: false });
     });
 
     channels.set(key, created);
+    wire?.postMessage({ kind: 'state-request' } satisfies WireMessage);
     return created;
   }
 

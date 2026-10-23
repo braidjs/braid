@@ -181,17 +181,128 @@ describe('at-most-once events', () => {
     two.close();
   });
 
-  it('keeps a page-scoped channel out of other contexts', async () => {
+  it('keeps a page-scoped channel out of other pages — another tab', async () => {
     const wire = wirePair();
-    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
-    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-2' });
 
     const handled = vi.fn();
+    const state = vi.fn();
     two.channel('selection').addEventListener('row.clicked', handled);
+    two.channel('selection').subscribe(state);
     await one.channel('selection').emit('row.clicked', { id: 'row-1' });
+    one.channel('selection').broadcast({ id: 'row-1' });
 
     // Scope is per channel so a UI selection does not end up in five tabs.
     expect(handled).not.toHaveBeenCalled();
+    expect(state).not.toHaveBeenCalled();
+    one.close();
+    two.close();
+  });
+
+  it('carries a page-scoped channel between the realms of one page', async () => {
+    // two fragments on one page: separate JavaScript contexts, as isolated in memory as two tabs
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+
+    const handled = vi.fn();
+    const state = vi.fn();
+    two.channel('selection').addEventListener('row.clicked', handled);
+    two.channel('selection').subscribe(state);
+    await one.channel('selection').emit('row.clicked', { id: 'row-1' });
+    one.channel('selection').broadcast({ id: 'row-2' });
+
+    expect(handled).toHaveBeenCalledWith(expect.objectContaining({ payload: { id: 'row-1' } }));
+    expect(state).toHaveBeenCalledWith({ id: 'row-2' });
+    one.close();
+    two.close();
+  });
+
+  it('stays within this bus when there is no page to share, as outside a browser', () => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const state = vi.fn();
+
+    two.channel('selection').subscribe(state);
+    one.channel('selection').broadcast({ id: 'row-1' });
+
+    expect(state).not.toHaveBeenCalled();
+    one.close();
+    two.close();
+  });
+});
+
+describe('which page a bus is on, by default', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A bus in a context whose top-level document started at `timeOrigin`. */
+  function busUnder(top: unknown, wire: (name: string) => BroadcastChannelLike, consumer: string) {
+    vi.stubGlobal('window', { top });
+    return createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+  }
+
+  it('is the top-level document, so realms under one top share page scope and other tabs do not', () => {
+    const wire = wirePair();
+    const realmA = busUnder({ performance: { timeOrigin: 1000.5 } }, wire, 'a');
+    const realmB = busUnder({ performance: { timeOrigin: 1000.5 } }, wire, 'b');
+    const otherTab = busUnder({ performance: { timeOrigin: 2000.25 } }, wire, 'c');
+    const inB = vi.fn();
+    const inOtherTab = vi.fn();
+    realmB.channel('selection').subscribe(inB);
+    otherTab.channel('selection').subscribe(inOtherTab);
+
+    realmA.channel('selection').broadcast({ id: 'row-1' });
+
+    expect(inB).toHaveBeenCalledWith({ id: 'row-1' });
+    expect(inOtherTab).not.toHaveBeenCalled();
+    [realmA, realmB, otherTab].forEach((bus) => bus.close());
+  });
+
+  it('falls back to this document when the top one cannot be read', () => {
+    const crossOrigin = {
+      get performance(): never {
+        throw new DOMException('Blocked a frame from accessing a cross-origin frame', 'SecurityError');
+      },
+    };
+
+    expect(() => busUnder(crossOrigin, wirePair(), 'a').close()).not.toThrow();
+  });
+});
+
+describe('a context that opens a channel late', () => {
+  it.each([
+    ['an origin-scoped channel, in another tab', { scope: 'origin' as const }, {}],
+    ['a page-scoped channel, in another realm', {}, { page: 'tab-1' }],
+  ])('receives %s its current state without a new broadcast', (_, channelOptions, busOptions) => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, ...busOptions });
+    one.channel('session', channelOptions).broadcast({ userId: 'u1' });
+
+    // the account panel mounts later — a lazy route, a fragment loaded on demand, a new tab
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, ...busOptions });
+    const seen = vi.fn();
+    two.channel('session', channelOptions).subscribe(seen);
+
+    expect(seen).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(two.channel('session', channelOptions).state()).toEqual({ userId: 'u1' });
+    one.close();
+    two.close();
+  });
+
+  it('does not let a late reply set back a newer value it already has', () => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    two.channel('session').broadcast({ userId: 'new' });
+
+    // a third context answers a state request with what it held before the newer broadcast
+    const stale = wire('skew:events:default:page:tab-1:session');
+    stale.postMessage({ kind: 'state-reply', value: { userId: 'old' } });
+
+    expect(two.channel('session').state()).toEqual({ userId: 'new' });
+    expect(one.channel('session').state()).toEqual({ userId: 'new' });
     one.close();
     two.close();
   });
