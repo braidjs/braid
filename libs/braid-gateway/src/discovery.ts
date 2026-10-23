@@ -1,5 +1,5 @@
 import { BRAID_FRAGMENT_PREFIX, BRAID_PROTOCOL_VERSION } from './protocol.js';
-import { toAppdApplication, type AppdAppResponse, type AppdListResponse } from './appd.js';
+import { appdResponse } from './appd.js';
 import { canFetch, canList, Principal, Registry, ResolvedFragmentManifest } from './registry.js';
 
 /**
@@ -141,25 +141,15 @@ export function createDiscoveryHandler(
       // so a caller can never see a resolver through AppD that discovery would have hidden.
       if (appdEnabled && url.pathname.startsWith(appdPath)) {
         const requested = url.pathname.slice(appdPath.length).replace(/^\//, '');
-
-        if (!requested) {
-          const body: AppdListResponse = {
-            applications: visible.map((manifest) => toAppdApplication(manifest, url.origin)),
-            message: 'OK',
-          };
-          return json(body, 200, { 'Cache-Control': 'no-store', Vary: 'cookie, authorization' });
-        }
-
-        const appId = decodeURIComponent(requested);
-        const match = visible.find((manifest) => manifest.id === appId);
-        if (!match) {
-          // 404 for "not visible to you" as well as "not registered" — distinguishing them would
-          // let an unauthorized caller enumerate the registry one id at a time.
-          return json({ message: `No application with appId "${appId}"` }, 404, { 'Cache-Control': 'no-store' });
-        }
-
-        const body: AppdAppResponse = { application: toAppdApplication(match, url.origin), message: 'OK' };
-        return json(body, 200, { 'Cache-Control': 'no-store', Vary: 'cookie, authorization' });
+        const { status, body } = appdResponse({
+          manifests: visible,
+          origin: url.origin,
+          ...(requested ? { appId: safeDecode(requested) } : {}),
+        });
+        return json(body, status, {
+          'Cache-Control': 'no-store',
+          ...(status === 200 ? { Vary: 'cookie, authorization' } : {}),
+        });
       }
 
       const pageSize = clampPageSize(url.searchParams.get('pageSize'), defaultPageSize, maxPageSize);
@@ -225,6 +215,15 @@ function clampPage(requested: string | null, totalPages: number): number {
   const parsed = Number.parseInt(requested ?? '', 10);
   if (!Number.isFinite(parsed) || parsed < 1) return 1;
   return Math.min(parsed, totalPages);
+}
+
+/** A malformed escape names no application, rather than throwing. */
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 function json(body: unknown, status: number, headers: Record<string, string> = {}): Response {

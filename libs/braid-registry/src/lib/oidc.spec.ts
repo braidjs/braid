@@ -109,6 +109,14 @@ describe('createOidcAuthorizer', () => {
     expect(await auth.authorize(approver, 'approve', { environment: 'production' })).toBe(true);
   });
 
+  it('grants the App Directory alone with read:directory, without the rest of read', async () => {
+    const auth = authorizer({ roleMap: { desks: ['read:directory'] } });
+    const desk = request(await token({ groups: ['desks'] }));
+
+    expect(await auth.authorize(desk, 'read', { resource: 'directory' })).toBe(true);
+    expect(await auth.authorize(desk, 'read')).toBe(false);
+  });
+
   it('refuses a token without exp, which would never expire', async () => {
     const forever = await new SignJWT({ groups: ['braid-editors'] })
       .setProtectedHeader({ alg: 'RS256', kid: 'k1' })

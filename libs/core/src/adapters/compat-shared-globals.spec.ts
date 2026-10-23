@@ -16,13 +16,15 @@ vi.mock('../compat/realm-patches.js', () => ({
   }),
 }));
 vi.mock('../compat/script-execution.js', () => ({
-  executeScriptsInFragmentContent: vi.fn(() => calls.push('scripts')),
+  executeScriptsInFragmentContent: vi.fn(() =>
+    calls.push(`scripts${'fdc3' in window ? ':fdc3-defined' : ''}`),
+  ),
 }));
 
 const { compatAdapter } = await import('./compat-adapter.js');
 
 describe('compat adapter and shared globals', () => {
-  async function boot(sharedGlobals?: readonly string[]) {
+  async function boot(sharedGlobals?: readonly string[], realmGlobals?: Record<string, unknown>) {
     calls.length = 0;
     const slot = document.createElement('fragment-slot');
     const shadowRoot = slot.attachShadow({ mode: 'open' });
@@ -40,6 +42,7 @@ describe('compat adapter and shared globals', () => {
       bound: false,
       env: {} as FragmentEnv,
       ...(sharedGlobals === undefined ? {} : { sharedGlobals }),
+      ...(realmGlobals === undefined ? {} : { realmGlobals }),
       signal: new AbortController().signal,
     });
   }
@@ -52,5 +55,22 @@ describe('compat adapter and shared globals', () => {
   it('shares nothing when the slot passes no list', async () => {
     await boot();
     expect(calls[0]).toBe('realm-context:[]');
+  });
+
+  it("defines the host's realm globals on the realm window after its patches and before any script runs", async () => {
+    const agent = { getInfo: () => undefined };
+    try {
+      await boot([], { fdc3: agent });
+      expect(calls).toEqual(['realm-context:[]', 'scripts:fdc3-defined', 'boot-complete']);
+      expect((window as unknown as { fdc3: unknown }).fdc3).toBe(agent);
+    } finally {
+      delete (window as unknown as { fdc3?: unknown }).fdc3;
+    }
+  });
+
+  it('declares that it installs realm globals, so the slot calls the host hook for it', async () => {
+    const { customElementAdapter } = await import('./custom-element-adapter.js');
+    expect(compatAdapter.installsRealmGlobals).toBe(true);
+    expect(customElementAdapter.installsRealmGlobals).toBe(true);
   });
 });

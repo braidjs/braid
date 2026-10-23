@@ -1,0 +1,38 @@
+{
+  "name": "@braidlabs/fdc3",
+  "version": "0.0.1",
+  "description": "An FDC3 2.2 Desktop Agent for Braid pages: every composed fragment gets a window.fdc3 bound to its own app identity, with user channels, app channels and intents across fragments, resolved against an FDC3 App Directory. Built on the FINOS reference implementation.",
+  "keywords": ["braid", "micro-frontends", "fdc3", "desktop-agent", "interop", "finos"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@finos/fdc3-agent-proxy": "2.2.3",
+    "@finos/fdc3-standard": "2.2.3",
+    "@finos/fdc3-web-impl": "2.2.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/braidjs/braid.git",
+    "directory": "libs/braid-fdc3"
+  },
+  "homepage": "https://github.com/braidjs/braid#readme",
+  "bugs": {
+    "url": "https://github.com/braidjs/braid/issues"
+  }
+}

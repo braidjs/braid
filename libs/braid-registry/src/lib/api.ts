@@ -1,4 +1,5 @@
-import type { FragmentManifest } from '@braidlabs/gateway';
+import { appdResponse, normalizeManifest } from '@braidlabs/gateway';
+import type { FragmentManifest, ResolvedFragmentManifest } from '@braidlabs/gateway';
 import { createSnapshot, type RegistrySnapshot } from './snapshot.js';
 import { isAfterCursor, isEnvironmentName, refCursor, type SnapshotStore } from './store.js';
 import { diffRegistries, validateRegistry, type RegistryFinding } from './analysis.js';
@@ -108,6 +109,26 @@ export interface RegistryApiOptions {
    * other than the requester.
    */
   environments?: readonly EnvironmentConfig[];
+  /**
+   * Also serve the registry as an FDC3 2.2 **App Directory**, at `{basePath}/appd/v2/apps` and
+   * `{basePath}/appd/v2/apps/{appId}` — one URL to hand any FDC3 desktop agent. See
+   * {@link RegistryAppdOptions}.
+   */
+  appd?: RegistryAppdOptions;
+}
+
+export interface RegistryAppdOptions {
+  /**
+   * The shell origin the fragments are served on, e.g. `https://portal.example`. AppD records
+   * carry absolute URLs, and the registry API's own origin is not where an app appears.
+   */
+  origin: string;
+  /**
+   * Serve this environment's pinned snapshot rather than HEAD — `'production'`, typically, so an
+   * agent only ever resolves to apps that were promoted (and approved, where that is required).
+   * Unset, HEAD is served.
+   */
+  environment?: string;
 }
 
 export type RegistryAction = 'read' | 'publish' | 'pin' | 'promote' | 'approve';
@@ -115,6 +136,12 @@ export type RegistryAction = 'read' | 'publish' | 'pin' | 'promote' | 'approve';
 /** What an action is about, for rights scoped narrower than the action — `promote` to `production`. */
 export interface AuthorizeContext {
   environment?: string;
+  /**
+   * Set on a `read` of the App Directory (`appd`) alone, so a hook can open the directory to
+   * desktop agents without opening `/head` and `/snapshots`, which return manifests whole.
+   * `createOidcAuthorizer` grants it to `'read:directory'` as well as to `'read'`.
+   */
+  resource?: 'directory';
 }
 
 /**
@@ -246,6 +273,20 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
       throw new Error(`braid-registry: endpointOrigins entry "${origin}" must be an origin like https://billing.internal`);
     }
   }
+  if (options.appd) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(options.appd.origin);
+    } catch {
+      // reported below
+    }
+    if (!parsed || parsed.origin !== options.appd.origin.replace(/\/+$/, '')) {
+      throw new Error(`braid-registry: appd.origin "${options.appd.origin}" must be an origin like https://portal.example`);
+    }
+    if (options.appd.environment !== undefined && !environments.has(options.appd.environment)) {
+      throw new Error(`braid-registry: appd.environment "${options.appd.environment}" is not a configured environment`);
+    }
+  }
   if (environments.size > 0 && (!store.ref || !store.setRef || !store.refLog || !store.pending || !store.setPending)) {
     throw new Error('braid-registry: environments need a store with environment support (ref, setRef, refLog, pending, setPending)');
   }
@@ -344,6 +385,9 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
         }
         if (request.method === 'GET' && route === '/head') return await getHead(request);
         if (request.method === 'GET' && route === '/permissions') return await permissions(request);
+        if (options.appd && request.method === 'GET' && (route === '/appd/v2/apps' || route.startsWith('/appd/v2/apps/'))) {
+          return await appDirectory(request, options.appd, route.slice('/appd/v2/apps/'.length));
+        }
         if (request.method === 'POST' && route === '/snapshots') {
           return await audited(request, 'publish', (d) => crossSite(request) ?? publish(request, d));
         }
@@ -410,6 +454,38 @@ export function createRegistryApi(options: RegistryApiOptions): RegistryApi {
     const id = (await store.head?.()) ?? null;
     const snapshot = id ? await store.get(id) : null;
     return json({ id, snapshot });
+  }
+
+  /**
+   * The served snapshot in FDC3 App Directory shape. Reading it is the `read` right — the same
+   * right that already returns every manifest whole from `/head` — so it is not filtered further
+   * by `access.list`; the gateway's `discovery.appd` is the per-user view.
+   */
+  async function appDirectory(request: Request, appd: RegistryAppdOptions, requested: string): Promise<Response> {
+    // `refuse`, with AppD's ErrorDTO body; an authorize hook's own Response (a 401 challenge) is kept
+    const outcome = authorize ? await authorize(request, 'read', { resource: 'directory' }) : true;
+    if (outcome instanceof Response) return outcome;
+    if (!outcome) return json({ code: 403, message: 'not authorized to read' }, 403);
+
+    const id = appd.environment !== undefined ? await store.ref!(appd.environment) : ((await store.head?.()) ?? null);
+    const snapshot = id ? await store.get(id) : null;
+    // a manifest the gateway could not serve would not mount either, so it is not listed
+    const manifests = (snapshot?.manifests ?? []).flatMap((manifest): ResolvedFragmentManifest[] => {
+      try {
+        return [normalizeManifest(manifest)];
+      } catch {
+        return [];
+      }
+    });
+
+    let appId: string | undefined;
+    try {
+      appId = requested ? decodeURIComponent(requested) : undefined;
+    } catch {
+      appId = requested;
+    }
+    const { status, body } = appdResponse({ manifests, origin: appd.origin, ...(appId !== undefined ? { appId } : {}) });
+    return json(body, status);
   }
 
   /**

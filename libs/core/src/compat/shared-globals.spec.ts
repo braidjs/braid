@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installSharedGlobals } from './shared-globals.js';
-import { setBraidConfig } from '../config.js';
+import { installRealmGlobals, installSharedGlobals, resolveRealmGlobals } from './shared-globals.js';
+import { getBraidConfig, setBraidConfig } from '../config.js';
 
 /**
  * Shared globals are checked against a real realm: a same-origin iframe running real classic
@@ -101,5 +101,68 @@ describe('installSharedGlobals()', () => {
     expect(errors).toEqual([]);
     expect(typeof realm.dataLayer).toBe('function');
     expect(host.dataLayer).toBe(hostDataLayer);
+  });
+});
+
+describe('realm globals', () => {
+  const frames: HTMLIFrameElement[] = [];
+
+  afterEach(() => {
+    frames.splice(0).forEach((frame) => frame.remove());
+    delete (getBraidConfig() as { realmGlobals?: unknown }).realmGlobals;
+    setBraidConfig({ dev: false });
+    vi.restoreAllMocks();
+  });
+
+  function createRealm(): Window & Record<string, unknown> {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    frames.push(frame);
+    return frame.contentWindow as Window & Record<string, unknown>;
+  }
+
+  it('calls the hook with the fragment id and its teardown signal', async () => {
+    const hook = vi.fn(() => ({ fdc3: 'agent' }));
+    setBraidConfig({ realmGlobals: hook });
+    const signal = new AbortController().signal;
+
+    expect(await resolveRealmGlobals('billing', signal)).toEqual({ fdc3: 'agent' });
+    expect(hook).toHaveBeenCalledWith({ fragmentId: 'billing', signal });
+  });
+
+  it('gives nothing, and does not throw, when the hook throws or rejects', async () => {
+    setBraidConfig({ dev: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const signal = new AbortController().signal;
+
+    setBraidConfig({ realmGlobals: () => { throw new Error('boom'); } });
+    expect(await resolveRealmGlobals('billing', signal)).toBeUndefined();
+    setBraidConfig({ realmGlobals: async () => { throw new Error('boom'); } });
+    expect(await resolveRealmGlobals('billing', signal)).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives nothing without a hook', async () => {
+    expect(await resolveRealmGlobals('billing', new AbortController().signal)).toBeUndefined();
+  });
+
+  it('defines plain values a classic script reads as bare identifiers', () => {
+    const realm = createRealm();
+    installRealmGlobals(realm, { fdc3: { id: 'billing' } }, 'billing');
+
+    const script = realm.document.createElement('script');
+    script.textContent = 'window.seen = fdc3.id;';
+    realm.document.body.append(script);
+    expect(realm.seen).toBe('billing');
+    expect('fdc3' in window).toBe(false);
+  });
+
+  it('never replaces a name the realm already has', () => {
+    const realm = createRealm();
+    const location = realm.location;
+    installRealmGlobals(realm, { location: 'elsewhere', document: null }, 'billing');
+
+    expect(realm.location).toBe(location);
+    expect(realm.document).not.toBeNull();
   });
 });

@@ -1,0 +1,41 @@
+{
+  "name": "braid-fdc3",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/braid-fdc3/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "framework:agnostic"],
+  "release": {
+    "version": {
+      "manifestRootsToUpdate": ["dist/{projectRoot}"],
+      "currentVersionResolver": "git-tag",
+      "fallbackCurrentVersionResolver": "disk"
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/{projectRoot}"],
+      "options": {
+        "outputPath": "dist/libs/braid-fdc3",
+        "main": "libs/braid-fdc3/src/index.ts",
+        "tsConfig": "libs/braid-fdc3/tsconfig.build.json",
+        "assets": ["libs/braid-fdc3/*.md"]
+      }
+    },
+    "nx-release-publish": {
+      "options": {
+        "packageRoot": "dist/{projectRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "vitest run --config libs/braid-fdc3/vite.config.ts"
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    }
+  }
+}
