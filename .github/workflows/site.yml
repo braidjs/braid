@@ -1,0 +1,95 @@
+name: Site
+
+# Builds apps/site and deploys it to AWS: first the CDK stack (the Amplify app, the contact-form
+# Lambda, its rate-limit table), then the built files as an Amplify deployment.
+#
+# There are no AWS keys anywhere: GitHub's OIDC token is exchanged for a deploy role that only this
+# repository's main branch can assume. Needs these repository variables (Settings → Secrets and
+# variables → Actions → Variables). None of them is secret:
+#   AWS_DEPLOY_ROLE_ARN — the DeployRoleArn output of the first, manual `npx nx run site:infra-deploy`
+#   CONTACT_TO          — the SES-verified inbox that receives enquiries
+#   TURNSTILE_SITEKEY   — the Turnstile widget's site key
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/site/**'
+      - 'libs/core/**'
+      - 'libs/skew/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # for the OIDC token exchanged for the deploy role
+
+# One deploy at a time; never cancel a running deploy midway.
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Until the stack exists and the role is known, skip rather than fail.
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      CDK_DEFAULT_REGION: us-east-1
+      CONTACT_TO: ${{ vars.CONTACT_TO }}
+      SITE_TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Refuse a half-configured deploy rather than ship a form that can't work.
+      - name: Check the deploy is configured
+        run: |
+          missing=""
+          [ -n "$CONTACT_TO" ] || missing="$missing CONTACT_TO"
+          [ -n "$SITE_TURNSTILE_SITEKEY" ] || missing="$missing TURNSTILE_SITEKEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Set these repository variables:$missing"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npx nx run-many -t lint test -p site
+      - run: npx nx build site
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Deploy the stack
+        run: >
+          npx cdk deploy --app "node apps/site/infra/app.mjs" --output apps/site/infra/cdk.out
+          --require-approval never --outputs-file apps/site/infra/cdk.out/outputs.json
+
+      - name: Publish the site to Amplify
+        run: |
+          set -euo pipefail
+          app_id=$(node -p 'require("./apps/site/infra/cdk.out/outputs.json").BraidSite.AppId')
+          # _headers is the static build's header file; Amplify gets the same headers from the stack.
+          (cd dist/apps/site && zip -qr "$RUNNER_TEMP/site.zip" . -x '_headers' -x '*.map')
+          read -r job_id upload_url < <(aws amplify create-deployment --app-id "$app_id" --branch-name main \
+            --query '[jobId, zipUploadUrl]' --output text)
+          curl --fail --silent --show-error --upload-file "$RUNNER_TEMP/site.zip" "$upload_url"
+          aws amplify start-deployment --app-id "$app_id" --branch-name main --job-id "$job_id" > /dev/null
+          for _ in $(seq 1 60); do
+            status=$(aws amplify get-job --app-id "$app_id" --branch-name main --job-id "$job_id" \
+              --query 'job.summary.status' --output text)
+            case "$status" in
+              SUCCEED) echo "Published: $(node -p 'require("./apps/site/infra/cdk.out/outputs.json").BraidSite.SiteUrl')"; exit 0 ;;
+              FAILED|CANCELLED) echo "::error::The Amplify deployment ended $status"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::The Amplify deployment did not finish in five minutes"
+          exit 1
