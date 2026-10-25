@@ -69,16 +69,36 @@ Do these once, in order, signed in as a non-root administrator. Replace `<accoun
 7. **Point the domain at Amplify.** The site's hostname is set in `infra/app.ts`
    (`oss.braidcloud.com`). The stack attaches that hostname, and only that hostname, to the Amplify
    app. Its DNS zone is in another account (braid-cloud-prod), so Amplify can't add the records
-   itself. Read the two CNAMEs it wants, one to validate the certificate and one for the site:
-   ```bash
-   aws amplify get-domain-association --app-id <app-id> --domain-name oss.braidcloud.com --query 'domainAssociation.{status:domainStatus,cert:certificateVerificationDNSRecord,site:subDomains[0].dnsRecord}'
-   ```
-   Add both to the `braidcloud.com` zone with `aws route53 change-resource-record-sets --profile
-   braid-prod` (UPSERT, CNAME, TTL 300). Do it right away: Amplify stops waiting after a while.
-   The site is live once the status is `AVAILABLE`.
+   itself.
+   1. Add `oss.braidcloud.com` to the Turnstile widget's hostnames. Until you do, the form fails
+      there.
+   2. Deploy (step 6). The deploy finishes while the domain is still waiting for DNS. From then on
+      the form accepts posts only from `oss.braidcloud.com`, so it's down until the records below are
+      live. Add them straight away.
+   3. Read the two CNAMEs Amplify wants, one to validate the certificate and one for the site. The
+      site record comes back without a name (` CNAME d….cloudfront.net`): create it as
+      `oss.braidcloud.com`, not at the zone's apex.
+      ```bash
+      aws amplify get-domain-association --app-id <app-id> --domain-name oss.braidcloud.com --query 'domainAssociation.{status:domainStatus,cert:certificateVerificationDNSRecord,site:subDomains[0].dnsRecord}'
+      ```
+   4. Add both to the `braidcloud.com` zone with `aws route53 change-resource-record-sets --profile
+      braid-prod` (UPSERT, CNAME, TTL 300). The site is live once the status is `AVAILABLE`, usually
+      within minutes. If the status ends at `FAILED` (for instance because the records came too
+      late), restarting verification should work: `aws amplify update-domain-association --app-id <app-id>
+      --domain-name oss.braidcloud.com --sub-domain-settings prefix=,branchName=main`. A redeploy
+      won't retry it, because nothing in the template changed.
+
    `main.<app-id>.amplifyapp.com` keeps serving the site, but its contact form returns 403, because
-   the form accepts posts only from the hostname. To undo all of this, revert the change, redeploy,
-   and delete the two records.
+   the form accepts posts only from the hostname. Changing the hostname later replaces the domain,
+   so it needs new records and a new certificate. To undo all of this, keep this order:
+   1. Delete the `oss.braidcloud.com` CNAME.
+   2. Revert the change and redeploy. This removes the domain from Amplify.
+   3. Delete the certificate-validation CNAME (`_….oss.braidcloud.com`).
+
+   Never let the records outlive the domain, including before any `cdk destroy`. Someone else
+   could claim a CNAME that points at a released Amplify/CloudFront target and serve content as a
+   `braidcloud.com` subdomain. The records sit in a zone owned by another project, so make sure its
+   owners know these two belong to this site.
 8. **In GitHub**, create the environment `site-production` (*Settings → Environments*), limited to
    the `main` branch. Then set three repository variables (*Settings → Secrets and variables →
    Actions → Variables*): `AWS_PUBLISH_ROLE_ARN` and `AMPLIFY_APP_ID` from the stack's outputs, and
