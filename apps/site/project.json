@@ -37,7 +37,7 @@
       "dependsOn": ["build"],
       "continuous": true,
       "options": {
-        "command": "wrangler dev --config apps/site/wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA"
+        "command": "node apps/site/dev.mjs --port 8787"
       }
     },
     "test": {
@@ -52,10 +52,28 @@
       "cache": true,
       "options": {
         "commands": [
-          "eslint apps/site --ignore-pattern 'apps/site/.wrangler/**'",
+          "eslint apps/site --ignore-pattern 'apps/site/infra/cdk.out/**'",
           "tsc --noEmit -p apps/site/tsconfig.json"
         ],
         "parallel": false
+      }
+    },
+    "infra-synth": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk synth --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --quiet"
+      }
+    },
+    "infra-diff": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk diff --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out"
+      }
+    },
+    "infra-deploy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk deploy --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --outputs-file apps/site/infra/cdk.out/outputs.json"
       }
     }
   }

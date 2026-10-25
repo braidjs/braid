@@ -10,5 +10,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "worker/**/*.ts"]
+  "include": ["src/**/*.ts", "api/**/*.ts", "aws/**/*.ts", "infra/**/*.ts"]
 }

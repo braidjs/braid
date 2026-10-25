@@ -5,7 +5,7 @@ export default defineConfig({
   cacheDir: '../../node_modules/.vite/apps/site',
   test: {
     environment: 'node',
-    include: ['src/**/*.spec.ts', 'worker/**/*.spec.ts'],
+    include: ['src/**/*.spec.ts', 'api/**/*.spec.ts', 'aws/**/*.spec.ts', 'infra/**/*.spec.ts'],
     reporters: ['default'],
     // The spec runs the real build once, which bundles the host runtime and six fragments.
     testTimeout: 60_000,
