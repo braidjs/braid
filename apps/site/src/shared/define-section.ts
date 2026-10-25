@@ -1,5 +1,5 @@
 import { defineFragment } from '@braidlabs/core';
-import { HOST_CONTRACT_VERSION, SEAMS_KEY, frame } from './frame';
+import { SEAMS_KEY, frame } from './frame';
 
 /**
  * Registers one homepage section as a contract fragment.
@@ -9,7 +9,9 @@ import { HOST_CONTRACT_VERSION, SEAMS_KEY, frame } from './frame';
  */
 export function defineSection(markup: string): void {
   defineFragment({
-    contract: { version: '1.0.0', requires: { host: `>=${HOST_CONTRACT_VERSION}` } },
+    // What these sections were written against, not whatever the host is today: a host that bumps
+    // its contract must not silently raise every fragment's requirement with it.
+    contract: { version: '1.0.0', requires: { host: '>=1.0.0' } },
     mount(env) {
       env.root.innerHTML = frame(markup);
       const frag = env.root.querySelector('.frag');

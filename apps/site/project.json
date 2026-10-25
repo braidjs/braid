@@ -8,7 +8,7 @@
     "build": {
       "executor": "nx:run-commands",
       "cache": true,
-      "inputs": ["{projectRoot}/**/*", "{workspaceRoot}/libs/core/src/**/*", "{workspaceRoot}/libs/skew/src/**/*"],
+      "inputs": ["default", "^default", "{workspaceRoot}/tsconfig.base.json", { "externalDependencies": ["esbuild"] }],
       "outputs": ["{workspaceRoot}/dist/apps/site"],
       "options": {
         "command": "node apps/site/build.mjs --out dist/apps/site"

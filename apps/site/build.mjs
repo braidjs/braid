@@ -33,7 +33,8 @@ const inTempDir = (path) => {
 export async function buildSite(outDir) {
   const out = resolve(workspace, outDir);
   // The output is cleared first, so a mistyped or empty --out must never point at the repo itself.
-  if (!within(join(workspace, 'dist'), out) && !inTempDir(out)) {
+  const holdsWorkspace = out === workspace || within(out, workspace);
+  if (holdsWorkspace || (!within(join(workspace, 'dist'), out) && !inTempDir(out))) {
     throw new Error(`refusing to clear ${out}: --out must be inside ${join(workspace, 'dist')} or the system temp directory`);
   }
   rmSync(out, { recursive: true, force: true });

@@ -8,7 +8,7 @@ import css from './fragment.css';
 /** The context key the host publishes "show the seams" under. Every section subscribes to it. */
 export const SEAMS_KEY = 'site:seams';
 
-/** The host's contract version. Every section requires at least this of whichever host mounts it. */
+/** The host's contract version. Each section declares its own minimum (see define-section.ts). */
 export const HOST_CONTRACT_VERSION = '1.0.0';
 
 /**

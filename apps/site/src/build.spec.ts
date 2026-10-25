@@ -41,7 +41,7 @@ describe('the built site', () => {
     expect(html.match(/<template shadowrootmode="open">/g)).toHaveLength(FRAGMENTS.length);
     for (const heading of [
       'Four teams, one website.',
-      'Words you’ll hear a lot, in plain English.'.replace('’', "'"),
+      "Words you'll hear a lot, in plain English.",
       'This page is braided.',
       'Safe, untangled, and honest about the rest.',
       'Pick a path. Each one takes about ten minutes.',
@@ -59,6 +59,22 @@ describe('the built site', () => {
       for (const url of urls) {
         expect(url, `${page}: ${url}`).not.toMatch(/__braid/);
         expect(url, `${page}: ${url}`).not.toMatch(/^\/(?!\/)/);
+      }
+    }
+  });
+
+  it('sends every anchor link to an id that exists where it points', () => {
+    // Only light-DOM ids count: a URL fragment cannot reach an id inside a shadow root.
+    const lightIds = (page: string) =>
+      new Set(
+        [...read(page).replace(/<template shadowrootmode="open">[\s\S]*?<\/template>/g, '').matchAll(/\bid="([^"]+)"/g)].map(
+          (m) => m[1],
+        ),
+      );
+    for (const page of PAGES) {
+      for (const [, prefix, target] of read(page).matchAll(/\bhref="(\.\.\/|\.\/)?#([^"]+)"/g)) {
+        const where = prefix === '../' ? 'index.html' : page;
+        expect(lightIds(where).has(target), `${page}: ${prefix ?? ''}#${target}`).toBe(true);
       }
     }
   });

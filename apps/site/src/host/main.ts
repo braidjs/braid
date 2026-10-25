@@ -18,10 +18,9 @@ function setSeams(on: boolean): void {
   }
   // The live fragments hear it over the context bus, from inside their own realms.
   braidContext.set(SEAMS_KEY, on);
-  if (seamsToggle) {
-    seamsToggle.setAttribute('aria-pressed', String(on));
-    seamsToggle.textContent = on ? 'Hide the seams' : 'Show the seams';
-  }
+  // A toggle button keeps one label and reports its state through aria-pressed; changing the label
+  // as well would be announced as "Show the seams, not pressed".
+  seamsToggle?.setAttribute('aria-pressed', String(on));
 }
 
 // Published before any slot boots, so every fragment's first read already has it.
