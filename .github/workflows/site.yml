@@ -8,16 +8,9 @@ name: Site
 #   vars.CLOUDFLARE_ACCOUNT_ID     — the account the Worker lives in
 #   vars.TURNSTILE_SITEKEY         — the Turnstile widget's site key (public)
 # and, once, on Cloudflare:  npx wrangler secret put TURNSTILE_SECRET --config apps/site/wrangler.jsonc
+#
+# Manual only for now: the site's hosting is moving to AWS Amplify, so this does not run on pushes.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/site/**'
-      - 'libs/core/**'
-      - 'libs/skew/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/site.yml'
   workflow_dispatch:
 
 permissions:
