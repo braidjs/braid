@@ -8,7 +8,17 @@
     "build": {
       "executor": "nx:run-commands",
       "cache": true,
-      "inputs": ["default", "^default", "{workspaceRoot}/tsconfig.base.json", { "externalDependencies": ["esbuild"] }],
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": ["esbuild"]
+        },
+        {
+          "env": "SITE_TURNSTILE_SITEKEY"
+        }
+      ],
       "outputs": ["{workspaceRoot}/dist/apps/site"],
       "options": {
         "command": "node apps/site/build.mjs --out dist/apps/site"
@@ -30,13 +40,6 @@
         "command": "wrangler dev --config apps/site/wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA"
       }
     },
-    "deploy": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["build"],
-      "options": {
-        "command": "wrangler deploy --config apps/site/wrangler.jsonc"
-      }
-    },
     "test": {
       "executor": "nx:run-commands",
       "cache": true,
@@ -48,7 +51,10 @@
       "executor": "nx:run-commands",
       "cache": true,
       "options": {
-        "commands": ["eslint apps/site --ignore-pattern 'apps/site/.wrangler/**'", "tsc --noEmit -p apps/site/tsconfig.json"],
+        "commands": [
+          "eslint apps/site --ignore-pattern 'apps/site/.wrangler/**'",
+          "tsc --noEmit -p apps/site/tsconfig.json"
+        ],
         "parallel": false
       }
     }

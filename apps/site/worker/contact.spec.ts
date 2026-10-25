@@ -14,6 +14,7 @@ const valid = {
 function deps(overrides: Partial<ContactDeps> = {}) {
   const sent: ContactMessage[] = [];
   const all: ContactDeps = {
+    clientIp: vi.fn(() => '203.0.113.7'),
     rateLimit: vi.fn(async () => true),
     verifyTurnstile: vi.fn(async () => true),
     send: vi.fn(async (message: ContactMessage) => void sent.push(message)),
@@ -69,6 +70,13 @@ describe('POST /api/contact', () => {
     ['message', { message: '' }, 'message'],
     ['a message over 5,000 characters', { message: 'x'.repeat(5001) }, 'message'],
     ['a name over 100 characters', { name: 'x'.repeat(101) }, 'name'],
+    // Characters RFC 5322 gives meaning to in an address header: each could turn Reply-To into a
+    // list, a group or a comment. Only plain addresses are accepted.
+    ['an email with a comma', { email: 'ceo,attacker@evil.test' }, 'email'],
+    ['an email with a semicolon', { email: 'a;b@evil.test' }, 'email'],
+    ['an email with quotes', { email: '"a"@evil.test' }, 'email'],
+    ['an email with a comment', { email: 'a(b)@evil.test' }, 'email'],
+    ['an email with a control character', { email: 'a\u0000b@evil.test' }, 'email'],
   ])('refuses a missing or invalid %s with a 400 naming the field', async (_label, change, field) => {
     const { deps: d, sent } = deps();
     const res = await handleContact(post({ ...valid, ...change }, { json: true }), d);
@@ -108,10 +116,34 @@ describe('POST /api/contact', () => {
 
   it('drops a filled honeypot silently: it looks like success, and nothing is sent', async () => {
     const { deps: d, sent } = deps();
-    const res = await handleContact(post({ ...valid, website: 'http://spam.test' }), d);
+    const res = await handleContact(post({ ...valid, hp_extra: 'http://spam.test' }), d);
     expect(res.status).toBe(303);
     expect(sent).toHaveLength(0);
     expect(d.verifyTurnstile).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the rate limit on a submission that fails validation', async () => {
+    const { deps: d } = deps();
+    await handleContact(post({ ...valid, email: 'nope' }, { json: true }), d);
+    expect(d.rateLimit).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the platform cannot say who is asking', async () => {
+    const { deps: d, sent } = deps({ clientIp: vi.fn(() => null) });
+    const res = await handleContact(post(valid, { json: true }), d);
+    expect(res.status).toBe(400);
+    expect(d.rateLimit).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('marks every response with nosniff and no-store, and locks down the HTML error page', async () => {
+    const json = await handleContact(post({ ...valid, email: 'nope' }, { json: true }), deps().deps);
+    expect(json.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(json.headers.get('cache-control')).toBe('no-store');
+    const html = await handleContact(post({ ...valid, email: 'nope' }), deps().deps);
+    expect(html.headers.get('content-security-policy')).toMatch(/default-src 'none'.*frame-ancestors 'none'/);
+    const ok = await handleContact(post(valid), deps().deps);
+    expect(ok.headers.get('cache-control')).toBe('no-store');
   });
 
   it('answers 429 once the rate limit is used up, keyed by the visitor IP', async () => {
@@ -127,6 +159,31 @@ describe('POST /api/contact', () => {
     const res = await handleContact(new Request(`${ORIGIN}/api/contact`, { method }), deps().deps);
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('POST');
+  });
+
+  it('accepts a post with no Origin header (a script or curl), which is not a cross-site browser post', async () => {
+    const req = post(valid);
+    const noOrigin = new Request(req, { headers: Object.fromEntries([...req.headers].filter(([k]) => k !== 'origin')) });
+    expect((await handleContact(noOrigin, deps().deps)).status).toBe(303);
+  });
+
+  it('answers the honeypot with JSON success too, and logs that it dropped one', async () => {
+    const { deps: d, sent } = deps();
+    const res = await handleContact(post({ ...valid, hp_extra: 'x' }, { json: true }), d);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(sent).toHaveLength(0);
+    expect(d.log).toHaveBeenCalledWith('contact: honeypot filled; dropped');
+  });
+
+  it('answers a body it cannot read as a form with 400', async () => {
+    const req = new Request(`${ORIGIN}/api/contact`, {
+      method: 'POST',
+      body: 'not a form',
+      headers: { 'content-type': 'multipart/form-data; boundary=missing', accept: 'application/json' },
+    });
+    const res = await handleContact(req, deps().deps);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { errors: object }).errors).toHaveProperty('form');
   });
 
   it('refuses a post from another site', async () => {

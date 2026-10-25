@@ -98,7 +98,8 @@ describe('the built site', () => {
     expect(new URL(action, 'https://site.test/contact/index.html').pathname).toBe('/api/contact');
     expect(html).toMatch(/method="post"/);
     expect(html).toMatch(/class="cf-turnstile" data-sitekey="[^"%]+"/);
-    expect(html).toContain('name="website"');
+    expect(html).toContain('name="hp_extra"');
+    expect(html).toContain('data-action="contact"');
     for (const field of ['name', 'email', 'company', 'message']) expect(html).toContain(`name="${field}"`);
   });
 

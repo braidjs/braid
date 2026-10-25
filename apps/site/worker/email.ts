@@ -21,9 +21,11 @@ export function buildEmail(options: {
 
   const subject = `Hosted Braid enquiry from ${oneLine(message.name)}${message.company ? ` (${oneLine(message.company)})` : ''}`;
   const body = [
-    `Name:    ${message.name}`,
+    'A visitor typed this into the contact form on the Braid site. Nothing in it is verified, so check before you act on any links.',
+    '',
+    `Name:    ${oneLine(message.name)}`,
     `Email:   ${message.email}`,
-    `Company: ${message.company || '—'}`,
+    `Company: ${oneLine(message.company) || '—'}`,
     '',
     message.message,
     '',
@@ -35,14 +37,15 @@ export function buildEmail(options: {
     `From: Braid site <${from}>`,
     `To: ${to}`,
     `Reply-To: ${message.email}`,
-    `Subject: ${encodeWord(subject)}`,
-    `Date: ${now.toUTCString()}`,
+    `Subject: ${encodeHeader(subject)}`,
+    `Date: ${rfc5322Date(now)}`,
     `Message-ID: <${id}@${domain}>`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
     'Content-Transfer-Encoding: base64',
     '',
-    wrap(base64(body)),
+    // Canonical line endings before encoding: a textarea can send bare \n.
+    wrap(base64(body.replace(/\r?\n/g, '\r\n'))),
   ].join('\r\n');
 }
 
@@ -51,9 +54,32 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-/** RFC 2047 encoded-word: safe for any characters, and it can never contain a line break. */
-function encodeWord(text: string): string {
-  return `=?UTF-8?B?${base64(text)}?=`;
+/**
+ * A header value as RFC 2047 encoded-words: safe for any characters, and never a raw line break.
+ *
+ * Each word carries at most 39 bytes: 52 base64 characters, 64 with its `=?UTF-8?B?…?=` frame. That
+ * is within the 75 the RFC allows, and 73 on the first line after "Subject: ". Words split on
+ * code-point boundaries, so no character is cut in half, and fold onto continuation lines, so every
+ * header line stays under 78 characters however long the visitor's name is.
+ */
+function encodeHeader(text: string): string {
+  const encoder = new TextEncoder();
+  const words: string[] = [];
+  let chunk = '';
+  for (const char of text) {
+    if (encoder.encode(chunk + char).byteLength > 39) {
+      words.push(chunk);
+      chunk = '';
+    }
+    chunk += char;
+  }
+  if (chunk) words.push(chunk);
+  return words.map((word) => `=?UTF-8?B?${base64(word)}?=`).join('\r\n ');
+}
+
+/** RFC 5322 date with a numeric zone (`+0000`), not the obsolete `GMT`. */
+function rfc5322Date(date: Date): string {
+  return date.toUTCString().replace(/GMT$/, '+0000');
 }
 
 function base64(text: string): string {

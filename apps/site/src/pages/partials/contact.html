@@ -7,6 +7,8 @@
     <p style="flex: 1 1 300px; align-self: flex-end; margin: 0; max-width: 38ch; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 24px; line-height: 1.25">Tell us what you’re putting together. We’ll reply by email, usually within a couple of working days.</p>
   </div>
 
+  <noscript><p class="form-noscript">This form needs JavaScript turned on for its spam check. Please turn it on and reload the page.</p></noscript>
+
   <form id="contact-form" class="contact-form" method="post" action="%BASE%api/contact" novalidate>
     <div class="field">
       <label for="contact-name">Your name</label>
@@ -32,12 +34,12 @@
 
     <!-- A field people never see. Bots fill it in; the server drops anything that does. -->
     <div class="hp" aria-hidden="true">
-      <label for="contact-website">Leave this empty</label>
-      <input id="contact-website" name="website" type="text" tabindex="-1" autocomplete="off">
+      <label for="contact-hp">Leave this empty</label>
+      <input id="contact-hp" name="hp_extra" type="text" tabindex="-1" autocomplete="off">
     </div>
 
     <div class="field field-wide">
-      <div class="cf-turnstile" data-sitekey="%TURNSTILE_SITEKEY%" data-theme="light"></div>
+      <div class="cf-turnstile" data-sitekey="%TURNSTILE_SITEKEY%" data-action="contact" data-theme="light"></div>
       <p class="field-error" id="contact-turnstile-error" hidden></p>
     </div>
 
@@ -45,6 +47,7 @@
       <button type="submit" class="contact-submit">Send</button>
       <p class="field-hint" style="margin: 0">We use these details only to reply to you. They’re emailed to us and not stored on this site.</p>
     </div>
-    <p class="field-wide form-status" id="contact-status" role="status" aria-live="polite"></p>
   </form>
+  <p class="form-status" id="contact-status" role="status" aria-live="polite"></p>
+  <p class="form-sent" id="contact-sent" tabindex="-1" hidden>Thanks. Your message is on its way, and we’ll reply to the email address you gave.</p>
 </main>
