@@ -40,24 +40,29 @@ flowchart TD
 import { createRecordStore, indexedDbRecordDriver } from '@braidlabs/data';
 import { UserSchema } from './user.schema';
 
-const store = createRecordStore({
-  driver: indexedDbRecordDriver({ name: 'my-app-db' }),
-  partition: 'tenant_acme',
+const users = createRecordStore({
+  driver: indexedDbRecordDriver({ database: 'my-app-db', collections: ['users'] }),
+  collection: 'users',
+  schema: UserSchema,
 });
 
-// Writing a versioned record
-await store.put('users', 'user_1', UserSchema, {
+// Writing a versioned record into a partition
+await users.put({
   id: 'user_1',
-  firstName: 'Grace',
-  lastName: 'Hopper',
-  email: 'grace@navy.mil',
-  verified: true,
+  partition: 'tenant_acme',
+  value: {
+    id: 'user_1',
+    firstName: 'Grace',
+    lastName: 'Hopper',
+    email: 'grace@navy.mil',
+    verified: true,
+  },
 });
 
 // Reading with automatic schema projection
-const user = await store.get('users', 'user_1', UserSchema);
+const user = await users.get('user_1', 'tenant_acme');
 if (user) {
-  console.log('Projected user:', user.firstName);
+  console.log('Projected user:', user.value.firstName);
 }
 ```
 
