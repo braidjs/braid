@@ -17,7 +17,7 @@ npm install -D @braidlabs/build
 Stamps the current build with git commit hash, timestamp, and metadata, writing a TypeScript module and a public manifest:
 
 ```bash
-npx skew-stamp --out-ts src/build-id.ts --out-manifest public/skew-manifest.json
+npx skew-stamp --out src/build-id.ts --manifest public/skew-manifest.json
 ```
 
 ### Generated `build-id.ts`
