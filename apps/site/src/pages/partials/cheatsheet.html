@@ -1,0 +1,377 @@
+<main class="wrap" style="padding-top: 28px; padding-bottom: 72px; font-size: 14px; line-height: 1.5; display: flex; flex-direction: column; gap: 28px">
+
+  <!-- masthead -->
+  <header>
+    <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 24px; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">
+      <span>braid · @braidlabs/*</span>
+      <span>Pin it next to your monitor</span>
+      <span>Reference card · edition 1</span>
+    </div>
+    <div style="margin-top: 8px; border-top: 6px solid #121116; border-bottom: 1.5px solid #121116; height: 4px"></div>
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 20px 48px; flex-wrap: wrap; padding: 18px 0 20px; border-bottom: 1.5px solid #121116">
+      <h1 style="margin: 0; font-weight: 800; font-size: clamp(60px, 9vw, 132px); line-height: 0.82; letter-spacing: -0.065em">The cheatsheet.</h1>
+      <p style="margin: 0 0 6px; max-width: 34ch; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 24px; line-height: 1.2">Everything you'll reach for, in the order you'll reach for it. Short snippets, real APIs, no filler.</p>
+    </div>
+    <nav aria-label="Topics" style="display: flex; flex-wrap: wrap; gap: 0 24px; border-bottom: 1.5px solid #121116">
+      <span style="flex: 1 1 180px; padding: 10px 0; display: flex; gap: 10px; align-items: baseline"><b style="font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 26px; line-height: 1">1</b><span style="font-weight: 600">Setup &amp; the gateway</span></span>
+      <span style="flex: 1 1 180px; padding: 10px 0; display: flex; gap: 10px; align-items: baseline"><b style="font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 26px; line-height: 1">2</b><span style="font-weight: 600">Compat vs contract</span></span>
+      <span style="flex: 1 1 180px; padding: 10px 0; display: flex; gap: 10px; align-items: baseline"><b style="font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 26px; line-height: 1">3</b><span style="font-weight: 600">Talking between apps</span></span>
+      <span style="flex: 1 1 180px; padding: 10px 0; display: flex; gap: 10px; align-items: baseline"><b style="font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 26px; line-height: 1">4</b><span style="font-weight: 600">Skew protection</span></span>
+      <span style="flex: 1 1 180px; padding: 10px 0; display: flex; gap: 10px; align-items: baseline"><b style="font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 26px; line-height: 1">5</b><span style="font-weight: 600">Data, offline &amp; the outbox</span></span>
+    </nav>
+  </header>
+
+  <!-- row 1 -->
+  <div class="sheet-grid">
+
+    <!-- 1 SETUP -->
+    <section aria-labelledby="s1" style="border-top: 6px solid #121116; padding-top: 12px">
+      <div style="display: flex; gap: 14px; align-items: baseline"><span style="font-family: 'Instrument Serif', serif; font-size: 64px; line-height: 0.8">1</span><h2 id="s1" style="margin: 0; font-size: 28px; line-height: 1; letter-spacing: -0.025em">Setup &amp; the gateway</h2></div>
+      <p class="sheet-note" style="font-size: 14px; margin-top: 10px">The gateway is a library, not a service. It runs inside the server you already have.</p>
+
+      <p class="sheet-lbl">Install</p>
+<pre class="sheet-code"><span class="tk-c">$</span> npm i @braidlabs/gateway @braidlabs/core</pre>
+
+      <p class="sheet-lbl">Mount it first, before your app's routes</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { createGateway } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/gateway'</span>;
+<span class="tk-k">import</span> { toNodeMiddleware } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/gateway/node'</span>;
+
+<span class="tk-k">const</span> gateway = createGateway({
+  mode: <span class="tk-s">'production'</span>,
+  registry: [{
+    id: <span class="tk-s">'billing'</span>,                    <span class="tk-c">// its name everywhere</span>
+    endpoint: <span class="tk-s">'http://localhost:4201'</span>, <span class="tk-c">// its server</span>
+    pierce: [<span class="tk-s">'/billing'</span>, <span class="tk-s">'/billing/*'</span>], <span class="tk-c">// pages it's on</span>
+    timeoutMs: 1200,
+  }],
+});
+
+app.use(toNodeMiddleware(gateway));  <span class="tk-c">// Express, Nest, Vite</span>
+app.use(hostAppRouter);</pre>
+
+      <p class="sheet-lbl">On Workers, Deno, Bun or Nitro</p>
+<pre class="sheet-code"><span class="tk-k">export default</span> toFetchHandler(gateway, appHandler);</pre>
+
+      <p class="sheet-lbl">In the browser, and in your HTML</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { initBraid } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/core'</span>;
+initBraid();  <span class="tk-c">// defines &lt;fragment-slot&gt;</span>
+
+<span class="tk-t">&lt;fragment-slot</span> name=<span class="tk-s">"billing"</span><span class="tk-t">&gt;</span>
+  <span class="tk-t">&lt;p</span> slot=<span class="tk-s">"fallback"</span><span class="tk-t">&gt;</span>Billing is unavailable.<span class="tk-t">&lt;/p&gt;</span>
+<span class="tk-t">&lt;/fragment-slot&gt;</span></pre>
+      <p class="sheet-note">The fallback shows only if the app errors or goes away.</p>
+
+      <p class="sheet-lbl">A widget on every page (not tied to the URL)</p>
+<pre class="sheet-code">{ id: <span class="tk-s">'notifications'</span>, bound: <span class="tk-k">false</span>,
+  src: <span class="tk-s">'/panel'</span>, pierce: [<span class="tk-s">'/'</span>, <span class="tk-s">'/*'</span>] }</pre>
+
+      <p class="sheet-lbl">Check it worked</p>
+<pre class="sheet-code"><span class="tk-c"># content is in the first response</span>
+curl -s localhost:3000/billing | grep -c fragment-slot
+<span class="tk-c"># which apps the gateway put on the page</span>
+curl -sI localhost:3000/billing | grep x-braid-fragment-id</pre>
+
+      <p class="sheet-lbl">The URLs you'll see</p>
+      <dl style="margin: 0; font-size: 13px">
+        <div style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid #121116"><dt class="mono" style="flex: 0 0 168px; font-weight: 700">/__braid/realm/:id/</dt><dd style="margin: 0">tiny page each app's sealed space starts from</dd></div>
+        <div style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid #121116"><dt class="mono" style="flex: 0 0 168px; font-weight: 700">/__braid/doc/:id/…</dt><dd style="margin: 0">the app's HTML, when the server didn't add it</dd></div>
+        <div style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid #121116; border-bottom: 1px solid #121116"><dt class="mono" style="flex: 0 0 168px; font-weight: 700">/__braid/frag/:id/*</dt><dd style="margin: 0">the app's own files and API calls, forwarded</dd></div>
+      </dl>
+    </section>
+
+    <!-- 2 COMPAT VS CONTRACT -->
+    <section aria-labelledby="s2" style="border-top: 6px solid #121116; padding-top: 12px">
+      <div style="display: flex; gap: 14px; align-items: baseline"><span style="font-family: 'Instrument Serif', serif; font-size: 64px; line-height: 0.8">2</span><h2 id="s2" style="margin: 0; font-size: 28px; line-height: 1; letter-spacing: -0.025em">Compat vs contract</h2></div>
+      <p class="sheet-note" style="font-size: 14px; margin-top: 10px">Two ways to start an app. Pick by one question: can you change the app?</p>
+
+      <table style="width: 100%; margin-top: 14px; border-collapse: collapse; font-size: 13px">
+        <thead>
+          <tr style="border-top: 1.5px solid #121116; border-bottom: 1.5px solid #121116; text-align: left">
+            <th scope="col" style="padding: 7px 8px 7px 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Question</span></th>
+            <th scope="col" class="mono" style="padding: 7px 8px; font-weight: 700">compat</th>
+            <th scope="col" class="mono" style="padding: 7px 8px; font-weight: 700; background: var(--accent)">contract</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid #121116"><th scope="row" style="padding: 7px 8px 7px 0; text-align: left; font-weight: 600">For</th><td style="padding: 7px 8px">apps you can't change</td><td style="padding: 7px 8px; background: var(--accent)">apps written for Braid</td></tr>
+          <tr style="border-bottom: 1px solid #121116"><th scope="row" style="padding: 7px 8px 7px 0; text-align: left; font-weight: 600">Code changes</th><td style="padding: 7px 8px">none</td><td style="padding: 7px 8px; background: var(--accent)">one <span class="mono">defineFragment</span> call</td></tr>
+          <tr style="border-bottom: 1px solid #121116"><th scope="row" style="padding: 7px 8px 7px 0; text-align: left; font-weight: 600">The app sees</th><td style="padding: 7px 8px">a convincing <span class="mono">window</span>, <span class="mono">document</span>, history</td><td style="padding: 7px 8px; background: var(--accent)">an <span class="mono">env</span> object, nothing faked</td></tr>
+          <tr style="border-bottom: 1px solid #121116"><th scope="row" style="padding: 7px 8px 7px 0; text-align: left; font-weight: 600">Starts from</th><td style="padding: 7px 8px">a server URL</td><td style="padding: 7px 8px; background: var(--accent)">a <span class="mono">blob:</span> URL, in memory</td></tr>
+          <tr style="border-bottom: 1.5px solid #121116"><th scope="row" style="padding: 7px 8px 7px 0; text-align: left; font-weight: 600">Needs the gateway</th><td style="padding: 7px 8px">yes</td><td style="padding: 7px 8px; background: var(--accent)">no, any static host</td></tr>
+        </tbody>
+      </table>
+
+      <p class="sheet-lbl">Compat: nothing to write</p>
+      <p class="sheet-note" style="margin-top: 0">It's the default. Register the app with the gateway (section 1) and serve it exactly as you do today.</p>
+
+      <p class="sheet-lbl">Contract: the page</p>
+<pre class="sheet-code"><span class="tk-t">&lt;fragment-slot</span> name=<span class="tk-s">"checkout"</span>
+  adapter=<span class="tk-s">"contract"</span>
+  entry=<span class="tk-s">"https://checkout.example.com/main.js"</span><span class="tk-t">&gt;</span>
+<span class="tk-t">&lt;/fragment-slot&gt;</span></pre>
+
+      <p class="sheet-lbl">Contract: the app</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { defineFragment } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/core'</span>;
+
+defineFragment({
+  contract: { version: <span class="tk-s">'2.1.0'</span>, requires: { host: <span class="tk-s">'&gt;=1.4.0'</span> } },
+  mount(env) {
+    <span class="tk-k">const</span> app = createApp(env.root, {
+      basePath: env.location.basePath,
+    });
+    env.signal.addEventListener(<span class="tk-s">'abort'</span>, () =&gt; app.destroy());
+  },
+});</pre>
+
+      <p class="sheet-lbl">Contract, in React</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { defineReactFragment } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/react'</span>;
+
+defineReactFragment({
+  render: (env) =&gt; &lt;Checkout cart={env.props.cart} /&gt;,
+});</pre>
+
+      <p class="sheet-lbl">What's on env</p>
+<pre class="sheet-code">env.root          <span class="tk-c">// draw here</span>
+env.location      <span class="tk-c">// your route, incl. basePath</span>
+env.history       <span class="tk-c">// push · replace · back · onChange</span>
+env.props         <span class="tk-c">// from the host · onPropsChanged()</span>
+env.context       <span class="tk-c">// shared values · get · subscribe</span>
+env.emit()        <span class="tk-c">// tell the host something</span>
+env.setDirty()    <span class="tk-c">// "unsaved work here"</span>
+env.onClosing()   <span class="tk-c">// last chance to save</span>
+env.signal        <span class="tk-c">// aborts when you're removed</span></pre>
+
+      <p class="sheet-lbl">Code from outside your company</p>
+<pre class="sheet-code"><span class="tk-t">&lt;fragment-slot</span> name=<span class="tk-s">"chat"</span> trust=<span class="tk-s">"untrusted"</span>
+  src=<span class="tk-s">"https://widget.vendor.com/"</span><span class="tk-t">&gt;&lt;/fragment-slot&gt;</span></pre>
+      <p class="sheet-note">A real cross-origin wall: own cookies, own storage, own document. It no longer flows with your page.</p>
+    </section>
+
+    <!-- 3 EVENTING -->
+    <section aria-labelledby="s3" style="border-top: 6px solid #121116; padding-top: 12px">
+      <div style="display: flex; gap: 14px; align-items: baseline"><span style="font-family: 'Instrument Serif', serif; font-size: 64px; line-height: 0.8">3</span><h2 id="s3" style="margin: 0; font-size: 28px; line-height: 1; letter-spacing: -0.025em">Talking between apps</h2></div>
+      <p class="sheet-note" style="font-size: 14px; margin-top: 10px">Four options, from simplest to strongest. Start at the top.</p>
+
+      <p class="sheet-lbl">A · Props: host → app</p>
+<pre class="sheet-code"><span class="tk-c">// host, plain DOM</span>
+slot.props = { accountId: <span class="tk-s">'ACC-99201'</span>, currency: <span class="tk-s">'USD'</span> };
+
+<span class="tk-c">// host, React</span>
+&lt;BraidFragment name=<span class="tk-s">"billing"</span> props={…} /&gt;
+
+<span class="tk-c">// app</span>
+env.onPropsChanged((props) =&gt; render(props));</pre>
+
+      <p class="sheet-lbl">B · Events: app → host</p>
+<pre class="sheet-code"><span class="tk-c">// app</span>
+env.emit(<span class="tk-s">'invoice:paid'</span>, { invoiceId: <span class="tk-s">'INV-101'</span> });
+
+<span class="tk-c">// host, plain DOM: bubbles from the slot</span>
+slot.addEventListener(<span class="tk-s">'braid:event'</span>, (e) =&gt; {
+  <span class="tk-k">const</span> { type, detail } = e.detail;
+});
+
+<span class="tk-c">// host, React · Angular</span>
+&lt;BraidFragment onFragmentEvent={onEvent} /&gt;
+&lt;braid-fragment (fragmentEvent)=<span class="tk-s">"onEvent($event)"</span> /&gt;</pre>
+
+      <p class="sheet-lbl">C · Context: shared values everyone can read</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { braidContext, initBraid } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/core'</span>;
+
+<span class="tk-c">// host: say who may read what</span>
+initBraid({ capabilities: {
+  billing: { context: { read: [<span class="tk-s">'user'</span>] } },
+} });
+braidContext.set(<span class="tk-s">'user'</span>, { id: <span class="tk-s">'u-1'</span>, locale: <span class="tk-s">'en-GB'</span> });
+
+<span class="tk-c">// app</span>
+env.context.subscribe(<span class="tk-s">'user'</span>, (user) =&gt; greet(user));</pre>
+
+      <p class="sheet-lbl">D · The event bus: across apps, tabs and reloads</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { createEventBus } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/data'</span>;
+
+<span class="tk-k">const</span> bus = createEventBus({ consumer: <span class="tk-s">'billing'</span>, driver });
+<span class="tk-k">const</span> cart = bus.channel(<span class="tk-s">'cart'</span>);
+
+<span class="tk-c">// state: "this is now true" (late joiners get it)</span>
+cart.broadcast({ items: 3 });
+cart.subscribe((c) =&gt; badge(c.items));
+
+<span class="tk-c">// events: "this happened"</span>
+<span class="tk-k">await</span> cart.emit(<span class="tk-s">'item:added'</span>, { sku: <span class="tk-s">'A1'</span> },
+  { delivery: <span class="tk-s">'at-least-once'</span> }); <span class="tk-c">// survives a reload</span>
+cart.addEventListener(<span class="tk-s">'item:added'</span>, (e) =&gt; log(e.payload));
+
+<span class="tk-c">// intents: "someone, please do this"</span>
+bus.addIntentListener(<span class="tk-s">'ViewInvoice'</span>, { handler: open });
+<span class="tk-k">await</span> bus.raiseIntent(<span class="tk-s">'ViewInvoice'</span>, { id: <span class="tk-s">'INV-101'</span> });</pre>
+      <p class="sheet-note">Rule of thumb: state is a noun, an event is a verb. Don't use one for the other.</p>
+    </section>
+  </div>
+
+  <!-- row 2 -->
+  <div class="sheet-grid">
+
+    <!-- 4 SKEW -->
+    <section aria-labelledby="s4" style="border-top: 6px solid #121116; padding-top: 12px">
+      <div style="display: flex; gap: 14px; align-items: baseline"><span style="font-family: 'Instrument Serif', serif; font-size: 64px; line-height: 0.8">4</span><h2 id="s4" style="margin: 0; font-size: 28px; line-height: 1; letter-spacing: -0.025em">Skew protection</h2></div>
+      <p class="sheet-note" style="font-size: 14px; margin-top: 10px">Skew is when two builds meet and disagree: an old tab and a new deploy, an old draft and new code, an old app and a new API.</p>
+
+      <p class="sheet-lbl">Version your data</p>
+<pre class="sheet-code"><span class="tk-k">import</span> { versioned } <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/skew'</span>;
+
+<span class="tk-c">// frozen snapshots, never your live types</span>
+<span class="tk-k">interface</span> V1 { id: string; body: string }
+<span class="tk-k">interface</span> V2 { id: string; title: string; body: string }
+
+<span class="tk-k">export const</span> Draft = versioned&lt;V1&gt;(<span class="tk-s">'draft'</span>)
+  .next&lt;V2&gt;(<span class="tk-s">'lift first line into a title'</span>, (p) =&gt; ({
+    ...p, title: p.body.split(<span class="tk-s">'\n'</span>)[0] ?? <span class="tk-s">''</span>,
+  }));</pre>
+
+      <p class="sheet-lbl">Read it back, safely</p>
+<pre class="sheet-code"><span class="tk-k">const</span> r = Draft.read(raw);
+<span class="tk-k">if</span> (r.ok) render(r.value);   <span class="tk-c">// always the current shape</span>
+<span class="tk-k">else switch</span> (r.reason) {
+  <span class="tk-k">case</span> <span class="tk-s">'ahead'</span>:   <span class="tk-c">// written by a NEWER build</span>
+  <span class="tk-k">case</span> <span class="tk-s">'gap'</span>:     <span class="tk-c">// a migration step is missing</span>
+  <span class="tk-k">case</span> <span class="tk-s">'invalid'</span>: <span class="tk-c">// not this kind of data</span>
+  <span class="tk-k">case</span> <span class="tk-s">'threw'</span>:   <span class="tk-c">// a migration failed</span>
+  <span class="tk-k">case</span> <span class="tk-s">'retired'</span>: <span class="tk-c">// older than you still support</span>
+}</pre>
+      <p class="sheet-note">Data with no version label counts as v1, so you can adopt this without a backfill.</p>
+
+      <p class="sheet-lbl">Stamp every build</p>
+<pre class="sheet-code"><span class="tk-c">$</span> npx skew-stamp --out src/generated/build-id.ts \
+    --manifest dist/skew-manifest.json</pre>
+
+      <p class="sheet-lbl">Old tab, new deploy</p>
+<pre class="sheet-code"><span class="tk-c">// Angular: recover from missing lazy chunks</span>
+provideSkewRecovery({
+  identity: BUILD_IDENTITY,
+  manifestUrl: <span class="tk-s">'/skew-manifest.json'</span>,
+});
+
+<span class="tk-c">// any framework: keep old chunks reachable</span>
+createGateway({ registry, serviceWorker: <span class="tk-k">true</span> });
+<span class="tk-k">await</span> registerBraidServiceWorker({ buildId: BUILD_ID });</pre>
+
+      <p class="sheet-lbl">Old app, new API</p>
+<pre class="sheet-code"><span class="tk-k">const</span> resolver = createContractResolver();
+<span class="tk-k">const</span> r = <span class="tk-k">await</span> resolver.readResolving(FundV1, body,
+  wellKnownContractUrl(API, <span class="tk-s">'portfolio-fund'</span>));
+<span class="tk-c">// on 'ahead', it learns the new steps from the API</span>
+<span class="tk-c">// and gives you a labeled, older-shape copy</span></pre>
+      <p class="sheet-note"><b>The one rule:</b> a migration must never import your live types. Each step closes over its own frozen snapshot.</p>
+    </section>
+
+    <!-- 5 DATA (spans 2) -->
+    <section aria-labelledby="s5" class="sheet-span-2" style="border-top: 6px solid #121116; padding-top: 12px">
+      <div style="display: flex; gap: 14px; align-items: baseline"><span style="font-family: 'Instrument Serif', serif; font-size: 64px; line-height: 0.8">5</span><h2 id="s5" style="margin: 0; font-size: 28px; line-height: 1; letter-spacing: -0.025em">Data, offline &amp; the outbox</h2></div>
+      <p class="sheet-note" style="font-size: 14px; margin-top: 10px; max-width: 80ch">Saved data, cached server data and queued writes all go through the same versioned envelope, so none of it breaks when your app's shapes change.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 0 40px">
+        <div>
+          <p class="sheet-lbl">Pick a driver: where the data lives</p>
+<pre class="sheet-code"><span class="tk-k">import</span> {
+  indexedDbRecordDriver,       <span class="tk-c">// durable, survives reloads</span>
+  sessionStorageRecordDriver,  <span class="tk-c">// this tab only</span>
+  memoryRecordDriver,          <span class="tk-c">// tests, and throwaway state</span>
+} <span class="tk-k">from</span> <span class="tk-s">'@braidlabs/data'</span>;
+
+<span class="tk-k">const</span> driver = indexedDbRecordDriver({
+  database: <span class="tk-s">'my-app'</span>,
+  collections: [<span class="tk-s">'notes'</span>, <span class="tk-s">'outbox'</span>], <span class="tk-c">// declare all up front</span>
+});</pre>
+
+          <p class="sheet-lbl">State you own: the record store</p>
+<pre class="sheet-code"><span class="tk-k">const</span> notes = createRecordStore({
+  driver, collection: <span class="tk-s">'notes'</span>, schema: NoteContract,
+});
+
+<span class="tk-k">await</span> notes.put({ id: <span class="tk-s">'n1'</span>, partition: <span class="tk-s">'default'</span>,
+  value: { id: <span class="tk-s">'n1'</span>, title: <span class="tk-s">'Buy milk'</span> } });
+<span class="tk-k">const</span> note = <span class="tk-k">await</span> notes.get(<span class="tk-s">'n1'</span>, <span class="tk-s">'default'</span>);</pre>
+
+          <p class="sheet-lbl">Server state: the data client</p>
+<pre class="sheet-code"><span class="tk-k">const</span> data = createDataClient({
+  driver, partition: () =&gt; <span class="tk-s">'default'</span>, collection: <span class="tk-s">'notes'</span>,
+});
+
+<span class="tk-k">const</span> note = data.query({
+  key: <span class="tk-s">'note:n1'</span>,
+  tags: [<span class="tk-s">'note#n1'</span>, <span class="tk-s">'notes'</span>],
+  schema: NoteContract,
+  fetch: (signal) =&gt; fetch(<span class="tk-s">'/api/notes/n1'</span>, { signal })
+    .then((r) =&gt; r.json()),
+});
+
+note.subscribe((s) =&gt; {
+  <span class="tk-k">if</span> (s.status === <span class="tk-s">'ready'</span>) render(s.data);
+});
+data.invalidate(<span class="tk-s">'note#n1'</span>);  <span class="tk-c">// refetch everything tagged</span></pre>
+
+          <p class="sheet-lbl">Live updates: push into the cache</p>
+<pre class="sheet-code">client.connect({ schema: Quote, source: (sink, signal) =&gt; {
+  <span class="tk-k">const</span> ws = <span class="tk-k">new</span> WebSocket(<span class="tk-s">'wss://…/quotes'</span>);
+  ws.onmessage = (e) =&gt; sink.receive({ key: <span class="tk-s">`quote:…`</span>, value: e.data });
+  signal.addEventListener(<span class="tk-s">'abort'</span>, () =&gt; ws.close());
+} });</pre>
+        </div>
+
+        <div>
+          <p class="sheet-lbl">Writes that survive going offline</p>
+<pre class="sheet-code"><span class="tk-k">const</span> data = createDataClient({
+  driver, partition: () =&gt; <span class="tk-s">'default'</span>,
+  outbox: createOutbox({ driver, owner: <span class="tk-s">'notes-app'</span> }),
+});
+
+<span class="tk-c">// register at startup, so a write queued before a reload</span>
+<span class="tk-c">// still has something to replay it</span>
+data.registerMutation(<span class="tk-s">'note.rename'</span>, sendRename,
+  { tags: [<span class="tk-s">'note#n1'</span>] });
+
+<span class="tk-k">const</span> out = <span class="tk-k">await</span> data.mutate({
+  key: <span class="tk-s">'note:n1'</span>, schema: NoteContract,
+  mutationId: <span class="tk-s">'note.rename'</span>,          <span class="tk-c">// the kind of write</span>
+  input: { id: <span class="tk-s">'n1'</span>, title: <span class="tk-s">'Buy oat milk'</span> },
+  patch: { title: <span class="tk-s">'Buy oat milk'</span> },  <span class="tk-c">// shown right away</span>
+  tags: [<span class="tk-s">'note#n1'</span>],
+  send: sendRename,
+});
+out.status;  <span class="tk-c">// 'confirmed' landed · 'queued' waiting to retry</span></pre>
+
+          <p class="sheet-lbl">Did the data come from an older or newer app?</p>
+<pre class="sheet-code">note.subscribe((s) =&gt; {
+  <span class="tk-k">if</span> (s.status !== <span class="tk-s">'ready'</span>) <span class="tk-k">return</span>;
+  s.derivedPaths;   <span class="tk-c">// filled in by a migration</span>
+  s.downgradedFrom; <span class="tk-c">// written by a newer app</span>
+  s.lossyPaths;     <span class="tk-c">// fields you can't see</span>
+});</pre>
+
+          <p class="sheet-lbl">Several tabs, one queue</p>
+<pre class="sheet-code"><span class="tk-k">await</span> withLock(<span class="tk-s">'flush-outbox:tenant_acme'</span>, () =&gt; flush());
+<span class="tk-c">// only one tab or app runs this at a time</span></pre>
+
+          <p class="sheet-lbl">Signed-in users and tenants</p>
+<pre class="sheet-code"><span class="tk-k">const</span> tenancy = createTenancy({ driver,
+  collections: [<span class="tk-s">'notes'</span>, <span class="tk-s">'outbox'</span>] });
+<span class="tk-k">await</span> tenancy.signIn({ userId: <span class="tk-s">'u-1'</span>, actingAs: <span class="tk-s">'acme'</span> });
+createDataClient({ driver, partition: tenancy.partition });
+<span class="tk-k">await</span> tenancy.signOut();  <span class="tk-c">// wipes every partition for u-1</span></pre>
+
+          <p class="sheet-lbl">In Angular</p>
+<pre class="sheet-code">provideSkewData({ owner: <span class="tk-s">'notes-app'</span>, persistOutbox: <span class="tk-k">true</span>,
+  database: <span class="tk-s">'my-app'</span>, collections: [<span class="tk-s">'notes'</span>] });
+inject(OutboxService).register(<span class="tk-s">'note.rename'</span>, send);</pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- footer strip -->
+  <footer style="margin-top: auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px; padding: 14px 18px; background: var(--accent); font-size: 14px">
+    <span><b>When something breaks,</b> look it up by what you see in the failure-modes guide before you debug anything.</span>
+    <span class="mono" style="font-weight: 700">braid · cheatsheet · edition 1</span>
+  </footer>
+</main>

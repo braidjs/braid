@@ -1,0 +1,82 @@
+<header class="wrap" style="padding-top: 20px">
+  <div class="seam" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding: 8px 12px; margin-bottom: 14px; border: 1.5px dashed #121116; background: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.4">
+      <span><b>the page itself</b> · plain files on a CDN · no server behind it</span>
+      <span>each striped label below marks a separate app</span>
+    </div>
+  <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 24px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase">
+    <span>The composition issue</span>
+    <span>Interested in hosted Braid? <a href="%CONTACT%" style="display: inline-flex; align-items: center; min-height: 24px; font-weight: 700; text-decoration-thickness: 1.5px; text-underline-offset: 3px">Get in touch →</a></span>
+  </div>
+  <div style="margin-top: 10px; border-top: 6px solid #121116; border-bottom: 1.5px solid #121116; height: 4px"></div>
+  <nav aria-label="Primary" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 14px 0; border-bottom: 1.5px solid #121116">
+    <a href="#top" style="display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 800; font-size: 22px; letter-spacing: -0.04em">
+      <svg width="34" height="22" viewBox="0 0 34 22" aria-hidden="true"><path d="M1 11 C6 1, 11 1, 17 11 S28 21, 33 11" fill="none" stroke="#121116" stroke-width="3.5" stroke-linecap="round"></path><path d="M1 11 C6 21, 11 21, 17 11 S28 1, 33 11" fill="none" stroke="#3346FF" stroke-width="3.5" stroke-linecap="round"></path></svg>
+      braid
+    </a>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 15px; font-weight: 500">
+      <a href="#how" class="nav-link">How it works</a>
+      <a href="https://braidjs.github.io/braid/" class="nav-link">Docs</a>
+      <a href="cheatsheet/" class="nav-link">Cheatsheet</a>
+      <a href="https://github.com/braidjs/braid" class="nav-link">GitHub</a>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+      <button type="button" id="seams-toggle" aria-pressed="true" style="min-height: 44px; padding: 0 16px; border: 1.5px solid #121116; border-radius: 999px; background: transparent; color: #121116; font: 500 13px 'JetBrains Mono', monospace; cursor: pointer">Show the seams</button>
+      <a href="#start" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px; border-radius: 999px; background: #121116; color: #F1ECE2; font-weight: 600; font-size: 15px; text-decoration: none">Get started</a>
+    </div>
+  </nav>
+
+  <!-- the wordmark, with the strands beneath it -->
+  <div id="top" style="margin-top: clamp(16px, 3vw, 40px)">
+    <h1 style="margin: 0; font-weight: 800; font-size: clamp(132px, 27vw, 420px); line-height: 0.8; letter-spacing: -0.07em; text-align: center; font-variation-settings: 'opsz' 96">braid</h1>
+    <svg viewBox="0 0 1440 240" preserveAspectRatio="xMidYMid slice" aria-hidden="true" style="display: block; width: 100%; height: clamp(64px, 12vw, 176px); margin-top: clamp(10px, 2vw, 28px)">
+      <path d="M -240 120 C -197 27, -163 27, -120 120 S -43 213, 0 120 S 77 27, 120 120 S 197 213, 240 120 S 317 27, 360 120 S 437 213, 480 120 S 557 27, 600 120 S 677 213, 720 120 S 797 27, 840 120 S 917 213, 960 120 S 1037 27, 1080 120 S 1157 213, 1200 120 S 1277 27, 1320 120 S 1397 213, 1440 120 S 1517 27, 1560 120" fill="none" stroke="#F1ECE2" stroke-width="34" stroke-linecap="round"></path>
+      <path d="M -240 120 C -197 27, -163 27, -120 120 S -43 213, 0 120 S 77 27, 120 120 S 197 213, 240 120 S 317 27, 360 120 S 437 213, 480 120 S 557 27, 600 120 S 677 213, 720 120 S 797 27, 840 120 S 917 213, 960 120 S 1037 27, 1080 120 S 1157 213, 1200 120 S 1277 27, 1320 120 S 1397 213, 1440 120 S 1517 27, 1560 120" fill="none" stroke="#121116" stroke-width="18" stroke-linecap="round"></path>
+      <path d="M -160 120 C -117 27, -83 27, -40 120 S 37 213, 80 120 S 157 27, 200 120 S 277 213, 320 120 S 397 27, 440 120 S 517 213, 560 120 S 637 27, 680 120 S 757 213, 800 120 S 877 27, 920 120 S 997 213, 1040 120 S 1117 27, 1160 120 S 1237 213, 1280 120 S 1357 27, 1400 120 S 1477 213, 1520 120 S 1597 27, 1640 120" fill="none" stroke="#F1ECE2" stroke-width="34" stroke-linecap="round"></path>
+      <path d="M -160 120 C -117 27, -83 27, -40 120 S 37 213, 80 120 S 157 27, 200 120 S 277 213, 320 120 S 397 27, 440 120 S 517 213, 560 120 S 637 27, 680 120 S 757 213, 800 120 S 877 27, 920 120 S 997 213, 1040 120 S 1117 27, 1160 120 S 1237 213, 1280 120 S 1357 27, 1400 120 S 1477 213, 1520 120 S 1597 27, 1640 120" fill="none" stroke="#3346FF" stroke-width="18" stroke-linecap="round"></path>
+      <path d="M -80 120 C -37 27, -3 27, 40 120 S 117 213, 160 120 S 237 27, 280 120 S 357 213, 400 120 S 477 27, 520 120 S 597 213, 640 120 S 717 27, 760 120 S 837 213, 880 120 S 957 27, 1000 120 S 1077 213, 1120 120 S 1197 27, 1240 120 S 1317 213, 1360 120 S 1437 27, 1480 120 S 1557 213, 1600 120" fill="none" stroke="#F1ECE2" stroke-width="34" stroke-linecap="round"></path>
+      <path d="M -80 120 C -37 27, -3 27, 40 120 S 117 213, 160 120 S 237 27, 280 120 S 357 213, 400 120 S 477 27, 520 120 S 597 213, 640 120 S 717 27, 760 120 S 837 213, 880 120 S 957 27, 1000 120 S 1077 213, 1120 120 S 1197 27, 1240 120 S 1317 213, 1360 120 S 1437 27, 1480 120 S 1557 213, 1600 120" fill="none" stroke="var(--accent)" stroke-width="18" stroke-linecap="round"></path>
+    </svg>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; margin-top: clamp(14px, 2vw, 24px); padding: 12px 0; border-top: 1.5px solid #121116; border-bottom: 1.5px solid #121116">
+      <span style="flex: 1 1 200px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">Safe · Untangled · Skew-aware</span>
+      <p style="flex: 0 1 auto; margin: 0; font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-size: clamp(28px, 3.6vw, 52px); line-height: 1; text-align: center">Tangle-free microfrontends.</p>
+      <span style="flex: 1 1 200px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; text-align: right">Open source · MIT</span>
+    </div>
+  </div>
+  <div style="margin-top: clamp(16px, 2.5vw, 32px)"></div>
+
+  <!-- lede + contents -->
+  <div style="display: flex; flex-wrap: wrap; gap: 40px 64px; padding: 40px 0 88px">
+    <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 28px">
+      <p style="margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">Microfrontends, made safe</p>
+      <h2 style="margin: 0; font-weight: 700; font-size: clamp(44px, 5.6vw, 84px); line-height: 0.94; letter-spacing: -0.04em">The <span style="color: #3346FF">safe</span> microfrontend orchestrator.</h2>
+      <p style="margin: 0; max-width: 38ch; font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-size: clamp(22px, 2.3vw, 31px); line-height: 1.22">Braid puts apps from different teams on one page. It untangles the libraries they'd normally have to share, and it catches the moment two apps stop agreeing on their data, before your users do.</p>
+      <ul style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 0; border-top: 1.5px solid #121116">
+        <li style="padding: 16px 20px 4px 0"><b style="display: block; font-size: 20px; letter-spacing: -0.01em">Safe.</b><span style="display: block; margin-top: 4px; font-size: 16px">Each app runs in its own sealed space. It can't break the page or the apps beside it.</span></li>
+        <li style="padding: 16px 20px 4px 0"><b style="display: block; font-size: 20px; letter-spacing: -0.01em">Untangled.</b><span style="display: block; margin-top: 4px; font-size: 16px">No shared dependency graph. Every app brings its own libraries, at its own versions.</span></li>
+        <li style="padding: 16px 0 4px 0"><b style="display: block; font-size: 20px; letter-spacing: -0.01em">Skew-aware.</b><span style="display: block; margin-top: 4px; font-size: 16px">Apps check they agree on data. Old data gets upgraded, and real mismatches fail loudly.</span></li>
+      </ul>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px">
+        <a href="https://braidjs.github.io/braid/getting-started" style="display: inline-flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 26px; border-radius: 999px; background: #121116; color: #F1ECE2; font-weight: 600; font-size: 17px; text-decoration: none">Get started in ten minutes</a>
+        <button type="button" id="copy-install" aria-label="Copy the install command" style="display: inline-flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 8px 0 18px; border: 1.5px solid #121116; border-radius: 999px; background: #F1ECE2; color: #121116; font: 500 14px 'JetBrains Mono', monospace; cursor: pointer">
+          <span><span style="color: #5B5750">$</span> npm i @braidlabs/core</span>
+          <span style="display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; border-radius: 999px; background: #121116; color: #F1ECE2; font-size: 12px" data-copy-label aria-live="polite">Copy</span>
+        </button>
+      </div>
+    </div>
+    <aside aria-label="In this issue" style="flex: 1 1 300px; min-width: 0; align-self: flex-start; border-top: 6px solid #121116">
+      <p style="margin: 12px 0 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">In this issue</p>
+      <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column">
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">01</span><a href="#problem" style="flex: 1; text-decoration: none; font-weight: 600">Why this is hard</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 2</span></li>
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">02</span><a href="#how" style="flex: 1; text-decoration: none; font-weight: 600">Words you'll hear a lot</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 3</span></li>
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">03</span><a href="#braided" style="flex: 1; text-decoration: none; font-weight: 600">This page is braided</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 4</span></li>
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">04</span><a href="#promises" style="flex: 1; text-decoration: none; font-weight: 600">What we promise</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 5</span></li>
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">05</span><a href="#start" style="flex: 1; text-decoration: none; font-weight: 600">Start in ten minutes</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 6</span></li>
+        <li style="display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid #121116"><span style="font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1; min-width: 30px">06</span><a href="#parts" style="flex: 1; text-decoration: none; font-weight: 600">The parts bin</a><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">p. 7</span></li>
+      </ol>
+      <div style="margin-top: 18px; padding: 14px 16px; border: 1.5px solid #121116; display: flex; gap: 14px; align-items: center">
+        <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="8" fill="none" stroke="#121116" stroke-width="2.5"></circle><path d="M20 3v5M20 32v5M3 20h5M32 20h5M8 8l3.5 3.5M28.5 28.5L32 32M8 32l3.5-3.5M28.5 11.5L32 8" stroke="#121116" stroke-width="2.5" stroke-linecap="round"></path></svg>
+        <p style="margin: 0; font-size: 14px; line-height: 1.4"><b>Today's forecast.</b> Six apps, one page, no server, and not a single tangle.</p>
+      </div>
+    </aside>
+  </div>
+</header>

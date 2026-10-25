@@ -2,6 +2,24 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "site",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/serve.mjs", "--dir", "dist/apps/site", "--port", "4600"],
+      "port": 4600
+    },
+    {
+      "name": "site-worker",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--config", "apps/site/wrangler.jsonc", "--port", "8787", "--var", "TURNSTILE_SECRET:1x0000000000000000000000000000000AA"],
+      "port": 8787
+    },
+    {
+      "name": "site-subpath",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/serve.mjs", "--dir", "dist/apps/site", "--port", "4601", "--prefix", "/braid-site/"],
+      "port": 4601
+    },
+    {
       "name": "prod-remote",
       "runtimeExecutable": "npx",
       "runtimeArgs": [

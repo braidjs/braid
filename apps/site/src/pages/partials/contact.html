@@ -1,0 +1,53 @@
+<main class="wrap" style="padding-top: 28px; padding-bottom: 96px">
+  <div style="display: flex; flex-wrap: wrap; gap: 32px 64px; padding-bottom: 32px; border-bottom: 6px solid #121116">
+    <div style="flex: 999 1 460px; min-width: 0">
+      <p style="margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase">Hosted Braid</p>
+      <h1 style="margin: 14px 0 0; font-weight: 800; font-size: clamp(48px, 7vw, 84px); line-height: 0.9; letter-spacing: -0.055em">Let’s talk about<br>hosting it for you.</h1>
+    </div>
+    <p style="flex: 1 1 300px; align-self: flex-end; margin: 0; max-width: 38ch; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 24px; line-height: 1.25">Tell us what you’re putting together. We’ll reply by email, usually within a couple of working days.</p>
+  </div>
+
+  <noscript><p class="form-noscript">This form needs JavaScript turned on for its spam check. Please turn it on and reload the page.</p></noscript>
+
+  <form id="contact-form" class="contact-form" method="post" action="%BASE%api/contact" novalidate>
+    <div class="field">
+      <label for="contact-name">Your name</label>
+      <input id="contact-name" name="name" type="text" autocomplete="name" maxlength="100" required aria-describedby="contact-name-error">
+      <p class="field-error" id="contact-name-error" hidden></p>
+    </div>
+    <div class="field">
+      <label for="contact-email">Email</label>
+      <input id="contact-email" name="email" type="email" autocomplete="email" maxlength="254" required aria-describedby="contact-email-error">
+      <p class="field-error" id="contact-email-error" hidden></p>
+    </div>
+    <div class="field">
+      <label for="contact-company">Company <span class="optional">optional</span></label>
+      <input id="contact-company" name="company" type="text" autocomplete="organization" maxlength="100" aria-describedby="contact-company-error">
+      <p class="field-error" id="contact-company-error" hidden></p>
+    </div>
+    <div class="field field-wide">
+      <label for="contact-message">What are you building?</label>
+      <textarea id="contact-message" name="message" rows="7" maxlength="5000" required aria-describedby="contact-message-hint contact-message-error"></textarea>
+      <p class="field-hint" id="contact-message-hint">How many apps and teams, what they’re built with, and what you’d want us to run.</p>
+      <p class="field-error" id="contact-message-error" hidden></p>
+    </div>
+
+    <!-- A field people never see. Bots fill it in; the server drops anything that does. -->
+    <div class="hp" aria-hidden="true">
+      <label for="contact-hp">Leave this empty</label>
+      <input id="contact-hp" name="hp_extra" type="text" tabindex="-1" autocomplete="off">
+    </div>
+
+    <div class="field field-wide">
+      <div class="cf-turnstile" data-sitekey="%TURNSTILE_SITEKEY%" data-action="contact" data-theme="light"></div>
+      <p class="field-error" id="contact-turnstile-error" hidden></p>
+    </div>
+
+    <div class="field-wide contact-actions">
+      <button type="submit" class="contact-submit">Send</button>
+      <p class="field-hint" style="margin: 0">We use these details only to reply to you. They’re emailed to us and not stored on this site.</p>
+    </div>
+  </form>
+  <p class="form-status" id="contact-status" role="status" aria-live="polite"></p>
+  <p class="form-sent" id="contact-sent" tabindex="-1" hidden>Thanks. Your message is on its way, and we’ll reply to the email address you gave.</p>
+</main>

@@ -1,0 +1,62 @@
+{
+  "name": "site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/site/src",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": ["esbuild"]
+        },
+        {
+          "env": "SITE_TURNSTILE_SITEKEY"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/dist/apps/site"],
+      "options": {
+        "command": "node apps/site/build.mjs --out dist/apps/site"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node apps/site/serve.mjs --dir dist/apps/site --port 4600"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "wrangler dev --config apps/site/wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "vitest run --config apps/site/vitest.config.ts"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "commands": [
+          "eslint apps/site --ignore-pattern 'apps/site/.wrangler/**'",
+          "tsc --noEmit -p apps/site/tsconfig.json"
+        ],
+        "parallel": false
+      }
+    }
+  }
+}

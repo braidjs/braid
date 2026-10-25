@@ -1,0 +1,66 @@
+<section class="on-ink" aria-labelledby="start-h" style="background: #121116; color: #F1ECE2">
+  <div class="wrap" style="padding-top: 20px; padding-bottom: 112px">
+    <div class="seam" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 24px; padding: 8px 12px; margin-bottom: 28px; border: 1.5px dashed #F1ECE2; background: var(--accent); color: #121116; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.4">
+        <span>&lt;fragment-slot name="start" adapter="contract"&gt;</span>
+        <span>its own sealed space · started from blob:https://this-page/0a7f…</span>
+      </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 24px 64px">
+      <div style="flex: 0 1 240px">
+        <p style="margin: 0; font-family: 'Instrument Serif', serif; font-size: clamp(96px, 11vw, 168px); line-height: 0.8">05</p>
+        <p style="margin: 16px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #A9A5B0">Start in<br>ten minutes</p>
+      </div>
+      <div style="flex: 999 1 560px; min-width: 0">
+        <h2 id="start-h" style="margin: 0; max-width: 16ch; font-weight: 700; font-size: clamp(38px, 4.6vw, 66px); line-height: 0.98; letter-spacing: -0.035em">Pick a path. Each one takes about ten minutes.</h2>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 24px; margin-top: 56px">
+      <article style="display: flex; flex-direction: column; border: 1.5px solid #F1ECE2; border-radius: 6px; overflow: hidden">
+        <div style="padding: 24px 26px 20px">
+          <p style="margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: #A9A5B0">Path A · compat</p>
+          <h3 style="margin: 10px 0 0; font-size: 34px; line-height: 1.02; letter-spacing: -0.03em">Add an app you can't change.</h3>
+          <p style="margin: 12px 0 0; color: #D9D5DE">Add the gateway to the server you already run. There's nothing new to deploy, and the app doesn't need a single code change.</p>
+        </div>
+<pre class="code" style="flex: 1; padding: 20px 26px 26px; background: #1C1B22; border-top: 1px solid #34323C"><span class="tk-c">$ npm i @braidlabs/gateway @braidlabs/core</span>
+
+<span class="tk-k">const</span> gateway = createGateway({
+  registry: [{
+    id: <span class="tk-s">'billing'</span>,
+    endpoint: <span class="tk-s">'http://localhost:4201'</span>,
+    pierce: [<span class="tk-s">'/billing'</span>, <span class="tk-s">'/billing/*'</span>],
+  }],
+});
+app.use(toNodeMiddleware(gateway));
+
+<span class="tk-c">&lt;!-- then, wherever it should appear --&gt;</span>
+<span class="tk-t">&lt;fragment-slot</span> name=<span class="tk-s">"billing"</span><span class="tk-t">&gt;&lt;/fragment-slot&gt;</span></pre>
+      </article>
+      <article style="display: flex; flex-direction: column; border: 1.5px solid var(--accent); border-radius: 6px; overflow: hidden">
+        <div style="padding: 24px 26px 20px; background: var(--accent); color: #121116">
+          <p style="margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase">Path B · contract · no server</p>
+          <h3 style="margin: 10px 0 0; font-size: 34px; line-height: 1.02; letter-spacing: -0.03em">Build a site with no server, like this one.</h3>
+          <p style="margin: 12px 0 0">Any static host will do. Each app is a script the page loads, and each one starts up from memory.</p>
+        </div>
+<pre class="code" style="flex: 1; padding: 20px 26px 26px; background: #1C1B22; border-top: 1px solid #34323C"><span class="tk-c">$ npm i @braidlabs/core</span>
+
+<span class="tk-c">&lt;!-- the page: any static HTML --&gt;</span>
+<span class="tk-t">&lt;fragment-slot</span> name=<span class="tk-s">"checkout"</span>
+  adapter=<span class="tk-s">"contract"</span>
+  entry=<span class="tk-s">"https://checkout.example.com/main.js"</span><span class="tk-t">&gt;</span>
+<span class="tk-t">&lt;/fragment-slot&gt;</span>
+
+<span class="tk-c">// the app: main.js</span>
+defineFragment({
+  mount(env) { render(env.root); },
+});</pre>
+      </article>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 40px; font-weight: 600">
+      <a href="https://braidjs.github.io/braid/getting-started" style="display: inline-flex; align-items: center; min-height: 44px">Getting started →</a>
+      <a href="https://braidjs.github.io/braid/tutorial/" style="display: inline-flex; align-items: center; min-height: 44px">The seven-part tutorial →</a>
+      <a href="https://stackblitz.com/github/braidjs/braid/tree/main/examples/acme-portal" style="display: inline-flex; align-items: center; min-height: 44px">Try it in StackBlitz →</a>
+      <a href="https://braidjs.github.io/braid/braid-from-module-federation" style="display: inline-flex; align-items: center; min-height: 44px">Moving from Module Federation →</a>
+    </div>
+  </div>
+</section>
