@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleContact, type ContactDeps, type ContactMessage } from './contact';
+import { handleContact, unavailable, type ContactDeps, type ContactMessage } from './contact';
 
 const ORIGIN = 'https://braid.example';
 
@@ -106,12 +106,21 @@ describe('POST /api/contact', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('refuses a submission whose Turnstile check fails', async () => {
+  it('refuses a submission whose Turnstile check fails, without spending the rate limit', async () => {
     const { deps: d, sent } = deps({ verifyTurnstile: vi.fn(async () => false) });
     const res = await handleContact(post(valid, { json: true }), d);
     expect(res.status).toBe(400);
     expect(((await res.json()) as { errors: object }).errors).toHaveProperty('turnstile');
+    expect(d.rateLimit).not.toHaveBeenCalled();
     expect(sent).toHaveLength(0);
+  });
+
+  it('answers a server fault with 503 in the caller’s format', async () => {
+    const json = unavailable(post(valid, { json: true }));
+    expect(json.status).toBe(503);
+    expect(((await json.json()) as { errors: object }).errors).toHaveProperty('form');
+    const html = unavailable(post(valid));
+    expect(html.headers.get('content-type')).toContain('text/html');
   });
 
   it('drops a filled honeypot silently: it looks like success, and nothing is sent', async () => {

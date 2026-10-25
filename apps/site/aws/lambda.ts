@@ -1,6 +1,10 @@
-import { handleContact } from '../api/contact';
+import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
+import { createHmac } from 'node:crypto';
+import { handleContact, unavailable } from '../api/contact';
 import { buildEmail } from '../api/email';
-import { verifyTurnstile as siteverify, type TurnstileExpectations } from '../api/turnstile';
+import { verifyTurnstile as siteverify } from '../api/turnstile';
 
 /**
  * The contact form on AWS: a Lambda behind a Function URL, which Amplify reaches through a rewrite
@@ -9,6 +13,10 @@ import { verifyTurnstile as siteverify, type TurnstileExpectations } from '../ap
  * This file only translates. The Function URL event becomes a standard Request, the platform-neutral
  * handler in ../api does the work, and its Response becomes the Function URL result. Rate limiting is
  * a DynamoDB counter, mail goes through SES, and the Turnstile secret comes from SSM.
+ *
+ * The rewrite targets a secret path on the Function URL (`/api/contact/<secret>`), and every other
+ * path is a 404. The Function URL is public, so without that secret a direct call — which could forge
+ * X-Forwarded-For and pick its own rate-limit key — never reaches the handler.
  */
 
 /** The parts of a Lambda Function URL (payload 2.0) event this uses. */
@@ -31,6 +39,8 @@ export interface FunctionUrlResult {
 export interface AwsContactConfig {
   /** The public site, e.g. https://main.<app>.amplifyapp.com. Requests are rebuilt on it. */
   siteOrigin: string;
+  /** The only path served: /api/contact/<secret>, as Amplify's rewrite sends it. */
+  proxyPath: string;
   /** How many proxies we trust in front of the Lambda: 1 when Amplify's CloudFront proxies it. */
   trustedProxyHops: number;
   contactTo: string;
@@ -39,6 +49,7 @@ export interface AwsContactConfig {
   /** Counts one hit against `key` and returns the total so far in its window. */
   hit(key: string): Promise<number>;
   sendRaw(raw: string): Promise<void>;
+  /** The Turnstile secret. Empty means it couldn't be read, which is our fault, not the visitor's. */
   turnstileSecret(): Promise<string>;
   verifyTurnstile(secret: string, token: string, ip: string | null): Promise<boolean>;
   log(message: string, detail?: unknown): void;
@@ -55,7 +66,8 @@ export function toRequest(event: FunctionUrlEvent, siteOrigin: string): Request 
       : event.isBase64Encoded
         ? Buffer.from(event.body, 'base64')
         : event.body;
-  return new Request(`${siteOrigin}${event.rawPath}${query}`, { method, headers, body });
+  // The path the browser posted to, not the secret one Amplify forwarded to.
+  return new Request(`${siteOrigin}/api/contact${query}`, { method, headers, body });
 }
 
 /**
@@ -79,25 +91,43 @@ export async function toResult(response: Response): Promise<FunctionUrlResult> {
   return { statusCode: response.status, headers, body: await response.text(), isBase64Encoded: false };
 }
 
+/** Raised for faults on our side; the handler turns them into a 503, never a visitor-facing 400. */
+class ServerFault extends Error {}
+
 export function createHandler(config: AwsContactConfig): (event: FunctionUrlEvent) => Promise<FunctionUrlResult> {
   return async (event) => {
-    if (event.rawPath !== '/api/contact') {
+    if (event.rawPath !== config.proxyPath) {
       return toResult(Response.json({ ok: false, error: 'not found' }, { status: 404 }));
     }
-    const response = await handleContact(toRequest(event, config.siteOrigin), {
-      clientIp: () => clientIpFrom(event, config.trustedProxyHops),
-      rateLimit: async (ip) => (await config.hit(`${ip}#${Math.floor(Date.now() / 60_000)}`)) <= config.perMinute,
-      verifyTurnstile: async (token, ip) => config.verifyTurnstile(await config.turnstileSecret(), token, ip),
-      send: (message) => config.sendRaw(buildEmail({ from: config.contactFrom, to: config.contactTo, message })),
-      log: config.log,
-    });
-    return toResult(response);
+    const request = toRequest(event, config.siteOrigin);
+    try {
+      const response = await handleContact(request, {
+        clientIp: () => clientIpFrom(event, config.trustedProxyHops),
+        verifyTurnstile: async (token, ip) => {
+          const secret = await config.turnstileSecret();
+          if (!secret) throw new ServerFault('the Turnstile secret is not available');
+          return config.verifyTurnstile(secret, token, ip);
+        },
+        rateLimit: async (ip) => {
+          // Keyed by a keyed hash of the IP, not the IP itself, so the table never holds an address.
+          const visitor = createHmac('sha256', await config.turnstileSecret()).update(ip).digest('hex');
+          return (await config.hit(`${visitor}#${Math.floor(Date.now() / 60_000)}`)) <= config.perMinute;
+        },
+        send: (message) => config.sendRaw(buildEmail({ from: config.contactFrom, to: config.contactTo, message })),
+        log: config.log,
+      });
+      return toResult(response);
+    } catch (error) {
+      // A missing secret, an unreachable table: the visitor can't fix these, so don't say they can.
+      config.log('contact: failed on our side', error instanceof Error ? error.message : error);
+      return toResult(unavailable(request));
+    }
   };
 }
 
 /**
- * The real wiring, from the Lambda's environment. Built on the first invocation, not at import, so
- * the tests can import this file without AWS credentials or configuration.
+ * The real wiring, from the Lambda's environment and SSM. Built on the first invocation, not at
+ * import, so the tests can import this file without configuration.
  */
 async function fromEnvironment(): Promise<AwsContactConfig> {
   const env = process.env;
@@ -106,32 +136,41 @@ async function fromEnvironment(): Promise<AwsContactConfig> {
     if (!value) throw new Error(`contact: ${name} is not set`);
     return value;
   };
-  const [{ DynamoDBClient, UpdateItemCommand }, { SESv2Client, SendEmailCommand }, { SSMClient, GetParameterCommand }] =
-    await Promise.all([import('@aws-sdk/client-dynamodb'), import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-ssm')]);
+  const positiveInteger = (name: string, fallback: number) => {
+    const value = Number(env[name] ?? fallback);
+    if (!Number.isInteger(value) || value < 0) throw new Error(`contact: ${name} must be a whole number`);
+    return value;
+  };
   const dynamo = new DynamoDBClient({});
   const ses = new SESv2Client({});
   const ssm = new SSMClient({});
-  const table = required('RATE_LIMIT_TABLE');
-  const parameter = required('TURNSTILE_SECRET_PARAMETER');
-  const siteHostname = env['SITE_HOSTNAME'];
-  const expected: TurnstileExpectations = siteHostname ? { hostname: siteHostname, action: 'contact' } : {};
   const log = (message: string, detail?: unknown) => console.error(message, detail);
+  const parameter = async (name: string, decrypt = false) =>
+    (await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: decrypt }))).Parameter?.Value ?? '';
 
-  // The public origin comes from SSM rather than the environment: the Amplify app (which knows its
-  // domain) and this function (which the app's rewrite points at) can't reference each other directly.
-  const siteOrigin =
-    env['SITE_ORIGIN'] ||
-    (await ssm.send(new GetParameterCommand({ Name: required('SITE_ORIGIN_PARAMETER') }))).Parameter?.Value ||
-    '';
-  if (!siteOrigin) throw new Error('contact: the site origin is not configured');
+  const table = required('RATE_LIMIT_TABLE');
+  const contactTo = required('CONTACT_TO');
+  const contactFrom = env['CONTACT_FROM'] || contactTo;
+  // From SSM rather than the environment: the Amplify app (which knows its domain and holds the
+  // rewrite) and this function can't reference each other directly without a cycle.
+  const [siteOrigin, proxySecret] = await Promise.all([
+    env['SITE_ORIGIN'] || parameter(required('SITE_ORIGIN_PARAMETER')),
+    parameter(required('PROXY_SECRET_PARAMETER')),
+  ]);
+  if (!siteOrigin || !proxySecret) throw new Error('contact: the site origin or proxy secret is not configured');
+  const secretName = required('TURNSTILE_SECRET_PARAMETER');
+  // The token must have been issued for this site and this form. This also catches Cloudflare's test
+  // keys used by mistake in production: they report hostname "example.com" and no action.
+  const expected = { hostname: new URL(siteOrigin).hostname, action: 'contact' };
 
   let secret: Promise<string> | undefined;
   return {
     siteOrigin,
-    trustedProxyHops: Number(env['TRUSTED_PROXY_HOPS'] ?? '1'),
-    contactTo: required('CONTACT_TO'),
-    contactFrom: env['CONTACT_FROM'] || required('CONTACT_TO'),
-    perMinute: Number(env['CONTACT_PER_MINUTE'] ?? '5'),
+    proxyPath: `/api/contact/${proxySecret}`,
+    trustedProxyHops: positiveInteger('TRUSTED_PROXY_HOPS', 1),
+    contactTo,
+    contactFrom,
+    perMinute: positiveInteger('CONTACT_PER_MINUTE', 5),
     async hit(key) {
       const result = await dynamo.send(
         new UpdateItemCommand({
@@ -148,17 +187,19 @@ async function fromEnvironment(): Promise<AwsContactConfig> {
     async sendRaw(raw) {
       await ses.send(
         new SendEmailCommand({
-          FromEmailAddress: env['CONTACT_FROM'] || required('CONTACT_TO'),
-          Destination: { ToAddresses: [required('CONTACT_TO')] },
+          FromEmailAddress: contactFrom,
+          Destination: { ToAddresses: [contactTo] },
           Content: { Raw: { Data: new TextEncoder().encode(raw) } },
         }),
       );
     },
     turnstileSecret() {
-      // Read once per cold start; a failed read is retried next time rather than cached.
-      secret ??= ssm
-        .send(new GetParameterCommand({ Name: parameter, WithDecryption: true }))
-        .then((out) => out.Parameter?.Value ?? '')
+      // Read once per cold start; a failed or empty read is retried next time rather than cached.
+      secret ??= parameter(secretName, true)
+        .then((value) => {
+          if (!value) secret = undefined;
+          return value;
+        })
         .catch((error: unknown) => {
           secret = undefined;
           log('contact: reading the Turnstile secret failed', error instanceof Error ? error.message : error);
@@ -182,5 +223,10 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResul
       configured = undefined;
       throw error;
     });
-  return (await configured)(event);
+  try {
+    return await (await configured)(event);
+  } catch (error) {
+    console.error('contact: setup failed', error instanceof Error ? error.message : error);
+    return toResult(Response.json({ ok: false, errors: { form: 'The form isn’t working on our side right now.' } }, { status: 503 }));
+  }
 }

@@ -1,11 +1,18 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { join, resolve } from 'node:path';
+import { parse } from 'yaml';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { amplifyHeaders, PARAMETERS, SiteStack } from './stack';
 
 const workspace = resolve(import.meta.dirname, '../../..');
 let template: Template;
+
+type Statement = { Action: string | string[]; Condition?: Record<string, unknown> };
+const statementsOf = (prefix: string): Statement[] =>
+  Object.values(template.findResources('AWS::IAM::Policy', { Properties: { PolicyName: Match.stringLikeRegexp(`^${prefix}`) } })).flatMap(
+    (p) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement,
+  );
 
 beforeAll(() => {
   const app = new App();
@@ -13,6 +20,8 @@ beforeAll(() => {
     env: { account: '111111111111', region: 'us-east-1' },
     contactTo: 'team@braid.example',
     githubRepo: 'braidjs/braid',
+    githubEnvironment: 'site-production',
+    reservedConcurrency: 5,
     headers: [['X-Content-Type-Options', 'nosniff']],
     paths: {
       lambdaEntry: join(workspace, 'apps/site/aws/lambda.ts'),
@@ -25,19 +34,38 @@ beforeAll(() => {
 }, 120_000);
 
 describe('the site stack', () => {
-  it('proxies /api/contact to the contact function, so the form stays same-origin', () => {
-    template.hasResourceProperties('AWS::Amplify::App', {
-      CustomRules: [{ Source: '/api/contact', Status: '200', Target: { 'Fn::Join': ['', [Match.objectLike({ 'Fn::GetAtt': Match.arrayWith(['FunctionUrl']) }), 'api/contact']] } }],
+  it('proxies /api/contact to a secret path on the function, read from SSM at deploy time', () => {
+    const app = Object.values(template.findResources('AWS::Amplify::App'))[0] as { Properties: { CustomRules: unknown[] } };
+    const rule = JSON.stringify(app.Properties.CustomRules);
+    expect(rule).toContain('"Source":"/api/contact"');
+    expect(rule).toContain('FunctionUrl');
+    expect(rule).toContain('api/contact/');
+    // The secret arrives as an SSM-typed stack parameter, never as a literal in the template.
+    const parameters = template.toJSON().Parameters as Record<string, { Type: string; Default: string }>;
+    expect(Object.values(parameters).some((p) => p.Default === PARAMETERS.proxySecret && p.Type.includes('AWS::SSM::Parameter::Value'))).toBe(true);
+  });
+
+  it('does not publish the Function URL as an output', () => {
+    expect(Object.keys(template.toJSON().Outputs ?? {}).sort()).toEqual(['AppId', 'PublishRoleArn', 'SiteUrl']);
+  });
+
+  it('records the public origin, main.<default domain>, for the function to read', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: PARAMETERS.siteOrigin,
+      Value: { 'Fn::Join': ['', ['https://main.', { 'Fn::GetAtt': [Match.anyValue(), 'DefaultDomain'] }]] },
     });
   });
 
-  it('runs the function on Node 24 with the configuration the adapter reads', () => {
+  it('runs the function on Node 24, capped, with the configuration the adapter reads', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs24.x',
+      ReservedConcurrentExecutions: 5,
       Environment: {
         Variables: Match.objectLike({
           CONTACT_TO: 'team@braid.example',
+          CONTACT_FROM: 'team@braid.example',
           SITE_ORIGIN_PARAMETER: PARAMETERS.siteOrigin,
+          PROXY_SECRET_PARAMETER: PARAMETERS.proxySecret,
           TURNSTILE_SECRET_PARAMETER: PARAMETERS.turnstileSecret,
           TRUSTED_PROXY_HOPS: '1',
         }),
@@ -45,15 +73,19 @@ describe('the site stack', () => {
     });
   });
 
-  it('gives the function only what it needs: one table action, two parameters, SES send', () => {
-    const policies = template.findResources('AWS::IAM::Policy', { Properties: { PolicyName: Match.stringLikeRegexp('^Contact') } });
-    const actions = Object.values(policies).flatMap((p) =>
-      (p as { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } }).Properties.PolicyDocument.Statement.flatMap((s) => s.Action),
-    );
-    expect(actions.sort()).toEqual(['dynamodb:UpdateItem', 'ses:SendEmail', 'ses:SendRawEmail', 'ssm:GetParameter']);
+  it('gives the function only what it needs: one table action, three parameters, SES send', () => {
+    expect(statementsOf('Contact').flatMap((s) => s.Action).sort()).toEqual(['dynamodb:UpdateItem', 'ses:SendEmail', 'ssm:GetParameter']);
   });
 
-  it('lets only braidjs/braid on main assume the deploy role', () => {
+  it('lets the function send only from the configured sender to the configured inbox', () => {
+    const ses = statementsOf('Contact').find((s) => s.Action === 'ses:SendEmail');
+    expect(ses?.Condition).toEqual({
+      StringEquals: { 'ses:FromAddress': 'team@braid.example' },
+      'ForAllValues:StringEquals': { 'ses:Recipients': ['team@braid.example'] },
+    });
+  });
+
+  it('lets only the site-production environment of braidjs/braid assume the publish role', () => {
     template.hasResourceProperties('AWS::IAM::Role', {
       AssumeRolePolicyDocument: {
         Statement: [
@@ -62,7 +94,7 @@ describe('the site stack', () => {
             Condition: {
               StringEquals: {
                 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-                'token.actions.githubusercontent.com:sub': 'repo:braidjs/braid:ref:refs/heads/main',
+                'token.actions.githubusercontent.com:sub': 'repo:braidjs/braid:environment:site-production',
               },
             },
           }),
@@ -71,12 +103,8 @@ describe('the site stack', () => {
     });
   });
 
-  it('limits the deploy role to the CDK bootstrap roles and this app’s main-branch deployments', () => {
-    const policies = template.findResources('AWS::IAM::Policy', { Properties: { PolicyName: Match.stringLikeRegexp('^DeployRole') } });
-    const actions = Object.values(policies).flatMap((p) =>
-      (p as { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } }).Properties.PolicyDocument.Statement.flatMap((s) => s.Action),
-    );
-    expect(actions.sort()).toEqual(['amplify:CreateDeployment', 'amplify:GetJob', 'amplify:StartDeployment', 'sts:AssumeRole']);
+  it('lets the publish role publish to Amplify and nothing else: no CDK roles, no infrastructure', () => {
+    expect(statementsOf('PublishRole').flatMap((s) => s.Action).sort()).toEqual(['amplify:CreateDeployment', 'amplify:GetJob', 'amplify:StartDeployment']);
   });
 
   it('expires rate-limit counters on their own', () => {
@@ -85,10 +113,18 @@ describe('the site stack', () => {
 });
 
 describe('amplifyHeaders', () => {
-  it('applies every header to every path, quoting values safely for YAML', () => {
-    const yaml = amplifyHeaders([["Content-Security-Policy", "default-src 'self'"]]);
-    expect(yaml).toContain("pattern: '**'");
-    expect(yaml).toContain("key: 'Content-Security-Policy'");
-    expect(yaml).toContain("value: 'default-src ''self'''");
+  it('produces YAML that parses to every header, on every path', () => {
+    const yaml = parse(amplifyHeaders([['Content-Security-Policy', "default-src 'self'"], ['X-Frame-Options', 'DENY']]));
+    expect(yaml).toEqual({
+      customHeaders: [
+        {
+          pattern: '**',
+          headers: [
+            { key: 'Content-Security-Policy', value: "default-src 'self'" },
+            { key: 'X-Frame-Options', value: 'DENY' },
+          ],
+        },
+      ],
+    });
   });
 });

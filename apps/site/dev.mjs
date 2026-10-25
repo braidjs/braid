@@ -6,7 +6,7 @@
 // so the built site and POST /api/contact are served together.
 import { build } from 'esbuild';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,8 @@ const workspace = resolve(here, '../..');
 const flag = process.argv.indexOf('--port');
 const port = flag > 0 ? process.argv[flag + 1] : '8787';
 
-const api = join(mkdtempSync(join(tmpdir(), 'braid-site-dev-')), 'api.mjs');
+const scratch = mkdtempSync(join(tmpdir(), 'braid-site-dev-'));
+const api = join(scratch, 'api.mjs');
 await build({
   entryPoints: [join(here, 'aws/local.ts')],
   outfile: api,
@@ -33,5 +34,8 @@ const server = spawn(
   [join(here, 'serve.mjs'), '--dir', join(workspace, 'dist/apps/site'), '--port', port, '--api', api],
   { stdio: 'inherit' },
 );
-server.on('exit', (code) => process.exit(code ?? 0));
+server.on('exit', (code) => {
+  rmSync(scratch, { recursive: true, force: true });
+  process.exit(code ?? 0);
+});
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.kill(signal));

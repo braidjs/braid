@@ -3,8 +3,8 @@
  *
  * Platform-neutral: it takes a standard Request and returns a Response, and everything with a side
  * effect or a platform-specific source (the client IP, rate limiting, Turnstile, sending mail,
- * logging) comes in through `deps`. So the same handler runs in a Cloudflare Worker, an AWS Lambda,
- * or under plain Node in the tests.
+ * logging) comes in through `deps`. So the same handler runs in the AWS Lambda, the local dev server,
+ * and under plain Node in the tests.
  *
  * It answers two kinds of caller. A plain form post (no JavaScript) gets a 303 to the thanks page,
  * or a readable error page. A script that sends `Accept: application/json` gets JSON it can render
@@ -96,18 +96,20 @@ export async function handleContact(request: Request, deps: ContactDeps): Promis
   if (!token) errors.turnstile = 'Please complete the check that you’re a person.';
   if (Object.keys(errors).length > 0) return fail(wantsJson, 400, errors);
 
-  // Only submissions that could actually be sent count against the limit, so a visitor fixing a
-  // typo doesn't lock themselves out. With no IP to key on, refuse rather than share one bucket.
+  // With no IP to key on, refuse rather than put everyone in one bucket.
   const ip = deps.clientIp(request);
   if (!ip) return fail(wantsJson, 400, { form: 'We couldn’t tell where this came from, so we didn’t send it.' });
+
+  // Turnstile before the rate limit: only submissions a person has vouched for count against it. So
+  // a typo can't lock a visitor out, and nobody can use up someone else's allowance with junk.
+  if (!(await deps.verifyTurnstile(token, ip))) {
+    return fail(wantsJson, 400, { turnstile: 'That check didn’t go through. Please try it again.' });
+  }
+
   if (!(await deps.rateLimit(ip))) {
     const res = fail(wantsJson, 429, { form: 'That’s a lot of messages in a minute. Please wait a moment and try again.' });
     res.headers.set('retry-after', '60');
     return res;
-  }
-
-  if (!(await deps.verifyTurnstile(token, ip))) {
-    return fail(wantsJson, 400, { turnstile: 'That check didn’t go through. Please try it again.' });
   }
 
   try {
@@ -161,6 +163,15 @@ async function readCapped(request: Request, limit: number): Promise<Uint8Array<A
     offset += chunk.byteLength;
   }
   return body;
+}
+
+/**
+ * 503, in the same shapes as every other answer, for a fault on our side (missing configuration,
+ * an unreachable dependency) that the visitor can't fix by trying again with different input.
+ */
+export function unavailable(request: Request): Response {
+  const wantsJson = (request.headers.get('accept') ?? '').includes('application/json');
+  return fail(wantsJson, 503, { form: 'The form isn’t working on our side right now. Please try again later.' });
 }
 
 function succeed(wantsJson: boolean): Response {

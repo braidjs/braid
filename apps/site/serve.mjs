@@ -98,7 +98,9 @@ createServer((req, res) => {
   if (api && pathname === `${prefix}api/contact`) {
     answerApi(req, res).catch((error) => {
       console.error('api:', error);
-      send(res, 500, 'Server error');
+      // Once headers are out there is nothing to send; end the response rather than crash.
+      if (res.headersSent) res.destroy();
+      else send(res, 500, 'Server error');
     });
     return;
   }

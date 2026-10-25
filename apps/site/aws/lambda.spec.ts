@@ -1,13 +1,15 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { clientIpFrom, createHandler, toRequest, type AwsContactConfig, type FunctionUrlEvent } from './lambda';
 
 const SITE = 'https://main.d1abc.amplifyapp.com';
+const PROXY_PATH = '/api/contact/6f1c9a2e-path-secret';
 
 function event(overrides: Partial<FunctionUrlEvent> & { form?: Record<string, string> } = {}): FunctionUrlEvent {
   const { form, ...rest } = overrides;
   const body = form ? new URLSearchParams(form).toString() : undefined;
   return {
-    rawPath: '/api/contact',
+    rawPath: PROXY_PATH,
     rawQueryString: '',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -33,6 +35,7 @@ function config(overrides: Partial<AwsContactConfig> = {}) {
   const sent: string[] = [];
   const all: AwsContactConfig = {
     siteOrigin: SITE,
+    proxyPath: PROXY_PATH,
     trustedProxyHops: 1,
     contactTo: 'team@braid.example',
     contactFrom: 'team@braid.example',
@@ -48,9 +51,9 @@ function config(overrides: Partial<AwsContactConfig> = {}) {
 }
 
 describe('toRequest', () => {
-  it('rebuilds the request on the public site origin, so the Origin check compares like with like', async () => {
+  it('rebuilds the request on the public site origin and path, so the Origin check compares like with like', async () => {
     const req = toRequest(event({ form: valid, rawQueryString: 'x=1' }), SITE);
-    expect(req.url).toBe(`${SITE}/api/contact?x=1`);
+    expect(req.url).toBe(`${SITE}/api/contact?x=1`); // the public path, not the secret one
     expect(req.method).toBe('POST');
     expect(req.headers.get('origin')).toBe(SITE);
     expect(await req.text()).toBe(new URLSearchParams(valid).toString());
@@ -92,11 +95,13 @@ describe('the Lambda handler', () => {
     expect(c.verifyTurnstile).toHaveBeenCalledWith('s3cret', 'tok', '203.0.113.7');
   });
 
-  it('keys the rate limit on the visitor and the current minute, and answers 429 past the limit', async () => {
+  it('keys the rate limit on a keyed hash of the visitor and the minute, and answers 429 past the limit', async () => {
     const { config: c, sent } = config({ hit: vi.fn(async () => 6) });
     const res = await createHandler(c)(event({ form: valid }));
     expect(res.statusCode).toBe(429);
-    expect(c.hit).toHaveBeenCalledWith(expect.stringMatching(/^203\.0\.113\.7#\d+$/));
+    const expected = createHmac('sha256', 's3cret').update('203.0.113.7').digest('hex');
+    expect(c.hit).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^${expected}#\\d+$`)));
+    expect(JSON.stringify((c.hit as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('203.0.113.7');
     expect(sent).toHaveLength(0);
   });
 
@@ -109,9 +114,29 @@ describe('the Lambda handler', () => {
     expect(JSON.parse(res.body)).toMatchObject({ ok: false, errors: { email: expect.any(String) } });
   });
 
-  it('answers 404 for anything but /api/contact', async () => {
-    const { config: c } = config();
-    expect((await createHandler(c)(event({ rawPath: '/' }))).statusCode).toBe(404);
+  it('answers 404 for anything but the secret proxy path, so a direct call to the Function URL gets nowhere', async () => {
+    const { config: c, sent } = config();
+    for (const rawPath of ['/', '/api/contact', '/api/contact/wrong-secret', `${PROXY_PATH}/x`]) {
+      expect((await createHandler(c)(event({ rawPath, form: valid }))).statusCode, rawPath).toBe(404);
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it('answers 503, not "try the check again", when the Turnstile secret cannot be read', async () => {
+    const { config: c, sent } = config({ turnstileSecret: vi.fn(async () => '') });
+    const res = await createHandler(c)(event({ form: valid, headers: { ...event().headers, accept: 'application/json' } }));
+    expect(res.statusCode).toBe(503);
+    expect(c.verifyTurnstile).not.toHaveBeenCalled();
+    expect(c.log).toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('answers 503 when the rate-limit table is unreachable', async () => {
+    const { config: c, sent } = config({ hit: vi.fn(async () => Promise.reject(new Error('ProvisionedThroughputExceeded'))) });
+    const res = await createHandler(c)(event({ form: valid }));
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(sent).toHaveLength(0);
   });
 
   it('refuses a post whose Origin is not the site', async () => {
