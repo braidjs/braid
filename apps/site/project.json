@@ -1,0 +1,41 @@
+{
+  "name": "site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/site/src",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["{projectRoot}/**/*", "{workspaceRoot}/libs/core/src/**/*", "{workspaceRoot}/libs/skew/src/**/*"],
+      "outputs": ["{workspaceRoot}/dist/apps/site"],
+      "options": {
+        "command": "node apps/site/build.mjs --out dist/apps/site"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node apps/site/serve.mjs --dir dist/apps/site --port 4600"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "vitest run --config apps/site/vitest.config.ts"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "commands": ["eslint apps/site", "tsc --noEmit -p apps/site/tsconfig.json"],
+        "parallel": false
+      }
+    }
+  }
+}

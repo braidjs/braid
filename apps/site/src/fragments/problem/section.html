@@ -1,0 +1,47 @@
+<section id="problem" aria-labelledby="problem-h" style="border-top: 1.5px solid #121116">
+  <div class="wrap" style="padding-top: 20px; padding-bottom: 104px">
+    <div class="seam" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 24px; padding: 8px 12px; margin-bottom: 28px; border: 1.5px dashed #121116; background: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.4">
+        <span>&lt;fragment-slot name="problem" adapter="contract"&gt;</span>
+        <span>its own sealed space · started from blob:https://this-page/3c1a…</span>
+      </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 24px 64px">
+      <div style="flex: 0 1 240px">
+        <p style="margin: 0; font-family: 'Instrument Serif', serif; font-size: clamp(96px, 11vw, 168px); line-height: 0.8">01</p>
+        <p style="margin: 16px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">Why this<br>is hard</p>
+      </div>
+      <div style="flex: 999 1 560px; min-width: 0">
+        <h2 id="problem-h" style="margin: 0; max-width: 18ch; font-weight: 700; font-size: clamp(38px, 4.6vw, 66px); line-height: 0.98; letter-spacing: -0.035em">Four teams, one website. The usual fixes all go wrong somewhere.</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0; margin-top: 48px; border-top: 6px solid #121116">
+          <article style="padding: 22px 28px 8px 0; border-right: 1px solid #121116">
+            <p style="margin: 0 0 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #5B5750">Fix A</p>
+            <h3 style="margin: 0 0 12px; font-size: 26px; line-height: 1.1; letter-spacing: -0.02em">Make it one big app.</h3>
+            <p style="margin: 0">Now nobody ships alone. One team's broken build breaks everyone, and updating a library means getting every team to agree first.</p>
+            <p style="margin: 18px 0 0; padding-top: 12px; border-top: 1px dotted #121116; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 20px">What breaks: your release schedule.</p>
+          </article>
+          <article style="padding: 22px 28px 8px 28px; border-right: 1px solid #121116">
+            <p style="margin: 0 0 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #5B5750">Fix B</p>
+            <h3 style="margin: 0 0 12px; font-size: 26px; line-height: 1.1; letter-spacing: -0.02em">Put each app in an iframe.</h3>
+            <p style="margin: 0">Nicely separated, but each one is stuck in a box. It can't flow with the page, its pop-ups can't cover the page, and screen readers treat it as a different page.</p>
+            <p style="margin: 18px 0 0; padding-top: 12px; border-top: 1px dotted #121116; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 20px">What breaks: layout and accessibility.</p>
+          </article>
+          <article style="padding: 22px 0 8px 28px">
+            <p style="margin: 0 0 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #5B5750">Fix C</p>
+            <h3 style="margin: 0 0 12px; font-size: 26px; line-height: 1.1; letter-spacing: -0.02em">Load every app into one page.</h3>
+            <p style="margin: 0">It looks right, but the apps now share everything. Two versions of React collide, or one team's code quietly changes something another team relies on.</p>
+            <p style="margin: 18px 0 0; padding-top: 12px; border-top: 1px dotted #121116; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 20px">What breaks: something, on a Tuesday, with no clue why.</p>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <!-- the big idea -->
+    <figure style="margin: 96px 0 0; padding: 48px 0 0; border-top: 1.5px solid #121116">
+      <p style="margin: 0 0 20px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase">Fix D, the one Braid is built on</p>
+      <blockquote style="margin: 0; font-family: 'Instrument Serif', Georgia, serif; font-size: clamp(52px, 8.4vw, 136px); line-height: 0.95; letter-spacing: -0.02em">Keep each app's code <span style="font-style: italic; color: #3346FF">apart.</span> Put what it shows <span style="font-style: italic; background: var(--accent); padding: 0 0.08em; box-decoration-break: clone; -webkit-box-decoration-break: clone">together.</span></blockquote>
+      <figcaption style="display: flex; flex-wrap: wrap; gap: 16px 48px; margin-top: 36px; font-size: 17px">
+        <span style="flex: 1 1 320px; max-width: 54ch">Each app's code runs in its own hidden, sealed-off space, so it can't touch anyone else's. What it draws lands right on your page, so everything lines up and reads as one page to everyone, including people using screen readers.</span>
+        <span style="flex: 0 1 auto; align-self: flex-end; font-family: 'Instrument Serif', serif; font-style: italic; font-size: 20px">— that's the whole idea</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
