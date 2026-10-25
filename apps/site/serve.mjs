@@ -4,10 +4,12 @@
 //
 // `--prefix` serves the site from a sub-path, to check that every URL in it is relative. It listens
 // on 127.0.0.1 unless `--host` says otherwise, since it is a preview server, not a host.
+// `--api <module.mjs>` also answers /api/contact with that module's `handle(request)` (see dev.mjs).
 import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
-import { pipeline } from 'node:stream';
+import { pipeline, Readable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -18,6 +20,8 @@ const root = realpathSync(resolve(arg('dir', 'dist/apps/site')));
 const port = Number(arg('port', '4600'));
 const host = arg('host', '127.0.0.1');
 const prefix = `/${arg('prefix', '/').replace(/^\/+|\/+$/g, '')}/`.replace('//', '/');
+const apiModule = arg('api', undefined);
+const api = apiModule ? (await import(pathToFileURL(resolve(apiModule)).href)).handle : null;
 
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -58,6 +62,25 @@ function fileFor(urlPath) {
 
 const send = (res, status, text) => res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' }).end(text);
 
+/** Hands one request to the --api module as a standard Request, and writes its Response back. */
+async function answerApi(req, res) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) if (typeof value === 'string') headers.set(key, value);
+  // The local stand-in for the edge's client-IP header; set here, so a client can't choose it.
+  headers.set('x-dev-client-ip', req.socket.remoteAddress ?? '127.0.0.1');
+  const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+  const request = new Request(`http://${req.headers.host}${req.url}`, {
+    method: req.method,
+    headers,
+    body: hasBody ? Readable.toWeb(req) : undefined,
+    duplex: 'half',
+  });
+  const response = await api(request);
+  const out = {};
+  response.headers.forEach((value, key) => (out[key] = value));
+  res.writeHead(response.status, out).end(Buffer.from(await response.arrayBuffer()));
+}
+
 createServer((req, res) => {
   let pathname;
   try {
@@ -70,6 +93,13 @@ createServer((req, res) => {
   // `//other-site` (an open redirect), and no file of ours lives at such a path anyway.
   if (pathname.includes('//') || pathname.includes('\\') || posix.normalize(pathname) !== pathname) {
     send(res, 404, 'Not found');
+    return;
+  }
+  if (api && pathname === `${prefix}api/contact`) {
+    answerApi(req, res).catch((error) => {
+      console.error('api:', error);
+      send(res, 500, 'Server error');
+    });
     return;
   }
   // A directory URL without its trailing slash would resolve relative links one level too high.

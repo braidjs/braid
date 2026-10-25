@@ -32,6 +32,14 @@
         "command": "node apps/site/serve.mjs --dir dist/apps/site --port 4600"
       }
     },
+    "dev": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node apps/site/dev.mjs --port 8787"
+      }
+    },
     "test": {
       "executor": "nx:run-commands",
       "cache": true,

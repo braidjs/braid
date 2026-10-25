@@ -14,6 +14,12 @@
       "port": 4600
     },
     {
+      "name": "site-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/dev.mjs", "--port", "8787"],
+      "port": 8787
+    },
+    {
       "name": "site-subpath",
       "runtimeExecutable": "node",
       "runtimeArgs": [
