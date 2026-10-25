@@ -56,15 +56,14 @@ ${fill(colophon)}
 
 /** The compact nav the two reference pages share. */
 export function subnav(base: string): string {
-  const link = (href: string, text: string) =>
-    `<a href="${href}" style="display: inline-flex; align-items: center; min-height: 44px; text-decoration: none">${text}</a>`;
+  const link = (href: string, text: string) => `<a href="${href}" class="nav-link">${text}</a>`;
   return `<header class="wrap" style="padding-top: 20px">
   <nav aria-label="Primary" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 24px; padding-bottom: 10px; border-bottom: 6px solid #121116">
     <a href="${base}" style="display: flex; align-items: center; gap: 10px; min-height: 44px; text-decoration: none; font-weight: 800; font-size: 22px; letter-spacing: -0.04em">
       <svg width="34" height="22" viewBox="0 0 34 22" aria-hidden="true"><path d="M1 11 C6 1, 11 1, 17 11 S28 21, 33 11" fill="none" stroke="#121116" stroke-width="3.5" stroke-linecap="round"></path><path d="M1 11 C6 21, 11 21, 17 11 S28 1, 33 11" fill="none" stroke="#3346FF" stroke-width="3.5" stroke-linecap="round"></path></svg>
       braid
     </a>
-    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0 26px; font-size: 15px; font-weight: 500">
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 15px; font-weight: 500">
       ${link(`${base}#how`, 'How it works')}
       ${link(`${DOCS}/`, 'Docs')}
       ${link(`${base}cheatsheet/`, 'Cheatsheet')}

@@ -9,6 +9,9 @@ a { color: #121116; } a:hover { color: #3346FF; }
 .code { margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.7; white-space: pre; overflow-x: auto; color: #E9E5EE; }
 .tk-c { color: #8D8996; } .tk-k { color: #A8DCCB; } .tk-s { color: #B9C1FF; } .tk-t { color: #F1ECE2; font-weight: 700; }
 ::selection { background: #3346FF; color: #F1ECE2; }
+/* Nav links get a full-size target, not just the width of their words. */
+.nav-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 999px; text-decoration: none; }
+.nav-link:hover { color: #121116; background: rgba(18, 17, 22, 0.07); }
 a:focus-visible, button:focus-visible { outline: 3px solid #3346FF; outline-offset: 3px; }
 
 /* Each homepage section is a live fragment with a prerendered copy right after it. The copy shows
