@@ -7,10 +7,10 @@ const FONTS =
 export const DOCS = 'https://braidjs.github.io/braid';
 
 /**
- * Where every "Interested in hosted Braid? Get in touch." link goes. A prefilled GitHub issue for
- * now, which is public; point it at the contact form once that exists.
+ * The Turnstile site key the contact form renders with. CI sets the real one; without it, local
+ * builds use Cloudflare's published test key, which always passes.
  */
-export const CONTACT = 'https://github.com/braidjs/braid/issues/new?title=Hosted%20Braid';
+const TURNSTILE_SITEKEY = process.env['SITE_TURNSTILE_SITEKEY'] || '1x00000000000000000000AA';
 
 export interface Page {
   /** Where the file goes in the output, e.g. `cheatsheet/index.html`. */
@@ -26,13 +26,20 @@ interface LayoutOptions {
   body: string;
   /** Load the host runtime. Only the homepage composes fragments. */
   braid?: boolean;
+  /** Extra tags for <head>, e.g. the contact page's scripts. `%BASE%` works here too. */
+  head?: string;
   bodyAttributes?: string;
 }
 
 const escapeAttr = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-export function layout({ title, description, base, body, braid = false, bodyAttributes = '' }: LayoutOptions): string {
-  const fill = (html: string) => html.replaceAll('%BASE%', base).replaceAll('%CONTACT%', escapeAttr(CONTACT));
+export function layout({ title, description, base, body, braid = false, head = '', bodyAttributes = '' }: LayoutOptions): string {
+  // Every "Get in touch" link reads %CONTACT%: the contact page, relative, so the site stays movable.
+  const fill = (html: string) =>
+    html
+      .replaceAll('%BASE%', base)
+      .replaceAll('%CONTACT%', `${base}contact/`)
+      .replaceAll('%TURNSTILE_SITEKEY%', escapeAttr(TURNSTILE_SITEKEY));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -45,7 +52,7 @@ export function layout({ title, description, base, body, braid = false, bodyAttr
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="${escapeAttr(FONTS)}">
 <link rel="stylesheet" href="${base}site.css">
-${braid ? `<script type="module" src="${base}core.js"></script>\n` : ''}</head>
+${braid ? `<script type="module" src="${base}core.js"></script>\n` : ''}${head ? `${fill(head)}\n` : ''}</head>
 <body${bodyAttributes ? ` ${bodyAttributes}` : ''}>
 ${fill(body)}
 ${fill(colophon)}

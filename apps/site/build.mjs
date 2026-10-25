@@ -61,6 +61,7 @@ export async function buildSite(outDir) {
     sourcemap: true,
     entryPoints: {
       core: join(here, 'src/host/main.ts'),
+      contact: join(here, 'src/host/contact.ts'),
       ...Object.fromEntries(fragments.map((name) => [`f/${name}/main`, join(here, `src/fragments/${name}/main.ts`)])),
     },
     outdir: out,

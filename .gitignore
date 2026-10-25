@@ -61,3 +61,7 @@ docs/.vitepress/cache
 .claude/.goal-pause
 .claude/current-goal.md
 .claude/goal-archive/
+
+# Cloudflare Workers local state and secrets
+.wrangler/
+.dev.vars

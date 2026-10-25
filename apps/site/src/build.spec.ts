@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const app = resolve(import.meta.dirname, '..');
 const FRAGMENTS = ['problem', 'glossary', 'braided', 'promises', 'start', 'parts'];
-const PAGES = ['index.html', 'cheatsheet/index.html', 'how-its-built/index.html'];
+const PAGES = ['index.html', 'cheatsheet/index.html', 'how-its-built/index.html', 'contact/index.html', 'contact/thanks/index.html'];
 
 let out: string;
 const read = (path: string) => readFileSync(join(out, path), 'utf8');
@@ -19,8 +19,8 @@ beforeAll(() => {
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 describe('the built site', () => {
-  it('is a folder of static files: three pages, the host runtime and six fragments', () => {
-    for (const file of [...PAGES, 'core.js', 'site.css', 'favicon.svg', ...FRAGMENTS.map((n) => `f/${n}/main.js`)]) {
+  it('is a folder of static files: the pages, the host runtime and six fragments', () => {
+    for (const file of [...PAGES, 'core.js', 'contact.js', 'site.css', 'favicon.svg', '_headers', ...FRAGMENTS.map((n) => `f/${n}/main.js`)]) {
       expect(existsSync(join(out, file)), file).toBe(true);
     }
   });
@@ -79,9 +79,41 @@ describe('the built site', () => {
     }
   });
 
+  it('sends every "Get in touch" link to the contact page, by a relative URL', () => {
+    let links = 0;
+    for (const page of PAGES) {
+      for (const [, href] of read(page).matchAll(/<a href="([^"]*)"[^>]*>(?:Get in touch|Get in touch\.|Get in touch →)<\/a>/g)) {
+        links++;
+        expect(href, page).not.toMatch(/^(https?:|\/)/);
+        const target = new URL(href ?? '', `https://site.test/${page}`).pathname;
+        expect(target, `${page}: ${href}`).toBe('/contact/');
+      }
+    }
+    expect(links).toBeGreaterThanOrEqual(PAGES.length);
+  });
+
+  it('posts the contact form, with a Turnstile widget and a honeypot, to api/contact', () => {
+    const html = read('contact/index.html');
+    const action = html.match(/<form id="contact-form"[^>]*action="([^"]+)"/)?.[1] ?? '';
+    expect(new URL(action, 'https://site.test/contact/index.html').pathname).toBe('/api/contact');
+    expect(html).toMatch(/method="post"/);
+    expect(html).toMatch(/class="cf-turnstile" data-sitekey="[^"%]+"/);
+    expect(html).toContain('name="website"');
+    for (const field of ['name', 'email', 'company', 'message']) expect(html).toContain(`name="${field}"`);
+  });
+
+  it('ships security headers that still let blob: realms boot', () => {
+    const headers = read('_headers');
+    const csp = headers.match(/Content-Security-Policy: (.+)/)?.[1] ?? '';
+    expect(csp).toMatch(/frame-src [^;]*blob:/);
+    expect(csp).toMatch(/default-src 'self'/);
+    expect(csp).toMatch(/form-action 'self'/);
+    expect(headers).toContain('X-Content-Type-Options: nosniff');
+  });
+
   it('leaves no design-tool syntax behind', () => {
     for (const page of PAGES) {
-      expect(read(page), page).not.toMatch(/\{\{|<sc-if|%BASE%|<x-dc|<helmet/);
+      expect(read(page), page).not.toMatch(/\{\{|<sc-if|%BASE%|%CONTACT%|%TURNSTILE_SITEKEY%|<x-dc|<helmet/);
     }
   });
 
