@@ -128,8 +128,7 @@
     "vitest": "^4.1.11",
     "webpack": "^5.101.3",
     "webpack-cli": "^7.0.0",
-    "webpack-dev-server": "^5.2.1",
-    "wrangler": "^4.152.0"
+    "webpack-dev-server": "^5.2.1"
   },
   "dependencies": {
     "@angular-architects/native-federation": "^22.2.2",
@@ -168,9 +167,6 @@
     },
     "@nestjs/platform-express": {
       "multer": "2.5.0"
-    },
-    "miniflare": {
-      "undici": "7.30.1"
     }
   }
 }
