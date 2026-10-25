@@ -51,6 +51,8 @@ new SiteStack(app, 'BraidSite', {
   ...(process.env['SITE_HOSTNAME'] ? { siteHostname: process.env['SITE_HOSTNAME'] } : {}),
   ...(process.env['GITHUB_OIDC_PROVIDER_ARN'] ? { githubOidcProviderArn: process.env['GITHUB_OIDC_PROVIDER_ARN'] } : {}),
   githubRepo: 'braidjs/braid',
+  // The repo uses GitHub's immutable OIDC subjects: owner and repo by ID, not by name.
+  githubSubjectPrefix: 'repo:braidjs@316401299/braid@1326724459',
   githubEnvironment: 'site-production',
   ...(concurrency === 'none' ? {} : { reservedConcurrency: Number(concurrency) }),
   headers: readHeaders(),

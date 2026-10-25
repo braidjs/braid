@@ -20,6 +20,7 @@ beforeAll(() => {
     env: { account: '111111111111', region: 'us-east-1' },
     contactTo: 'team@braid.example',
     githubRepo: 'braidjs/braid',
+    githubSubjectPrefix: 'repo:braidjs@316401299/braid@1326724459',
     githubEnvironment: 'site-production',
     reservedConcurrency: 5,
     headers: [['X-Content-Type-Options', 'nosniff']],
@@ -85,7 +86,7 @@ describe('the site stack', () => {
     });
   });
 
-  it('lets only the site-production environment of braidjs/braid assume the publish role', () => {
+  it('lets only the site-production environment of this exact repository (by ID) assume the publish role', () => {
     template.hasResourceProperties('AWS::IAM::Role', {
       AssumeRolePolicyDocument: {
         Statement: [
@@ -94,7 +95,7 @@ describe('the site stack', () => {
             Condition: {
               StringEquals: {
                 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-                'token.actions.githubusercontent.com:sub': 'repo:braidjs/braid:environment:site-production',
+                'token.actions.githubusercontent.com:sub': 'repo:braidjs@316401299/braid@1326724459:environment:site-production',
               },
             },
           }),
