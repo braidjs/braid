@@ -6,6 +6,12 @@ const FONTS =
 
 export const DOCS = 'https://braidjs.github.io/braid';
 
+/**
+ * Where every "Interested in hosted Braid? Get in touch." link goes. A prefilled GitHub issue for
+ * now, which is public; point it at the contact form once that exists.
+ */
+export const CONTACT = 'https://github.com/braidjs/braid/issues/new?title=Hosted%20Braid';
+
 export interface Page {
   /** Where the file goes in the output, e.g. `cheatsheet/index.html`. */
   path: string;
@@ -26,7 +32,7 @@ interface LayoutOptions {
 const escapeAttr = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 export function layout({ title, description, base, body, braid = false, bodyAttributes = '' }: LayoutOptions): string {
-  const fill = (html: string) => html.replaceAll('%BASE%', base);
+  const fill = (html: string) => html.replaceAll('%BASE%', base).replaceAll('%CONTACT%', escapeAttr(CONTACT));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -65,6 +71,10 @@ export function subnav(base: string): string {
       ${link(`${base}cheatsheet/`, 'Cheatsheet')}
       ${link('https://github.com/braidjs/braid', 'GitHub')}
     </div>
+    <p style="margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; font-size: 15px">
+      <span style="color: #5B5750">Interested in hosted Braid?</span>
+      <a href="%CONTACT%" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 700; text-decoration-thickness: 1.5px; text-underline-offset: 4px">Get in touch.</a>
+    </p>
   </nav>
 </header>`;
 }
