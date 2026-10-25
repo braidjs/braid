@@ -117,9 +117,17 @@ async function fromEnvironment(): Promise<AwsContactConfig> {
   const expected: TurnstileExpectations = siteHostname ? { hostname: siteHostname, action: 'contact' } : {};
   const log = (message: string, detail?: unknown) => console.error(message, detail);
 
+  // The public origin comes from SSM rather than the environment: the Amplify app (which knows its
+  // domain) and this function (which the app's rewrite points at) can't reference each other directly.
+  const siteOrigin =
+    env['SITE_ORIGIN'] ||
+    (await ssm.send(new GetParameterCommand({ Name: required('SITE_ORIGIN_PARAMETER') }))).Parameter?.Value ||
+    '';
+  if (!siteOrigin) throw new Error('contact: the site origin is not configured');
+
   let secret: Promise<string> | undefined;
   return {
-    siteOrigin: required('SITE_ORIGIN'),
+    siteOrigin,
     trustedProxyHops: Number(env['TRUSTED_PROXY_HOPS'] ?? '1'),
     contactTo: required('CONTACT_TO'),
     contactFrom: env['CONTACT_FROM'] || required('CONTACT_TO'),
@@ -167,6 +175,12 @@ let configured: Promise<(event: FunctionUrlEvent) => Promise<FunctionUrlResult>>
 
 /** The Lambda entry point. */
 export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
-  configured ??= fromEnvironment().then(createHandler);
+  // A failed setup (a transient SSM error, say) is not cached: the next invocation tries again.
+  configured ??= fromEnvironment()
+    .then(createHandler)
+    .catch((error: unknown) => {
+      configured = undefined;
+      throw error;
+    });
   return (await configured)(event);
 }

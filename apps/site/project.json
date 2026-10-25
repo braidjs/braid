@@ -52,11 +52,30 @@
       "cache": true,
       "options": {
         "commands": [
-          "eslint apps/site",
+          "eslint apps/site --ignore-pattern 'apps/site/infra/cdk.out/**'",
           "tsc --noEmit -p apps/site/tsconfig.json"
         ],
         "parallel": false
       }
+    },
+    "infra-synth": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk synth --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --quiet"
+      }
+    },
+    "infra-diff": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk diff --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out"
+      }
+    },
+    "infra-deploy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk deploy --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --outputs-file apps/site/infra/cdk.out/outputs.json"
+      },
+      "dependsOn": ["build"]
     }
   }
 }
