@@ -2,7 +2,8 @@
 name: goal-verifier
 description: Independently verifies that every acceptance criterion in .claude/current-goal.md is genuinely met. Use before declaring a task done, alongside code-reviewer.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: max
 ---
 
 You are an independent verifier. You did not write this code and you have no
