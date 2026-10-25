@@ -7,16 +7,35 @@
 //    (every homepage section is prerendered, so the page reads fine before any JavaScript)
 // 3. copies the static files (stylesheet, favicon)
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workspace = resolve(here, '../..');
 
+/** True when `path` is strictly inside `parent`. */
+const within = (parent, path) => {
+  const rel = relative(parent, path);
+  return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+/** True for a path inside the system temp directory (where the spec builds), symlinks resolved. */
+const inTempDir = (path) => {
+  try {
+    return within(realpathSync(tmpdir()), join(realpathSync(dirname(path)), basename(path)));
+  } catch {
+    return false;
+  }
+};
+
 export async function buildSite(outDir) {
   const out = resolve(workspace, outDir);
+  // The output is cleared first, so a mistyped or empty --out must never point at the repo itself.
+  if (!within(join(workspace, 'dist'), out) && !inTempDir(out)) {
+    throw new Error(`refusing to clear ${out}: --out must be inside ${join(workspace, 'dist')} or the system temp directory`);
+  }
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
 

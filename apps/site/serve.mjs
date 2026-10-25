@@ -1,19 +1,22 @@
 // A dependency-free static file server for the built site, for local preview only.
 //
-//   node apps/site/serve.mjs --dir dist/apps/site --port 4600 [--prefix /braid-site/]
+//   node apps/site/serve.mjs --dir dist/apps/site --port 4600 [--prefix /braid-site/] [--host 127.0.0.1]
 //
-// `--prefix` serves the site from a sub-path, to check that every URL in it is relative.
-import { createReadStream, statSync } from 'node:fs';
+// `--prefix` serves the site from a sub-path, to check that every URL in it is relative. It listens
+// on 127.0.0.1 unless `--host` says otherwise, since it is a preview server, not a host.
+import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > 0 ? process.argv[i + 1] : fallback;
 };
 
-const root = resolve(arg('dir', 'dist/apps/site'));
+const root = realpathSync(resolve(arg('dir', 'dist/apps/site')));
 const port = Number(arg('port', '4600'));
+const host = arg('host', '127.0.0.1');
 const prefix = `/${arg('prefix', '/').replace(/^\/+|\/+$/g, '')}/`.replace('//', '/');
 
 const types = {
@@ -26,6 +29,12 @@ const types = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/** True when `path` is `root` or inside it. */
+const inside = (path) => {
+  const rel = relative(root, path);
+  return !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
+};
+
 /** Maps a request path to a file under `root`, or null when it falls outside it. */
 function fileFor(urlPath) {
   if (!urlPath.startsWith(prefix)) return null;
@@ -36,35 +45,51 @@ function fileFor(urlPath) {
     return null;
   }
   const candidate = resolve(root, `.${sep}${decoded}`);
-  const rel = relative(root, candidate);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  if (!inside(candidate)) return null;
   try {
-    const stat = statSync(candidate);
-    if (stat.isDirectory()) {
-      const index = join(candidate, 'index.html');
-      return statSync(index).isFile() ? index : null;
-    }
-    return stat.isFile() ? candidate : null;
+    // Resolve symlinks too: a link inside the root must not serve a file outside it.
+    let real = realpathSync(candidate);
+    if (statSync(real).isDirectory()) real = realpathSync(join(real, 'index.html'));
+    return inside(real) && statSync(real).isFile() ? real : null;
   } catch {
     return null;
   }
 }
 
+const send = (res, status, text) => res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' }).end(text);
+
 createServer((req, res) => {
-  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  let pathname;
+  try {
+    ({ pathname } = new URL(req.url ?? '/', 'http://localhost'));
+  } catch {
+    send(res, 400, 'Bad request');
+    return;
+  }
+  // Only ever answer clean paths: an empty segment or a backslash is how a redirect gets turned into
+  // `//other-site` (an open redirect), and no file of ours lives at such a path anyway.
+  if (pathname.includes('//') || pathname.includes('\\') || posix.normalize(pathname) !== pathname) {
+    send(res, 404, 'Not found');
+    return;
+  }
   // A directory URL without its trailing slash would resolve relative links one level too high.
   if (!pathname.endsWith('/') && !extname(pathname) && fileFor(`${pathname}/`)) {
     res.writeHead(301, { location: `${pathname}/` }).end();
     return;
   }
   const file = fileFor(pathname);
-  if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) {
-    res.writeHead(file ? 405 : 404, { 'content-type': 'text/plain; charset=utf-8' }).end(file ? 'Method not allowed' : 'Not found');
+  if (!file) {
+    send(res, 404, 'Not found');
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    send(res, 405, 'Method not allowed');
     return;
   }
   res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
   if (req.method === 'HEAD') res.end();
-  else createReadStream(file).pipe(res);
-}).listen(port, () => {
-  console.log(`site: http://localhost:${port}${prefix} → ${root}`);
+  // A file that vanishes or turns unreadable after the stat ends this response, not the server.
+  else pipeline(createReadStream(file), res, (error) => error && res.destroy());
+}).listen(port, host, () => {
+  console.log(`site: http://${host}:${port}${prefix} → ${root}`);
 });
