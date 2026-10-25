@@ -1,7 +1,8 @@
 /* The host page's own styles. Sections carry theirs into their shadow roots (src/shared/fragment.css). */
 :root { --accent: #8EC5B4; }
 body { margin: 0; background: #F1ECE2; color: #121116; font-family: 'Bricolage Grotesque', system-ui, sans-serif; font-size: 17px; line-height: 1.55; font-optical-sizing: auto; }
-body:not([data-seams]) .seam { display: none; }
+/* !important because each seam carries the design's inline `display: flex`. */
+body:not([data-seams]) .seam { display: none !important; }
 .wrap { max-width: 1360px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 48px); box-sizing: border-box; }
 a { color: #121116; } a:hover { color: #3346FF; }
 .on-ink a { color: #F1ECE2; } .on-ink a:hover { color: #A8DCCB; }
@@ -11,10 +12,12 @@ a { color: #121116; } a:hover { color: #3346FF; }
 a:focus-visible, button:focus-visible { outline: 3px solid #3346FF; outline-offset: 3px; }
 
 /* Each homepage section is a live fragment with a prerendered copy right after it. The copy shows
-   until the fragment is ready, and comes back if the fragment fails, so a section is never blank. */
-fragment-slot { display: block; }
-fragment-slot:not([state="ready"]) { display: none; }
-fragment-slot[state="ready"] + .ssr { display: none; }
+   until the fragment has mounted, and comes back if it errors or goes away, so a section is never
+   blank. `ready` is only the first mounted state: liveness then moves it to healthy, unobservable
+   (tab hidden) or suspect, all of which are still on screen. */
+fragment-slot { display: none; }
+fragment-slot:is([state="ready"], [state="healthy"], [state="unobservable"], [state="suspect"]) { display: block; }
+fragment-slot:is([state="ready"], [state="healthy"], [state="unobservable"], [state="suspect"]) + .ssr { display: none; }
 
 /* The two reference pages: a wide grid that folds to one column. */
 .sheet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 40px; }

@@ -3,7 +3,7 @@
    cross, which is why the palette is defined once, on the host's :root. */
 :host { display: block; }
 .frag { color: #121116; font-family: 'Bricolage Grotesque', system-ui, sans-serif; font-size: 17px; line-height: 1.55; font-optical-sizing: auto; }
-.frag:not([data-seams]) .seam { display: none; }
+.frag:not([data-seams]) .seam { display: none !important; } /* beats the seam's inline display */
 .wrap { max-width: 1360px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 48px); box-sizing: border-box; }
 a { color: #121116; } a:hover { color: #3346FF; }
 .on-ink a { color: #F1ECE2; } .on-ink a:hover { color: #A8DCCB; }

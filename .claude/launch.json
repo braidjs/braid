@@ -2,6 +2,18 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "site",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/serve.mjs", "--dir", "dist/apps/site", "--port", "4600"],
+      "port": 4600
+    },
+    {
+      "name": "site-subpath",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/serve.mjs", "--dir", "dist/apps/site", "--port", "4601", "--prefix", "/braid-site/"],
+      "port": 4601
+    },
+    {
       "name": "prod-remote",
       "runtimeExecutable": "npx",
       "runtimeArgs": [
