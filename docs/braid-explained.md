@@ -215,9 +215,8 @@ const html =
   `<!doctype html><meta charset="utf-8"><title>Braid realm: billing</title>` +
   `<meta name="braid-protocol" content="2">` +
   // so the fragment's relative URLs resolve into its own namespace
-  `<base href="https://yoursite/__braid/frag/billing/">` +
-  // this fragment's own dependency map, private to this realm
-  `<script type="importmap">{"imports":{}}</script>`;
+  // (or into the entry module's directory, for a fragment loaded with no gateway)
+  `<base href="https://yoursite/__braid/frag/billing/">`;
 
 const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
 iframe.src = blobUrl; // the browser reads it straight from memory
@@ -230,9 +229,10 @@ optimization, simply no request to make. Once the iframe has loaded the URL is r
 document it created lives on. The real thing is `createContractBlobRealm` in
 [`libs/core/src/realm/realm-manager.ts`](https://github.com/braidjs/braid/blob/main/libs/core/src/realm/realm-manager.ts).
 
-The import map in there is the quiet payoff. Every realm gets its own document, so every realm gets
-its own import map for free — which is how two fragments ship different majors of the same
-dependency with no shared resolution namespace to fight over.
+The separate document is the quiet payoff. Every realm has its own globals and evaluates its own
+copy of every module it loads, which is how two fragments ship different majors of the same
+dependency with nothing shared to fight over. (A realm document could also carry its own import
+map; `createRealm()` accepts one, but nothing exposes it to fragment authors yet.)
 
 **Why compat fragments cannot use it.** A compat fragment's code believes it owns the browser: it
 reads `location.pathname` expecting its own route, and calls `history.pushState`. The realm keeps
@@ -245,13 +245,12 @@ So compat realms boot from a real URL — the realm stub the gateway serves — 
 it. Contract-mode fragments read `env.location` and `env.document` instead of realm globals, so
 there is no illusion to maintain, nothing to `replaceState`, and the blob is free to be a blob.
 
-**How to switch your app to it: today, you cannot.** Both adapters that ship declare
-`realmKind: 'compat-http'`, and that is the kind the slot boots. Blob realms are implemented and
-exported — `createRealm('contract-blob', { fragmentId, routeUrl, bound, signal, importMap })` works
-if you are writing your own adapter — but no manifest field selects one and there is no flag to flip.
-When contract adapters ship, the choice will be a property of the adapter rather than a knob, because
-it is not a preference: an adapter that needs the location illusion cannot have a blob, and one that
-does not, should.
+**How to switch your app to it.** Write the fragment in contract mode, with
+`defineAngularFragment()`, `defineReactFragment()` or `defineFragment()`, and mount it with
+`<fragment-slot adapter="contract" entry="…">`. The choice is a property of the adapter rather than
+a knob: the compat and custom-element adapters boot from a real URL (`compat-http`), because a
+fragment that reads realm globals needs them truthful, and the contract adapter boots a blob. See
+[using Braid without the gateway](braid-without-gateway.md).
 
 If you do use it, one deployment note: a host page with a restrictive Content Security Policy has to
 allow `blob:` in `frame-src`, or the realm will not load. Braid's error for that failure says so.
@@ -492,7 +491,8 @@ POC: a 2s widget against a 400ms budget delayed the page by 407ms, not 2s.
 
 **Do fragments share cookies and storage?** Under the trusted tier, yes — it is one origin. That is
 convenient (one session) and it is why the tier is called _trusted_. Storage isolation is what the
-untrusted tier is for, and it is not built yet.
+untrusted tier (`trust="untrusted"`, a cross-origin sandboxed iframe) is for — see
+[trust tiers](braid-boundary.md).
 
 **Can a fragment break the host?** Not by loading, and this is enforced rather than hoped for: its
 markup arrives inert, its code runs in another realm, and the host purity invariant is tested in CI.
@@ -502,8 +502,9 @@ It can still be slow, and it can still render something ugly.
 may only have one `<html>`, `<head>`, and `<body>`. A second set inside the page would be silently
 dropped by the parser, taking the fragment's content with it, so they are renamed on the way in.
 
-**Do I need the gateway?** For piercing and the namespace, yes. There is a client-only path with a
-smaller feature set — see [braid-without-gateway.md](braid-without-gateway.md).
+**Do I need the gateway?** For piercing, the namespace and compat mode, yes. Contract-mode
+fragments need none — the host loads them straight from their own origin, with a smaller feature
+set. See [braid-without-gateway.md](braid-without-gateway.md).
 
 ---
 

@@ -19,6 +19,7 @@ npm install @braidlabs/gateway
 3. **Script Neutralization:** Automatically rewrites fragment `<script>` tags to `<script type="inert">` during piercing so they do not execute in the host window.
 4. **Data-Driven Manifest Registry:** Configured via JSON manifests, local files, URLs, or dynamic KV/database loaders. Deploying a new fragment requires zero gateway redeployments.
 5. **FDC3 App Directory Projection:** Can serve the manifest registry in standard FDC3 App Directory (AppD v2) format at `/__braid/registry/appd/v2/apps`.
+6. **Federation:** A team's gateway can join this one as a subgraph. Its fragments are composed into this registry and pierced directly, with no shell within a shell. See [Federating gateways](/braid-federation).
 
 ---
 

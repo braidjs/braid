@@ -145,7 +145,9 @@ function applyDescriptor(
         fragmentId: manifest.id,
         kind: 'rejected-field',
         field,
-        descriptorValue: value,
+        // The value is not echoed back. A rejected field is the one place a probe's response would
+        // otherwise reach the caller verbatim, and the probe runs on the server — inside its
+        // network — so whatever the endpoint served would be read out through the publish answer.
         message:
           fieldOwner(field) === 'gateway'
             ? `"${manifest.id}" published "${field}", which only the gateway may set — ignored`
@@ -236,7 +238,16 @@ export async function fetchDescriptors(
         const response = await doFetch(url, {
           headers: { accept: 'application/json' },
           signal: AbortSignal.timeout(timeoutMs),
+          // Not followed: the endpoint was checked when it was registered, and a redirect would
+          // let it point this server-side request anywhere — cloud metadata, an internal admin.
+          redirect: 'manual',
         });
+
+        // `redirected` too: an injected fetch may follow redirects whatever it was asked.
+        if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+          results.set(manifest.id, new Error(`${url} redirected; descriptors are read from the endpoint itself, not followed`));
+          return;
+        }
 
         if (response.status === 404) return; // publishing nothing is the supported default
         if (!response.ok) {
@@ -244,7 +255,15 @@ export async function fetchDescriptors(
           return;
         }
 
-        results.set(manifest.id, parseDescriptor(await response.json()));
+        const text = await readCapped(response, MAX_DESCRIPTOR_BYTES);
+        let value: unknown;
+        try {
+          value = JSON.parse(text);
+        } catch {
+          // Not the parser's message: it quotes the start of the body, which is not ours to repeat.
+          throw new Error('the descriptor is not valid JSON');
+        }
+        results.set(manifest.id, parseDescriptor(value));
       } catch (cause) {
         results.set(manifest.id, new Error(cause instanceof Error ? cause.message : String(cause)));
       }
@@ -252,6 +271,30 @@ export async function fetchDescriptors(
   );
 
   return results;
+}
+
+/** A descriptor is a handful of labels; anything larger is not one, and is not read into memory. */
+const MAX_DESCRIPTOR_BYTES = 64 * 1024;
+
+async function readCapped(response: Response, limit: number): Promise<string> {
+  const declared = Number(response.headers.get('content-length'));
+  if (declared > limit) throw new Error(`descriptor is ${declared} bytes; the limit is ${limit}`);
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      throw new Error(`descriptor exceeds ${limit} bytes`);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 function parseDescriptor(value: unknown): FragmentDescriptor {

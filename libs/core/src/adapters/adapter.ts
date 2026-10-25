@@ -54,6 +54,17 @@ export interface AdapterBootContext {
    * Adapters that need an entry should prefer this and fall back to the stub.
    */
   entry?: string;
+  /**
+   * Host globals this fragment shares instead of getting realm-local copies, already resolved
+   * from its capabilities and the host default. The compat and custom-element adapters read it:
+   * sharing needs a same-origin realm, and the contract adapter's host API is the contract itself.
+   */
+  sharedGlobals?: readonly string[];
+  /**
+   * Values the host's `realmGlobals` hook gave this fragment, already resolved. Installed by the
+   * compat and custom-element adapters before the fragment's code runs.
+   */
+  realmGlobals?: Readonly<Record<string, unknown>>;
   /** Aborts when the fragment is being torn down. */
   signal: AbortSignal;
 }
@@ -73,6 +84,12 @@ export interface InstalledAdapter {
    * element, say) is not reported as broken for failing to serve one.
    */
   readonly needsDocument?: boolean;
+  /**
+   * Whether the adapter installs {@link AdapterBootContext.realmGlobals}. The host's hook is only
+   * called for adapters that do: a value handed out for a fragment that never receives it — an
+   * FDC3 instance, say — would be a phantom the host's agent counts as live.
+   */
+  readonly installsRealmGlobals?: boolean;
   boot(ctx: AdapterBootContext): Promise<void>;
 }
 

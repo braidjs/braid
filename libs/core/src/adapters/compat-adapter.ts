@@ -2,6 +2,7 @@ import { AdapterBootContext, InstalledAdapter } from './adapter.js';
 import { CompatShadowRoot, compatMetadataSymbol } from '../compat/metadata.js';
 import { initializeRealmContext } from '../compat/realm-patches.js';
 import { executeScriptsInFragmentContent } from '../compat/script-execution.js';
+import { installRealmGlobals } from '../compat/shared-globals.js';
 import { isDevMode } from '../config.js';
 
 /**
@@ -20,9 +21,10 @@ import { isDevMode } from '../config.js';
 export const compatAdapter: InstalledAdapter = {
   name: 'compat',
   realmKind: 'compat-http',
+  installsRealmGlobals: true,
 
   async boot(ctx: AdapterBootContext): Promise<void> {
-    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, signal } = ctx;
+    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, sharedGlobals, realmGlobals, signal } = ctx;
 
     const fragmentShadowRoot = Object.assign(shadowRoot, {
       [compatMetadataSymbol]: { documentReadyState: 'loading' as DocumentReadyState },
@@ -53,7 +55,11 @@ export const compatAdapter: InstalledAdapter = {
       contentRoot,
       bound,
       fragmentAbortController,
+      sharedGlobals ?? [],
     );
+
+    // after the realm patches, so a name they define is not replaced; before any fragment script
+    if (realmGlobals) installRealmGlobals(realm.window, realmGlobals, fragmentId);
 
     // Now activate the fragment's scripts, in document order, in the realm's JS context.
     executeScriptsInFragmentContent(contentRoot, realm.document);

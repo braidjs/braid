@@ -59,6 +59,19 @@ describe('contract adapter', () => {
     expect(mount).toHaveBeenCalledWith(env);
   });
 
+  it('installs no shared globals: a contract fragment talks to the host through its contract', async () => {
+    const mount = vi.fn();
+    const realm = realmWith('/main.js', (realmGlobal) => {
+      realmGlobal['__braidFragment'] = { mount };
+    });
+    const env = { root: document.createElement('div') } as FragmentEnv;
+
+    await contractAdapter.boot({ ...bootContext(realm, env), sharedGlobals: ['dataLayer'] });
+
+    expect(mount).toHaveBeenCalled();
+    expect(Object.getOwnPropertyDescriptor(realm.window, 'dataLayer')).toBeUndefined();
+  });
+
   it('awaits an async mount', async () => {
     let settled = false;
     const realm = realmWith('/main.js', (realmGlobal) => {

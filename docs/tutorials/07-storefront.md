@@ -519,6 +519,9 @@ env.context.subscribe('session', async (session) => {
 });
 ```
 
+`subscribe` is called at once with the current session, then on every change. A fragment that
+mounts after sign-in, such as a lazy route or a slot rendered later, still signs in.
+
 Same identity in, same partition out, in every realm, with no shared state and no handshake. Publish
 it on the **versioned** context bus rather than a bare event, because a fragment deployed months ago
 will be reading today's session object — that is the whole reason the bus projects per subscriber.

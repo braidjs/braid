@@ -11,6 +11,7 @@ import { resolveAdapter } from '../adapters/adapter.js';
 import { parseFragmentContent } from '../adapters/compat-adapter.js';
 import { createFragmentEnv } from '../env/create-env.js';
 import { getBraidConfig, isDevMode } from '../config.js';
+import { resolveRealmGlobals } from '../compat/shared-globals.js';
 import { braidContext } from '../context/context-bus.js';
 import { createBoundaryChannel } from '../weave/channel.js';
 import { createSameRealmBackingPair } from '../weave/same-realm-backing.js';
@@ -23,7 +24,12 @@ import { CloseReason, DIRTY, DirtyPayload, closeAndDispose } from '../weave/clos
 import { negotiateContract } from '../weave/contract.js';
 import { createSandboxRealm } from '../realm/sandbox-realm.js';
 import { createPortBacking } from '../weave/port-backing.js';
-import { FragmentCapabilities, readCapabilities, resolveCapabilities } from '../weave/capabilities.js';
+import {
+  FragmentCapabilities,
+  readCapabilities,
+  resolveCapabilities,
+  resolveSharedGlobals,
+} from '../weave/capabilities.js';
 
 /**
  * What the slot reports about its fragment.
@@ -232,6 +238,12 @@ export class FragmentSlot extends HTMLElement {
 
   connectedCallback() {
     if (this.#booted || this.#bootScheduled) {
+      return;
+    }
+    // An outlet the gateway did not fill has no fragment yet: the page is simply not one of the
+    // routed ones. It boots when it is given a name (see attributeChangedCallback). A slot the
+    // gateway unnamed because an outlet already holds its fragment stays idle for the same reason.
+    if (!this.name && (this.hasAttribute('outlet') || this.hasAttribute('data-braid-in-outlet'))) {
       return;
     }
     this.#bootScheduled = true;
@@ -552,6 +564,9 @@ export class FragmentSlot extends HTMLElement {
 
       if (signal.aborted) return;
 
+      const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal) : undefined;
+      if (signal.aborted) return;
+
       await adapter.boot({
         fragmentId,
         shadowRoot,
@@ -563,6 +578,8 @@ export class FragmentSlot extends HTMLElement {
         routeUrl,
         bound,
         env,
+        sharedGlobals: resolveSharedGlobals(capabilities),
+        ...(realmGlobals ? { realmGlobals } : {}),
         signal,
       });
 

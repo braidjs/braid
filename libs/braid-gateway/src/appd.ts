@@ -13,9 +13,9 @@ import { BRAID_FRAGMENT_PREFIX } from './protocol.js';
  * The payoff for FDC3 is direct: `findIntent` becomes a registry query, and because discovery
  * filters by the caller's principal, a user only ever sees resolvers they are permitted to use.
  *
- * **Verify the record shape against the FDC3 AppD v2 spec before relying on it.** The mapping below
- * is faithful to the standard as understood here, but the schema has more optional members than
- * this uses and is the kind of thing that is easy to be subtly wrong about.
+ * Records are checked against FDC3 2.2's own AppD schema in `appd.spec.ts` (vendored under
+ * `tools/fdc3/`). Optional members Braid has no data for — `lang`, `screenshots`,
+ * `localizedVersions`, `interop.appChannels` — are not produced.
  */
 
 /** The `fdc3` block a manifest may carry. A superset of what AppD needs; the rest is for the runtime. */
@@ -45,12 +45,12 @@ export interface FragmentAppdMetadata {
   icons?: { src: string; size?: string; type?: string }[];
 }
 
+/** An FDC3 AppD v2 `Application` record — the members Braid fills. */
 export interface AppdApplication {
   appId: string;
-  name: string;
+  title: string;
   type: 'web';
   details: { url: string };
-  title?: string;
   description?: string;
   tooltip?: string;
   version?: string;
@@ -62,7 +62,7 @@ export interface AppdApplication {
   icons?: { src: string; size?: string; type?: string }[];
   interop?: {
     intents?: {
-      listensFor?: Record<string, { name: string; displayName?: string; contexts: string[]; resultType?: string }>;
+      listensFor?: Record<string, { displayName?: string; contexts: string[]; resultType?: string }>;
       raises?: Record<string, string[]>;
     };
     userChannels?: { broadcasts?: string[]; listensFor?: string[] };
@@ -92,9 +92,43 @@ export interface AppdListResponse {
   message: string;
 }
 
-export interface AppdAppResponse {
-  application: AppdApplication;
+/** AppD's error body, `ErrorDTO`. */
+export interface AppdError {
+  code: number;
   message: string;
+}
+
+/**
+ * The App Directory's two reads over a set of manifests the caller may already see: the listing,
+ * or one application by `appId`. `GET /v2/apps/{appId}` answers with the bare `Application`, not
+ * a wrapper. Headers are the caller's — what may be cached differs between the gateway, whose
+ * listing depends on who asked, and the registry.
+ */
+export function appdResponse(options: {
+  manifests: readonly ResolvedFragmentManifest[];
+  origin: string;
+  /** Present for `/v2/apps/{appId}`, absent for the listing. */
+  appId?: string;
+}): { status: 200; body: AppdListResponse | AppdApplication } | { status: 404; body: AppdError } {
+  const { manifests, origin, appId } = options;
+
+  if (appId === undefined) {
+    // one manifest the projection cannot read is left out, not allowed to fail everyone's listing
+    const applications = manifests.flatMap((manifest) => {
+      try {
+        return [toAppdApplication(manifest, origin)];
+      } catch {
+        return [];
+      }
+    });
+    return { status: 200, body: { applications, message: 'OK' } };
+  }
+
+  const match = manifests.find((manifest) => manifest.id === appId);
+  // the same 404 for "not visible to you" as for "not registered" — distinguishing them would let
+  // an unauthorized caller enumerate the registry one id at a time
+  if (!match) return { status: 404, body: { code: 404, message: `No application with appId "${appId}"` } };
+  return { status: 200, body: toAppdApplication(match, origin) };
 }
 
 /**
@@ -114,12 +148,12 @@ export function toAppdApplication(manifest: ResolvedFragmentManifest, origin: st
   const mount = `${BRAID_FRAGMENT_PREFIX}${encodeURIComponent(manifest.id)}/`;
   const page = firstPiercePage(manifest.pierce);
 
+  // `name` is deprecated in AppD v2 in favour of `appId` and `title`, so it is not set.
   const application: AppdApplication = {
     appId: manifest.id,
-    name: manifest.id,
+    title: manifest.title ?? manifest.id,
     type: 'web',
     details: { url: new URL(page ?? mount, origin).href },
-    title: manifest.title ?? manifest.id,
     hostManifests: {
       braid: { fragmentId: manifest.id, mount, adapter: manifest.adapter, standalonePage: page !== null },
     },
@@ -132,10 +166,16 @@ export function toAppdApplication(manifest: ResolvedFragmentManifest, origin: st
   if (appd?.publisher) application.publisher = appd.publisher;
   if (appd?.contactEmail) application.contactEmail = appd.contactEmail;
   if (appd?.supportEmail) application.supportEmail = appd.supportEmail;
-  if (appd?.moreInfo) application.moreInfo = appd.moreInfo;
+  const moreInfo = appd?.moreInfo ? webUrl(appd.moreInfo, origin) : null;
+  if (moreInfo) application.moreInfo = moreInfo;
   if (appd?.version) application.version = appd.version;
   if (appd?.tooltip) application.tooltip = appd.tooltip;
-  if (appd?.icons?.length) application.icons = appd.icons.map((icon) => ({ ...icon }));
+  // AppD requires an absolute icon url; a manifest may name one relative to the shell
+  const icons = (appd?.icons ?? []).flatMap((icon) => {
+    const src = webUrl(icon.src, origin);
+    return src ? [{ ...icon, src }] : [];
+  });
+  if (icons.length) application.icons = icons;
 
   const interop = toInterop(manifest.fdc3);
   if (interop) application.interop = interop;
@@ -149,10 +189,8 @@ function toInterop(fdc3: FragmentFdc3Metadata | undefined): AppdApplication['int
   const listensFor = Object.entries(fdc3.listensFor ?? {}).reduce<
     NonNullable<NonNullable<AppdApplication['interop']>['intents']>['listensFor']
   >((accumulator, [intent, declaration]) => {
-    // `name` is required on an AppD intent record and duplicates the key. Filling it from the key
-    // rather than requiring it in the manifest keeps one source of truth for the intent's name.
+    // the key is the intent's name; AppD v2's intent record has no `name` member of its own
     accumulator![intent] = {
-      name: intent,
       contexts: declaration.contexts ?? [],
       ...(declaration.displayName ? { displayName: declaration.displayName } : {}),
       ...(declaration.resultType ? { resultType: declaration.resultType } : {}),
@@ -171,6 +209,21 @@ function toInterop(fdc3: FragmentFdc3Metadata | undefined): AppdApplication['int
   };
 
   return Object.keys(interop).length > 0 ? interop : undefined;
+}
+
+/**
+ * A manifest-supplied link, absolute on `origin`, or null when it is not an http(s) URL. Dropping
+ * a bad one keeps one manifest's typo from failing the whole listing, and keeps `javascript:` out
+ * of every launcher that renders the directory.
+ */
+function webUrl(value: unknown, origin: string): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value, origin);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

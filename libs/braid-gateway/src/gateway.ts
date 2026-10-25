@@ -2,6 +2,7 @@ import {
   BRAID_ADAPTER_META,
   BRAID_ADAPTER_OPTIONS_META,
   BRAID_FRAGMENT_ID_HEADER,
+  BRAID_MAX_HOPS,
   BRAID_PROTOCOL_META,
   BRAID_PROTOCOL_VERSION,
   BRAID_REDIRECT_LOCATION_HEADER,
@@ -11,6 +12,7 @@ import {
   BRAID_SERVICE_WORKER_PATH,
   BRAID_VITALS_BEACON_PATH,
   BRAID_VITALS_SCRIPT_PATH,
+  BRAID_VIA_HEADER,
 } from './protocol.js';
 import {
   canFetch,
@@ -18,7 +20,9 @@ import {
   hasAccessRules,
   Principal,
   Registry,
+  RegistryRefresh,
   RegistrySource,
+  FragmentManifest,
   ResolvedFragmentManifest,
 } from './registry.js';
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
@@ -66,6 +70,29 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export interface GatewayOptions {
   /** The fragment registry: inline manifests, a JSON URL, or an async loader. */
   registry: RegistrySource;
+  /**
+   * Reload the registry source every this many milliseconds, and serve what it returns from then
+   * on — a re-pin goes live without a restart.
+   *
+   * Off by default, which keeps the snapshot model's "a re-pin is a deploy". With a source that
+   * follows a moving pointer (`snapshotRegistry` without `pinned`, a URL), this is hot re-pin; with
+   * a pinned source it is a cheap no-op. Each reload is all-or-nothing, and one that fails leaves
+   * the current registry serving and is reported as a `registry` telemetry event.
+   *
+   * Instances poll independently, so a fleet converges within one interval rather than at one
+   * instant. Not allowed with inline manifests, which cannot change.
+   */
+  registryRefreshMs?: number;
+  /**
+   * Supplies the page itself for a document request, in place of the shell app behind the gateway:
+   * return HTML, or null to let `next` (the app) answer as usual.
+   *
+   * Fragments are pierced into what this returns exactly as into an app's response, and a page it
+   * answers is served even when no fragment pierces it. This is how a shell defined as data — see
+   * `shellDocuments` in `@braidlabs/registry` — is served with no app and no rebuild. Consulted only
+   * for document requests (GET, `Sec-Fetch-Dest: document` or an HTML `Accept`).
+   */
+  documents?: (request: Request, context: DocumentsContext) => Response | null | Promise<Response | null>;
   /** 'development' enables verbose error bodies; defaults to 'development'. */
   mode?: 'production' | 'development';
   /**
@@ -89,8 +116,31 @@ export interface GatewayOptions {
    * assertion minted per request via {@link GatewayOptions.additionalHeaders}, or a token
    * exchanged for the fragment's own audience. Turn this on only when every endpoint in the
    * registry is inside the same trust boundary as the shell.
+   *
+   * Or decide per fragment, when only some of them are — the usual case once a gateway composes
+   * other teams' gateways:
+   *
+   * ```ts
+   * forwardCredentials: (fragment) => typeof fragment.endpoint === 'string' &&
+   *   fragment.endpoint.startsWith('https://orders.internal/'),
+   * ```
+   *
+   * The function is the host's, never the manifest's: a fragment that could declare its own
+   * entitlement to the user's cookies would not be behind a boundary at all. A function that
+   * throws forwards nothing. The same decision applies to websocket upgrades.
    */
-  forwardCredentials?: boolean;
+  forwardCredentials?: boolean | ((fragment: FragmentManifest) => boolean);
+  /**
+   * More request headers that carry the caller's identity, stripped alongside `cookie`,
+   * `authorization` and `proxy-authorization` whenever {@link GatewayOptions.forwardCredentials}
+   * does not allow a fragment.
+   *
+   * An auth proxy in front of the shell often adds its own: `x-auth-request-access-token`
+   * (oauth2-proxy), `cf-access-jwt-assertion` (Cloudflare Access), `x-amzn-oidc-data` (an ALB).
+   * The gateway cannot know them, and each one is the user's identity handed to every fragment
+   * endpoint unless it is listed here.
+   */
+  credentialHeaders?: readonly string[];
   /**
    * Publishes a paginated listing of the fragments this gateway serves, for shells that build
    * their UI from the registry instead of hard-coding slot names.
@@ -270,6 +320,27 @@ export interface RoutingEvent {
   at: number;
 }
 
+/** Where a fragment websocket upgrade goes, and what may travel with it. See `resolveUpgrade`. */
+export interface UpgradeTarget {
+  fragmentId: string;
+  target: URL;
+  forwardCredentials: boolean;
+  /** Headers that carry the caller's identity: stripped unless `forwardCredentials`. */
+  credentialHeaders: readonly string[];
+  /** The `x-braid-via` value for the upstream request, this gateway's hop included. */
+  via: string;
+}
+
+/** What the gateway tells a `documents` hook about the registry it is serving right now. */
+export interface DocumentsContext {
+  /**
+   * The manifests the gateway is serving — exactly the array its registry source last returned and
+   * it accepted. A hook that renders from the same snapshot (`shellDocuments`) keys on this, so a
+   * page's shell can never come from a snapshot the gateway refused to load.
+   */
+  manifests: readonly FragmentManifest[];
+}
+
 export interface BraidGateway {
   /**
    * Handles a request if it belongs to Braid: a fragment-namespace request, or a document
@@ -288,21 +359,58 @@ export interface BraidGateway {
    * addressed through the fragment namespace, so the gateway has to say where they go — the
    * socket plumbing itself belongs to the platform binding.
    *
-   * @returns the endpoint URL to dial, or null when the request is not a fragment upgrade, the
-   *          fragment is unknown, or the caller may not load it.
+   * A binding other than `toNodeUpgradeHandler` **must** remove `credentialHeaders` from the
+   * upstream request when `forwardCredentials` is false, and set `x-braid-via` to `via` — the
+   * socket otherwise carries the user's identity past the boundary every fetch respects.
+   *
+   * @returns the endpoint URL to dial, whether the caller's credentials may go with it (the same
+   *          {@link GatewayOptions.forwardCredentials} rule as a fetch) and which headers carry
+   *          them, and the hop header to send — or null when the request is not a fragment
+   *          upgrade, the fragment is unknown, the caller may not load it, or it has already
+   *          crossed too many gateways.
    */
-  resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null>;
+  resolveUpgrade(request: Request): Promise<UpgradeTarget | null>;
+
+  /**
+   * Reloads the registry source now and swaps in what it returns. Resolves once the new registry
+   * is serving; rejects, leaving the current one serving, when the source fails.
+   */
+  refreshRegistry(): Promise<RegistryRefresh>;
+
+  /** Stops the `registryRefreshMs` timer. Nothing else holds resources between requests. */
+  close(): void;
 }
 
 export function createGateway(options: GatewayOptions): BraidGateway {
   const registry = new Registry(options.registry);
+  if (options.registryRefreshMs !== undefined) {
+    if (!registry.refreshable) {
+      throw new Error('braid-gateway: registryRefreshMs needs a registry that can change — a URL or a loader function, not inline manifests');
+    }
+    if (!(options.registryRefreshMs > 0)) {
+      throw new Error(`braid-gateway: registryRefreshMs must be a positive number of milliseconds, got ${options.registryRefreshMs}`);
+    }
+  }
   const mode = options.mode ?? 'development';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
   const additionalHeaders = options.additionalHeaders ?? {};
   const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
     ? additionalHeaders
     : () => additionalHeaders;
-  const forwardCredentials = options.forwardCredentials ?? false;
+  const credentialHeaders = [
+    ...new Set(['cookie', 'authorization', 'proxy-authorization', ...(options.credentialHeaders ?? [])].map((name) => name.toLowerCase())),
+  ];
+
+  /** Whether the caller's `cookie` and `authorization` may go to this fragment's endpoint. */
+  const forwardsCredentialsTo = (fragment: FragmentManifest): boolean => {
+    const rule = options.forwardCredentials ?? false;
+    if (typeof rule !== 'function') return rule;
+    try {
+      return rule(fragment) === true;
+    } catch {
+      return false;
+    }
+  };
   const trustForwardedHeaders = options.trustForwardedHeaders ?? false;
   const serviceWorker = options.serviceWorker
     ? (options.serviceWorker === true ? {} : options.serviceWorker)
@@ -328,12 +436,51 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const warnedNoIdentity = new Set<string>();
 
   /**
+   * Reloads the registry and resets what belonged to the old one: a circuit that opened against a
+   * fragment's previous endpoint says nothing about its new one, and a removed fragment's circuit
+   * is just memory.
+   */
+  async function refreshRegistry(): Promise<RegistryRefresh> {
+    let result: RegistryRefresh;
+    try {
+      result = await registry.refresh();
+    } catch (error) {
+      emit({ kind: 'registry', outcome: 'failed', error: error instanceof Error ? error.message : String(error), at: Date.now() });
+      throw error;
+    }
+    // A request still in flight to an old endpoint may report its outcome after this, against the
+    // fresh circuit. One stray result against a threshold of several is not worth a generation
+    // counter per circuit.
+    for (const id of [...result.removed, ...result.endpointChanged]) breaker?.forget(id);
+    if (result.changed) {
+      emit({ kind: 'registry', outcome: 'refreshed', fragmentCount: result.fragmentCount, at: Date.now() });
+    }
+    return result;
+  }
+
+  // Sequential, not setInterval: the next reload is scheduled only once this one has finished, so
+  // a slow store can never stack reloads on top of each other. Unref'd, so it never keeps a
+  // process alive that would otherwise exit.
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const scheduleRefresh = (): void => {
+    if (closed || options.registryRefreshMs === undefined) return;
+    refreshTimer = setTimeout(() => {
+      refreshRegistry()
+        .catch(() => undefined) // reported as telemetry; the current registry keeps serving
+        .finally(scheduleRefresh);
+    }, options.registryRefreshMs);
+    (refreshTimer as { unref?: () => void }).unref?.();
+  };
+  scheduleRefresh();
+
+  /**
    * A fragment that redirects when it cannot tell who the user is will redirect again after the
    * login sends them back, unless something carries their identity to it. Credentials are stripped
    * by default, so say so up front rather than let the first user find out.
    */
-  function warnIfNoIdentity(manifest: { id: string; redirect?: string }): void {
-    if (manifest.redirect !== 'navigate' || forwardCredentials || options.additionalHeaders) return;
+  function warnIfNoIdentity(manifest: FragmentManifest): void {
+    if (manifest.redirect !== 'navigate' || forwardsCredentialsTo(manifest) || options.additionalHeaders) return;
     if (warnedNoIdentity.has(manifest.id)) return;
     warnedNoIdentity.add(manifest.id);
     console.warn(
@@ -397,8 +544,25 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   const discovery = createDiscoveryHandler(registry, options.discovery, mode, resolvePrincipal);
 
   return {
+    refreshRegistry,
+
+    close() {
+      closed = true;
+      clearTimeout(refreshTimer);
+    },
+
     async handle(request: Request, next?: () => Promise<Response>): Promise<Response | null> {
       const requestUrl = new URL(request.url);
+
+      // Only fragment traffic loops: everything else here is answered locally or passed to the shell.
+      if (hopCount(request) >= BRAID_MAX_HOPS && braidRoute(requestUrl.pathname)) {
+        return htmlResponse(
+          `<!doctype html><title>Braid: loop detected</title><p>This request has already crossed ` +
+            `${BRAID_MAX_HOPS} Braid gateways. A fragment endpoint probably points back at a gateway on its own path.</p>`,
+          508,
+          { 'cache-control': 'no-store' },
+        );
+      }
 
       if (discovery?.owns(requestUrl.pathname)) {
         return discovery.handle(request, requestUrl);
@@ -426,6 +590,34 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
+        // HEAD gets the same answer without the body, so a monitor or link checker in front of a
+        // gateway with no app behind it sees the page a browser would.
+        if (options.documents && request.method === 'HEAD') {
+          const asGet = new Request(request.url, { method: 'GET', headers: request.headers });
+          const document = await options.documents(asGet, { manifests: await registry.current() });
+          if (document) {
+            const headers = new Headers(document.headers);
+            headers.append('vary', 'sec-fetch-dest');
+            applyPierceCacheControl(headers);
+            await document.body?.cancel();
+            return new Response(null, { status: document.status, headers });
+          }
+        }
+
+        const document =
+          options.documents && isDocumentRequest(request)
+            ? await options.documents(request, { manifests: await registry.current() })
+            : null;
+        if (document) {
+          // The defined document is the shell: pierced like an app's response when fragments match,
+          // and served as it is when none do.
+          const composed = await handleShellRequest(request, requestUrl, async () => document);
+          if (composed) return composed;
+          const served = new Response(document.body, document);
+          served.headers.append('vary', 'sec-fetch-dest');
+          applyPierceCacheControl(served.headers);
+          return served;
+        }
         return next ? handleShellRequest(request, requestUrl, next) : null;
       }
 
@@ -462,20 +654,29 @@ export function createGateway(options: GatewayOptions): BraidGateway {
          * made from the fragment's JS context resolve to the fragment's own assets even after
          * the route-url illusion is restored.
          */
-        case 'realm':
-          return htmlResponse(
+        case 'realm': {
+          const stub =
             `<!doctype html><title>Braid realm</title>` +
-              `<meta name="${BRAID_PROTOCOL_META}" content="${BRAID_PROTOCOL_VERSION}">` +
-              `<meta name="${BRAID_ADAPTER_META}" content="${escapeHtml(fragment.adapter)}">` +
-              adapterOptionsMeta(fragment, basePath) +
-              `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`,
-            200,
-            {
-              [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
-              // identical for a given url, and now varies on nothing: safe to cache anywhere
-              'Cache-Control': 'max-age=3600, public, stale-while-revalidate=31536000',
-            },
-          );
+            `<meta name="${BRAID_PROTOCOL_META}" content="${BRAID_PROTOCOL_VERSION}">` +
+            `<meta name="${BRAID_ADAPTER_META}" content="${escapeHtml(fragment.adapter)}">` +
+            adapterOptionsMeta(fragment, basePath) +
+            `<base href="${escapeHtml(braidFragmentUrl(fragment.id, route.pathname, '', basePath))}">`;
+          // The stub is generated from the manifest, so it changes when a re-pin changes the
+          // fragment's adapter, entry or capabilities. Fresh for five minutes in the browser and one
+          // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
+          // returning visitor's fragment boot never waits on it — the cost is that the first boot
+          // after a re-pin may use the previous stub once, while the new one is fetched.
+          const etag = await stubEtag(stub);
+          const cacheHeaders = {
+            [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
+            ETag: etag,
+            'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
+          };
+          if (etagMatches(request.headers.get('if-none-match'), etag)) {
+            return new Response(null, { status: 304, headers: cacheHeaders });
+          }
+          return htmlResponse(stub, 200, cacheHeaders);
+        }
 
         /**
          * The fragment's document, prepared for the host page's DOM: singletons renamed, scripts
@@ -513,8 +714,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       }
     },
 
-    async resolveUpgrade(request: Request): Promise<{ fragmentId: string; target: URL } | null> {
+    async resolveUpgrade(request: Request): Promise<UpgradeTarget | null> {
       const requestUrl = new URL(request.url);
+
+      // a socket loops as easily as a fetch, and has no timeout to end it
+      if (hopCount(request) >= BRAID_MAX_HOPS) return null;
       const route = braidRoute(requestUrl.pathname);
 
       // only the fragment namespace carries live sockets; stubs and documents are plain GETs
@@ -533,7 +737,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       strippedUrl.pathname = route.pathname;
 
       try {
-        return { fragmentId: fragment.id, target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id) };
+        return {
+          fragmentId: fragment.id,
+          target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
+          forwardCredentials: forwardsCredentialsTo(fragment),
+          credentialHeaders,
+          via: appendHop(request),
+        };
       } catch {
         return null;
       }
@@ -644,7 +854,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
-    forwarded.headers.append(BRAID_FRAGMENT_ID_HEADER, fragment.id);
+    // set, not append: an endpoint that is itself a gateway has already named the fragment
+    forwarded.headers.set(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
       // the body was transformed, so any length/encoding the endpoint declared no longer describes it
       forwarded.headers.delete('content-length');
@@ -784,10 +995,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
     // different origin by construction — so they are removed unless the host has said its whole
     // registry is inside one trust boundary. See `forwardCredentials`.
-    if (!forwardCredentials) {
-      fragmentRequest.headers.delete('cookie');
-      fragmentRequest.headers.delete('authorization');
+    if (!forwardsCredentialsTo(fragment)) {
+      for (const name of credentialHeaders) fragmentRequest.headers.delete(name);
     }
+
+    // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
+    // of gateways accumulates one entry each — see BRAID_MAX_HOPS.
+    fragmentRequest.headers.set(BRAID_VIA_HEADER, appendHop(request));
 
     // Tell the fragment endpoint the protocol and host the *user* reached us on.
     //
@@ -1041,6 +1255,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const targets: PendingPierceTarget[] = matches.map((fragment, index) => ({
       fragmentId: fragment.id,
       ...(fragment.src === undefined ? {} : { src: fragment.src }),
+      bound: fragment.bound !== false,
       settled: fragmentResults[index].then((result) => pierceContent(fragment, result)),
     }));
 
@@ -1415,4 +1630,44 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/** The `x-braid-via` value for an upstream request: the inbound hops plus this gateway's. */
+function appendHop(request: Request): string {
+  return [request.headers.get(BRAID_VIA_HEADER), 'braid'].filter(Boolean).join(', ');
+}
+
+/** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */
+function hopCount(request: Request): number {
+  const via = request.headers.get(BRAID_VIA_HEADER);
+  return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
+}
+
+/** Realm stub ETags by stub content, so a hot path does not hash the same few hundred bytes twice. */
+const stubEtags = new Map<string, string>();
+
+/** A strong ETag over a realm stub's content. */
+async function stubEtag(stub: string): Promise<string> {
+  const cached = stubEtags.get(stub);
+  if (cached) return cached;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stub));
+  const etag = `"${btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 12)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')}"`;
+  // Bounded by the registry's size times its realm paths; cleared wholesale if something unusual
+  // (a fragment generating endless distinct stubs) ever grows it.
+  if (stubEtags.size > 10_000) stubEtags.clear();
+  stubEtags.set(stub, etag);
+  return etag;
+}
+
+/**
+ * If-None-Match, compared weakly as RFC 9110 requires: a CDN that compresses at the edge turns a
+ * strong `"x"` into `W/"x"`, and the header may list several tags or be `*`.
+ */
+function etagMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').some((candidate) => candidate.trim().replace(/^W\//, '') === etag);
 }

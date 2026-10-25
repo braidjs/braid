@@ -372,6 +372,102 @@ describe('pierceShellHtml()', () => {
   });
 });
 
+/**
+ * An outlet is one slot that takes whichever routed fragment the page's URL matched, so a shell
+ * composing many teams' routes does not have to name a slot for each of them.
+ */
+describe('route outlet', () => {
+  const page = (body: string) => htmlResponse(`<!doctype html><html><head></head><body>${body}</body></html>`);
+  const app = (name: string) => (async () => htmlResponse(`<h1>${name}</h1>`)) as unknown as typeof fetch;
+
+  const outletGateway = () =>
+    createGateway({
+      registry: [
+        { id: 'promo', endpoint: app('promo'), pierce: ['/*'], bound: false, src: '/banner' },
+        { id: 'orders', endpoint: app('orders'), pierce: ['/orders/*'] },
+        { id: 'refunds', endpoint: app('refunds'), pierce: ['/refunds/*'] },
+      ],
+    });
+
+  const documentRequest = (path: string) =>
+    new Request(`https://example.com${path}`, { headers: { 'sec-fetch-dest': 'document' } });
+
+  it("pierces the page's routed fragment into the outlet and names the slot after it", async () => {
+    const shell = async () => page(`<nav>org</nav><main><fragment-slot outlet></fragment-slot></main>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+
+    expect(body).toMatch(/<main><fragment-slot outlet name="orders" data-braid-pierced="">/);
+    expect(body.match(/shadowrootmode="open"/g)).toHaveLength(2); // the outlet, and promo's orphan slot
+    expect(body).toContain('<h1>orders</h1>');
+    expect(body).not.toContain('<h1>refunds</h1>');
+  });
+
+  it('never fills the outlet with an unbound widget, which has a place of its own', async () => {
+    const shell = async () => page(`<main><fragment-slot outlet></fragment-slot></main>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/about'), shell))!.text();
+
+    // only promo matched /about, and it is not routed: the outlet stays as the shell wrote it
+    expect(body).toContain('<main><fragment-slot outlet></fragment-slot></main>');
+    expect(body).toMatch(/<fragment-slot name="promo" src="\/banner" data-braid-pierced="">/);
+  });
+
+  it('leaves a fragment to a named slot that comes before the outlet', async () => {
+    const shell = async () =>
+      page(`<aside><fragment-slot name="orders"></fragment-slot></aside><main><fragment-slot outlet></fragment-slot></main>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+
+    expect(body).toMatch(/<aside><fragment-slot name="orders" data-braid-pierced="">/);
+    expect(body).toContain('<main><fragment-slot outlet></fragment-slot></main>');
+    expect(body.match(/<h1>orders<\/h1>/g)).toHaveLength(1);
+  });
+
+  it('neutralises a named slot after the outlet that asks for the fragment the outlet already took', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const shell = async () =>
+      page(`<main><fragment-slot outlet></fragment-slot></main><footer><fragment-slot name="orders"></fragment-slot></footer>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+
+    expect(body.match(/<h1>orders<\/h1>/g)).toHaveLength(1);
+    // unnamed, so the client does not boot a second copy of what the outlet holds
+    expect(body).toContain('<footer><fragment-slot data-braid-in-outlet="orders"></fragment-slot></footer>');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('outlet'));
+    warn.mockRestore();
+  });
+
+  it('puts exactly one shadow root inside the outlet', async () => {
+    const shell = async () => page(`<main><fragment-slot outlet></fragment-slot></main>`);
+
+    const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+    const outlet = body.slice(body.indexOf('<main>'), body.indexOf('</main>'));
+
+    expect(outlet.match(/shadowrootmode="open"/g)).toHaveLength(1);
+  });
+
+  it('leaves the outlet as written when nothing on the page matched', async () => {
+    const gateway = createGateway({ registry: [{ id: 'orders', endpoint: app('orders'), pierce: ['/orders/*'] }] });
+    const shell = vi.fn(async () => page(`<main><fragment-slot outlet></fragment-slot></main>`));
+
+    const response = await gateway.handle(documentRequest('/about'), shell);
+
+    // no pierce match at all: the gateway steps aside and the shell answers unchanged
+    expect(response).toBeNull();
+  });
+
+  it('does not fill an outlet that declares a tier the gateway does not pierce for', async () => {
+    for (const attributes of ['trust="untrusted"', 'adapter="contract"']) {
+      const shell = async () => page(`<main><fragment-slot outlet ${attributes}></fragment-slot></main>`);
+
+      const body = await (await outletGateway().handle(documentRequest('/orders/42'), shell))!.text();
+
+      expect(body).toContain(`<main><fragment-slot outlet ${attributes}></fragment-slot></main>`);
+    }
+  });
+});
+
 describe('gateway piercing', () => {
   const billingApp = () =>
     htmlResponse(`<!doctype html><html><head><title>Billing</title></head><body><h1>Invoices</h1><script>go()</script></body></html>`);

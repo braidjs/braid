@@ -215,6 +215,8 @@ export function validateShells(shells: readonly ShellManifest[], manifests: read
   const findings: RegistryFinding[] = [];
   const fragmentIds = new Set(manifests.map((manifest) => manifest.id));
   const seen = new Set<string>();
+  /** Route path → the shell that declared it first, to catch two shells claiming one page. */
+  const routeOwners = new Map<string, string>();
 
   const error = (code: RegistryFinding['code'], shellId: string, message: string, hint?: string, fragments: string[] = []) =>
     findings.push({ severity: 'error', code, shellIds: [shellId], fragmentIds: fragments, message, ...(hint ? { hint } : {}) });
@@ -245,6 +247,22 @@ export function validateShells(shells: readonly ShellManifest[], manifests: read
     for (const route of shell.routes) {
       validateRoutePath(route.path, id, paths, error);
       paths.add(route.path);
+
+      // Two shells on one path is two answers to one page — and the gateway serves shells from
+      // their definition, so it would have to pick one silently.
+      const owner = routeOwners.get(route.path);
+      if (owner !== undefined && owner !== id) {
+        findings.push({
+          severity: 'error',
+          code: 'shell-route-conflict',
+          shellIds: [owner, id],
+          fragmentIds: [],
+          message: `shells "${owner}" and "${id}" both declare route ${route.path}`,
+          hint: 'a page has one shell: move the route to one of them',
+        });
+      } else {
+        routeOwners.set(route.path, id);
+      }
 
       const parsed = parseAreas(route.layout.areas);
       for (const message of parsed.errors) {

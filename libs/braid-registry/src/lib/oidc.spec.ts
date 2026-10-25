@@ -84,6 +84,39 @@ describe('createOidcAuthorizer', () => {
     expect(await auth.authorize(request(viewerAskingForMore), 'publish')).toBe(false);
   });
 
+  it('maps groups to the tags they own through tagMap, unioned', async () => {
+    const auth = authorizer({ tagMap: { payments: ['finance'], storefront: ['react', 'growth'], platform: '*' } });
+
+    expect(await auth.owns!(request(await token({ groups: ['payments'] })))).toEqual(['finance']);
+    expect(await auth.owns!(request(await token({ groups: ['payments', 'storefront'] })))).toEqual(['finance', 'react', 'growth']);
+    expect(await auth.owns!(request(await token({ groups: ['payments', 'platform'] })))).toBe('*');
+    expect(await auth.owns!(request(await token({ groups: ['constructor'] })))).toEqual([]);
+    expect(await auth.owns!(request())).toEqual([]);
+  });
+
+  it('has no ownership without a tagMap, so publish and pin rights are all there is', () => {
+    expect(authorizer().owns).toBeUndefined();
+  });
+
+  it('scopes promote and approve to one environment, as roleMap writes them', async () => {
+    const auth = authorizer({ roleMap: { releasers: ['read', 'promote:staging'], approvers: ['approve:production'] } });
+    const releaser = request(await token({ groups: ['releasers'] }));
+    const approver = request(await token({ groups: ['approvers'] }));
+
+    expect(await auth.authorize(releaser, 'promote', { environment: 'staging' })).toBe(true);
+    expect(await auth.authorize(releaser, 'promote', { environment: 'production' })).toBe(false);
+    expect(await auth.authorize(releaser, 'promote')).toBe(false);
+    expect(await auth.authorize(approver, 'approve', { environment: 'production' })).toBe(true);
+  });
+
+  it('grants the App Directory alone with read:directory, without the rest of read', async () => {
+    const auth = authorizer({ roleMap: { desks: ['read:directory'] } });
+    const desk = request(await token({ groups: ['desks'] }));
+
+    expect(await auth.authorize(desk, 'read', { resource: 'directory' })).toBe(true);
+    expect(await auth.authorize(desk, 'read')).toBe(false);
+  });
+
   it('refuses a token without exp, which would never expire', async () => {
     const forever = await new SignJWT({ groups: ['braid-editors'] })
       .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
@@ -231,7 +264,7 @@ describe('createOidcAuthorizer', () => {
       const response = await api.handle(new Request(`${BASE}/permissions`));
 
       expect(response?.status).toBe(200);
-      expect(await response!.json()).toEqual({ read: false, publish: false, pin: false, actor: null });
+      expect(await response!.json()).toEqual({ read: false, publish: false, pin: false, actor: null, tags: null });
     });
 
         it('reports permissions for the caller', async () => {
@@ -240,7 +273,7 @@ describe('createOidcAuthorizer', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`, { headers: { authorization: `Bearer ${viewer}` } })))!.json();
 
-      expect(body).toEqual({ read: true, publish: false, pin: false, actor: 'dana@example.com' });
+      expect(body).toEqual({ read: true, publish: false, pin: false, actor: 'dana@example.com', tags: null });
     });
   });
 });

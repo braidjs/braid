@@ -18,13 +18,19 @@
 export { createSnapshot, verifySnapshot, serializeSnapshot, parseSnapshot, SNAPSHOT_ID_PREFIX } from './lib/snapshot.js';
 export type { RegistrySnapshot, SnapshotInput } from './lib/snapshot.js';
 
-export { memorySnapshotStore, toRef } from './lib/store.js';
+export { memorySnapshotStore, toRef, compareRefs, refCursor, isAfterCursor } from './lib/store.js';
 export type { SnapshotStore, SnapshotRef } from './lib/store.js';
 
 export { snapshotRegistry } from './lib/source.js';
-export type { SnapshotRegistryOptions, SnapshotDiagnostic } from './lib/source.js';
+export type { SnapshotRegistryOptions, SnapshotDiagnostic, SnapshotRegistrySource } from './lib/source.js';
+
+export { renderShellDocument, shellDocuments } from './lib/shell-render.js';
+export type { RenderShellOptions, ShellDocumentsOptions } from './lib/shell-render.js';
 
 export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from './lib/analysis.js';
+
+export { subgraph, supergraph } from './lib/supergraph.js';
+export type { SubgraphOptions, SubgraphSource } from './lib/supergraph.js';
 
 export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
 export type {
@@ -76,14 +82,25 @@ export type {
 } from './lib/access-matrix.js';
 
 export { createRegistryApi } from './lib/api.js';
+export { githubPublisher, GitHubPublishError } from './lib/github-publisher.js';
+export type { SnapshotPublisher, SnapshotProposal, GitHubPublisherOptions } from './lib/github-publisher.js';
+export { isEnvironmentName } from './lib/store.js';
+export type { RefMove, PendingPromotion } from './lib/store.js';
+export { jsonLinesAuditSink, webhookAuditSink } from './lib/audit.js';
+export { ownershipViolations } from './lib/ownership.js';
+export type { OwnedTags, OwnershipViolation } from './lib/ownership.js';
+export type { AuditEvent, AuditAction, AuditSink, WebhookAuditSink, WebhookAuditSinkOptions } from './lib/audit.js';
 export type {
   RegistryApi,
   RegistryApiOptions,
+  RegistryAppdOptions,
   PublishRequestBody,
   PublishResult,
   RegistryAction,
   AuthorizeResult,
   RegistryPermissions,
+  EnvironmentConfig,
+  AuthorizeContext,
 } from './lib/api.js';
 export type {
   RegistryFinding,

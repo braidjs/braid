@@ -68,14 +68,72 @@ initBraid({
   onHostNavigation: (notify) => {
     window.addEventListener('popstate', () => notify());
   },
+  // Trusted fragments use the host's analytics instead of a realm-local copy
+  sharedGlobals: ['dataLayer', 'adobeDataLayer', '_satellite', 'KAMPYLE'],
 });
 ```
+
+### Shared host globals
+
+A compat fragment runs its JavaScript in a hidden same-origin realm. Without `sharedGlobals`, its
+`window.adobeDataLayer.push(…)` goes into an array nobody watches. The usual workaround is a second
+copy of the vendor script. Each listed name becomes an accessor on the fragment's realm window that
+reads the host's property live and writes it back, bare identifiers included:
+`var dataLayer = dataLayer || []` finds the host's array.
+
+- **Trusted tier only.** Compat and custom-element fragments get the accessors. Untrusted
+  (cross-origin) fragments ignore it, and so do contract fragments, whose host API is the contract.
+- **Per fragment.** `capabilities.sharedGlobals` in the registry manifest or in
+  `initBraid({ capabilities })` replaces the default. `[]` opts a fragment out.
+- **Fragments can write these globals.** Initialize them on the host first.
+- **It doesn't dedupe vendor scripts.** A fragment's own `<script src=".../launch.js">` still runs
+  unless the fragment guards it with `if (!window._satellite)`.
+- **Names the realm already defines are skipped,** with a dev-mode warning. That covers
+  `location`, `document` and constructors.
+- **Objects pushed from a fragment come from another realm,** so host code that checks
+  `instanceof Object` on them sees `false`.
+- **The accessor is configurable.** A fragment's `delete window.dataLayer` or
+  `function dataLayer(){}` takes the name back into its own realm.
+- **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
+  reaches browsers on that schedule.
 
 Mounting in HTML:
 
 ```html
 <!-- Mounts the billing fragment -->
 <fragment-slot name="billing" trust="trusted"></fragment-slot>
+```
+
+### Shared context, and fragments that mount late
+
+The host publishes state on the context bus. Each fragment reads it at the contract version it
+declares:
+
+```ts
+// host
+braidContext.set('session', { userId: 'user:ana' });
+
+// fragment: the current value now, then every change
+env.context.subscribe('session', (session) => signIn(session));
+```
+
+The bus keeps the last value of each key. A fragment's copy is seeded with every value the moment
+it connects, before its code runs, and kept current by messages after that. So
+`env.context.get(key)` returns the current value however late the fragment mounted. A key the
+fragment may not read returns `undefined`. `subscribe` is called at once with the current value,
+when there is one, and then on every change, so there is no separate `get` to remember. Pass
+`replay: false` to hear only later changes. Host code's `braidContext.subscribe` behaves the same.
+
+**Upgrading:** before this, `subscribe` fired only on later changes. Code that called `get` and then
+`subscribe` now handles the first value twice. Drop the `get`, or pass `replay: false`.
+
+The replay runs inside `subscribe`, before it returns. A listener that unsubscribes itself through
+the returned function (`const off = subscribe(key, (v) => done(v) && off())`) has no `off` yet on
+that first call. Use a `signal` instead:
+
+```ts
+const stop = new AbortController();
+env.context.subscribe('job', (job) => job.finished && stop.abort(), { signal: stop.signal });
 ```
 
 ---
@@ -106,14 +164,18 @@ Registers the `<fragment-slot>` custom element and sets up global runtime observ
 
 ```ts
 interface InitBraidOptions {
+  /** What this host offers fragments, as a contract they can require a range of. */
+  contract?: HostContract;
+  /** Per-fragment capability grants, by fragment id. The registry's grants win where both speak. */
+  capabilities?: Record<string, FragmentCapabilities>;
+  /** Host globals trusted fragments share instead of a realm-local copy (see "Shared host globals"). */
+  sharedGlobals?: string[];
+  /** Development diagnostics: unaudited-API warnings, boundary-bypass reports, verbose boot logs. */
+  dev?: boolean;
   /** Callback to wire host router navigation events to fragments. */
   onHostNavigation?: (notify: () => void) => void;
   /** The gateway's mount when the host does not own the domain root ('/manage'); must match the gateway's basePath. */
   basePath?: string;
-  /** Base URL for gateway requests (default: current origin). */
-  gatewayBaseUrl?: string;
-  /** Global timeout in milliseconds before triggering slot fallbacks. */
-  defaultTimeoutMs?: number;
 }
 ```
 
@@ -124,6 +186,7 @@ DOM Properties and methods on the custom element:
 | :--- | :--- | :--- |
 | `name` | `string` | The fragment ID registered in the gateway manifest. |
 | `trust` | `'trusted' \| 'untrusted'` | Trust level (`'trusted'` for realm isolation; `'untrusted'` for sandboxed iframe). |
+| `outlet` | attribute | Marks the slot the gateway fills with the page's routed fragment and names after it. A nameless outlet waits quietly, and boots when it is given a `name`. |
 | `props` | `Record<string, unknown>` | Reactive props passed into the fragment. |
 | `state` | `'idle' \| 'loading' \| 'ready' \| 'error'` | Current lifecycle state of the slot. |
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |

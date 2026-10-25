@@ -387,6 +387,11 @@ export interface PierceTarget {
    * disagreement is what stops that duplication from drifting in silence.
    */
   src?: string;
+  /**
+   * Whether the fragment renders the page's route (a screen) rather than sitting at a fixed `src`
+   * (a widget). Only a routed fragment may fill an outlet — see {@link pierceShellHtml}.
+   */
+  bound?: boolean;
 }
 
 /**
@@ -395,7 +400,7 @@ export interface PierceTarget {
  * The shell streams on without it; the stream waits for `settled` only when it reaches this
  * fragment's slot (or, for a shell with no slot, the end of `<body>`).
  */
-export interface PendingPierceTarget extends Pick<PierceTarget, 'fragmentId' | 'src'> {
+export interface PendingPierceTarget extends Pick<PierceTarget, 'fragmentId' | 'src' | 'bound'> {
   settled: Promise<Pick<PierceTarget, 'content' | 'fallbackReason' | 'after'>>;
 }
 
@@ -431,16 +436,33 @@ export interface PierceOptions {
  * If the shell contains no matching slot, the fragment is appended before `</body>` (or at the
  * end of the document — `</body>` is optional in HTML and often omitted) inside a slot element
  * the gateway creates. This keeps piercing working for shells that haven't been marked up yet.
+ *
+ * **Outlets.** A `<fragment-slot outlet>` with no `name` takes the first routed (bound) fragment,
+ * in registration order, that no earlier named slot has claimed, and is given that fragment's
+ * name. That lets a shell that composes many teams' routes declare one place for "whatever this
+ * page is" instead of a slot per fragment id. The stream cannot look ahead, so a named slot
+ * *after* the outlet is too late for a fragment the outlet already took: it is unnamed and marked
+ * `data-braid-in-outlet`, so the client does not boot a second copy, and the gateway warns. Unbound
+ * widgets never fill an outlet: they have a `src` and a place of their own. Neither does an
+ * untrusted or contract slot. Each further outlet takes the next routed match. The rewriter does
+ * not track `<template>`, so an outlet inside one claims a fragment like any other.
  */
 export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Array> {
   const { shell, headScript, nonce } = options;
 
   const pending = new Map(options.fragments.map((fragment) => [fragment.fragmentId, fragment]));
+  /** Fragments an outlet took, so a named slot that asks for one later can be told why it is empty. */
+  const inOutlet = new Set<string>();
   let stylesInjected = false;
 
   const settle = async (target: PierceTarget | PendingPierceTarget): Promise<PierceTarget> =>
     'settled' in target
-      ? { fragmentId: target.fragmentId, ...(target.src === undefined ? {} : { src: target.src }), ...(await target.settled) }
+      ? {
+          fragmentId: target.fragmentId,
+          ...(target.src === undefined ? {} : { src: target.src }),
+          ...(target.bound === undefined ? {} : { bound: target.bound }),
+          ...(await target.settled),
+        }
       : target;
 
   const shadowRoot = (target: PierceTarget): Injection[] => [
@@ -487,9 +509,35 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
       'fragment-slot': {
         element(tag) {
           const name = tag.getAttribute('name');
+
+          // a bare `outlet` has no value, so ask whether it is present rather than what it says
+          if (!name && tag.attributeNames.includes('outlet')) {
+            // an untrusted or contract slot never takes pierced content, so it cannot be an outlet
+            if (tag.getAttribute('trust') === 'untrusted' || tag.getAttribute('adapter') === 'contract') return;
+            const routed = [...pending.values()].find((target) => target.bound);
+            if (!routed) return;
+            pending.delete(routed.fragmentId);
+            inOutlet.add(routed.fragmentId);
+            // named, so the client boots exactly what was pierced into it
+            tag.setAttribute('name', routed.fragmentId);
+            return pierceSlot(tag, routed);
+          }
+
           const unsettled = name ? pending.get(name) : undefined;
           // synchronous unless this slot is one being pierced: only those wait
-          if (!unsettled) return;
+          if (!unsettled) {
+            if (name && inOutlet.has(name)) {
+              // Unnamed so the client leaves it alone: two instances of one routed fragment would be
+              // two routers on one URL. The attribute says where the fragment went instead.
+              tag.removeAttribute('name');
+              tag.setAttribute('data-braid-in-outlet', name);
+              console.warn(
+                `braid-gateway: a <fragment-slot name="${name}"> comes after the outlet that already ` +
+                  `holds "${name}", so it is left empty — move the named slot before the outlet, or remove it`,
+              );
+            }
+            return;
+          }
           pending.delete(unsettled.fragmentId);
           return pierceSlot(tag, unsettled);
         },

@@ -1,3 +1,5 @@
+import { BRAID_VIA_HEADER } from './protocol.js';
+
 /**
  * Collapses concurrent identical fragment fetches into one.
  *
@@ -134,6 +136,10 @@ export function singleFlightKey(
     // caller who asked for the body.
     request.headers.get('if-none-match') ?? '',
     request.headers.get('if-modified-since') ?? '',
+    // How many gateways this request has crossed. A fetch never shares with one deeper in its own
+    // chain: if a registry loops a fragment back through this gateway, the inner request would
+    // otherwise wait on the outer one — itself — until the timeout.
+    request.headers.get(BRAID_VIA_HEADER) ?? '',
     // Sorted, so the key does not depend on the order a host happened to build its object in.
     ...[...extraHeaders].sort().map((name) => `${name}=${request.headers.get(name) ?? ''}`),
   ].join('\n');

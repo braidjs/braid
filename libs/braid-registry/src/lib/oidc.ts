@@ -1,5 +1,6 @@
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet, type JWTPayload } from 'jose';
-import type { AuthorizeResult, RegistryAction } from './api.js';
+import type { AuthorizeContext, AuthorizeResult, RegistryAction } from './api.js';
+import type { OwnedTags } from './ownership.js';
 
 /**
  * `authorize` and `identify` for the registry API, from an OIDC provider's access tokens — Okta,
@@ -35,8 +36,12 @@ export interface OidcAuthorizerOptions {
   /**
    * Group name (from `rolesClaim`) → the actions it grants. A caller gets the union over every
    * group they hold. Defaults to {@link DEFAULT_ROLE_MAP}.
+   *
+   * `promote` and `approve` may be scoped to one environment: `'promote:staging'`,
+   * `'approve:production'`. The bare action grants it in every environment. `'read:directory'`
+   * grants the App Directory (`appd`) and nothing else of `read`.
    */
-  roleMap?: Record<string, readonly RegistryAction[]>;
+  roleMap?: Record<string, readonly RegistryGrant[]>;
   /**
    * Scope (from `scp` or `scope`) → the actions it grants, for client-credentials tokens that carry
    * no groups. Empty by default.
@@ -46,7 +51,15 @@ export interface OidcAuthorizerOptions {
    * client, which any signed-in viewer can drive. Map a scope only if the issuer's access policy
    * restricts it to the clients that should hold it.
    */
-  scopeMap?: Record<string, readonly RegistryAction[]>;
+  scopeMap?: Record<string, readonly RegistryGrant[]>;
+  /**
+   * Group name (from `rolesClaim`) → the tags its members own, or `'*'` for all of them — per-tag
+   * ownership (see `owns` on the registry API). A caller owns the union over every group they hold.
+   *
+   * Omit it and there is no tag ownership: whoever may publish may change anything. With it, a
+   * caller in no mapped group owns nothing, and so may change nothing, whatever `roleMap` grants.
+   */
+  tagMap?: Record<string, readonly string[] | '*'>;
   /**
    * Verification keys to use instead of fetching the issuer's — for tests and air-gapped networks.
    * When omitted, keys come from the issuer's `jwks_uri` (OIDC discovery) and are cached.
@@ -59,7 +72,10 @@ export interface OidcAuthorizerOptions {
   fetch?: typeof fetch;
 }
 
-export const DEFAULT_ROLE_MAP: Readonly<Record<string, readonly RegistryAction[]>> = {
+/** An action, or `promote` and `approve` scoped to one environment. */
+export type RegistryGrant = RegistryAction | `promote:${string}` | `approve:${string}` | 'read:directory';
+
+export const DEFAULT_ROLE_MAP: Readonly<Record<string, readonly RegistryGrant[]>> = {
   'braid-viewers': ['read'],
   'braid-editors': ['read', 'publish', 'pin'],
 };
@@ -75,8 +91,12 @@ type KeySet = ReturnType<typeof createLocalJWKSet> | ReturnType<typeof createRem
 type Verification = { ok: true; claims: JWTPayload } | { ok: false; response: Response };
 
 export interface OidcAuthorizer {
-  authorize(request: Request, action: RegistryAction): Promise<AuthorizeResult>;
+  authorize(request: Request, action: RegistryAction, context?: AuthorizeContext): Promise<AuthorizeResult>;
   identify(request: Request): Promise<string | null>;
+  /** Present only with a `tagMap`. */
+  owns?: (request: Request) => Promise<OwnedTags>;
+  /** `iss` and `sub`, for comparisons that display names would fool — four-eyes approval. */
+  subject(request: Request): Promise<string | null>;
 }
 
 export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthorizer {
@@ -152,11 +172,42 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
     }
   }
 
+  const tagMap = options.tagMap;
+  const owns = tagMap
+    ? async (request: Request): Promise<OwnedTags> => {
+        const result = await verify(request);
+        if (!result.ok) return [];
+        const tags = new Set<string>();
+        for (const group of asList(result.claims[rolesClaim])) {
+          // Own properties only, as in grants(): a group called "constructor" owns nothing.
+          if (!Object.prototype.hasOwnProperty.call(tagMap, group)) continue;
+          const owned = tagMap[group];
+          if (owned === '*') return '*';
+          for (const tag of owned ?? []) tags.add(tag);
+        }
+        return [...tags];
+      }
+    : undefined;
+
   return {
-    async authorize(request, action) {
+    ...(owns ? { owns } : {}),
+
+    async authorize(request, action, context) {
       const result = await verify(request);
       if (!result.ok) return result.response;
-      return grants(result.claims, rolesClaim, roleMap, scopeMap).has(action);
+      const granted = grants(result.claims, rolesClaim, roleMap, scopeMap);
+      return (
+        granted.has(action) ||
+        (context?.environment !== undefined && granted.has(`${action}:${context.environment}` as RegistryGrant)) ||
+        (context?.resource !== undefined && granted.has(`${action}:${context.resource}` as RegistryGrant))
+      );
+    },
+
+    async subject(request) {
+      const result = await verify(request);
+      if (!result.ok) return null;
+      const { iss, sub } = result.claims;
+      return typeof iss === 'string' && typeof sub === 'string' && sub ? `${iss}|${sub}` : null;
     },
 
     async identify(request) {
@@ -176,11 +227,11 @@ export function createOidcAuthorizer(options: OidcAuthorizerOptions): OidcAuthor
 export function grants(
   claims: JWTPayload,
   rolesClaim: string,
-  roleMap: Record<string, readonly RegistryAction[]>,
-  scopeMap: Record<string, readonly RegistryAction[]> = {},
-): Set<RegistryAction> {
-  const actions = new Set<RegistryAction>();
-  const add = (names: string[], map: Record<string, readonly RegistryAction[]>) => {
+  roleMap: Record<string, readonly RegistryGrant[]>,
+  scopeMap: Record<string, readonly RegistryGrant[]> = {},
+): Set<RegistryGrant> {
+  const actions = new Set<RegistryGrant>();
+  const add = (names: string[], map: Record<string, readonly RegistryGrant[]>) => {
     for (const name of names) {
       // Own properties only: a group called "constructor" must not reach Object.prototype.
       if (!Object.prototype.hasOwnProperty.call(map, name)) continue;

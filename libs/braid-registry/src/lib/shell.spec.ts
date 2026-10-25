@@ -123,6 +123,23 @@ describe('validateRegistry with shells', () => {
     expect(codes([shell(), shell()])).toEqual(['duplicate-shell-id']);
   });
 
+  it('reports two shells that claim the same route, naming both', () => {
+    const findings = validateRegistry([billing, reviews], {
+      shells: [shell({ id: 'storefront' }), shell({ id: 'checkout' })],
+    }).filter((finding) => finding.code === 'shell-route-conflict');
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ severity: 'error', shellIds: ['storefront', 'checkout'] });
+  });
+
+  it('warns when routes in two shells can answer the same page', () => {
+    const findings = validateRegistry([billing, reviews], {
+      shells: [shell({ id: 'storefront' }), shell({ id: 'checkout', routes: [{ path: '/billing/:id', layout: { areas: 'main' } }] })],
+    }).filter((finding) => finding.code === 'shell-route-overlap');
+
+    expect(findings).toEqual([expect.objectContaining({ severity: 'warning', shellIds: ['storefront', 'checkout'] })]);
+  });
+
   it('reports an invalid shell id and an unknown framework', () => {
     expect(codes([shell({ id: 'a/b', framework: 'svelte' as never })])).toEqual(['invalid-shell-id', 'invalid-shell-framework']);
   });

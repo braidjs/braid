@@ -35,6 +35,7 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
   // Back never throws away unpublished edits.
   const [visited, setVisited] = useState<Set<View>>(() => new Set([route.view]));
   const [shellsDirty, setShellsDirty] = useState(false);
+  const [fragmentsDirty, setFragmentsDirty] = useState(false);
   // The Shells tab returns to the shell that was open, the way the panel kept its draft.
   const [lastShell, setLastShell] = useState<string | undefined>(route.shell);
 
@@ -60,7 +61,9 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
     let current = true;
     fetchPermissions(api).then(
       (result) => current && setPermissions(result),
-      () => current && setPermissions(null),
+      // A failed refetch keeps what was known: dropping to null would hide the Edit tab and unmount
+      // the editor, discarding its draft over a blip.
+      () => undefined,
     );
     fetchHead(api).then(
       (head) => current && setShells(head.snapshot?.shells ?? []),
@@ -83,12 +86,13 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
   }, [route.view]);
 
   // A reload or a closed tab is the one way left to lose a draft; the browser asks first.
+  const dirty = shellsDirty || fragmentsDirty;
   useEffect(() => {
-    if (!shellsDirty) return;
+    if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [shellsDirty]);
+  }, [dirty]);
 
   function go(next: Route): void {
     // Renaming the open shell rewrites its link in place, rather than leaving one history entry
@@ -154,9 +158,13 @@ export function ConsoleApp({ api, edit, session }: { api: ConsoleApi; edit: bool
       </div>
 
       <Suspense fallback={<p className="braid-console__empty">Loading…</p>}>
-        {/* Mounted only while shown: its publish carries no baseId, so a copy kept from before a
-            rollback would silently publish the old HEAD back. */}
-        {view === 'edit' && <RegistryEditor api={api} />}
+        {/* Kept mounted once visited, like the designer, so switching tabs keeps the draft. A draft
+            from before a rollback is safe: its publish carries baseId, and the server refuses it. */}
+        {canEdit && visited.has('edit') && (
+          <div hidden={view !== 'edit'}>
+            <RegistryEditor api={api} onDirtyChange={setFragmentsDirty} />
+          </div>
+        )}
         {visited.has('shells') && (
           <div hidden={view !== 'shells'}>
             <ShellsPanel

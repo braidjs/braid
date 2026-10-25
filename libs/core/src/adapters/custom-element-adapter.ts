@@ -1,6 +1,7 @@
 import { AdapterBootContext, InstalledAdapter } from './adapter.js';
 import { BraidError } from '../errors.js';
 import { isDevMode } from '../config.js';
+import { installRealmGlobals, installSharedGlobals } from '../compat/shared-globals.js';
 
 /**
  * The custom-element adapter — a fragment that ships an ordinary custom element.
@@ -37,10 +38,19 @@ export const customElementAdapter: InstalledAdapter = {
    * that ships only a script is a complete fragment.
    */
   needsDocument: false,
+  installsRealmGlobals: true,
 
   async boot(ctx: AdapterBootContext): Promise<void> {
     const { fragmentId, realm, env, signal } = ctx;
     const options = readOptions(realm.adapterOptions, fragmentId);
+
+    // The element's code runs in its own realm, so the host's analytics globals are not its globals
+    // unless the host shared them — and they must be in place before the entry module runs.
+    const mainWindow = env.root.ownerDocument.defaultView;
+    if (mainWindow && ctx.sharedGlobals?.length) {
+      installSharedGlobals(realm.window, mainWindow, ctx.sharedGlobals, fragmentId);
+    }
+    if (ctx.realmGlobals) installRealmGlobals(realm.window, ctx.realmGlobals, fragmentId);
 
     // define the element inside the fragment's own realm
     await realm.evaluate(options.entry);

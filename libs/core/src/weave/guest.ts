@@ -35,7 +35,10 @@ import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload } from './messages.j
 
 export interface GuestSession {
   readonly channel: BoundaryChannel;
-  readonly context: { get(key: string): unknown; subscribe(key: string, listener: (value: unknown) => void, options?: { signal?: AbortSignal }): () => void };
+  readonly context: {
+    get(key: string): unknown;
+    subscribe(key: string, listener: (value: unknown) => void, options?: { signal?: AbortSignal; replay?: boolean }): () => void;
+  };
   readonly props: Readonly<Record<string, unknown>>;
   onPropsChanged(listener: (props: Readonly<Record<string, unknown>>) => void): () => void;
   /** Fragment → host. Surfaced on the slot element as `braid:event`. */
@@ -129,7 +132,7 @@ export async function connectToBraidHost(options: ConnectOptions): Promise<Guest
 
   return {
     channel,
-    context: { get: (key) => context.get(key), subscribe: (key, listener, subscribeOptions) => context.subscribe(key, listener, { signal: subscribeOptions?.signal ?? controller.signal }) },
+    context: { get: (key) => context.get(key), subscribe: (key, listener, subscribeOptions) => context.subscribe(key, listener, { ...subscribeOptions, signal: subscribeOptions?.signal ?? controller.signal }) },
     get props() {
       return props;
     },

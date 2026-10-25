@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RegistryPermissions, SnapshotRef } from '@braidlabs/registry';
-import { fetchPermissions, listSnapshots, pinSnapshot, type ConsoleApi } from './client.js';
+import {
+  approvePromotion,
+  fetchEnvironments,
+  fetchPermissions,
+  listSnapshots,
+  pinSnapshot,
+  promoteSnapshot,
+  rejectPromotion,
+  type ConsoleApi,
+  type EnvironmentState,
+} from './client.js';
 import { EmptyState, emptyKindOf, type EmptyKind } from './empty-state.js';
 import { ensureStyles } from './styles.js';
 
@@ -16,7 +26,15 @@ type State =
   | { status: 'loading' }
   | { status: 'empty'; kind: EmptyKind }
   | { status: 'failed'; error: Error }
-  | { status: 'ready'; items: SnapshotRef[]; head: string | null; permissions: RegistryPermissions };
+  | {
+      status: 'ready';
+      items: SnapshotRef[];
+      head: string | null;
+      /** Cursor for the next older page; null when this is all of it. */
+      next: string | null;
+      permissions: RegistryPermissions;
+      environments: EnvironmentState[];
+    };
 
 /**
  * Published snapshots, newest first, and who published each.
@@ -44,8 +62,9 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
     let current = true;
     setState({ status: 'loading' });
 
-    Promise.all([listSnapshots(api, controller.signal), fetchPermissions(api, controller.signal)]).then(
-      ([{ items, head }, permissions]) => current && setState({ status: 'ready', items, head, permissions }),
+    Promise.all([listSnapshots(api, controller.signal), fetchPermissions(api, controller.signal), fetchEnvironments(api, controller.signal)]).then(
+      ([{ items, head, next }, permissions, environments]) =>
+        current && setState({ status: 'ready', items, head, next: next ?? null, permissions, environments }),
       (reason: unknown) => {
         if (!current || controller.signal.aborted) return;
         const kind = emptyKindOf(reason);
@@ -61,13 +80,36 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
   }, [apiKey, reloadToken]);
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // The listing an older page belongs to; a reload in the meantime makes the page stale.
+  const listing = useRef(0);
+  listing.current = reloadToken;
 
-  const pin = async (id: string) => {
-    setPinning(id);
+  /** Appends the next older page. Rollback is only as far back as the history the panel can show. */
+  const loadOlder = async () => {
+    if (state.status !== 'ready' || !state.next) return;
+    setLoadingOlder(true);
     setError(null);
     try {
-      await pinSnapshot(api ?? {}, id);
-      onPinned?.(id);
+      const startedOn = listing.current;
+      const page = await listSnapshots(api, undefined, { before: state.next });
+      if (listing.current !== startedOn) return;
+      setState((current) =>
+        current.status === 'ready' ? { ...current, items: [...current.items, ...page.items], next: page.next ?? null } : current,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  /** Runs one write at a time, reporting its error in the panel and reloading on success. */
+  const act = async (key: string, write: () => Promise<unknown>) => {
+    setPinning(key);
+    setError(null);
+    try {
+      await write();
       reload();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -75,6 +117,12 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
       setPinning(null);
     }
   };
+
+  const pin = (id: string) =>
+    act(id, async () => {
+      await pinSnapshot(api ?? {}, id);
+      onPinned?.(id);
+    });
 
   return (
     <div className={`braid-console${className ? ` ${className}` : ''}`} {...(theme ? { 'data-theme': theme } : {})}>
@@ -97,14 +145,48 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
             <span className="braid-console__count">{state.items.length}</span>
           </div>
           <p className="braid-console__notice braid-console__notice--quiet">
-            To roll back, pin an earlier snapshot. A gateway loads its pinned snapshot when it starts, so a new pin goes
-            live on its next restart or deploy.
+            To roll back, pin an earlier snapshot. A gateway that follows HEAD with a refresh interval serves the new pin
+            within that interval; one without it picks the pin up on its next restart or deploy.
           </p>
           {error && (
             <p className="braid-console__barstate--error" role="alert">
               {error}
             </p>
           )}
+          {state.environments
+            .filter((environment) => environment.pending)
+            .map((environment) => {
+              const pending = environment.pending!;
+              const rights = state.permissions.environments?.[environment.name];
+              const isRequester = state.permissions.actor !== null && state.permissions.actor === pending.requestedBy;
+              return (
+                <div key={environment.name} className="braid-console__notice" role="status">
+                  <strong>{pending.requestedBy}</strong> asked to promote{' '}
+                  <span className="braid-console__mono">{pending.id}</span> to <strong>{environment.name}</strong>.{' '}
+                  {rights?.approve && !isRequester && (
+                    <button
+                      type="button"
+                      className="braid-console__ghost"
+                      disabled={pinning !== null}
+                      onClick={() => void act(`approve:${environment.name}`, () => approvePromotion(api ?? {}, environment.name, pending))}
+                    >
+                      Approve
+                    </button>
+                  )}
+                  {(rights?.approve || isRequester) && (
+                    <button
+                      type="button"
+                      className="braid-console__ghost"
+                      disabled={pinning !== null}
+                      onClick={() => void act(`reject:${environment.name}`, () => rejectPromotion(api ?? {}, environment.name))}
+                    >
+                      {isRequester ? 'Withdraw' : 'Reject'}
+                    </button>
+                  )}
+                  {isRequester && !rights?.approve && <span className="braid-console__desc"> Waiting for someone else to approve.</span>}
+                </div>
+              );
+            })}
           {state.items.length === 0 ? (
             <p className="braid-console__empty">Nothing has been published yet.</p>
           ) : (
@@ -131,6 +213,14 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                           <span className="braid-console__badge braid-console__badge--loadable">HEAD</span>
                         </>
                       )}
+                      {state.environments
+                        .filter((environment) => environment.id === item.id)
+                        .map((environment) => (
+                          <span key={environment.name}>
+                            {' '}
+                            <span className="braid-console__badge">{environment.name}</span>
+                          </span>
+                        ))}
                     </td>
                     <td>
                       <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
@@ -138,6 +228,18 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
                     <td>{item.labels?.['publishedBy'] ?? <span className="braid-console__desc">not recorded</span>}</td>
                     <td>{item.fragmentCount}</td>
                     <td>
+                      {promotableTo(item.id, state).map((environment) => (
+                        <button
+                          key={environment.name}
+                          type="button"
+                          className="braid-console__ghost"
+                          disabled={pinning !== null}
+                          onClick={() => void act(`promote:${environment.name}:${item.id}`, () => promoteSnapshot(api ?? {}, environment.name, item.id))}
+                          aria-label={`Promote ${item.id} to ${environment.name}`}
+                        >
+                          {pinning === `promote:${environment.name}:${item.id}` ? 'Promoting…' : `Promote to ${environment.name}`}
+                        </button>
+                      ))}
                       {item.id !== state.head && state.permissions.pin && (
                         <button
                           type="button"
@@ -155,8 +257,30 @@ export function HistoryPanel({ api, theme, className, onPinned }: HistoryPanelPr
               </tbody>
             </table>
           )}
+          {state.next && (
+            <button type="button" className="braid-console__ghost" onClick={() => void loadOlder()} disabled={loadingOlder}>
+              {loadingOlder ? 'Loading…' : 'Load older'}
+            </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The environments a snapshot can be promoted into from this row: the caller may promote there, it
+ * is not already there, nothing is waiting for approval there, and — for an environment with a
+ * source — it is what the source holds. (A rollback to an earlier one is the server's to allow;
+ * the row offers the forward path.)
+ */
+function promotableTo(id: string, state: Extract<State, { status: 'ready' }>): EnvironmentState[] {
+  const refOf = (name: string) => state.environments.find((environment) => environment.name === name)?.id ?? null;
+  return state.environments.filter(
+    (environment) =>
+      state.permissions.environments?.[environment.name]?.promote &&
+      environment.id !== id &&
+      !environment.pending &&
+      (environment.from ? refOf(environment.from) === id : true),
   );
 }

@@ -133,6 +133,27 @@ describe('context across the boundary', () => {
     mounted.dispose();
   });
 
+  it('replays the current value to a fragment that subscribes after it was set', async () => {
+    braidContext.set('session', { userId: 'u1' });
+    const mounted = await mount();
+    const seen = vi.fn();
+
+    // what a fragment that mounts after sign-in does: one call, no separate get
+    mounted.env.context.subscribe('session', seen);
+    expect(seen).toHaveBeenCalledWith({ userId: 'u1' });
+
+    braidContext.set('session', { userId: 'u2' });
+    await flush();
+    expect(seen).toHaveBeenLastCalledWith({ userId: 'u2' });
+    expect(seen).toHaveBeenCalledTimes(2);
+
+    // and told not to, the mirror does not replay
+    const optedOut = vi.fn();
+    mounted.env.context.subscribe('session', optedOut, { replay: false });
+    expect(optedOut).not.toHaveBeenCalled();
+    mounted.dispose();
+  });
+
   it('pushes a later change to a subscriber', async () => {
     braidContext.set('cart', { items: 0 });
     const mounted = await mount();
@@ -248,7 +269,7 @@ describe('context across the boundary', () => {
     braidContext.set('cart', { items: 0 });
     const mounted = await mount();
     const seen = vi.fn();
-    mounted.env.context.subscribe('cart', seen);
+    mounted.env.context.subscribe('cart', seen, { replay: false });
 
     mounted.dispose();
     braidContext.set('cart', { items: 9 });

@@ -191,6 +191,41 @@ describe('registry write API', () => {
       expect(body.head).toBe(snapshot.id);
     });
 
+    it('pages history with a next cursor, so nothing older than one page is out of reach', async () => {
+      const minted = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          createSnapshot({ manifests: [{ id: `f${i}`, endpoint: 'https://f.internal' }], createdAt: `2026-01-0${i + 1}T00:00:00.000Z` }),
+        ),
+      );
+      const api = createRegistryApi({ store: memorySnapshotStore(minted), authorize: allow });
+      const page = async (query: string) => (await api.handle(new Request(`${BASE}/snapshots${query}`)))!.json();
+
+      const first = await page('?limit=2');
+      const second = await page(`?limit=2&before=${encodeURIComponent(first.next)}`);
+      const third = await page(`?limit=2&before=${encodeURIComponent(second.next)}`);
+
+      expect([...first.items, ...second.items, ...third.items].map((ref: { id: string }) => ref.id)).toEqual(
+        [...minted].reverse().map((snapshot) => snapshot.id),
+      );
+      expect(third.next).toBeNull();
+      expect((await api.handle(new Request(`${BASE}/snapshots?before=nonsense`)))!.status).toBe(400);
+    });
+
+    it('ends the listing rather than looping when a custom store ignores before', async () => {
+      const minted = await Promise.all(
+        [1, 2, 3].map((i) => createSnapshot({ manifests: [{ id: `f${i}`, endpoint: 'https://f.internal' }], createdAt: `2026-01-0${i}T00:00:00.000Z` })),
+      );
+      const inner = memorySnapshotStore(minted);
+      const legacy = { ...inner, list: ({ limit }: { limit?: number } = {}) => inner.list(limit === undefined ? {} : { limit }) };
+      const api = createRegistryApi({ store: legacy, authorize: allow });
+
+      const first = await (await api.handle(new Request(`${BASE}/snapshots?limit=2`)))!.json();
+      const second = await (await api.handle(new Request(`${BASE}/snapshots?limit=2&before=${encodeURIComponent(first.next)}`)))!.json();
+
+      expect(second.items).toEqual([]);
+      expect(second.next).toBeNull();
+    });
+
     it('serves a snapshot by id and 404s an unknown one', async () => {
       const snapshot = await createSnapshot({ manifests });
       const api = createRegistryApi({ store: memorySnapshotStore([snapshot]), authorize: allow });
@@ -229,6 +264,97 @@ describe('registry write API', () => {
         const response = await api.handle(malformed(path));
         expect(response?.status).toBe(400);
         expect((await response!.json()).error).toMatch(/not valid JSON/);
+      }
+    });
+
+    it('refuses a body over maxBodyBytes with 413, before parsing it', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, maxBodyBytes: 1024 });
+      const big = JSON.stringify({ manifests: [{ ...manifests[0], description: 'x'.repeat(2048) }] });
+
+      // declared up front…
+      expect((await api.handle(post('/snapshots', JSON.parse(big))))!.status).toBe(413);
+      // …and counted while streaming, when nothing was declared
+      const chunked = new Request(`${BASE}/snapshots`, { method: 'POST', body: new Blob([big]).stream(), duplex: 'half' } as RequestInit);
+      expect(chunked.headers.get('content-length')).toBeNull();
+      expect((await api.handle(chunked))!.status).toBe(413);
+
+      expect(await store.list()).toEqual([]);
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
+    it('requires JSON from a browser, so a form or text/plain POST cannot skip the CORS preflight', async () => {
+      const api = createRegistryApi({ store: memorySnapshotStore(), authorize: allow });
+      const fromBrowser = (type: string) =>
+        new Request(`${BASE}/snapshots`, {
+          method: 'POST',
+          headers: { 'sec-fetch-site': 'same-site', 'content-type': type },
+          body: JSON.stringify({ manifests }),
+        });
+
+      for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data']) {
+        expect((await api.handle(fromBrowser(type)))!.status).toBe(415);
+      }
+      expect((await api.handle(fromBrowser('application/json; charset=utf-8')))!.status).toBe(201);
+      // a pipeline, which sends no browser headers, is not a browser
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
+    it('refuses an endpoint outside endpointOrigins, which the gateway would open to the internet', async () => {
+      const store = memorySnapshotStore();
+      const api = createRegistryApi({ store, authorize: allow, endpointOrigins: ['https://billing.internal'] });
+
+      const refused = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'admin', endpoint: 'http://internal-admin:8080/' }] }));
+
+      expect(refused!.status).toBe(422);
+      expect((await refused!.json()).findings).toEqual([
+        expect.objectContaining({ code: 'endpoint-not-allowed', fragmentIds: ['admin'], severity: 'error' }),
+      ]);
+      expect(await store.list()).toEqual([]);
+      expect((await api.handle(post('/snapshots', { manifests })))!.status).toBe(201);
+    });
+
+    it('never probes an endpoint outside endpointOrigins, so a refused one is not fetched at all', async () => {
+      const probed: string[] = [];
+      const fetchMock = async (url: string | URL | Request) => {
+        probed.push(String(url));
+        // the allowed endpoint publishes no descriptor; anything else would answer with secrets
+        if (String(url).startsWith('https://billing.internal/')) return new Response(null, { status: 404 });
+        return new Response(JSON.stringify({ title: 'leaked', AWS_SECRET_ACCESS_KEY: 'x' }), { headers: { 'content-type': 'application/json' } });
+      };
+      const api = createRegistryApi({
+        store: memorySnapshotStore(),
+        authorize: allow,
+        fetchDescriptors: true,
+        fetch: fetchMock as typeof fetch,
+        endpointOrigins: ['https://billing.internal'],
+      });
+
+      const refused = await api.handle(post('/snapshots', { manifests: [...manifests, { id: 'meta', endpoint: 'http://169.254.169.254/latest/meta-data/' }] }));
+
+      expect(refused!.status).toBe(422);
+      expect(probed.every((url) => url.startsWith('https://billing.internal/'))).toBe(true);
+      expect(JSON.stringify(await refused!.json())).not.toContain('leaked');
+    });
+
+    it('will not pin or promote a stored snapshot whose endpoints endpointOrigins now refuses', async () => {
+      const old = await createSnapshot({ manifests: [...manifests, { id: 'admin', endpoint: 'http://internal-admin:8080/' }] });
+      const store = memorySnapshotStore([old]);
+      const api = createRegistryApi({
+        store,
+        authorize: allow,
+        endpointOrigins: ['https://billing.internal'],
+        environments: [{ name: 'production' }],
+      });
+
+      expect((await api.handle(post('/head', { id: old.id })))!.status).toBe(422);
+      expect((await api.handle(post('/environments/production/promote', { id: old.id })))!.status).toBe(422);
+      expect(await store.ref!('production')).toBeNull();
+    });
+
+    it('refuses a misconfigured endpointOrigins at startup', () => {
+      for (const origin of ['billing.internal', 'https://billing.internal/path']) {
+        expect(() => createRegistryApi({ store: memorySnapshotStore(), authorize: allow, endpointOrigins: [origin] })).toThrow(/must be an origin/);
       }
     });
 
@@ -317,7 +443,7 @@ describe('registry write API', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
 
-      expect(body).toEqual({ read: true, publish: true, pin: false, actor: 'dana@example.com' });
+      expect(body).toEqual({ read: true, publish: true, pin: false, actor: 'dana@example.com', tags: null });
     });
 
     it('reports read-only permissions when no authorize hook is configured', async () => {
@@ -325,7 +451,7 @@ describe('registry write API', () => {
 
       const body = await (await api.handle(new Request(`${BASE}/permissions`)))!.json();
 
-      expect(body).toEqual({ read: true, publish: false, pin: false, actor: null });
+      expect(body).toEqual({ read: true, publish: false, pin: false, actor: null, tags: null });
     });
   });
 

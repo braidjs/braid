@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { DescriptorNote, FieldChange, NamedPrincipal, RegistryFinding } from '@braidlabs/registry';
 import { AccessPanel } from './access-panel.js';
 import {
   fetchHead,
+  fetchPermissions,
   publishSnapshot,
   RegistryApiError,
   type ConsoleApi,
@@ -22,6 +23,8 @@ import {
   type Draft,
 } from './draft.js';
 import { ensureStyles } from './styles.js';
+import { canChange, startingTags } from './ownership.js';
+import type { OwnedTags } from '@braidlabs/registry';
 
 export interface RegistryEditorProps {
   /** Must carry an `apiPath` (or accept the default) — editing needs the write API. */
@@ -38,6 +41,8 @@ export interface RegistryEditorProps {
    */
   principals?: NamedPrincipal[];
   onPrincipalsChange?: (principals: NamedPrincipal[]) => void;
+  /** Told whether there are unpublished edits, for a host that warns before leaving the page. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 type Phase =
@@ -45,7 +50,7 @@ type Phase =
   | { status: 'ready' }
   | { status: 'publishing' }
   | { status: 'published'; outcome: PublishOutcome }
-  | { status: 'error'; error: Error; findings: RegistryFinding[]; notes: DescriptorNote[] };
+  | { status: 'error'; error: Error; findings: RegistryFinding[]; notes: DescriptorNote[]; conflict?: boolean };
 
 /**
  * Edit the registry and publish it as a new immutable snapshot.
@@ -61,6 +66,7 @@ export function RegistryEditor({
   onPublished,
   principals,
   onPrincipalsChange,
+  onDirtyChange,
 }: RegistryEditorProps) {
   const [draft, setDraft] = useState<Draft>(() => createDraft([]));
   const [phase, setPhase] = useState<Phase>({ status: 'loading' });
@@ -68,6 +74,11 @@ export function RegistryEditor({
   const [showDiff, setShowDiff] = useState(false);
   const [showAccess, setShowAccess] = useState(false);
   const [ownPrincipals, setOwnPrincipals] = useState<NamedPrincipal[]>([]);
+  /** Per-tag ownership from /permissions; null when the registry has none, or did not say. */
+  const [owned, setOwned] = useState<OwnedTags | null>(null);
+  /** Whether a publish may also pin. Unknown reads as yes: the server refuses what it refuses. */
+  const [canPin, setCanPin] = useState(true);
+  const [loadToken, setLoadToken] = useState(0);
 
   // Controlled when the host supplies them, uncontrolled otherwise — the same shape as any input.
   const testPrincipals = principals ?? ownPrincipals;
@@ -84,6 +95,16 @@ export function RegistryEditor({
     let current = true;
 
     setPhase({ status: 'loading' });
+    // Ownership only narrows what the editor offers; if it cannot be read, offer everything and let
+    // the server refuse what it refuses.
+    fetchPermissions(api, controller.signal).then(
+      (permissions) => {
+        if (!current) return;
+        setOwned(permissions.tags ?? null);
+        setCanPin(permissions.pin !== false);
+      },
+      () => undefined,
+    );
     fetchHead(api, controller.signal).then(
       (head) => {
         if (!current) return;
@@ -101,9 +122,18 @@ export function RegistryEditor({
       controller.abort();
     };
     // apiKey stands in for the api object, which is usually a fresh literal each render
-  }, [apiKey]);
+  }, [apiKey, loadToken]);
 
   const status = useMemo(() => draftStatus(draft), [draft]);
+
+  // Through a ref, so a host passing an inline callback hears only real changes, not one per render.
+  const dirtyListener = useRef(onDirtyChange);
+  dirtyListener.current = onDirtyChange;
+  useEffect(() => {
+    dirtyListener.current?.(!status.clean);
+  }, [status.clean]);
+  // Once unmounted the editor holds no draft, so there is nothing left for the host to warn about.
+  useEffect(() => () => dirtyListener.current?.(false), []);
 
   // Computed whether or not the panel is open: an access loss is a finding, and a finding hidden
   // behind a toggle nobody pressed is not a finding.
@@ -115,10 +145,14 @@ export function RegistryEditor({
   const publish = useCallback(async () => {
     setPhase({ status: 'publishing' });
     try {
-      const outcome = await publishSnapshot(api ?? {}, { manifests: draft.manifests });
+      // baseId makes the server refuse (409) a publish that would replace a HEAD someone else moved
+      // since this draft started — otherwise it would silently revert their change. A caller who
+      // may not pin publishes a candidate, which leaves HEAD for someone who may.
+      const outcome = await publishSnapshot(api ?? {}, { manifests: draft.manifests, baseId: draft.baseId, pin: canPin });
       // Re-base on what was actually published, so the diff resets and a second publish of the
-      // same content is correctly reported as no change.
-      setDraft(createDraft(draft.manifests, outcome.snapshot.id));
+      // same content is correctly reported as no change. A proposal or a candidate does not move
+      // HEAD, so the draft stays based on it.
+      if (outcome.pinned) setDraft(createDraft(draft.manifests, outcome.snapshot.id));
       setPhase({ status: 'published', outcome });
       onPublished?.(outcome);
     } catch (error) {
@@ -128,9 +162,10 @@ export function RegistryEditor({
         error: asError(error),
         findings: apiError?.findings ?? [],
         notes: apiError?.descriptorNotes ?? [],
+        conflict: apiError?.status === 409,
       });
     }
-  }, [api, draft.manifests, onPublished]);
+  }, [api, draft.manifests, draft.baseId, canPin, onPublished]);
 
   if (phase.status === 'loading') {
     return (
@@ -154,12 +189,12 @@ export function RegistryEditor({
           )}
         </span>
         <span className="braid-console__spacer" />
-        <button className="braid-console__retry" type="button" onClick={() => setDraft(addFragment(draft))}>
+        <button className="braid-console__retry" type="button" onClick={() => setDraft(addFragment(draft, startingTags(owned)))}>
           Add fragment
         </button>
       </div>
 
-      {phase.status === 'error' && <ErrorPanel phase={phase} />}
+      {phase.status === 'error' && <ErrorPanel phase={phase} onReload={() => setLoadToken((token) => token + 1)} />}
       {phase.status === 'published' && <PublishedPanel outcome={phase.outcome} />}
 
       {draft.manifests.length === 0 ? (
@@ -172,6 +207,8 @@ export function RegistryEditor({
               manifest={manifest}
               findings={status.findings.filter((finding) => finding.fragmentIds.includes(manifest.id))}
               expanded={expanded === index}
+              // Judged by the tags it was published with, so retagging cannot unlock it mid-edit.
+              editable={canChange((draft.base.find((base) => base.id === manifest.id) ?? manifest).tags, owned)}
               onToggle={() => setExpanded(expanded === index ? null : index)}
               onChange={(patch) => setDraft(updateFragment(draft, index, patch))}
               onRemove={() => {
@@ -203,6 +240,7 @@ export function RegistryEditor({
         accessLosses={accessLosses}
         onReset={() => setDraft(resetDraft(draft))}
         onPublish={publish}
+        canPin={canPin}
       />
     </div>
   );
@@ -212,6 +250,7 @@ function FragmentRow({
   manifest,
   findings,
   expanded,
+  editable,
   onToggle,
   onChange,
   onRemove,
@@ -219,6 +258,7 @@ function FragmentRow({
   manifest: FragmentManifest;
   findings: RegistryFinding[];
   expanded: boolean;
+  editable: boolean;
   onToggle: () => void;
   onChange: (patch: Partial<FragmentManifest>) => void;
   onRemove: () => void;
@@ -256,18 +296,26 @@ function FragmentRow({
         {errors.length > 0 && (
           <span className="braid-console__badge braid-console__badge--error">{errors.length} error</span>
         )}
-        <button
-          className="braid-console__ghost"
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-controls={fieldsId}
-        >
-          {expanded ? 'Done' : 'Edit'}
-        </button>
-        <button className="braid-console__ghost" type="button" onClick={onRemove} aria-label={`Remove ${manifest.id}`}>
-          Remove
-        </button>
+        {editable ? (
+          <>
+            <button
+              className="braid-console__ghost"
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              aria-controls={fieldsId}
+            >
+              {expanded ? 'Done' : 'Edit'}
+            </button>
+            <button className="braid-console__ghost" type="button" onClick={onRemove} aria-label={`Remove ${manifest.id}`}>
+              Remove
+            </button>
+          </>
+        ) : (
+          <span className="braid-console__desc" title="Owned by another team's tags">
+            read-only
+          </span>
+        )}
       </div>
 
       {findings.length > 0 && (
@@ -281,7 +329,7 @@ function FragmentRow({
         </ul>
       )}
 
-      {expanded && <FragmentFields manifest={manifest} onChange={onChange} id={fieldsId} />}
+      {expanded && editable && <FragmentFields manifest={manifest} onChange={onChange} id={fieldsId} />}
     </li>
   );
 }
@@ -456,6 +504,7 @@ function PublishBar({
   accessLosses,
   onReset,
   onPublish,
+  canPin,
 }: {
   status: ReturnType<typeof draftStatus>;
   phase: Phase;
@@ -466,6 +515,7 @@ function PublishBar({
   accessLosses: number;
   onReset: () => void;
   onPublish: () => void;
+  canPin: boolean;
 }) {
   const errors = status.findings.filter((finding) => finding.severity === 'error').length;
   const warnings = status.findings.length - errors;
@@ -499,14 +549,29 @@ function PublishBar({
         type="button"
         onClick={onPublish}
         disabled={status.blocked || status.clean || phase.status === 'publishing'}
+        {...(canPin ? {} : { title: 'Your role may publish but not pin; a publisher pins the candidate.' })}
       >
-        {phase.status === 'publishing' ? 'Publishing…' : 'Publish'}
+        {phase.status === 'publishing' ? 'Publishing…' : canPin ? 'Publish' : 'Publish as candidate'}
       </button>
     </div>
   );
 }
 
 function PublishedPanel({ outcome }: { outcome: PublishOutcome }) {
+  if (outcome.pullRequest) {
+    return (
+      <div className="braid-console__notice braid-console__notice--ok" role="status">
+        <span aria-hidden="true">✓</span>
+        <span>
+          Proposed as{' '}
+          <a href={outcome.pullRequest.url} target="_blank" rel="noreferrer">
+            pull request #{outcome.pullRequest.number}
+          </a>
+          . It is published when the pull request is merged.
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="braid-console__notice braid-console__notice--ok" role="status">
       <span aria-hidden="true">✓</span>
@@ -514,17 +579,22 @@ function PublishedPanel({ outcome }: { outcome: PublishOutcome }) {
         Published <code className="braid-console__mono">{outcome.snapshot.id}</code> —{' '}
         {outcome.snapshot.fragmentCount} fragment{outcome.snapshot.fragmentCount === 1 ? '' : 's'}
         {outcome.pinned ? ', now pinned.' : ', not pinned.'}{' '}
-        {outcome.pinned && 'Gateways pick it up on restart.'}
+        {outcome.pinned && 'A gateway following HEAD serves it within its refresh interval, or on restart without one.'}
       </span>
     </div>
   );
 }
 
-function ErrorPanel({ phase }: { phase: Extract<Phase, { status: 'error' }> }) {
+function ErrorPanel({ phase, onReload }: { phase: Extract<Phase, { status: 'error' }>; onReload: () => void }) {
   return (
     <div className="braid-console__error" role="alert">
-      <h3>Could not publish</h3>
+      <h3>{phase.conflict ? 'Someone published since you started' : 'Could not publish'}</h3>
       <p>{phase.error.message}</p>
+      {phase.conflict && (
+        <button type="button" className="braid-console__retry" onClick={onReload}>
+          Reload pinned (discards this draft)
+        </button>
+      )}
       {phase.findings.length > 0 && (
         <ul className="braid-console__findings">
           {phase.findings.map((finding, index) => (

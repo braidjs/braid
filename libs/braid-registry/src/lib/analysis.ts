@@ -28,6 +28,7 @@ export type FindingCode =
   | 'invalid-id'
   | 'missing-endpoint'
   | 'invalid-endpoint'
+  | 'endpoint-not-allowed'
   | 'invalid-pierce-pattern'
   | 'urlpattern-unavailable'
   | 'pierce-overlap'
@@ -41,7 +42,9 @@ export type FindingCode =
   | 'slot-unknown-area'
   | 'slot-unknown-fragment'
   | 'unsafe-shell-url'
-  | 'invalid-shell-field';
+  | 'invalid-shell-field'
+  | 'shell-route-conflict'
+  | 'shell-route-overlap';
 
 /**
  * Validates a registry without contacting anything.
@@ -51,8 +54,17 @@ export type FindingCode =
  */
 export function validateRegistry(
   manifests: readonly FragmentManifest[],
-  options: { shells?: readonly ShellManifest[] } = {},
+  options: {
+    shells?: readonly ShellManifest[];
+    /**
+     * Origins a URL endpoint may be on — `['https://billing.internal', 'https://cdn.example']`.
+     * Omit to allow any. The gateway proxies `/__braid/frag/:id/*` to a fragment's endpoint, so an
+     * endpoint is a door from the internet into wherever it points; this is the list of rooms.
+     */
+    endpointOrigins?: readonly string[];
+  } = {},
 ): RegistryFinding[] {
+  const allowedOrigins = options.endpointOrigins ? new Set(options.endpointOrigins.map((origin) => new URL(origin).origin)) : null;
   const findings: RegistryFinding[] = [];
   const seen = new Set<string>();
 
@@ -78,18 +90,21 @@ export function validateRegistry(
     }
     if (id) seen.add(id);
 
-    findings.push(...validateEndpoint(manifest));
+    findings.push(...validateEndpoint(manifest, allowedOrigins));
     findings.push(...validatePierce(manifest));
     findings.push(...validateAdapter(manifest));
     findings.push(...validateAccess(manifest));
   }
 
   findings.push(...findPierceOverlaps(manifests));
-  if (options.shells) findings.push(...validateShells(options.shells, manifests));
+  if (options.shells) {
+    findings.push(...validateShells(options.shells, manifests));
+    findings.push(...findShellRouteOverlaps(options.shells));
+  }
   return findings;
 }
 
-function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
+function validateEndpoint(manifest: FragmentManifest, allowedOrigins: ReadonlySet<string> | null = null): RegistryFinding[] {
   if (!manifest.endpoint) {
     return [
       {
@@ -104,9 +119,9 @@ function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
 
   if (typeof manifest.endpoint !== 'string') return [];
 
+  let origin: string;
   try {
-    new URL(manifest.endpoint);
-    return [];
+    origin = new URL(manifest.endpoint).origin;
   } catch {
     return [
       {
@@ -118,6 +133,18 @@ function validateEndpoint(manifest: FragmentManifest): RegistryFinding[] {
       },
     ];
   }
+  if (allowedOrigins && !allowedOrigins.has(origin)) {
+    return [
+      {
+        severity: 'error',
+        code: 'endpoint-not-allowed',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" has an endpoint on ${origin}, which is not an allowed endpoint origin`,
+        hint: `endpoints may be on: ${[...allowedOrigins].join(', ')}`,
+      },
+    ];
+  }
+  return [];
 }
 
 function validatePierce(manifest: FragmentManifest): RegistryFinding[] {
@@ -249,6 +276,43 @@ export function findPierceOverlaps(manifests: readonly FragmentManifest[]): Regi
 }
 
 /** Reduces a pattern to one concrete path it matches, for probing. */
+/**
+ * Routes in different shells that can answer the same page — `/billing/*` and `/billing/:id`.
+ * Exact duplicates are an error (`shell-route-conflict`); an overlap is a warning, because the
+ * gateway resolves it deterministically (shells in id order) but probably not as anyone intended.
+ */
+function findShellRouteOverlaps(shells: readonly ShellManifest[]): RegistryFinding[] {
+  const compiled: { shell: string; path: string; matcher: URLPattern; sample: string }[] = [];
+  if (typeof URLPattern === 'undefined') return [];
+  for (const shell of shells) {
+    for (const route of Array.isArray(shell?.routes) ? shell.routes : []) {
+      try {
+        compiled.push({ shell: shell.id, path: route.path, matcher: new URLPattern({ pathname: route.path }), sample: samplePath(route.path) });
+      } catch {
+        // reported by validateShells
+      }
+    }
+  }
+  const findings: RegistryFinding[] = [];
+  for (let i = 0; i < compiled.length; i++) {
+    for (let j = i + 1; j < compiled.length; j++) {
+      const a = compiled[i]!;
+      const b = compiled[j]!;
+      if (a.shell === b.shell || a.path === b.path) continue;
+      if (!(b.matcher.test({ pathname: a.sample }) || a.matcher.test({ pathname: b.sample }))) continue;
+      findings.push({
+        severity: 'warning',
+        code: 'shell-route-overlap',
+        shellIds: [a.shell, b.shell],
+        fragmentIds: [],
+        message: `shells "${a.shell}" (${a.path}) and "${b.shell}" (${b.path}) can both answer the same page`,
+        hint: 'the shell with the earlier id wins; narrow one of the routes so each page has one shell',
+      });
+    }
+  }
+  return findings;
+}
+
 function samplePath(pattern: string): string {
   return (
     pattern

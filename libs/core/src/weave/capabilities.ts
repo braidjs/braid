@@ -1,4 +1,4 @@
-import { isDevMode } from '../config.js';
+import { getBraidConfig, isDevMode } from '../config.js';
 
 /**
  * What a fragment is allowed to do, declared by the host and enforced where enforcement is possible.
@@ -12,6 +12,7 @@ import { isDevMode } from '../config.js';
  * | `sandbox` | the browser | n/a — no frame to sandbox | yes |
  * | `permissions` | the browser (Permissions-Policy) | n/a | yes |
  * | `network` | the browser (CSP), or nobody | **advisory only** | CSP on the fragment's own origin |
+ * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
  *
  * `context` is the one that matters most on the trusted tier, and the one Braid can actually
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment
@@ -43,6 +44,11 @@ export interface FragmentCapabilities {
   network?: string[];
   /** Reserved for the storage-partitioning work. */
   storage?: 'partitioned' | 'shared';
+  /**
+   * Host globals this fragment reads and writes as its own — see `BraidOptions.sharedGlobals`.
+   * Replaces the host-wide default when present; `[]` opts the fragment out. Trusted tier only.
+   */
+  sharedGlobals?: string[];
 }
 
 /**
@@ -102,6 +108,21 @@ export function resolveCapabilities(
   if (present.length === 0) return undefined;
   // Later sources are less authoritative, so earlier ones are spread last and win.
   return present.reduceRight((merged, source) => ({ ...merged, ...source }), {} as FragmentCapabilities);
+}
+
+/**
+ * The host globals a trusted fragment shares: its own `sharedGlobals` grant when it has one, the
+ * host-wide `initBraid({ sharedGlobals })` default otherwise.
+ *
+ * Replaces rather than merges, like `context.read`: a grant written for one fragment says exactly
+ * what that fragment gets, and `[]` is how a fragment with its own analytics stack opts out.
+ */
+export function resolveSharedGlobals(capabilities: FragmentCapabilities | undefined): readonly string[] {
+  const names: unknown = capabilities?.sharedGlobals ?? getBraidConfig().sharedGlobals;
+  // The stub's grant is manifest JSON, cast rather than parsed: a `"sharedGlobals": "dataLayer"`
+  // typo must share nothing, not one host-writing accessor per character.
+  if (!Array.isArray(names)) return [];
+  return names.filter((name): name is string => typeof name === 'string' && name !== '');
 }
 
 /** Reads a capabilities block off a realm stub's adapter options, or off `initBraid` config. */

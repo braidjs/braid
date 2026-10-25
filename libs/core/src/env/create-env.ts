@@ -140,7 +140,7 @@ export function createFragmentEnv(options: CreateEnvOptions): {
     context: {
       get: (key) => context.get(key),
       subscribe: (key, listener, subscribeOptions) =>
-        context.subscribe(key, listener, { signal: subscribeOptions?.signal ?? signal }),
+        context.subscribe(key, listener, { ...subscribeOptions, signal: subscribeOptions?.signal ?? signal }),
     },
     get props() {
       return props;

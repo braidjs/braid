@@ -242,6 +242,16 @@ describe('an untrusted session', () => {
     connected.dispose();
   });
 
+  it('replays the current context to a new subscriber', async () => {
+    braidContext.set('cart', { items: 2 });
+    const connected = await connect();
+    const seen = vi.fn();
+    connected.session.context.subscribe('cart', seen);
+
+    expect(seen).toHaveBeenCalledWith({ items: 2 });
+    connected.dispose();
+  });
+
   it('receives prop changes', async () => {
     const connected = await connect({ props: { placement: 'sidebar' } });
     const seen = vi.fn();

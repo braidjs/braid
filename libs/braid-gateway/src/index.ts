@@ -14,7 +14,7 @@
  */
 
 export { createGateway, toWebMiddleware, toFetchHandler } from './gateway.js';
-export type { BraidGateway, GatewayOptions, RoutingEvent, ServiceWorkerOptions } from './gateway.js';
+export type { BraidGateway, DocumentsContext, GatewayOptions, RoutingEvent, ServiceWorkerOptions, UpgradeTarget } from './gateway.js';
 export { rateVital, parseVitalsBeacon, vitalsCollectorScript } from './telemetry.js';
 export { createBreaker, DEFAULT_BREAKER } from './breaker.js';
 export { createSingleFlight, singleFlightKey } from './single-flight.js';
@@ -27,6 +27,7 @@ export type {
   WebVitalEvent,
   WebVitalName,
   BreakerEvent,
+  RegistryEvent,
 } from './telemetry.js';
 export {
   DEFAULT_ADAPTER,
@@ -42,15 +43,16 @@ export type {
   AccessRule,
   Principal,
   RegistrySource,
+  RegistryRefresh,
 } from './registry.js';
 export { satisfies, canList, canFetch } from './registry.js';
 export { DEFAULT_DISCOVERY_PATH, DEFAULT_DISCOVERY_PAGE_SIZE } from './discovery.js';
 export type { DiscoveryOptions, DiscoveryEntry, DiscoveryPage } from './discovery.js';
-export { toAppdApplication } from './appd.js';
+export { appdResponse, toAppdApplication } from './appd.js';
 export type {
   AppdApplication,
   AppdListResponse,
-  AppdAppResponse,
+  AppdError,
   FragmentFdc3Metadata,
   FragmentAppdMetadata,
 } from './appd.js';

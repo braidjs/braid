@@ -76,7 +76,7 @@ export type {
   CommandAdapter,
 } from './lib/adapters.js';
 
-export { createEventBus } from './lib/events.js';
+export { createEventBus, EVENT_BUS_COLLECTIONS } from './lib/events.js';
 export type {
   EventBus,
   EventBusOptions,
@@ -93,6 +93,8 @@ export type {
   IntentRegistryOptions,
   IntentHandlerOptions,
   IntentCandidate,
+  RemoteIntentHandler,
+  LocalIntentHandler,
   IntentResult,
   ResolvePolicy,
   RaiseOptions,

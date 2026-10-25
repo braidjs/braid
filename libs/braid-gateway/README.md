@@ -45,8 +45,9 @@ to load, and the element to mount:
 createGateway({ registry, discovery: { appd: true } });
 ```
 
-Serves the same registry in FDC3 App Directory shape at `/__braid/registry/appd/v2/apps` (and
-`/appd/v2/apps/{appId}`). It is a **projection, not a second directory** — same manifests, same
+Serves the same registry as an FDC3 2.2 App Directory: `/__braid/registry/appd/v2/apps` lists
+`{ applications, message }`, and `/appd/v2/apps/{appId}` returns the bare `Application` record.
+It is a **projection, not a second directory** — same manifests, same
 `access.list` rules — so a caller can never see through AppD a resolver that discovery would have
 hidden. `findIntent` becomes a registry query, and a user only sees resolvers they may use.
 
@@ -69,11 +70,17 @@ Two mapping decisions worth knowing:
   A fragment is *mounted into a page*, not opened as a window, so a Braid-aware agent reads
   `hostManifests.braid` and mounts a `<fragment-slot>`; one that does not falls back to the URL.
 
-An app the caller may not list 404s exactly as an unregistered one does — distinguishing them would
-let an unauthorized caller enumerate the registry one id at a time.
+An app the caller may not list 404s (with AppD's `{ code, message }` error body) exactly as an
+unregistered one does — distinguishing them would let an unauthorized caller enumerate the registry
+one id at a time.
 
-Verify the record shape against the FDC3 AppD v2 spec before depending on it; the schema carries
-more optional members than this projects.
+Records are validated in the test suite against FDC3 2.2's own App Directory schema. Relative icon
+`src` values are resolved against the origin, since AppD requires absolute URLs, and a link that is
+not http(s) is dropped rather than passed on. Optional members
+Braid has no data for (`lang`, `screenshots`, `localizedVersions`, `interop.appChannels`) are not
+produced. To serve the same directory from the governed registry instead of a gateway, see
+`createRegistryApi({ appd })` in `@braidlabs/registry`; to give fragments `window.fdc3`, see
+`@braidlabs/fdc3`.
 
 A relative `entry` is re-rooted into the fragment's namespace, so the module and its imports are
 fetched through the gateway rather than from the host's root. Such a fragment serves no document,
@@ -165,6 +172,13 @@ never serializes behind the shell. Each fragment lands in the `<fragment-slot>` 
 as a declarative shadow root, so the browser parses it into exactly the shape the client runtime
 would have built; the slot then adopts it instead of fetching. Shells with no matching slot get
 one created before `</body>`.
+
+A shell can instead mark one `<fragment-slot outlet>`. It takes the page's routed (bound) fragment,
+the first in registration order that no earlier named slot claimed, and is named after it. A shell
+that composes many routes then needs one slot rather than one per fragment id. Unbound widgets
+never fill an outlet. A named slot after the outlet is too late for a fragment the outlet already
+took, so the gateway unnames it (`data-braid-in-outlet`) and warns, rather than let the client boot
+a second copy. The outlet is filled on full page loads only.
 
 Fragment HTML is transformed on the way through: the doctype is stripped, `<html>/<head>/<body>`
 become `braid-html/braid-head/braid-body` (start *and* end tags), scripts are neutralized to
@@ -547,6 +561,11 @@ user against the shell. A fragment that needs to know who is asking should be gi
 scoped to it: a per-request assertion via `additionalHeaders`, or a token exchanged for the
 fragment's own audience. `forwardCredentials: true` restores the old behaviour, and is only
 appropriate when every endpoint in the registry sits inside the same trust boundary as the shell.
+When only some do, pass a function instead, `forwardCredentials: (fragment) => …`, and the gateway
+decides per fragment. A function that throws forwards nothing, and websocket upgrades follow the
+same decision. `proxy-authorization` is stripped with them, and `credentialHeaders` adds any
+identity header an auth proxy in front of the shell injects (`x-auth-request-access-token`,
+`cf-access-jwt-assertion`, …).
 
 Not yet implemented from the architecture's security section: allow-listed manifest origins and
 signed manifests. Until those land, treat the registry as trusted configuration.

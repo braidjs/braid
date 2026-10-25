@@ -128,6 +128,8 @@ export interface PublishOutcome {
   descriptorNotes: DescriptorNote[];
   pinned: boolean;
   diff?: RegistryDiff;
+  /** Set when the registry proposes changes as pull requests (GitOps) rather than publishing them. */
+  pullRequest?: { url: string; number: number };
 }
 
 /** The currently pinned snapshot, or `{ id: null }` when nothing has been published. */
@@ -135,8 +137,20 @@ export async function fetchHead(api: ConsoleApi = {}, signal?: AbortSignal): Pro
   return apiRequest<HeadState>(api, '/head', { method: 'GET' }, signal);
 }
 
-export async function listSnapshots(api: ConsoleApi = {}, signal?: AbortSignal): Promise<{ items: SnapshotRef[]; head: string | null }> {
-  return apiRequest(api, '/snapshots', { method: 'GET' }, signal);
+/**
+ * One page of history, newest first. Pass the previous page's `next` as `before` for the page after
+ * it; `next` is null on the last page, and absent from servers that predate paging.
+ */
+export async function listSnapshots(
+  api: ConsoleApi = {},
+  signal?: AbortSignal,
+  page: { before?: string; limit?: number } = {},
+): Promise<{ items: SnapshotRef[]; head: string | null; next?: string | null }> {
+  const query = new URLSearchParams();
+  if (page.limit !== undefined) query.set('limit', String(page.limit));
+  if (page.before !== undefined) query.set('before', page.before);
+  const search = query.toString() ? `?${query}` : '';
+  return apiRequest(api, `/snapshots${search}`, { method: 'GET' }, signal);
 }
 
 /**
@@ -171,9 +185,51 @@ export async function fetchPermissions(api: ConsoleApi = {}, signal?: AbortSigna
   try {
     return await apiRequest<RegistryPermissions>(api, '/permissions', { method: 'GET' }, signal);
   } catch (error) {
-    if (error instanceof RegistryApiError && error.status === 404) return { read: true, publish: true, pin: true, actor: null };
+    if (error instanceof RegistryApiError && error.status === 404) return { read: true, publish: true, pin: true, actor: null, tags: null };
     throw error;
   }
+}
+
+/** An environment as `GET /environments` describes it. */
+export interface EnvironmentState {
+  name: string;
+  from: string | null;
+  approvals: number;
+  id: string | null;
+  pending: { id: string; base: string | null; requestedBy: string; requestedAt: string } | null;
+}
+
+/**
+ * The registry's environments. A server with none — or too old to have them — answers 404, which
+ * reads as an empty list: there is nothing to promote to.
+ */
+export async function fetchEnvironments(api: ConsoleApi = {}, signal?: AbortSignal): Promise<EnvironmentState[]> {
+  try {
+    return (await apiRequest<{ items: EnvironmentState[] }>(api, '/environments', { method: 'GET' }, signal)).items;
+  } catch (error) {
+    if (error instanceof RegistryApiError && error.status === 404) return [];
+    throw error;
+  }
+}
+
+/** Promotes a snapshot into an environment; `pending` when the environment needs approval. */
+export async function promoteSnapshot(api: ConsoleApi, environment: string, id: string): Promise<{ pending?: unknown }> {
+  return apiRequest(api, `/environments/${encodeURIComponent(environment)}/promote`, { method: 'POST', body: JSON.stringify({ id }) });
+}
+
+/**
+ * Approves the promotion the approver was shown. The server refuses (409) if what is pending is
+ * not that one any more, so an approval cannot land on a request swapped in after review.
+ */
+export async function approvePromotion(api: ConsoleApi, environment: string, shown: { id: string; requestedAt: string }): Promise<void> {
+  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ id: shown.id, requestedAt: shown.requestedAt }),
+  });
+}
+
+export async function rejectPromotion(api: ConsoleApi, environment: string): Promise<void> {
+  await apiRequest(api, `/environments/${encodeURIComponent(environment)}/reject`, { method: 'POST', body: '{}' });
 }
 
 /** Re-points HEAD. Rollback is this and nothing else. */

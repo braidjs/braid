@@ -24,7 +24,7 @@ file to import.
 | **Fragments** | the gateway's `/__braid/registry` | every registered fragment, filterable with the query syntax below |
 | **Topology** | the same | shells → routes → fragments → origins: the only real couplings between fragments |
 | **Shells** | the registry write API | list, design, generate code for, publish and delete shells |
-| **History** | the write API | who published what, and rollback by re-pinning |
+| **History** | the write API | who published what, rollback by re-pinning, and promotion through environments with approvals |
 | **Edit fragments** | the write API | add, change and remove fragment manifests, with a diff and an access preview |
 
 Viewing fragments needs nothing deployed. Everything else needs `createRegistryApi` from
@@ -62,9 +62,11 @@ The **Code** tab generates the host for each framework a shell can be:
 | Angular SSR | the Angular files plus `server.ts` with the gateway mounted in front of the SSR handler |
 | Plain JS | one HTML page per route with `<fragment-slot>`s |
 
-Every value is escaped for where it lands. Today the framework decides which code you get. The
-gateway still serves the HTML your shell app returns, and serving shells straight from the
-definition is planned.
+Every value is escaped for where it lands. A **Plain JS** shell needs no code at all: the gateway
+can serve it straight from its definition, so publishing it puts the page live with no rebuild (see
+[serving shells from their definition](./registry.md#serving-shells-from-their-definition)). For
+the other frameworks, the code is yours to build and serve, and the gateway pierces fragments into
+what your app returns.
 
 ---
 
@@ -99,8 +101,10 @@ undoing anything is pinning an earlier snapshot in **History**.
 - Removing a fragment that a shell still slots is refused, naming the shell.
 - Roles that may publish but not pin publish **candidates**, which someone with pin rights promotes
   from History.
-- A gateway loads its pinned snapshot when it starts, so a new pin goes live on its next restart or
-  deploy.
+- A gateway with `registryRefreshMs` and a source that follows HEAD serves a new pin within that
+  interval, with no restart (hot re-pin). Without it, a gateway loads its snapshot when it starts,
+  so a new pin goes live on its next restart or deploy. Instances poll independently, so a fleet
+  converges within one interval rather than at one instant.
 
 ---
 
@@ -163,15 +167,22 @@ Tokens live in `sessionStorage`. Serve the console with a strict Content-Securit
   artifact.
 - **API and CI first.** Everything the console does is an HTTP call. A pipeline validates with
   `validateRegistry`, publishes with a client-credentials token, and sends `baseId` to avoid races.
-  Teams that prefer GitOps keep snapshots in git and publish from CI.
+  Teams that prefer GitOps give the API a `githubPublisher`, so every publish from the console opens a pull request (see [GitOps](./registry.md#gitops-publish-by-pull-request)), or keep snapshots in git and publish from CI.
 - **Auditable.** Every snapshot records who published it, taken from the verified token. History
-  is append-only, and rollback is a re-pin.
+  is append-only, and rollback is a re-pin. Every write attempt (publish, pin, and refusals) is
+  also an audit event for your SIEM, as JSON lines or batched to a webhook (see
+  [audit export](./registry.md#audit-export)).
 - **Air-gapped.** Any OIDC issuer works in place of Okta, verification keys can be supplied
   locally, and the console calls nothing but your gateway and your issuer.
-
-Planned: the gateway serving shells from their definition with no rebuild, hot re-pin, named
-environments with promotion and approvals, a GitOps mode that opens a pull request instead of
-publishing, per-tag ownership in RBAC, and audit export to a SIEM.
+- **On its own origin.** Serve the standalone console and the registry API from a dedicated origin
+  (`registry.example.com`), not the origin your composed pages are on. Sign-in tokens are kept in
+  `sessionStorage`, and any script on the same origin (a pierced fragment, a served shell) can open
+  the console in a window and read them. The built `index.html` carries a Content-Security-Policy
+  that only lets its own bundle run; add `frame-ancestors 'none'` as a response header (a meta tag
+  can't carry it), and narrow `connect-src` to your API and issuer there if you can.
+- **Hardened API.** Set `endpointOrigins` on the registry API so fragment endpoints can only point
+  where you allow, and `paths` on `shellDocuments` so served shells can only answer the parts of the
+  site you allow (see [the write API](./registry.md#the-write-api)).
 
 ---
 

@@ -22,6 +22,7 @@ in language that implies more than it delivers. The correction, stated plainly:
 | Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
 | Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
 | Cookies & storage | **the host's** | its own, partitioned |
+| Host globals | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own |
 | Layout | participates in host layout | a rectangle the host sizes |
 | Accessibility | one tree | nested documents |
 | Overlays | can escape the fragment's box | clipped by the frame |
@@ -32,6 +33,25 @@ in language that implies more than it delivers. The correction, stated plainly:
 
 Everything in the trusted column below "where its DOM lives" is a *consequence* of sharing a
 document. None of it survives a boundary the browser enforces. The untrusted tier gives up all of it.
+
+**Shared globals widen the trusted tier on purpose.** A trusted fragment's JavaScript runs in its
+own realm, so by default its `window.dataLayer` is a private array that no tag manager reads.
+`initBraid({ sharedGlobals: ['dataLayer', '_satellite'] })` gives every trusted fragment an
+accessor for each named host global. Through it the fragment can read the host's value **and
+replace it**. Braid still installs nothing on the host window. The new thing is a write channel
+into host globals the host named itself. List only globals you would let any trusted fragment
+overwrite, and initialize them on the host first: an object a fragment creates outlives the
+fragment. A fragment's `capabilities.sharedGlobals` **replaces** the list for that fragment. It can
+narrow the list, opt out with `[]`, or add names `initBraid` never listed. Whoever controls the
+registry therefore controls this, so review manifest changes to `sharedGlobals` the way you review
+host config. The untrusted tier ignores it, because there is nothing same-origin to share.
+
+**Realm globals are per-fragment values, not host ones.** `initBraid({ realmGlobals })` is a hook
+called once per trusted fragment boot with `{ fragmentId, signal }`; what it returns is defined on
+that fragment's realm window before its code runs. It is how `@braidlabs/fdc3` gives each fragment a
+`window.fdc3` bound to its own app identity. Nothing is shared or written back: the host decides the
+value per fragment, and the signal says when to release it. Contract and untrusted fragments ignore
+it, as they do `sharedGlobals`.
 
 ## What the untrusted tier is
 
@@ -102,7 +122,7 @@ const session = await connectToBraidHost({
   contract: { version: '1.0.0', requires: { host: '>=1.4.0' } },
 });
 
-session.context.subscribe('user', renderUser);
+session.context.subscribe('user', renderUser); // the current user now, then changes
 session.onClosing(() => flushImpressions());
 session.emit('impression', { slot: 'sidebar' });
 ```

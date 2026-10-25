@@ -1,8 +1,9 @@
 # Can Braid be used without the gateway?
 
-Short answer: **you never need to deploy a separate gateway service, but compat-mode fragments do
-need the gateway's code running somewhere on the host origin.** Which of those you were asking
-usually decides the answer, so this document separates them.
+Short answer: **you never need to deploy a separate gateway service. Compat-mode fragments need
+the gateway's code running somewhere on the host origin; contract-mode fragments need no gateway
+at all.** Which of those you were asking usually decides the answer, so this document separates
+them.
 
 ---
 
@@ -28,7 +29,8 @@ just needs to see requests before it does. That is the arrangement the architect
 
 ## "Can I use the client with no gateway code at all?"
 
-For **compat mode — the default adapter — no.** This is structural, not an omission.
+For **contract mode, yes** — see [below](#contract-mode-needs-no-gateway). For **compat mode — the
+default adapter — no.** That is structural, not an omission.
 
 A compat fragment's whole value is that unmodified code believes it owns the browser, which means
 its `location` and `history` must be truthful. That forces the realm to boot from a real `http:`
@@ -69,23 +71,47 @@ Use the library.
 
 ---
 
-## The one mode that needs no server: contract-blob realms
+## Contract mode needs no gateway
 
 Contract-mode fragments do not maintain any illusion — they receive `env.location` and
 `env.document` instead of reading globals — so their realm has nothing to be truthful about. Those
 realms boot from a `blob:` URL the runtime authors itself: no network round trip, no stub, no
 server involvement, and zero interaction with the joint session history.
 
-This works today and is verified (same-origin, DOM-capable, per-realm import maps, no history
-entries). What does **not** exist yet is a contract adapter for any framework, so nothing routes
-to it in normal use — you can create such a realm directly, but you cannot yet mount a React or
-Angular app into one.
+The fragment registers itself from its entry module with a framework binding, or with
+`defineFragment({ mount })` from `@braidlabs/core` directly:
 
-When contract adapters land, a genuinely gateway-free deployment becomes possible for fragments
-whose entry module and assets are absolute URLs to their own origin (with CORS). You would give
-up namespace routing, server-side piercing, and the manifest registry — the fragment would be a
-module you load, not a URL you compose. That is a real trade, and for a legacy app it is not
-available at all, because legacy apps are exactly the ones that cannot be handed an `env`.
+```ts
+// the fragment's entry module, served from its own origin
+import { defineAngularFragment } from '@braidlabs/angular';
+import { App } from './app';
+
+defineAngularFragment({ component: App, contract: { version: '1.0.0' } });
+```
+
+`defineReactFragment()` from `@braidlabs/react` is the React equivalent. The host needs only the
+runtime and a slot that names the entry module — no middleware, so the host can be a static site:
+
+```html
+<fragment-slot name="billing" adapter="contract" entry="https://billing.example/main.js"></fragment-slot>
+```
+
+The POC runs one this way: `apps/braid-poc-contract`, mounted by the POC host with no gateway route.
+
+What it needs:
+
+- **CORS.** The entry module and its assets load from the fragment's own origin, so that origin
+  must allow the host's.
+- **`blob:` in the host's `frame-src`**, if the host sets a Content-Security-Policy. The runtime
+  names this in its error when it is missing.
+- **Absolute URLs.** The realm's base is the entry module's directory, so relative asset paths
+  resolve against the fragment's origin, not the host's.
+
+What it gives up: namespace routing, server-side piercing (the fragment renders on the client),
+the manifest registry and everything built on it (access rules, snapshots, rollback, ownership,
+audit), and the gateway's credential stripping — the browser talks to the fragment's origin
+directly, under its own cookie rules. For a legacy app it is not available at all, because legacy
+apps are exactly the ones that cannot be handed an `env`.
 
 ---
 
@@ -97,7 +123,7 @@ available at all, because legacy apps are exactly the ones that cannot be handed
 | Avoid a separate deployment | Not a separate one | mount the library in your existing server |
 | Compose an app whose server you can't touch | Yes, in front of it | edge worker / reverse proxy |
 | Skip server-side rendering of fragments | No — piercing is optional | omit `pierce` from the manifest; the slot fetches instead |
-| Load a modern app with no server component | Not yet | contract-blob realms exist; contract adapters do not |
+| Load a modern app with no gateway | No | contract mode: `defineAngularFragment()` / `defineReactFragment()` and `<fragment-slot adapter="contract" entry="…">` |
 
 Piercing being optional is worth restating: dropping `pierce` from a manifest costs you the
 server-rendered first paint and nothing else. The fragment boots client-side and everything in

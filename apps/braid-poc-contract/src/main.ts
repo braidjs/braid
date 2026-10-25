@@ -67,7 +67,8 @@ defineFragment({
     const renderContext = (value: unknown) => {
       contextCell.textContent = value === undefined ? '—' : JSON.stringify(value);
     };
-    renderContext(env.context.get('demo:message'));
+    renderContext(undefined);
+    // replays the current message, if there is one, then every change
     env.context.subscribe('demo:message', renderContext);
 
     env.onPropsChanged((props) => void (propsCell.textContent = JSON.stringify(props)));

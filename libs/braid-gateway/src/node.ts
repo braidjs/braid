@@ -217,12 +217,22 @@ export function toNodeUpgradeHandler(
       const isSecure = target.target.protocol === 'https:';
       const transport = isSecure ? https : http;
 
+      const headers: Record<string, string | string[] | undefined> = {
+        ...req.headers,
+        host: target.target.host,
+        'x-braid-via': target.via,
+      };
+      // a socket is a load like any other, so it crosses the same trust boundary as a fetch
+      if (!target.forwardCredentials) {
+        for (const name of target.credentialHeaders) delete headers[name];
+      }
+
       const upstream = transport.request({
         host: target.target.hostname,
         port: target.target.port || (isSecure ? 443 : 80),
         path: `${target.target.pathname}${target.target.search}`,
         method: req.method,
-        headers: { ...req.headers, host: target.target.host },
+        headers,
       });
 
       upstream.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {

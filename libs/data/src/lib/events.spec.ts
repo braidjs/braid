@@ -181,17 +181,146 @@ describe('at-most-once events', () => {
     two.close();
   });
 
-  it('keeps a page-scoped channel out of other contexts', async () => {
+  it('keeps a page-scoped channel out of other pages — another tab', async () => {
     const wire = wirePair();
-    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
-    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-2' });
 
     const handled = vi.fn();
+    const state = vi.fn();
     two.channel('selection').addEventListener('row.clicked', handled);
+    two.channel('selection').subscribe(state);
     await one.channel('selection').emit('row.clicked', { id: 'row-1' });
+    one.channel('selection').broadcast({ id: 'row-1' });
 
     // Scope is per channel so a UI selection does not end up in five tabs.
     expect(handled).not.toHaveBeenCalled();
+    expect(state).not.toHaveBeenCalled();
+    one.close();
+    two.close();
+  });
+
+  it('carries a page-scoped channel between the realms of one page', async () => {
+    // two fragments on one page: separate JavaScript contexts, as isolated in memory as two tabs
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+
+    const handled = vi.fn();
+    const state = vi.fn();
+    two.channel('selection').addEventListener('row.clicked', handled);
+    two.channel('selection').subscribe(state);
+    await one.channel('selection').emit('row.clicked', { id: 'row-1' });
+    one.channel('selection').broadcast({ id: 'row-2' });
+
+    expect(handled).toHaveBeenCalledWith(expect.objectContaining({ payload: { id: 'row-1' } }));
+    expect(state).toHaveBeenCalledWith({ id: 'row-2' });
+    one.close();
+    two.close();
+  });
+
+  it('stays within this bus when there is no page to share, as outside a browser', () => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    const state = vi.fn();
+
+    two.channel('selection').subscribe(state);
+    one.channel('selection').broadcast({ id: 'row-1' });
+
+    expect(state).not.toHaveBeenCalled();
+    one.close();
+    two.close();
+  });
+});
+
+describe('which page a bus is on, by default', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A document that started at `timeOrigin`, under `parent` (itself, for a top-level one). */
+  function documentAt(timeOrigin: number, parent?: object): { parent: object; performance: { timeOrigin: number } } {
+    const doc = { performance: { timeOrigin } } as { parent: object; performance: { timeOrigin: number } };
+    doc.parent = parent ?? doc;
+    return doc;
+  }
+
+  function busIn(context: object, wire: (name: string) => BroadcastChannelLike, consumer: string) {
+    vi.stubGlobal('window', context);
+    return createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+  }
+
+  it('is the top document, so realms of one page share page scope and other tabs do not', () => {
+    const wire = wirePair();
+    const host = documentAt(1000.5);
+    const realmA = busIn(documentAt(1001, host), wire, 'a');
+    const realmB = busIn(documentAt(1002, host), wire, 'b');
+    const otherTab = busIn(documentAt(1003, documentAt(2000.25)), wire, 'c');
+    const inB = vi.fn();
+    const inOtherTab = vi.fn();
+    realmB.channel('selection').subscribe(inB);
+    otherTab.channel('selection').subscribe(inOtherTab);
+
+    realmA.channel('selection').broadcast({ id: 'row-1' });
+
+    expect(inB).toHaveBeenCalledWith({ id: 'row-1' });
+    expect(inOtherTab).not.toHaveBeenCalled();
+    [realmA, realmB, otherTab].forEach((bus) => bus.close());
+  });
+
+  it('stops at the last same-origin document when the app is embedded in another site', () => {
+    const wire = wirePair();
+    const crossOriginTop = {
+      get performance(): never {
+        throw new DOMException('Blocked a frame from accessing a cross-origin frame', 'SecurityError');
+      },
+    };
+    const host = documentAt(1000.5, crossOriginTop);
+    const realmA = busIn(documentAt(1001, host), wire, 'a');
+    const realmB = busIn(documentAt(1002, host), wire, 'b');
+    const inB = vi.fn();
+    realmB.channel('selection').subscribe(inB);
+
+    realmA.channel('selection').broadcast({ id: 'row-1' });
+
+    // the composed page is still one page, though its top cannot be read
+    expect(inB).toHaveBeenCalledWith({ id: 'row-1' });
+    realmA.close();
+    realmB.close();
+  });
+});
+
+describe('a context that opens a channel late', () => {
+  it.each([
+    ['an origin-scoped channel, in another tab', { scope: 'origin' as const }, {}],
+    ['a page-scoped channel, in another realm', {}, { page: 'tab-1' }],
+  ])('receives %s its current state without a new broadcast', (_, channelOptions, busOptions) => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, ...busOptions });
+    one.channel('session', channelOptions).broadcast({ userId: 'u1' });
+
+    // the account panel mounts later — a lazy route, a fragment loaded on demand, a new tab
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, ...busOptions });
+    const seen = vi.fn();
+    two.channel('session', channelOptions).subscribe(seen);
+
+    expect(seen).toHaveBeenCalledWith({ userId: 'u1' });
+    expect(two.channel('session', channelOptions).state()).toEqual({ userId: 'u1' });
+    one.close();
+    two.close();
+  });
+
+  it('does not let a late reply set back a newer value it already has', () => {
+    const wire = wirePair();
+    const one = createEventBus({ consumer: 'checkout', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    const two = createEventBus({ consumer: 'account', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1' });
+    two.channel('session').broadcast({ userId: 'new' });
+
+    // a third context answers a state request with what it held before the newer broadcast
+    const stale = wire('skew:events:default:page:tab-1:session');
+    stale.postMessage({ kind: 'state-reply', request: 'any', value: { userId: 'old' } });
+
+    expect(two.channel('session').state()).toEqual({ userId: 'new' });
+    expect(one.channel('session').state()).toEqual({ userId: 'new' });
     one.close();
     two.close();
   });
@@ -562,3 +691,646 @@ describe('a context per entity', () => {
   });
 });
 
+describe('late join, without a storm or a false conflict', () => {
+  /** A wire that counts what crosses it. */
+  function countingWire() {
+    const wire = wirePair();
+    const sent: string[] = [];
+    return {
+      sent,
+      wire: (name: string) => {
+        const endpoint = wire(name);
+        return { ...endpoint, postMessage: (message: unknown) => (sent.push((message as { kind: string }).kind), endpoint.postMessage(message)) };
+      },
+    };
+  }
+  const busOn = (consumer: string, wire: (name: string) => BroadcastChannelLike, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1', ...extra });
+
+  it('does not count adopting another context\'s state, then moving on from it, as a conflict', () => {
+    const { wire } = countingWire();
+    const one = busOn('checkout', wire);
+    one.channel('selection').broadcast({ row: 1 });
+    const two = busOn('account', wire);
+    two.channel('selection').subscribe(vi.fn());
+
+    // an ordinary next selection, not two writers racing
+    two.channel('selection').broadcast({ row: 2 });
+
+    expect(two.channel('selection').conflict()).toBeNull();
+    expect(one.channel('selection').state()).toEqual({ row: 2 });
+    one.close();
+    two.close();
+  });
+
+  it('sends one reply to a late joiner, from the context that published, however many hold the state', () => {
+    const { wire, sent } = countingWire();
+    const publisher = busOn('a', wire);
+    publisher.channel('selection').broadcast({ row: 1 });
+    const holders = ['b', 'c', 'd', 'e'].map((consumer) => busOn(consumer, wire));
+    holders.forEach((bus) => bus.channel('selection').subscribe(vi.fn()));
+    sent.length = 0;
+
+    const late = busOn('late', wire);
+    const seen = vi.fn();
+    late.channel('selection').subscribe(seen);
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    expect(sent.filter((kind) => kind === 'state-reply')).toHaveLength(1);
+    [publisher, ...holders, late].forEach((bus) => bus.close());
+  });
+
+  it('still answers when the publisher is gone, from whoever holds the state', async () => {
+    const { wire, sent } = countingWire();
+    const publisher = busOn('a', wire);
+    publisher.channel('selection').broadcast({ row: 1 });
+    const holders = ['b', 'c', 'd'].map((consumer) => busOn(consumer, wire));
+    holders.forEach((bus) => bus.channel('selection').subscribe(vi.fn()));
+    publisher.close();
+    sent.length = 0;
+
+    const late = busOn('late', wire);
+    const seen = vi.fn();
+    late.channel('selection').subscribe(seen);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    // the first fallback answer cancels the others
+    expect(sent.filter((kind) => kind === 'state-reply')).toHaveLength(1);
+    [...holders, late].forEach((bus) => bus.close());
+  });
+
+  it('asks nothing for a channel used only for events', async () => {
+    const { wire, sent } = countingWire();
+    const bus = busOn('a', wire);
+
+    bus.channel('orders').addEventListener('order.placed', vi.fn());
+    await bus.channel('orders').emit('order.placed', { id: 'o1' });
+
+    expect(sent.filter((kind) => kind.startsWith('state'))).toEqual([]);
+    expect(sent).toContain('event');
+    bus.close();
+  });
+
+  it('does not bring back state that was cleared', () => {
+    const { wire } = countingWire();
+    const one = busOn('a', wire);
+    const two = busOn('b', wire);
+    two.channel('selection').subscribe(vi.fn());
+    one.channel('selection').broadcast({ row: 1 });
+    two.channel('selection').broadcast(undefined);
+
+    // a reply to somebody else's request reaches every context
+    wire('skew:events:default:page:tab-1:selection').postMessage({ kind: 'state-reply', request: 'someone-else', value: { row: 1 } });
+
+    expect(two.channel('selection').state()).toBeUndefined();
+    one.close();
+    two.close();
+  });
+
+  it('reports a value that cannot be sent to other contexts, after delivering it here', async () => {
+    const reported = vi.fn();
+    const bus = busOn('a', (name) => ({ ...wirePair()(name), postMessage: () => { throw new DOMException('could not be cloned', 'DataCloneError'); } }), {
+      onEventError: reported,
+    });
+    const seen = vi.fn();
+    const handled = vi.fn();
+    bus.channel('selection').subscribe(seen);
+    bus.channel('selection').addEventListener('row.clicked', handled);
+
+    expect(() => bus.channel('selection').broadcast({ row: 1 })).not.toThrow();
+    await expect(bus.channel('selection').emit('row.clicked', { row: 1 })).resolves.toBeUndefined();
+
+    expect(seen).toHaveBeenCalledWith({ row: 1 });
+    expect(handled).toHaveBeenCalled();
+    expect(reported).toHaveBeenCalled();
+    bus.close();
+  });
+
+  it('registers nothing for a subscription whose signal already aborted', () => {
+    const bus = createEventBus({ consumer: 'a', invalidator: createInvalidator({ partition: 'p' }) });
+    bus.channel('selection').broadcast({ row: 1 });
+    const seen = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    bus.channel('selection').subscribe(seen, { signal: controller.signal });
+    bus.channel('selection').broadcast({ row: 2 });
+
+    expect(seen).not.toHaveBeenCalled();
+    bus.close();
+  });
+});
+
+describe('state that persists across reloads', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const busWith = (driver: ReturnType<typeof memoryRecordDriver>, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer: 'blotter', driver, invalidator: createInvalidator({ partition: 'p' }), ...extra });
+
+  it('restores the last broadcast into a bus opened after a reload, with no other context alive', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.channel('selection', { persist: true }).broadcast({ id: 'row-7' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const seen = vi.fn();
+    after.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).toHaveBeenCalledWith({ id: 'row-7' });
+    expect(after.channel('selection', { persist: true }).state()).toEqual({ id: 'row-7' });
+    after.close();
+  });
+
+  it('forgets state that was cleared', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    const selection = before.channel('selection', { persist: true });
+    selection.broadcast({ id: 'row-7' });
+    selection.broadcast(undefined);
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const seen = vi.fn();
+    after.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).not.toHaveBeenCalled();
+    after.close();
+  });
+
+  it('lets a value broadcast since the reload win over the stored one', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.channel('selection', { persist: true }).broadcast({ id: 'old' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    const selection = after.channel('selection', { persist: true });
+    // the user picks a row before storage answers
+    selection.broadcast({ id: 'new' });
+    await tick();
+
+    expect(selection.state()).toEqual({ id: 'new' });
+    after.close();
+  });
+
+  it('prefers a fresher value another context holds over the stored one', async () => {
+    const driver = memoryRecordDriver();
+    const wire = wirePair();
+    const stale = busWith(driver, { page: 'tab-1', broadcastChannel: wire });
+    stale.channel('selection', { persist: true }).broadcast({ id: 'stored' });
+    await tick();
+    stale.close();
+
+    // another realm, without persistence, moved on since
+    const other = createEventBus({ consumer: 'chart', invalidator: createInvalidator({ partition: 'p' }), page: 'tab-1', broadcastChannel: wire });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    other.channel('selection').broadcast({ id: 'fresh' });
+
+    const reloaded = busWith(driver, { page: 'tab-1', broadcastChannel: wire });
+    const selection = reloaded.channel('selection', { persist: true });
+    selection.subscribe(vi.fn());
+    await tick();
+
+    expect(selection.state()).toEqual({ id: 'fresh' });
+    other.close();
+    reloaded.close();
+  });
+
+  it('stores under the contract, so a reader at an older version gets the older shape', async () => {
+    const driver = memoryRecordDriver();
+    const before = busWith(driver);
+    before.register('orders', Order);
+    before.channel('orders', { persist: true }).broadcast({ id: 'o1', quantity: 2, currency: 'EUR' });
+    await tick();
+    before.close();
+
+    const after = busWith(driver);
+    after.register('orders', Order);
+    const behind = vi.fn();
+    after.channel('orders', { persist: true }).subscribe(behind, { as: 1 });
+    await tick();
+
+    expect(behind).toHaveBeenCalledWith({ id: 'o1', quantity: 2 });
+    after.close();
+  });
+
+  it('keeps one partition\'s state from another', async () => {
+    const driver = memoryRecordDriver();
+    const ana = busWith(driver, { partition: () => 'user:ana' });
+    ana.channel('selection', { persist: true }).broadcast({ id: 'ana-row' });
+    await tick();
+    ana.close();
+
+    const bo = busWith(driver, { partition: () => 'user:bo' });
+    const seen = vi.fn();
+    bo.channel('selection', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).not.toHaveBeenCalled();
+    bo.close();
+  });
+
+  it('refuses to persist without a driver rather than quietly forgetting', () => {
+    const bus = createEventBus({ consumer: 'blotter', invalidator: createInvalidator({ partition: 'p' }) });
+
+    expect(() => bus.channel('selection', { persist: true })).toThrow(/driver/);
+    bus.close();
+  });
+});
+
+describe('intents across the realms of a page', () => {
+  /** Handlers are announced once per task, as a fragment registering several at mount would want. */
+  const announced = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const realm = (consumer: string, wire: (name: string) => BroadcastChannelLike, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1', ...extra });
+
+  it('offers a handler registered in another realm, and runs it there', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const handled = vi.fn(async (order: { id: string }) => ({ invoice: `INV-${order.id}` }));
+    billing.addIntentListener('ViewInvoice', { handler: handled });
+    await announced();
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([
+      expect.objectContaining({ consumer: 'billing', source: expect.any(String) }),
+    ]);
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(handled).toHaveBeenCalledWith({ id: 'o1' });
+    expect(result.handled).toEqual([{ candidate: expect.objectContaining({ consumer: 'billing' }), result: { invoice: 'INV-o1' } }]);
+    blotter.close();
+    billing.close();
+  });
+
+  it('learns about handlers registered before it arrived', async () => {
+    const wire = wirePair();
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+
+    const late = realm('blotter', wire);
+    await announced();
+
+    expect(late.candidates('ViewInvoice').eligible.map((candidate) => candidate.consumer)).toEqual(['billing']);
+    billing.close();
+    late.close();
+  });
+
+  it('ranks this realm\'s handlers and others\' together for the first policy', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const local = vi.fn(() => 'local');
+    blotter.addIntentListener('ViewInvoice', { handler: local, priority: 1 });
+    billing.addIntentListener('ViewInvoice', { handler: () => 'remote', priority: 5 });
+    await announced();
+
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(result.handled[0]!.result).toBe('remote');
+    expect(local).not.toHaveBeenCalled();
+    blotter.close();
+    billing.close();
+  });
+
+  it('projects the payload at the raiser, to the version the remote handler reads', async () => {
+    const wire = wirePair();
+    const checkout = realm('checkout', wire);
+    checkout.register('PlaceOrder', Order);
+    const legacy = realm('legacy', wire);
+    const handled = vi.fn();
+    legacy.addIntentListener('PlaceOrder', { handler: handled, as: 1 });
+    await announced();
+
+    await checkout.raiseIntent('PlaceOrder', { id: 'o1', quantity: 3, currency: 'EUR' });
+
+    // the older realm never sees a shape it cannot read, and runs no migration code of its own
+    expect(handled).toHaveBeenCalledWith({ id: 'o1', quantity: 3 });
+    checkout.close();
+    legacy.close();
+  });
+
+  it('rejects the raise when the remote handler throws', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => { throw new Error('no such invoice'); } });
+    await announced();
+
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toThrow('no such invoice');
+    blotter.close();
+    billing.close();
+  });
+
+  it('forgets a realm that closes, and answers its pending calls at once', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => new Promise(() => undefined) });
+    await announced();
+
+    const pending = blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+    billing.close();
+
+    await expect(pending).rejects.toThrow('closed');
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toBeInstanceOf(NoIntentHandlerError);
+    blotter.close();
+  });
+
+  it('drops a handler from the directory when it is removed', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const stop = billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+    stop();
+    await announced();
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    blotter.close();
+    billing.close();
+  });
+
+  it('times out a handler that never answers', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire, { intentTimeoutMs: 20 });
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => new Promise(() => undefined) });
+    await announced();
+
+    await expect(blotter.raiseIntent('ViewInvoice', { id: 'o1' })).rejects.toThrow('did not answer');
+    blotter.close();
+    billing.close();
+  });
+
+  it('lets a raise made as the bus starts wait for the directory, as a real channel delivers later', async () => {
+    const sync = wirePair();
+    // a BroadcastChannel delivers on a later task, not during postMessage
+    const wire = (name: string) => {
+      const endpoint = sync(name);
+      return { ...endpoint, postMessage: (message: unknown) => void setTimeout(() => endpoint.postMessage(message), 1) };
+    };
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+
+    const blotter = realm('blotter', wire);
+    const result = await blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+
+    expect(result.handled[0]!.result).toBe('ok');
+    blotter.close();
+    billing.close();
+  });
+
+  it('does not reach another tab, and without a page stays within the bus', async () => {
+    const wire = wirePair();
+    const otherTab = realm('billing', wire, { page: 'tab-2' });
+    otherTab.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+    const noPage = createEventBus({ consumer: 'cli', invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire });
+    noPage.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+
+    const blotter = realm('blotter', wire);
+    await announced();
+
+    expect(blotter.candidates('ViewInvoice').eligible).toEqual([]);
+    [otherTab, noPage, blotter].forEach((bus) => bus.close());
+  });
+});
+
+describe('the collections a bus needs', () => {
+  it('names every collection the bus writes, for drivers that declare them up front', async () => {
+    const { EVENT_BUS_COLLECTIONS } = await import('./events.js');
+    const touched = new Set<string>();
+    const memory = memoryRecordDriver();
+    const driver = new Proxy(memory, {
+      get: (target, prop) => (typeof (target as never)[prop] === 'function'
+        ? (collection: string, ...rest: unknown[]) => (touched.add(collection), ((target as never)[prop] as (...args: unknown[]) => unknown)(collection, ...rest))
+        : (target as never)[prop]),
+    });
+    const bus = createEventBus({ consumer: 'a', driver, consumers: ['a'], invalidator: createInvalidator({ partition: 'p' }) });
+    bus.channel('selection', { persist: true }).broadcast({ id: 1 });
+    await bus.channel('orders').emit('placed', { id: 1 }, { delivery: 'at-least-once' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect([...touched].sort()).toEqual([...EVENT_BUS_COLLECTIONS].sort());
+    bus.close();
+  });
+});
+
+describe('intents across realms, when things go wrong', () => {
+  const announced = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const realm = (consumer: string, wire: (name: string) => BroadcastChannelLike, extra: Partial<Parameters<typeof createEventBus>[0]> = {}) =>
+    createEventBus({ consumer, invalidator: createInvalidator({ partition: 'p' }), broadcastChannel: wire, page: 'tab-1', ...extra });
+  const INTENTS = 'skew:events:default:page:tab-1:#intents';
+
+  it('leaves nothing unhandled when the handling realm closes mid-call', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const wire = wirePair();
+      const blotter = realm('blotter', wire);
+      const billing = realm('billing', wire);
+      let finish!: (value: string) => void;
+      billing.addIntentListener('ViewInvoice', { handler: () => new Promise<string>((resolve) => (finish = resolve)) });
+      await announced();
+
+      const raised = blotter.raiseIntent('ViewInvoice', { id: 'o1' });
+      await announced();
+      billing.close();
+      finish('late');
+      await expect(raised).rejects.toThrow('closed');
+      await announced();
+
+      expect(unhandled).not.toHaveBeenCalled();
+      blotter.close();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('stops offering a realm that stopped answering, so the next raise reaches one that does', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire, { intentTimeoutMs: 20 });
+    const live = realm('billing', wire);
+    live.addIntentListener('ViewInvoice', { handler: () => 'live', priority: 1 });
+    // a realm that crashed after announcing a higher-priority handler, and never said goodbye
+    wire(INTENTS).postMessage({ kind: 'intents-list', from: 'ghost', handlers: [{ id: 'h', intent: 'ViewInvoice', consumer: 'ghost', label: 'ghost', priority: 5 }] });
+    await announced();
+
+    await expect(blotter.raiseIntent('ViewInvoice', {})).rejects.toThrow('did not answer');
+    const next = await blotter.raiseIntent('ViewInvoice', {});
+
+    expect(next.handled[0]!.result).toBe('live');
+    blotter.close();
+    live.close();
+  });
+
+  it('ignores announcements of the wrong shape, and answers that come from the wrong realm', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    billing.addIntentListener('ViewInvoice', { handler: () => new Promise((resolve) => setTimeout(() => resolve('real'), 20)) });
+    const other = wire(INTENTS);
+    other.postMessage({ kind: 'intents-list', from: 'junk', handlers: [null, { intent: 1 }] });
+    other.postMessage({ kind: 'intents-list', from: 'junk2' });
+    await announced();
+
+    expect(blotter.candidates('ViewInvoice').eligible.map((candidate) => candidate.consumer)).toEqual(['billing']);
+    // a forged answer to the call, from a realm the call did not go to
+    other.addEventListener('message', (event) => {
+      const message = event.data as { kind: string; call?: string; from?: string };
+      if (message.kind === 'intent-call') other.postMessage({ kind: 'intent-return', call: message.call, from: 'forger', to: message.from, ok: true, result: 'FORGED' });
+    });
+    const result = await blotter.raiseIntent('ViewInvoice', {});
+
+    expect(result.handled[0]!.result).toBe('real');
+    blotter.close();
+    billing.close();
+  });
+
+  it('says goodbye entering the back-forward cache, and hello again coming back', async () => {
+    const page = new EventTarget();
+    vi.stubGlobal('window', page);
+    try {
+      const wire = wirePair();
+      const blotter = realm('blotter', wire);
+      vi.unstubAllGlobals();
+      const billing = realm('billing', wire);
+      blotter.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+      await announced();
+      expect(billing.candidates('ViewInvoice').eligible).toHaveLength(1);
+
+      page.dispatchEvent(Object.assign(new Event('pagehide'), { persisted: true }));
+      expect(billing.candidates('ViewInvoice').eligible).toHaveLength(0);
+      page.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+      await announced();
+
+      expect(billing.candidates('ViewInvoice').eligible).toHaveLength(1);
+      vi.stubGlobal('window', page);
+      blotter.close();
+      billing.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not offer a versioned remote handler to a raiser with no contract to project with', async () => {
+    const wire = wirePair();
+    const raiser = realm('checkout', wire);
+    const legacy = realm('legacy', wire);
+    legacy.register('PlaceOrder', Order);
+    legacy.addIntentListener('PlaceOrder', { handler: vi.fn(), as: 1 });
+    await announced();
+
+    const { eligible, ineligible } = raiser.candidates('PlaceOrder');
+
+    expect(eligible).toEqual([]);
+    expect(ineligible).toEqual([expect.objectContaining({ consumer: 'legacy' })]);
+    await expect(raiser.raiseIntent('PlaceOrder', { id: 'o1', quantity: 1, currency: 'EUR' })).rejects.toBeInstanceOf(NoIntentHandlerError);
+    raiser.close();
+    legacy.close();
+  });
+
+  it('reports a handler removed between the directory and the call as nothing to handle it', async () => {
+    const wire = wirePair();
+    const blotter = realm('blotter', wire);
+    const billing = realm('billing', wire);
+    const stop = billing.addIntentListener('ViewInvoice', { handler: () => 'ok' });
+    await announced();
+    stop();
+
+    // the removal has not been announced yet when the raise goes out
+    await expect(blotter.raiseIntent('ViewInvoice', {})).rejects.toBeInstanceOf(NoIntentHandlerError);
+    blotter.close();
+    billing.close();
+  });
+
+  it('runs a handler once, even when it throws "nothing can handle this" in the bus\'s first moments', async () => {
+    const wire = wirePair();
+    const bus = realm('blotter', wire);
+    const handler = vi.fn(() => {
+      throw new NoIntentHandlerError('Downstream', []);
+    });
+    bus.addIntentListener('ViewInvoice', { handler });
+
+    await expect(bus.raiseIntent('ViewInvoice', {})).rejects.toBeInstanceOf(NoIntentHandlerError);
+    expect(handler).toHaveBeenCalledTimes(1);
+    bus.close();
+  });
+});
+
+describe('persisted state, when things go wrong', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('reports a value it cannot clone or store, rather than throwing from broadcast', () => {
+    const reported = vi.fn();
+    const bus = createEventBus({ consumer: 'a', driver: memoryRecordDriver(), invalidator: createInvalidator({ partition: 'p' }), onEventError: reported });
+    bus.channel('selection', { persist: true }).subscribe(vi.fn());
+
+    expect(() => bus.channel('selection', { persist: true }).broadcast({ render: () => 1 })).not.toThrow();
+    expect(reported).toHaveBeenCalledWith(expect.stringContaining('could not be stored'), expect.anything());
+    bus.close();
+  });
+
+  it('delivers after sign-out, when no partition is active, and reports that it could not store', () => {
+    const reported = vi.fn();
+    let signedIn = true;
+    const bus = createEventBus({
+      consumer: 'a',
+      driver: memoryRecordDriver(),
+      invalidator: createInvalidator({ partition: 'p' }),
+      onEventError: reported,
+      partition: () => {
+        if (!signedIn) throw new Error('no partition is active');
+        return 'user:ana';
+      },
+    });
+    const seen = vi.fn();
+    const selection = bus.channel('selection', { persist: true });
+    selection.subscribe(seen);
+    signedIn = false;
+
+    expect(() => selection.broadcast({ id: 1 })).not.toThrow();
+    expect(seen).toHaveBeenCalledWith({ id: 1 });
+    expect(reported).toHaveBeenCalled();
+  });
+
+  it('refuses to reopen a channel with different storage or reach, rather than ignoring the difference', () => {
+    const bus = createEventBus({ consumer: 'a', driver: memoryRecordDriver(), invalidator: createInvalidator({ partition: 'p' }) });
+    bus.channel('selection');
+
+    expect(() => bus.channel('selection', { persist: true })).toThrow(/already open/);
+    expect(() => bus.channel('selection', { scope: 'origin' })).toThrow(/already open/);
+    expect(() => bus.channel('selection')).not.toThrow();
+    bus.close();
+  });
+
+  it('does not hand a build that has not registered the contract a value stored under it', async () => {
+    const driver = memoryRecordDriver();
+    const reported = vi.fn();
+    const writer = createEventBus({ consumer: 'a', driver, invalidator: createInvalidator({ partition: 'p' }) });
+    writer.register('orders', Order);
+    writer.channel('orders', { persist: true }).broadcast({ id: 'o1', quantity: 1, currency: 'EUR' });
+    await tick();
+    writer.close();
+
+    const reader = createEventBus({ consumer: 'a', driver, invalidator: createInvalidator({ partition: 'p' }), onEventError: reported });
+    const seen = vi.fn();
+    reader.channel('orders', { persist: true }).subscribe(seen);
+    await tick();
+
+    expect(seen).not.toHaveBeenCalled();
+    expect(reported).toHaveBeenCalledWith(expect.stringContaining('could not be read'), expect.anything());
+    reader.close();
+  });
+});

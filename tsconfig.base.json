@@ -27,6 +27,7 @@
       "@braidlabs/registry/node": ["./libs/braid-registry/src/node.ts"],
       "@braidlabs/registry/oidc": ["./libs/braid-registry/src/oidc.ts"],
       "@braidlabs/sw": ["./libs/braid-sw/src/index.ts"],
+      "@braidlabs/fdc3": ["./libs/braid-fdc3/src/index.ts"],
       "@braidlabs/gateway": ["./libs/braid-gateway/src/index.ts"],
       "@braidlabs/gateway/node": ["./libs/braid-gateway/src/node.ts"],
       "@braidlabs/build": ["./libs/build/src/index.ts"],

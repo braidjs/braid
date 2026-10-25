@@ -41,8 +41,15 @@ contacted during the first request that needs a manifest and never again.
 Two consequences worth stating plainly:
 
 1. The request path does not depend on the store past boot. That is the point.
-2. **Re-pinning takes effect on restart.** A config change is a deploy, visible wherever deploys
-   are visible. There is no hot re-pin.
+2. **Re-pinning takes effect on restart, unless you ask for hot re-pin.** By default a config
+   change is a deploy, visible wherever deploys are visible. Give the gateway `registryRefreshMs`
+   and a source that follows HEAD (no `pinned`), and a re-pin goes live within that interval
+   instead. A reload that finds HEAD unmoved costs one `head()` call. One that fails keeps the
+   current snapshot serving, and a `pinned` source never moves.
+
+   ```ts
+   createGateway({ registry: snapshotRegistry({ store }), registryRefreshMs: 15_000 });
+   ```
 
 ## Falling back
 
@@ -253,6 +260,37 @@ does, as you type — but that is a convenience for whoever is typing, not the d
 Drafts are deliberately not server state. Only published snapshots are, which keeps this to six
 routes and sidesteps multi-editor reconciliation; the cost is that drafts do not follow you between
 devices.
+
+## The registry as an FDC3 App Directory
+
+`appd` serves the registry as an FDC3 2.2 App Directory, from the same API, under the same `read`
+right — one URL to configure in any FDC3 desktop agent:
+
+```ts
+createRegistryApi({
+  store,
+  ...authorizer,
+  environments: [{ name: 'staging' }, { name: 'production', from: 'staging', approvals: 1 }],
+  appd: { origin: 'https://portal.example', environment: 'production' },
+});
+// GET /__braid/registry-api/appd/v2/apps          → { applications, message }
+// GET /__braid/registry-api/appd/v2/apps/billing  → the bare Application record
+```
+
+- **Governed.** With `environment`, the directory is that environment's pin, so an agent resolves
+  intents only to apps that were promoted — and approved, where production requires it. Without
+  it, HEAD is served.
+- **The same records as the gateway.** Manifests' `fdc3` and `appd` blocks are projected by the
+  gateway's `toAppdApplication`, validated in tests against FDC3's own schema. `origin` is the shell
+  the apps appear on; `details.url` and icons are absolute on it.
+- **Not per-user.** This is the governance view: it is not filtered by `access.list`. For a page's
+  own agent, where each user should see only what they may list, serve
+  `discovery: { appd: true }` from the gateway instead.
+- **Its own right.** The directory asks `authorize` for `read` with `{ resource: 'directory' }`, so
+  it can be opened to desktop agents without opening `/head` and `/snapshots`, which return whole
+  manifests. `createOidcAuthorizer` grants it to `'read:directory'` as well as `'read'`.
+- Errors are AppD's `{ code, message }`: 404 for an unknown app, 403 when `authorize` refuses `read`.
+  A `Response` from `authorize` (a 401 bearer challenge) is passed through.
 
 ## Shells
 
