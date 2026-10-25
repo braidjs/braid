@@ -151,8 +151,9 @@ async function fromEnvironment(): Promise<AwsContactConfig> {
   const table = required('RATE_LIMIT_TABLE');
   const contactTo = required('CONTACT_TO');
   const contactFrom = env['CONTACT_FROM'] || contactTo;
-  // From SSM rather than the environment: the Amplify app (which knows its domain and holds the
-  // rewrite) and this function can't reference each other directly without a cycle.
+  // The origin is in the environment when it's a fixed hostname. Otherwise it's in SSM: the Amplify
+  // app (which knows its default domain and holds the rewrite) and this function can't reference
+  // each other directly without a cycle.
   const [siteOrigin, proxySecret] = await Promise.all([
     env['SITE_ORIGIN'] || parameter(required('SITE_ORIGIN_PARAMETER')),
     parameter(required('PROXY_SECRET_PARAMETER')),

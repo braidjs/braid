@@ -19,6 +19,7 @@ beforeAll(() => {
   const stack = new SiteStack(app, 'Test', {
     env: { account: '111111111111', region: 'us-east-1' },
     contactTo: 'team@braid.example',
+    siteHostname: 'oss.braid.example',
     githubRepo: 'braidjs/braid',
     githubSubjectPrefix: 'repo:braidjs@316401299/braid@1326724459',
     githubEnvironment: 'site-production',
@@ -50,10 +51,17 @@ describe('the site stack', () => {
     expect(Object.keys(template.toJSON().Outputs ?? {}).sort()).toEqual(['AppId', 'PublishRoleArn', 'SiteUrl']);
   });
 
-  it('records the public origin, main.<default domain>, for the function to read', () => {
-    template.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: PARAMETERS.siteOrigin,
-      Value: { 'Fn::Join': ['', ['https://main.', { 'Fn::GetAtt': [Match.anyValue(), 'DefaultDomain'] }]] },
+  it('records the public origin, the custom hostname, for the function to read', () => {
+    template.hasResourceProperties('AWS::SSM::Parameter', { Name: PARAMETERS.siteOrigin, Value: 'https://oss.braid.example' });
+  });
+
+  it('attaches the hostname itself as the domain, so it claims no parent domain, serving main', () => {
+    template.resourceCountIs('AWS::Amplify::Domain', 1);
+    template.hasResourceProperties('AWS::Amplify::Domain', {
+      DomainName: 'oss.braid.example',
+      SubDomainSettings: [{ Prefix: '', BranchName: { 'Fn::GetAtt': [Match.stringLikeRegexp('^Main'), 'BranchName'] } }],
+      EnableAutoSubDomain: false,
+      CertificateSettings: Match.absent(),
     });
   });
 
@@ -65,6 +73,7 @@ describe('the site stack', () => {
         Variables: Match.objectLike({
           CONTACT_TO: 'team@braid.example',
           CONTACT_FROM: 'team@braid.example',
+          SITE_ORIGIN: 'https://oss.braid.example',
           SITE_ORIGIN_PARAMETER: PARAMETERS.siteOrigin,
           PROXY_SECRET_PARAMETER: PARAMETERS.proxySecret,
           TURNSTILE_SECRET_PARAMETER: PARAMETERS.turnstileSecret,

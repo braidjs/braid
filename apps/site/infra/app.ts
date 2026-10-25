@@ -10,7 +10,6 @@ import { SiteStack } from './stack';
  * Configured from the environment:
  *   CONTACT_TO       (required) the SES-verified inbox enquiries go to
  *   CONTACT_FROM     (optional) the sender; defaults to CONTACT_TO
- *   SITE_HOSTNAME    (optional) a custom domain, once there is one
  *   GITHUB_OIDC_PROVIDER_ARN (optional) reuse an existing GitHub OIDC provider in the account
  *   CONTACT_RESERVED_CONCURRENCY (optional) the contact function's reserved concurrency; default 5,
  *                    `none` for accounts too new to reserve any
@@ -48,7 +47,8 @@ new SiteStack(app, 'BraidSite', {
   description: 'The public Braid site: Amplify hosting, the contact form Lambda, and the role CI publishes with.',
   contactTo,
   ...(process.env['CONTACT_FROM'] ? { contactFrom: process.env['CONTACT_FROM'] } : {}),
-  ...(process.env['SITE_HOSTNAME'] ? { siteHostname: process.env['SITE_HOSTNAME'] } : {}),
+  // Fixed here, not from the environment: a deploy that forgot it would delete the domain.
+  siteHostname: 'oss.braidcloud.com',
   ...(process.env['GITHUB_OIDC_PROVIDER_ARN'] ? { githubOidcProviderArn: process.env['GITHUB_OIDC_PROVIDER_ARN'] } : {}),
   githubRepo: 'braidjs/braid',
   // The repo uses GitHub's immutable OIDC subjects: owner and repo by ID, not by name.
