@@ -17,6 +17,13 @@ export interface SiteStackProps extends StackProps {
   siteHostname?: string;
   /** The repository whose deploys may publish the site, e.g. braidjs/braid. */
   githubRepo: string;
+  /**
+   * The start of the repository's OIDC `sub` claim. With GitHub's immutable subjects (the repo's
+   * setting) it names the owner and repo by ID — `repo:braidjs@316401299/braid@1326724459` — so a
+   * different repository that later takes the same name can't match. Read it from
+   * `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` (`sub_claim_prefix`).
+   */
+  githubSubjectPrefix: string;
   /** The GitHub environment the publish job runs in. Only that environment can assume the role. */
   githubEnvironment: string;
   /** An existing GitHub OIDC provider in the account, if there is one; otherwise this stack makes it. */
@@ -130,7 +137,7 @@ export class SiteStack extends Stack {
         StringEquals: {
           'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
           // An environment, not a branch: any job on main would match a branch.
-          'token.actions.githubusercontent.com:sub': `repo:${props.githubRepo}:environment:${props.githubEnvironment}`,
+          'token.actions.githubusercontent.com:sub': `${props.githubSubjectPrefix}:environment:${props.githubEnvironment}`,
         },
       }),
     });
