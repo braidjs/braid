@@ -66,7 +66,6 @@ export function subnav(base: string): string {
     </a>
     <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0 26px; font-size: 15px; font-weight: 500">
       ${link(`${base}#how`, 'How it works')}
-      ${link(`${base}#braided`, 'No server')}
       ${link(`${DOCS}/`, 'Docs')}
       ${link(`${base}cheatsheet/`, 'Cheatsheet')}
       ${link('https://github.com/braidjs/braid', 'GitHub')}
