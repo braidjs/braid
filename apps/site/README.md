@@ -66,11 +66,24 @@ Do these once, in order, signed in as a non-root administrator. Replace `<accoun
    the deploy fails because the account can't reserve Lambda concurrency (new accounts sometimes
    can't), add `CONTACT_RESERVED_CONCURRENCY=none`. The outputs are in
    `apps/site/infra/cdk.out/outputs.json`. Add the `SiteUrl` hostname to the Turnstile widget.
-7. **In GitHub**, create the environment `site-production` (*Settings → Environments*), limited to
+7. **Point the domain at Amplify.** The site's hostname is set in `infra/app.ts`
+   (`oss.braidcloud.com`). The stack attaches that hostname, and only that hostname, to the Amplify
+   app. Its DNS zone is in another account (braid-cloud-prod), so Amplify can't add the records
+   itself. Read the two CNAMEs it wants, one to validate the certificate and one for the site:
+   ```bash
+   aws amplify get-domain-association --app-id <app-id> --domain-name oss.braidcloud.com --query 'domainAssociation.{status:domainStatus,cert:certificateVerificationDNSRecord,site:subDomains[0].dnsRecord}'
+   ```
+   Add both to the `braidcloud.com` zone with `aws route53 change-resource-record-sets --profile
+   braid-prod` (UPSERT, CNAME, TTL 300). Do it right away: Amplify stops waiting after a while.
+   The site is live once the status is `AVAILABLE`.
+   `main.<app-id>.amplifyapp.com` keeps serving the site, but its contact form returns 403, because
+   the form accepts posts only from the hostname. To undo all of this, revert the change, redeploy,
+   and delete the two records.
+8. **In GitHub**, create the environment `site-production` (*Settings → Environments*), limited to
    the `main` branch. Then set three repository variables (*Settings → Secrets and variables →
    Actions → Variables*): `AWS_PUBLISH_ROLE_ARN` and `AMPLIFY_APP_ID` from the stack's outputs, and
    `TURNSTILE_SITEKEY` from step 3.
-8. **Publish the first build** by running the *Site* workflow from the Actions tab. After that,
+9. **Publish the first build** by running the *Site* workflow from the Actions tab. After that,
    every push to `main` that touches the site publishes it.
 
 ## Checks for the first deploy
