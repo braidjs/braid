@@ -8,7 +8,7 @@ import { amplifyHeaders, PARAMETERS, SiteStack } from './stack';
 const workspace = resolve(import.meta.dirname, '../../..');
 let template: Template;
 
-type Statement = { Action: string | string[]; Condition?: Record<string, unknown> };
+type Statement = { Action: string | string[]; Resource?: unknown; Condition?: Record<string, unknown> };
 const statementsOf = (prefix: string): Statement[] =>
   Object.values(template.findResources('AWS::IAM::Policy', { Properties: { PolicyName: Match.stringLikeRegexp(`^${prefix}`) } })).flatMap(
     (p) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement,
@@ -106,6 +106,13 @@ describe('the site stack', () => {
 
   it('lets the publish role publish to Amplify and nothing else: no CDK roles, no infrastructure', () => {
     expect(statementsOf('PublishRole').flatMap((s) => s.Action).sort()).toEqual(['amplify:CreateDeployment', 'amplify:GetJob', 'amplify:StartDeployment']);
+  });
+
+  it('scopes the publish role to the main branch, its deployments and its jobs', () => {
+    // CreateDeployment is authorized against branches/main/deployments/*, which the service
+    // authorization reference does not list; without it the first publish is denied.
+    const resources = JSON.stringify(statementsOf('PublishRole').flatMap((s) => s.Resource));
+    for (const suffix of ['/branches/main"', '/branches/main/deployments/*"', '/branches/main/jobs/*"']) expect(resources).toContain(suffix);
   });
 
   it('expires rate-limit counters on their own', () => {

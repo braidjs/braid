@@ -146,6 +146,7 @@ export class SiteStack extends Stack {
         actions: ['amplify:CreateDeployment', 'amplify:StartDeployment', 'amplify:GetJob'],
         resources: [
           this.formatArn({ service: 'amplify', resource: 'apps', resourceName: `${app.attrAppId}/branches/main` }),
+          this.formatArn({ service: 'amplify', resource: 'apps', resourceName: `${app.attrAppId}/branches/main/deployments/*` }),
           this.formatArn({ service: 'amplify', resource: 'apps', resourceName: `${app.attrAppId}/branches/main/jobs/*` }),
         ],
       }),
