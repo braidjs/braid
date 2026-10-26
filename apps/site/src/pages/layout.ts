@@ -8,7 +8,8 @@ export const DOCS = 'https://braidjs.github.io/braid';
 
 /**
  * Where the site lives. Only what has to be absolute uses it: the canonical and share-card URLs,
- * the sitemap and the llms files. Everything else stays relative. Same hostname as infra/app.ts.
+ * the sitemap and the llms files. Everything else stays relative. Keep it the hostname the stack
+ * attaches to Amplify (infra/app.ts).
  */
 export const ORIGIN = 'https://oss.braidcloud.com';
 

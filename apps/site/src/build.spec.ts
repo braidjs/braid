@@ -150,13 +150,20 @@ describe('the built site', () => {
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1200, 630]);
   });
 
-  it('describes the project to search engines on the homepage only, claiming nothing the page does not', () => {
+  it('describes the project to search engines on the homepage only, with facts from the page and no rich-result claims', () => {
     const blocks = (page: string) => [...read(page).matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => m[1] ?? '');
     for (const page of PAGES.filter((p) => p !== 'index.html')) expect(blocks(page), page).toEqual([]);
+    expect(blocks('index.html')).toHaveLength(1);
     const [json = ''] = blocks('index.html');
     const data = JSON.parse(json) as { '@graph': Array<Record<string, unknown>> };
     expect(data['@graph'].map((node) => node['@type'])).toEqual(['WebSite', 'SoftwareSourceCode']);
-    expect(data['@graph'][1]).toMatchObject({ codeRepository: 'https://github.com/braidjs/braid', programmingLanguage: 'TypeScript' });
+    expect(data['@graph'][1]).toMatchObject({
+      codeRepository: 'https://github.com/braidjs/braid',
+      programmingLanguage: 'TypeScript',
+      description: meta(read('index.html'), 'name', 'description'),
+    });
+    // The license the data names is the one the page shows.
+    expect(read('index.html')).toContain('Open source · MIT');
     expect(json).not.toMatch(/aggregateRating|review|offers|SearchAction/);
   });
 
@@ -177,12 +184,13 @@ describe('the built site', () => {
       expect(existsSync(join(out, file.endsWith('/') || file === '' ? `${file}index.html` : file)), url).toBe(true);
     }
     const full = read('llms-full.txt');
-    for (const heading of [...SECTION_HEADINGS, 'Braid puts apps from different teams on one page', '# The cheatsheet.']) {
+    // "How this page<br>is braided." keeps its space.
+    for (const heading of [...SECTION_HEADINGS, 'Braid puts apps from different teams on one page', '# The cheatsheet.', '# How this page is braided.']) {
       expect(full, heading).toContain(heading);
     }
     expect(full).toContain('```\nimport { defineFragment }');
-    // Markup and entities left in the text mean a section uses an element the converter doesn't know.
-    // Code blocks are exempt: their examples are HTML on purpose.
+    // An unknown element already fails the build (markdown.ts); this catches attribute and entity
+    // leaks. Code blocks are exempt: their examples are HTML on purpose.
     expect(full.replace(/```[\s\S]*?```/g, '')).not.toMatch(/<(span|div|p|b|a|br|svg|dt|dd|li|table|t[rdh]|code|h[1-6])\b|style="|&(lt|gt|amp|quot|#160);|%BASE%|%CONTACT%|Show the seams/);
   });
 

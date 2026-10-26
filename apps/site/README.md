@@ -14,15 +14,15 @@ reads fine before JavaScript runs.
 
 ## Search engines and AI crawlers
 
-Every page has a canonical URL on `https://oss.braidcloud.com` (`ORIGIN` in `src/pages/layout.ts`,
-the same hostname as `infra/app.ts`), plus share-card tags. The homepage also has JSON-LD.
+Every page has a canonical URL on `https://oss.braidcloud.com` (`ORIGIN` in `src/pages/layout.ts`;
+keep it the hostname the stack attaches), plus share-card tags. The homepage also has JSON-LD.
 `src/pages/crawl.ts` generates `robots.txt`, `sitemap.xml`, `llms.txt` and `llms-full.txt` from the
 page list.
 
 The homepage sections are declarative shadow DOM. Search engines render that, but most AI crawlers
 skip `<template>` content, so `llms-full.txt` gives them the same words as plain text. It's built
-from the section sources, so it stays in step with the page. If a section uses a new kind of
-element, the build spec fails on any markup left in the text.
+from the section sources by `src/pages/markdown.ts`, so it stays in step with the page. If a section
+uses an element that file has no rule for, the build stops and says which.
 
 **The share card.** `og.png` is drawn by `og/card.html`, which isn't shipped. After changing the
 card, re-render it (Chrome, network access for the fonts):
