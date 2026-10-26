@@ -12,6 +12,25 @@ reads fine before JavaScript runs.
 | `npx nx test site` | build output, the contact handler, the Lambda adapter, the form script and the AWS stack |
 | `npx nx run site:infra-synth` / `infra-diff` / `infra-deploy` | the AWS stack (needs `CONTACT_TO`; see below) |
 
+## Search engines and AI crawlers
+
+Every page has a canonical URL on `https://oss.braidcloud.com` (`ORIGIN` in `src/pages/layout.ts`,
+the same hostname as `infra/app.ts`), plus share-card tags. The homepage also has JSON-LD.
+`src/pages/crawl.ts` generates `robots.txt`, `sitemap.xml`, `llms.txt` and `llms-full.txt` from the
+page list.
+
+The homepage sections are declarative shadow DOM. Search engines render that, but most AI crawlers
+skip `<template>` content, so `llms-full.txt` gives them the same words as plain text. It's built
+from the section sources, so it stays in step with the page. If a section uses a new kind of
+element, the build spec fails on any markup left in the text.
+
+**The share card.** `og.png` is drawn by `og/card.html`, which isn't shipped. After changing the
+card, re-render it (Chrome, network access for the fonts):
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 --virtual-time-budget=8000 --screenshot="$PWD/apps/site/src/static/og.png" "file://$PWD/apps/site/og/card.html"
+```
+
 ## How it's hosted
 
 On AWS, in one CDK stack (`infra/stack.ts`):
