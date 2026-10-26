@@ -7,6 +7,15 @@ const FONTS =
 export const DOCS = 'https://braidjs.github.io/braid';
 
 /**
+ * Where the site lives. Only what has to be absolute uses it: the canonical and share-card URLs,
+ * the sitemap and the llms files. Everything else stays relative. Same hostname as infra/app.ts.
+ */
+export const ORIGIN = 'https://oss.braidcloud.com';
+
+/** A page's public URL, from where its file goes: `cheatsheet/index.html` → `…/cheatsheet/`. */
+export const canonicalUrl = (path: string) => `${ORIGIN}/${path.replace(/(^|\/)index\.html$/, '$1')}`;
+
+/**
  * The Turnstile site key the contact form renders with. CI sets the real one; without it, local
  * builds use Cloudflare's published test key, which always passes.
  */
@@ -15,17 +24,26 @@ const TURNSTILE_SITEKEY = process.env['SITE_TURNSTILE_SITEKEY'] || '1x0000000000
 export interface Page {
   /** Where the file goes in the output, e.g. `cheatsheet/index.html`. */
   path: string;
+  /** The file's content: a page's HTML, or the text of a crawler file. */
   html: string;
+  /** Kept out of search results and the sitemap. */
+  noindex?: boolean;
 }
 
 interface LayoutOptions {
+  /** The page's own `Page.path`, for its canonical URL. */
+  path: string;
   title: string;
   description: string;
-  /** The relative way back to the site root from this page: `./` or `../`. Keeps the site movable. */
+  /**
+   * The relative way back to the site root from this page: `./` or `../`. Keeps the site movable,
+   * apart from the canonical and share-card tags, which name ORIGIN on purpose.
+   */
   base: string;
   body: string;
   /** Load the host runtime. Only the homepage composes fragments. */
   braid?: boolean;
+  noindex?: boolean;
   /** Extra tags for <head>, e.g. the contact page's scripts. `%BASE%` works here too. */
   head?: string;
   bodyAttributes?: string;
@@ -33,7 +51,8 @@ interface LayoutOptions {
 
 const escapeAttr = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-export function layout({ title, description, base, body, braid = false, head = '', bodyAttributes = '' }: LayoutOptions): string {
+export function layout({ path, title, description, base, body, braid = false, noindex = false, head = '', bodyAttributes = '' }: LayoutOptions): string {
+  const url = escapeAttr(canonicalUrl(path));
   // Every "Get in touch" link reads %CONTACT%: the contact page, relative, so the site stays movable.
   const fill = (html: string) =>
     html
@@ -47,6 +66,17 @@ export function layout({ title, description, base, body, braid = false, head = '
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeAttr(title)}</title>
 <meta name="description" content="${escapeAttr(description)}">
+<link rel="canonical" href="${url}">
+${noindex ? '<meta name="robots" content="noindex">\n' : ''}<meta property="og:type" content="website">
+<meta property="og:site_name" content="Braid">
+<meta property="og:title" content="${escapeAttr(title)}">
+<meta property="og:description" content="${escapeAttr(description)}">
+<meta property="og:url" content="${url}">
+<meta property="og:image" content="${ORIGIN}/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Braid: the safe microfrontend orchestrator">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="${base}favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

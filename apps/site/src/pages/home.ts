@@ -1,6 +1,6 @@
 import { sections } from '../fragments';
 import { frame } from '../shared/frame';
-import { layout, type Page } from './layout';
+import { DOCS, layout, ORIGIN, type Page } from './layout';
 import masthead from './partials/masthead.html';
 
 /**
@@ -17,15 +17,39 @@ function section({ name, id, markup }: (typeof sections)[number]): string {
 </div>`;
 }
 
+export const HOME_DESCRIPTION =
+  'Braid puts apps from different teams on one page. It untangles the libraries they would share and catches contract skew before your users do.';
+
+/** What search engines read about the project. Only facts the page itself states. */
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    { '@type': 'WebSite', name: 'Braid', url: `${ORIGIN}/`, description: HOME_DESCRIPTION },
+    {
+      '@type': 'SoftwareSourceCode',
+      name: 'Braid',
+      description: HOME_DESCRIPTION,
+      url: `${ORIGIN}/`,
+      codeRepository: 'https://github.com/braidjs/braid',
+      programmingLanguage: 'TypeScript',
+      license: 'https://opensource.org/licenses/MIT',
+      sameAs: [`${DOCS}/`, 'https://www.npmjs.com/package/@braidlabs/core'],
+    },
+  ],
+};
+
 export function home(): Page {
+  const path = 'index.html';
   return {
-    path: 'index.html',
+    path,
     html: layout({
+      path,
       title: 'Braid — the safe microfrontend orchestrator',
-      description:
-        'Braid puts apps from different teams on one page. It untangles the libraries they would share and catches contract skew before your users do.',
+      description: HOME_DESCRIPTION,
       base: './',
       braid: true,
+      // `<` escaped so no string in the data can close the script element.
+      head: `<script type="application/ld+json">${JSON.stringify(structuredData).replace(/</g, '\\u003c')}</script>`,
       bodyAttributes: 'data-seams',
       body: `${masthead}\n<main>\n${sections.map(section).join('\n')}\n</main>`,
     }),
