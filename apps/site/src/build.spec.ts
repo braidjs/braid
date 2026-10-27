@@ -185,8 +185,12 @@ describe('the built site', () => {
     }
     // Served without a charset, so anything past ASCII would be misread (see crawl.ts).
     for (const file of ['llms.txt', 'llms-full.txt']) expect(read(file), file).toMatch(/^[\t\n\r -~]*$/);
-    expect(index).toContain('# Braid\n\n> Braid puts apps');
+    // The spellings themselves, so a change that drops characters can't pass as ASCII.
+    expect(index).toContain('[Braid -- the safe microfrontend orchestrator]');
     const full = read('llms-full.txt');
+    expect(full).toContain('[1] Apps you can');
+    expect(full).toContain('-- that');
+    expect(full).not.toMatch(/^- that's the whole idea/m);
     // "How this page<br>is braided." keeps its space.
     for (const heading of [...SECTION_HEADINGS, 'Braid puts apps from different teams on one page', '# The cheatsheet.', '# How this page is braided.']) {
       expect(full, heading).toContain(heading);
