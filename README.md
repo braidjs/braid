@@ -101,7 +101,7 @@ All packages are published under [`@braidlabs`](https://www.npmjs.com/org/braidl
 | **Operations**         | [`@braidlabs/registry`](libs/braid-registry)           | Snapshots, validation, the write API, environments, ownership, audit, GitOps    |
 |                        | [`@braidlabs/console`](libs/braid-console)             | Registry console: fragments, shell designer, history and rollback               |
 |                        | [`@braidlabs/cli`](libs/braid-cli)                     | `braid dev`, scaffolding, registry commands, `detangle` off module federation   |
-| **Interop**            | [`@braidlabs/fdc3`](libs/braid-fdc3)                   | FDC3 2.2 Desktop Agent: `window.fdc3` per fragment, over the App Directory      |
+| **Interop**            | [`@braidlabs/fdc3`](libs/braid-fdc3)                   | FDC3 3.0 Desktop Agent: `window.fdc3` per fragment, over the App Directory      |
 | **Version skew**       | [`@braidlabs/skew`](libs/skew)                         | Versioned envelopes, migration chains, build identity. No dependencies          |
 |                        | [`@braidlabs/contract`](libs/contract)                 | Migrations published as a document an API serves and clients resolve            |
 |                        | [`@braidlabs/build`](libs/build)                       | `skew-stamp` and `skew-contract`: build identity and contract types             |

@@ -19,10 +19,20 @@ import {
   DesktopAgentProxy,
   type RegisterableListener,
 } from '@finos/fdc3-agent-proxy';
-import { ChannelError, LogLevel, OpenError, type AppIdentifier, type AppIntent, type DesktopAgent } from '@finos/fdc3-standard';
+import {
+  ChannelError,
+  CloseError,
+  LogLevel,
+  OpenError,
+  ResolveError,
+  type AppIdentifier,
+  type AppIntent,
+  type Context,
+  type DesktopAgent,
+} from '@finos/fdc3-standard';
 
 /**
- * An FDC3 2.2 Desktop Agent for one Braid page.
+ * An FDC3 3.0 Desktop Agent for one Braid page.
  *
  * The page is the desktop: the host runs the agent, and each composed fragment is an app instance
  * on it. The agent is the FINOS reference implementation — `DefaultFDC3Server` from
@@ -43,7 +53,8 @@ export interface BraidDesktopAgentOptions {
   /**
    * The App Directory records the agent resolves against — the `applications` of a Braid AppD
    * listing (`createRegistryApi({ appd })` or the gateway's `discovery: { appd: true }`). Each
-   * record's `appId` is a fragment id; a fragment with no record gets no `fdc3`.
+   * record's `appId` is a fragment id; a fragment with no record gets no `fdc3`, and neither does
+   * one whose record's `fdc3Version` range excludes 3.0.
    */
   directory: readonly DirectoryApp[];
 }
@@ -56,6 +67,8 @@ export interface BraidDesktopAgent {
   realmGlobals(fragment: { fragmentId: string; signal: AbortSignal }): Promise<{ fdc3: DesktopAgent } | undefined>;
 }
 
+/** The FDC3 version the agent implements; the directory drops records whose `fdc3Version` excludes it. */
+const FDC3_VERSION = '3.0';
 /** A request is answered within this, or the proxy reports `ApiTimeout`. */
 const MESSAGE_TIMEOUT_MS = 10_000;
 /** How long a raised intent may take to be handled. */
@@ -85,7 +98,7 @@ const NO_UI = {
 
 export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): BraidDesktopAgent {
   // a directory that failed to load is an empty one, not a page that fails to compose
-  const directory = new BasicDirectory(Array.isArray(options.directory) ? [...options.directory] : []);
+  const directory = new BasicDirectory(Array.isArray(options.directory) ? [...options.directory] : [], FDC3_VERSION);
   const context = new BraidServerContext(taskQueue());
   const userChannels: ChannelState[] = USER_CHANNELS.map(([color, glyph]) => ({
     id: `fdc3.channel.${glyph}`,
@@ -96,7 +109,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   const server = new DefaultFDC3Server(context, directory, userChannels, false, INTENT_TIMEOUT_MS, MESSAGE_TIMEOUT_MS);
   // which instances are listening for what: the agent's intent handler is the source of truth
   const intentHandler = server.handlers.find((handler): handler is IntentHandler => handler instanceof IntentHandler);
-  context.hasListener = (instanceId, intent) => intentHandler?.hasListener(instanceId, intent) ?? false;
+  context.hasListener = (instanceId, intent, contextType) => intentHandler?.hasListener(instanceId, intent, contextType) ?? false;
 
   async function connect(appId: string, signal: AbortSignal): Promise<DesktopAgent | undefined> {
     const instanceId = context.createUUID();
@@ -179,8 +192,13 @@ class InProcessMessaging extends AbstractMessaging {
    */
   async post(message: object): Promise<void> {
     if (!this.#isOpen()) return this.#refuse(message, 'AgentDisconnected');
-    // launching a fragment is the host's to do, and is not wired yet
-    if ((message as { type?: unknown }).type === 'openRequest') return this.#refuse(message, OpenError.ErrorOnLaunch);
+    // launching a fragment is the host's to do, and is not wired yet: neither `open` nor a raise
+    // that asks for a new instance (the agent would hand that to the instance already running)
+    const { type: kind, payload: request } = message as { type?: unknown; payload?: { newInstance?: unknown } };
+    if (kind === 'openRequest') return this.#refuse(message, OpenError.ErrorOnLaunch);
+    if ((kind === 'raiseIntentRequest' || kind === 'raiseIntentForContextRequest') && request?.newInstance === true) {
+      return this.#refuse(message, ResolveError.TargetAppUnavailable);
+    }
     let copy: object;
     try {
       // a clone, as a MessagePort would make: neither side holds the other's objects
@@ -283,8 +301,8 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   private readonly deliveries = new Map<InstanceID, (message: object) => void>();
   constructor(private readonly schedule: (task: () => void) => void) {}
 
-  /** Whether an instance has an intent listener for `intent`; set by the agent. */
-  hasListener: (instanceId: InstanceID, intent: string) => boolean = () => false;
+  /** Whether an instance has an intent listener for `intent` (and `contextType`, if given); set by the agent. */
+  hasListener: (instanceId: InstanceID, intent: string, contextType?: string) => boolean = () => false;
 
   /** Live instances of an app, oldest first. */
   private live(appId: string): AppRegistration[] {
@@ -298,13 +316,17 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    * as a request to launch the app, which a Braid page cannot do.
    */
   targetInstance(message: object): object {
-    const { type, payload } = message as { type?: unknown; payload?: { intent?: unknown; app?: { appId?: unknown; instanceId?: unknown } } };
+    const { type, payload } = message as {
+      type?: unknown;
+      payload?: { intent?: unknown; context?: { type?: unknown }; app?: { appId?: unknown; instanceId?: unknown } };
+    };
     const app = payload?.app;
     if (type !== 'raiseIntentRequest' || typeof payload?.intent !== 'string' || typeof app?.appId !== 'string' || app.instanceId) {
       return message;
     }
     const live = this.live(app.appId);
-    const listening = live.filter((instance) => this.hasListener(instance.instanceId, payload.intent as string));
+    const contextType = typeof payload.context?.type === 'string' ? payload.context.type : undefined;
+    const listening = live.filter((instance) => this.hasListener(instance.instanceId, payload.intent as string, contextType));
     const target = listening.length === 1 ? listening[0] : listening.length === 0 && live.length === 1 ? live[0] : undefined;
     return target ? { ...message, payload: { ...payload, app: { appId: target.appId, instanceId: target.instanceId } } } : message;
   }
@@ -335,8 +357,12 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     return this.live(appId)[0]?.instanceId ?? this.createUUID();
   }
 
+  /**
+   * `fdc3.close()`, refused: fragments are torn down by their host, not by the agent. The agent
+   * answers a close only when this throws, so a no-op would leave the app waiting out its timeout.
+   */
   async close(): Promise<void> {
-    // fragments are torn down by their host, not by the agent
+    throw new Error(CloseError.ErrorOnClose);
   }
 
   setFDC3Server(): void {
@@ -388,24 +414,24 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   }
 
   fdc3Version(): string {
-    return '2.2';
+    return FDC3_VERSION;
   }
 
   /**
    * The candidates an intent may go to, given that nothing can be launched:
    *
-   * - an instance only once it listens for the intent — before then, sending it the intent would
-   *   lose it;
+   * - an instance only once it listens for the intent, for this context's type — before then,
+   *   sending it the intent would lose it;
    * - an app without an instance (the directory's entry) only while one is mounted and none of its
    *   instances listens yet — the agent then holds the intent until the listener arrives.
    *
    * An app with no live instance drops out, which makes the raise a clean `NoAppsFound`.
    */
-  async narrowIntents(_raiser: AppIdentifier, appIntents: AppIntent[]): Promise<AppIntent[]> {
+  async narrowIntents(_raiser: AppIdentifier, appIntents: AppIntent[], context?: Context): Promise<AppIntent[]> {
     return appIntents
       .map((appIntent) => {
         const listening = appIntent.apps.filter(
-          (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name),
+          (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name, context?.type),
         );
         const waiting = appIntent.apps.filter(
           (app) =>

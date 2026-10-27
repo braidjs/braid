@@ -13,10 +13,15 @@ const manifests: FragmentManifest[] = [
     id: 'billing',
     endpoint: 'https://billing.internal',
     title: 'Billing',
-    fdc3: { listensFor: { ViewInvoice: { contexts: ['fdc3.instrument'], resultType: 'fdc3.invoice' } } },
+    fdc3: { listensFor: { ViewInvoice: { contexts: ['fdc3.instrument', 'fdc3.country'], resultType: 'fdc3.invoice' } } },
   },
   { id: 'blotter', endpoint: 'https://blotter.internal', title: 'Blotter' },
-  { id: 'chart', endpoint: 'https://chart.internal', title: 'Chart' },
+  {
+    id: 'chart',
+    endpoint: 'https://chart.internal',
+    title: 'Chart',
+    fdc3: { listensFor: { RefreshChart: { contexts: ['fdc3.nothing'] } } },
+  },
   {
     id: 'research',
     endpoint: 'https://research.internal',
@@ -59,7 +64,7 @@ describe('a Braid page as an FDC3 desktop', () => {
     const { fdc3 } = await mount('billing');
 
     const info = await fdc3.getInfo();
-    expect(info.fdc3Version).toBe('2.2');
+    expect(info.fdc3Version).toBe('3.0');
     expect(info.provider).toBe('Braid');
     expect(info.appMetadata.appId).toBe('billing');
     expect(info.appMetadata.instanceId).toEqual(expect.any(String));
@@ -306,6 +311,139 @@ describe('a Braid page as an FDC3 desktop', () => {
 
     await expect(blotter.open({ appId: 'billing' })).rejects.toThrow('ErrorOnLaunch');
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('refuses fdc3.close at once, since a fragment is torn down by its host, and keeps working', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const started = Date.now();
+
+    await expect(blotter.close()).rejects.toThrow('ErrorOnClose');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect((await blotter.getInfo()).appMetadata.appId).toBe('blotter');
+    expect(await blotter.findInstances({ appId: 'blotter' })).toHaveLength(1);
+  });
+
+  it.each([
+    ['with no target', (fdc3: DesktopAgent) => fdc3.raiseIntent('ViewInvoice', instrument, undefined, true)],
+    ['naming the app', (fdc3: DesktopAgent) => fdc3.raiseIntent('ViewInvoice', instrument, { appId: 'billing' }, true)],
+    ['for a context', (fdc3: DesktopAgent) => fdc3.raiseIntentForContext(instrument, undefined, true)],
+    [
+      'naming the instance',
+      async (fdc3: DesktopAgent) =>
+        fdc3.raiseIntent('ViewInvoice', instrument, (await fdc3.findInstances({ appId: 'billing' }))[0], true),
+    ],
+  ])('refuses a raise that asks for a new instance at once, %s, since nothing can be launched yet', async (_, raise) => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const { mount } = await setup();
+      const blotter = (await mount('blotter')).fdc3;
+      const handled = vi.fn();
+      await (await mount('billing')).fdc3.addIntentListener('ViewInvoice', handled);
+      const started = Date.now();
+
+      await expect(raise(blotter)).rejects.toThrow('TargetAppUnavailable');
+      expect(Date.now() - started).toBeLessThan(1_000);
+      await settle();
+      // not quietly handed to the instance that is already running
+      expect(handled).not.toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('gives a raise that asks for an existing instance to the live one, and refuses it when there is none', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const handled = vi.fn();
+    await (await mount('billing')).fdc3.addIntentListener('ViewInvoice', handled);
+
+    const resolution = await blotter.raiseIntent('ViewInvoice', instrument, { appId: 'billing' }, false);
+    await settle();
+    expect(resolution.source.appId).toBe('billing');
+    expect(handled).toHaveBeenCalledTimes(1);
+
+    // research declares ViewResearch but is not mounted
+    const started = Date.now();
+    await expect(blotter.raiseIntent('ViewResearch', instrument, { appId: 'research' }, false)).rejects.toThrow(
+      'TargetInstanceUnavailable',
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('refuses a raise that asks for an existing instance with no target while the only one is still booting', async () => {
+    // FINOS 3.0 needs a listening instance for this; naming the app (above) is held instead
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    await mount('billing');
+
+    await expect(blotter.raiseIntent('ViewInvoice', instrument, undefined, false)).rejects.toThrow(
+      'TargetInstanceUnavailable',
+    );
+  });
+
+  it('gives an intent only to the instance listening for its context type', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const forInstrument = vi.fn();
+    const forCountry = vi.fn();
+    await (await mount('billing')).fdc3.addIntentListenerWithContext('ViewInvoice', 'fdc3.instrument', forInstrument);
+    await (await mount('billing')).fdc3.addIntentListenerWithContext('ViewInvoice', 'fdc3.country', forCountry);
+    const country: Context = { type: 'fdc3.country', id: { ISOALPHA2: 'GB' } };
+
+    await blotter.raiseIntent('ViewInvoice', country);
+    await blotter.raiseIntent('ViewInvoice', country, { appId: 'billing' });
+    await settle();
+
+    expect(forCountry).toHaveBeenCalledTimes(2);
+    expect(forInstrument).not.toHaveBeenCalled();
+  });
+
+  it('delivers a raise with no context as fdc3.nothing to a fragment that declares it', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const handled = vi.fn();
+    await (await mount('chart')).fdc3.addIntentListener('RefreshChart', handled);
+
+    const resolution = await blotter.raiseIntent('RefreshChart');
+    await settle();
+
+    expect(resolution.source.appId).toBe('chart');
+    expect(handled).toHaveBeenCalledWith({ type: 'fdc3.nothing' }, expect.anything());
+  });
+
+  it('carries FDC3 3.0 context metadata between fragments: trace ids, current context with metadata, clearing', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const chart = (await mount('chart')).fdc3;
+    const billing = (await mount('billing')).fdc3;
+    const received = vi.fn();
+    const cleared = vi.fn();
+    const handled = vi.fn();
+    await chart.joinUserChannel('fdc3.channel.3');
+    await chart.addContextListener('fdc3.instrument', received);
+    await chart.addEventListener('contextCleared', cleared);
+    await billing.addIntentListener('ViewInvoice', handled);
+    await blotter.joinUserChannel('fdc3.channel.3');
+
+    await blotter.broadcast(instrument, { traceId: 'trace-broadcast' });
+    await settle();
+    expect(received.mock.calls[0][1]).toMatchObject({ traceId: 'trace-broadcast', source: { appId: 'blotter' } });
+    const current = await (await chart.getCurrentChannel())!.getCurrentContextWithMetadata('fdc3.instrument');
+    expect(current?.context).toEqual(instrument);
+    expect(current?.metadata.traceId).toBe('trace-broadcast');
+
+    await blotter.raiseIntent('ViewInvoice', instrument, undefined, undefined, { traceId: 'trace-raise' });
+    await settle();
+    expect(handled.mock.calls[0][1]).toMatchObject({ traceId: 'trace-raise', source: { appId: 'blotter' } });
+
+    await (await blotter.getCurrentChannel())!.clearContext();
+    await settle();
+    expect(cleared).toHaveBeenCalledTimes(1);
+    expect(cleared.mock.calls[0][0].details.channelId).toBe('fdc3.channel.3');
+    expect(await (await chart.getCurrentChannel())!.getCurrentContext()).toBeNull();
   });
 
   it('keeps delivering to the other listeners when one throws', async () => {
