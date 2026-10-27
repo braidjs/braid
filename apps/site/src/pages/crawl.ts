@@ -48,13 +48,13 @@ const ASCII: Record<string, string> = {
   '←': '<-',
   '†': '[1]',
   '‡': '[2]',
-  ' ': ' ',
+  [String.fromCharCode(0xa0)]: ' ', // a no-break space
 };
 
 function ascii(text: string): string {
   // Printable ASCII, tabs and line breaks; anything else needs an entry above.
-  const out = text.replace(/[^\t\n\r -~]/g, (char) => ASCII[char] ?? char);
-  const unknown = /[^\t\n\r -~]/.exec(out);
+  const out = text.replace(/[^\t\n\r -~]/gu, (char) => ASCII[char] ?? char);
+  const unknown = /[^\t\n\r -~]/u.exec(out);
   if (unknown) throw new Error(`crawl: no ASCII spelling for "${unknown[0]}" (U+${unknown[0].codePointAt(0)?.toString(16).toUpperCase()}). Add one to ASCII in src/pages/crawl.ts.`);
   return out;
 }
