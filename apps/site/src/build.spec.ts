@@ -183,6 +183,9 @@ describe('the built site', () => {
       const file = (url ?? '').slice(ORIGIN.length + 1);
       expect(existsSync(join(out, file.endsWith('/') || file === '' ? `${file}index.html` : file)), url).toBe(true);
     }
+    // Served without a charset, so anything past ASCII would be misread (see crawl.ts).
+    for (const file of ['llms.txt', 'llms-full.txt']) expect(read(file), file).toMatch(/^[\t\n\r -~]*$/);
+    expect(index).toContain('# Braid\n\n> Braid puts apps');
     const full = read('llms-full.txt');
     // "How this page<br>is braided." keeps its space.
     for (const heading of [...SECTION_HEADINGS, 'Braid puts apps from different teams on one page', '# The cheatsheet.', '# How this page is braided.']) {
