@@ -19,10 +19,19 @@ import {
   DesktopAgentProxy,
   type RegisterableListener,
 } from '@finos/fdc3-agent-proxy';
-import { ChannelError, LogLevel, OpenError, type AppIdentifier, type AppIntent, type DesktopAgent } from '@finos/fdc3-standard';
+import {
+  ChannelError,
+  CloseError,
+  LogLevel,
+  OpenError,
+  ResolveError,
+  type AppIdentifier,
+  type AppIntent,
+  type DesktopAgent,
+} from '@finos/fdc3-standard';
 
 /**
- * An FDC3 2.2 Desktop Agent for one Braid page.
+ * An FDC3 3.0 Desktop Agent for one Braid page.
  *
  * The page is the desktop: the host runs the agent, and each composed fragment is an app instance
  * on it. The agent is the FINOS reference implementation — `DefaultFDC3Server` from
@@ -179,8 +188,13 @@ class InProcessMessaging extends AbstractMessaging {
    */
   async post(message: object): Promise<void> {
     if (!this.#isOpen()) return this.#refuse(message, 'AgentDisconnected');
-    // launching a fragment is the host's to do, and is not wired yet
-    if ((message as { type?: unknown }).type === 'openRequest') return this.#refuse(message, OpenError.ErrorOnLaunch);
+    // launching a fragment is the host's to do, and is not wired yet: neither `open` nor a raise
+    // that asks for a new instance (the agent would hand that to the instance already running)
+    const { type: kind, payload: request } = message as { type?: unknown; payload?: { newInstance?: unknown } };
+    if (kind === 'openRequest') return this.#refuse(message, OpenError.ErrorOnLaunch);
+    if ((kind === 'raiseIntentRequest' || kind === 'raiseIntentForContextRequest') && request?.newInstance === true) {
+      return this.#refuse(message, ResolveError.TargetAppUnavailable);
+    }
     let copy: object;
     try {
       // a clone, as a MessagePort would make: neither side holds the other's objects
@@ -335,8 +349,12 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     return this.live(appId)[0]?.instanceId ?? this.createUUID();
   }
 
+  /**
+   * `fdc3.close()`, refused: fragments are torn down by their host, not by the agent. The agent
+   * answers a close only when this throws, so a no-op would leave the app waiting out its timeout.
+   */
   async close(): Promise<void> {
-    // fragments are torn down by their host, not by the agent
+    throw new Error(CloseError.ErrorOnClose);
   }
 
   setFDC3Server(): void {
@@ -388,7 +406,7 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   }
 
   fdc3Version(): string {
-    return '2.2';
+    return '3.0';
   }
 
   /**
