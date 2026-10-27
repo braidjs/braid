@@ -26,9 +26,37 @@ export function crawlFiles(pages: Page[]): Page[] {
         '',
       ].join('\n'),
     },
-    { path: 'llms.txt', html: llmsIndex(indexed) },
-    { path: 'llms-full.txt', html: llmsFull(indexed) },
+    { path: 'llms.txt', html: ascii(llmsIndex(indexed)) },
+    { path: 'llms-full.txt', html: ascii(llmsFull(indexed)) },
   ];
+}
+
+/**
+ * Amplify serves .txt as `text/plain` with no charset, and then browsers (windows-1252) and Python's
+ * requests (ISO-8859-1) misread UTF-8: "—" arrives as "â€”". ASCII reads the same under any of them.
+ */
+const ASCII: Record<string, string> = {
+  '—': '-',
+  '–': '-',
+  '·': '-',
+  '‘': "'",
+  '’': "'",
+  '“': '"',
+  '”': '"',
+  '…': '...',
+  '→': '->',
+  '←': '<-',
+  '†': '[1]',
+  '‡': '[2]',
+  [String.fromCharCode(0xa0)]: ' ', // a no-break space
+};
+
+function ascii(text: string): string {
+  // Printable ASCII, tabs and line breaks; anything else needs an entry above.
+  const out = text.replace(/[^\t\n\r -~]/gu, (char) => ASCII[char] ?? char);
+  const unknown = /[^\t\n\r -~]/u.exec(out);
+  if (unknown) throw new Error(`crawl: no ASCII spelling for "${unknown[0]}" (U+${unknown[0].codePointAt(0)?.toString(16).toUpperCase()}). Add one to ASCII in src/pages/crawl.ts.`);
+  return out;
 }
 
 const home = `${ORIGIN}/`;
