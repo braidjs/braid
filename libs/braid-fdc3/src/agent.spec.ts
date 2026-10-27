@@ -13,7 +13,7 @@ const manifests: FragmentManifest[] = [
     id: 'billing',
     endpoint: 'https://billing.internal',
     title: 'Billing',
-    fdc3: { listensFor: { ViewInvoice: { contexts: ['fdc3.instrument'], resultType: 'fdc3.invoice' } } },
+    fdc3: { listensFor: { ViewInvoice: { contexts: ['fdc3.instrument', 'fdc3.country'], resultType: 'fdc3.invoice' } } },
   },
   { id: 'blotter', endpoint: 'https://blotter.internal', title: 'Blotter' },
   {
@@ -321,12 +321,18 @@ describe('a Braid page as an FDC3 desktop', () => {
     await expect(blotter.close()).rejects.toThrow('ErrorOnClose');
     expect(Date.now() - started).toBeLessThan(1_000);
     expect((await blotter.getInfo()).appMetadata.appId).toBe('blotter');
+    expect(await blotter.findInstances({ appId: 'blotter' })).toHaveLength(1);
   });
 
   it.each([
     ['with no target', (fdc3: DesktopAgent) => fdc3.raiseIntent('ViewInvoice', instrument, undefined, true)],
     ['naming the app', (fdc3: DesktopAgent) => fdc3.raiseIntent('ViewInvoice', instrument, { appId: 'billing' }, true)],
     ['for a context', (fdc3: DesktopAgent) => fdc3.raiseIntentForContext(instrument, undefined, true)],
+    [
+      'naming the instance',
+      async (fdc3: DesktopAgent) =>
+        fdc3.raiseIntent('ViewInvoice', instrument, (await fdc3.findInstances({ appId: 'billing' }))[0], true),
+    ],
   ])('refuses a raise that asks for a new instance at once, %s, since nothing can be launched yet', async (_, raise) => {
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
@@ -365,6 +371,34 @@ describe('a Braid page as an FDC3 desktop', () => {
       'TargetInstanceUnavailable',
     );
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('refuses a raise that asks for an existing instance with no target while the only one is still booting', async () => {
+    // FINOS 3.0 needs a listening instance for this; naming the app (above) is held instead
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    await mount('billing');
+
+    await expect(blotter.raiseIntent('ViewInvoice', instrument, undefined, false)).rejects.toThrow(
+      'TargetInstanceUnavailable',
+    );
+  });
+
+  it('gives an intent only to the instance listening for its context type', async () => {
+    const { mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const forInstrument = vi.fn();
+    const forCountry = vi.fn();
+    await (await mount('billing')).fdc3.addIntentListenerWithContext('ViewInvoice', 'fdc3.instrument', forInstrument);
+    await (await mount('billing')).fdc3.addIntentListenerWithContext('ViewInvoice', 'fdc3.country', forCountry);
+    const country: Context = { type: 'fdc3.country', id: { ISOALPHA2: 'GB' } };
+
+    await blotter.raiseIntent('ViewInvoice', country);
+    await blotter.raiseIntent('ViewInvoice', country, { appId: 'billing' });
+    await settle();
+
+    expect(forCountry).toHaveBeenCalledTimes(2);
+    expect(forInstrument).not.toHaveBeenCalled();
   });
 
   it('delivers a raise with no context as fdc3.nothing to a fragment that declares it', async () => {

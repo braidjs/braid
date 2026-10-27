@@ -100,19 +100,22 @@ platform:
 - **Intents wait for a fragment that is still booting.** A fragment is mounted before its bundle
   has added its intent listener. An intent raised to it in that window is held until the listener
   arrives, or for up to 20 seconds, rather than lost. Raising by app (`{ appId: 'billing' }`)
-  resolves to that app's live instance.
+  resolves to that app's live instance. A raise with `newInstance: false` and no target is not
+  held: while the app's only instance is still booting, it rejects with `TargetInstanceUnavailable`.
 - **FDC3 3.0 metadata comes through.** A `traceId` passed to `broadcast` or `raiseIntent` reaches
   the receiver's metadata, and `getCurrentContextWithMetadata`, `clearContext` and the
-  `contextCleared` event work across fragments. A raise with no context arrives as `fdc3.nothing`.
-  As in FINOS 3.0, a directory record whose `fdc3Version` range excludes 3.0 is ignored; the
+  `contextCleared` event work across fragments. A listener added with
+  `addIntentListenerWithContext` gets only raises of its context types. A raise with no context
+  arrives as `fdc3.nothing`, so it reaches only a fragment whose manifest lists `fdc3.nothing` among
+  that intent's `contexts`. As in FINOS 3.0, a directory record whose `fdc3Version` range excludes 3.0 is ignored; the
   records Braid serves set no `fdc3Version`.
 
 ---
 
 ## What is not supported yet
 
-- **Launching and closing apps.** `fdc3.open()` rejects with `ErrorOnLaunch`, and a raise with
-  `newInstance: true` rejects with `TargetAppUnavailable`. An intent raised to an app with no
+- **Launching and closing apps.** `fdc3.open()` rejects with `ErrorOnLaunch`, and any raise with
+  `newInstance: true`, even one naming an instance, rejects with `TargetAppUnavailable`. An intent raised to an app with no
   mounted instance rejects with `NoAppsFound`, because nothing can mount a fragment on the agent's
   behalf yet. `fdc3.close()` rejects with `ErrorOnClose`: a fragment is torn down by its host.
 - **An intent resolver UI.** When a raise matches more than one live instance, it rejects with
