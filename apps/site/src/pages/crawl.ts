@@ -36,7 +36,8 @@ export function crawlFiles(pages: Page[]): Page[] {
  * requests (ISO-8859-1) misread UTF-8: "—" arrives as "â€”". ASCII reads the same under any of them.
  */
 const ASCII: Record<string, string> = {
-  '—': '-',
+  // Two hyphens: one, at the start of a line, would read as a Markdown list item.
+  '—': '--',
   '–': '-',
   '·': '-',
   '‘': "'",
