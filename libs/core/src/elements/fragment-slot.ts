@@ -29,6 +29,7 @@ import {
   readCapabilities,
   resolveCapabilities,
   resolveSharedGlobals,
+  resolveStoragePartition,
 } from '../weave/capabilities.js';
 
 /**
@@ -566,6 +567,7 @@ export class FragmentSlot extends HTMLElement {
 
       const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal) : undefined;
       if (signal.aborted) return;
+      const storagePartition = resolveStoragePartition(capabilities, fragmentId);
 
       await adapter.boot({
         fragmentId,
@@ -579,6 +581,7 @@ export class FragmentSlot extends HTMLElement {
         bound,
         env,
         sharedGlobals: resolveSharedGlobals(capabilities),
+        ...(storagePartition === null ? {} : { storagePartition }),
         ...(realmGlobals ? { realmGlobals } : {}),
         signal,
       });

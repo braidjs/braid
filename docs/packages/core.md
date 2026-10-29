@@ -97,6 +97,35 @@ reads the host's property live and writes it back, bare identifiers included:
 - **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
   reaches browsers on that schedule.
 
+### Per-fragment storage
+
+A compat fragment's realm is same-origin, so its `localStorage` and `sessionStorage` are the host
+origin's. Two fragments whose libraries use the same fixed key, such as two OIDC clients against
+different issuers, overwrite each other. Their `storage` listeners also hear each other's writes
+and copy the wrong value back. `capabilities.storage` gives a fragment a store of its own:
+
+```jsonc
+"capabilities": { "storage": "partitioned" }            // its own store, keyed by fragment id
+"capabilities": { "storage": { "partition": "kcd" } }   // a store shared by every fragment naming "kcd"
+```
+
+- **Zero app-code change.** The realm's `localStorage` and `sessionStorage` become views on the
+  partition, and they are in place before the fragment's first script runs. Reads, writes,
+  `length`, `key()`, `clear()`, named properties and `Object.keys()` see only the partition's
+  entries, under their own names.
+- **Events stay inside.** `storage` events, through `addEventListener` or `onstorage`, arrive
+  only for the partition's keys, with the prefix removed and `storageArea` set to the
+  fragment's own view. As in a native window, a fragment does not hear its own writes.
+- **Named partitions share.** Fragments that use one issuer and want one login name the same
+  partition. They see each other's entries and events.
+- **In the real store** entries live under `braid:storage:<partition>:<key>`. A host's
+  `localStorage.clear()` clears every partition too.
+- **Default is `'shared'`,** exactly as before. Compat fragments only; custom-element, contract
+  and untrusted fragments ignore it.
+- **An accident barrier, not a security boundary.** Same-origin code can still reach
+  `top.localStorage`. IndexedDB, Cache Storage, BroadcastChannel and cookies are not partitioned
+  by this.
+
 Mounting in HTML:
 
 ```html

@@ -64,7 +64,11 @@ export interface FragmentManifest {
     sandbox?: string[];
     permissions?: string[];
     network?: string[];
-    storage?: 'partitioned' | 'shared';
+    /**
+     * Whose Web Storage this trusted (compat) fragment sees: the host origin's (`'shared'`, the
+     * default), its own (`'partitioned'`), or a store shared by name (`{ partition: 'kcd' }`).
+     */
+    storage?: 'partitioned' | 'shared' | { partition: string };
     /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */
     sharedGlobals?: string[];
   };
