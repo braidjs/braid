@@ -11,3 +11,6 @@ tools/detangle-fixture
 # Isolated install of the dependency scanner (see tools/audit/package.json), not a
 # workspace project.
 tools/audit
+
+# Browser e2e checks run via `npm run e2e`, outside the Nx graph (see e2e/vitest.config.mts).
+e2e/
