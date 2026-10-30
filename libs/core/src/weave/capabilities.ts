@@ -13,6 +13,7 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * | `permissions` | the browser (Permissions-Policy) | n/a | yes |
  * | `network` | the browser (CSP), or nobody | **advisory only** | CSP on the fragment's own origin |
  * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
+ * | `storage` | **Braid** — realm-window storage views | compat fragments | n/a — the browser already partitions a cross-origin frame |
  *
  * `context` is the one that matters most on the trusted tier, and the one Braid can actually
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment
@@ -42,8 +43,13 @@ export interface FragmentCapabilities {
   permissions?: string[];
   /** Origins the fragment is expected to talk to. Advisory on the trusted tier — see above. */
   network?: string[];
-  /** Reserved for the storage-partitioning work. */
-  storage?: 'partitioned' | 'shared';
+  /**
+   * Whose Web Storage the fragment sees. `'shared'` (the default) is the host origin's, as for any
+   * same-origin frame. `'partitioned'` gives it a store of its own, keyed by fragment id;
+   * `{ partition }` names a store several fragments share. See `compat/storage-partition.ts`.
+   * Compat fragments only; ignored elsewhere.
+   */
+  storage?: StorageGrant;
   /**
    * Host globals this fragment reads and writes as its own — see `BraidOptions.sharedGlobals`.
    * Replaces the host-wide default when present; `[]` opts the fragment out. Trusted tier only.
@@ -123,6 +129,25 @@ export function resolveSharedGlobals(capabilities: FragmentCapabilities | undefi
   // typo must share nothing, not one host-writing accessor per character.
   if (!Array.isArray(names)) return [];
   return names.filter((name): name is string => typeof name === 'string' && name !== '');
+}
+
+/** A fragment's Web Storage grant. */
+export type StorageGrant = 'shared' | 'partitioned' | { partition: string };
+
+/**
+ * The storage partition a fragment writes into, or `null` for the shared, host-origin store.
+ *
+ * The grant is manifest JSON, cast rather than parsed, so anything that is not exactly one of the
+ * two partitioned forms is the shared default — a typo must not quietly move a fragment's data.
+ */
+export function resolveStoragePartition(capabilities: FragmentCapabilities | undefined, fragmentId: string): string | null {
+  const grant: unknown = capabilities?.storage;
+  if (grant === 'partitioned') return fragmentId;
+  if (grant && typeof grant === 'object') {
+    const partition = (grant as { partition?: unknown }).partition;
+    if (typeof partition === 'string' && partition !== '') return partition;
+  }
+  return null;
 }
 
 /** Reads a capabilities block off a realm stub's adapter options, or off `initBraid` config. */

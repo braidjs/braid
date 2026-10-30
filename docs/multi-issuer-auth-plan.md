@@ -106,7 +106,9 @@ Acceptance criteria (each spec written first and seen failing):
 - [ ] A's storage listener fires for writes to A's partition with the key unprefixed and
       `storageArea` set to A's view. It does not fire for B's writes or for unprefixed host
       writes.
-- [ ] The same holds for `window.onstorage` and other native listeners on the realm window.
+- [ ] The same holds for `window.onstorage`. A listener attached by calling the original
+      `EventTarget.prototype.addEventListener` deliberately bypasses the filter, which is acceptable
+      for an accident barrier and documented.
 - [ ] Two fragments with `storage: { partition: 'kcd' }` see each other's keys, and a third
       fragment does not.
 - [ ] `CI=1 npx nx run-many -t lint test build` passes, with no new dependency.

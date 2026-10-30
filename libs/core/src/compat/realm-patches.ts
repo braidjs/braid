@@ -11,6 +11,7 @@ import { makeScriptBornInert } from './born-inert-scripts.js';
 import { navigationBus, ensureHostNavigationSources } from './navigation-bus.js';
 import { createRealmNavigator } from './service-worker.js';
 import { installSharedGlobals } from './shared-globals.js';
+import { installStoragePartition, type StoragePartition } from './storage-partition.js';
 import { RealmHandle } from '../realm/realm-manager.js';
 
 /**
@@ -39,6 +40,7 @@ export function initializeRealmContext(
   boundNavigation: boolean,
   fragmentAbortController: AbortController,
   sharedGlobals: readonly string[] = [],
+  storagePartition?: string,
 ): RealmContext {
   assert(realm.window !== null && realm.document !== null, 'attempted to patch the realm before it was ready');
 
@@ -126,6 +128,13 @@ export function initializeRealmContext(
     configurable: true,
     enumerable: true,
   });
+
+  // A partitioned fragment gets Web Storage of its own instead of the host origin's. Before any
+  // fragment script, like every patch here; its `storage` events are translated in the proxy
+  // listener below, and `onstorage` is routed through it at the end of the event patches.
+  const partition: StoragePartition | null = storagePartition
+    ? installStoragePartition(realmWindow, mainWindow, storagePartition, fragmentAbortController.signal)
+    : null;
 
   // dispatch events onto the shadowRoot if the event is not one of the special realm events
   const originalDispatchEvent = realmWindow.dispatchEvent.bind(realmWindow);
@@ -591,6 +600,10 @@ export function initializeRealmContext(
             return;
           }
 
+          // a partition hears only about its own keys, named as it named them
+          const storageView = partition && event.type === 'storage' ? partition.adaptEvent(event as StorageEvent) : undefined;
+          if (storageView === null) return;
+
           // capture properties of the original event
           const originalEventProps = {
             target: event.target,
@@ -627,6 +640,13 @@ export function initializeRealmContext(
               get() {
                 return realmWindow;
               },
+            });
+          }
+
+          if (storageView) {
+            Object.defineProperties(eventPatch, {
+              key: { get: () => storageView.key },
+              storageArea: { get: () => storageView.storageArea },
             });
           }
 
@@ -722,6 +742,22 @@ export function initializeRealmContext(
 
   realmWindow.addEventListener = realmDocument.addEventListener = compatAddEventListener;
   realmWindow.removeEventListener = realmDocument.removeEventListener = compatRemoveEventListener;
+
+  if (partition) {
+    // The browser fires `storage` natively at every same-origin window, the realm's included, and
+    // a native `onstorage` handler would hear every partition's writes. Owning the property sends
+    // the handler through the compat listener instead, where the partition filters it.
+    let onstorage: ((this: Window, event: StorageEvent) => unknown) | null = null;
+    realmWindow.addEventListener('storage', (event) => onstorage?.call(realmWindow, event as StorageEvent));
+    Object.defineProperty(realmWindow, 'onstorage', {
+      get: () => onstorage,
+      set: (handler: unknown) => {
+        onstorage = typeof handler === 'function' ? (handler as typeof onstorage) : null;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
 
   // END: EVENT SYSTEM PATCHES
 
