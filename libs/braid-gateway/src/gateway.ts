@@ -1420,6 +1420,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       fragmentId: fragment.id,
       ...(fragment.src === undefined ? {} : { src: fragment.src }),
       bound: fragment.bound !== false,
+      ...(fragment.stream === 'out-of-order' ? { outOfOrder: true } : {}),
       settled: fragmentResults[index].then((result) => pierceContent(fragment, result)),
     }));
 

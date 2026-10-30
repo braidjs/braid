@@ -19,6 +19,7 @@ import { compatAdapter } from './adapters/compat-adapter.js';
 import { customElementAdapter } from './adapters/custom-element-adapter.js';
 import { contractAdapter } from './adapters/contract-adapter.js';
 import { FragmentSlot } from './elements/fragment-slot.js';
+import { BraidLate, BraidLateEnd } from './elements/late-content.js';
 
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
@@ -32,7 +33,8 @@ export { customElementAdapter } from './adapters/custom-element-adapter.js';
 export { contractAdapter } from './adapters/contract-adapter.js';
 export { defineFragment } from './env/define-fragment.js';
 export type { FragmentDefinition } from './env/define-fragment.js';
-export { FragmentSlot } from './elements/fragment-slot.js';
+export { FragmentSlot, prefetchFragment } from './elements/fragment-slot.js';
+export { clearPrefetchedFragments } from './elements/prefetch.js';
 export type { FragmentSlotState } from './elements/fragment-slot.js';
 export { braidContext, createContextBus } from './context/context-bus.js';
 export type { ContextBus } from './context/context-bus.js';
@@ -74,6 +76,12 @@ export function initBraid(options: BraidOptions = {}): void {
   installAdapter(customElementAdapter);
   installAdapter(contractAdapter);
 
+  // Before the slot: defining it upgrades late markup already parsed, which moves it into its slot
+  // before that slot boots and decides whether it was pierced.
+  if (!customElements.get('braid-late')) {
+    customElements.define('braid-late', BraidLate);
+    customElements.define('braid-late-end', BraidLateEnd);
+  }
   if (!customElements.get('fragment-slot')) {
     customElements.define('fragment-slot', FragmentSlot);
   }

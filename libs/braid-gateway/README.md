@@ -173,6 +173,12 @@ as a declarative shadow root, so the browser parses it into exactly the shape th
 would have built; the slot then adopts it instead of fetching. Shells with no matching slot get
 one created before `</body>`.
 
+The stream waits at a slot whose fragment has not answered yet, so a slow fragment holds back the
+markup after it, for up to its `timeoutMs`. Set `stream: 'out-of-order'` on its manifest to stream
+past the slot instead: the slot is marked `data-braid-deferred`, and the fragment's markup follows
+before `</body>` in a hidden `<braid-late>` that the client moves into it. A fragment that answered
+in time is inlined as usual. See the [gateway docs](../../docs/packages/gateway.md#streaming-past-a-slow-fragment).
+
 A shell can instead mark one `<fragment-slot outlet>`. It takes the page's routed (bound) fragment,
 the first in registration order that no earlier named slot claimed, and is named after it. A shell
 that composes many routes then needs one slot rather than one per fragment id. Unbound widgets
