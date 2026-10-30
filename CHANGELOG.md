@@ -1,3 +1,49 @@
+## 0.7.0 (2026-10-30)
+
+### 🚀 Features
+
+- **core:** per-fragment Web Storage for trusted fragments (capabilities.storage) ([a1faa26](https://github.com/braidjs/braid/commit/a1faa26))
+- **core:** boot fragments on intent with a slot boot attribute ([89dde11](https://github.com/braidjs/braid/commit/89dde11))
+- **core:** prefetchFragment starts a fragment's load before its slot exists ([6757b65](https://github.com/braidjs/braid/commit/6757b65))
+- **core:** opt-in self-healing slots with initBraid({ recover }) ([e3755f5](https://github.com/braidjs/braid/commit/e3755f5))
+- **core,gateway:** mount prerequisites — named things a fragment waits for before its code runs ([1508b13](https://github.com/braidjs/braid/commit/1508b13))
+- **core,gateway:** opt-in capabilities.html for a fragment's own HTML writes ([cc49ffb](https://github.com/braidjs/braid/commit/cc49ffb))
+- **core,react,angular:** optional loading states for booting fragments ([a505de0](https://github.com/braidjs/braid/commit/a505de0))
+- **gateway,core:** per-fragment cookies for partitioned fragments ([786de89](https://github.com/braidjs/braid/commit/786de89))
+- **gateway,core:** stream past slow fragments with stream: out-of-order ([ce652ef](https://github.com/braidjs/braid/commit/ce652ef))
+- **gateway,core:** turn capabilities.network into a realm policy ([0c51912](https://github.com/braidjs/braid/commit/0c51912))
+- **otel,gateway:** OpenTelemetry tracing of fragment fetches; safe baggage ([41f6159](https://github.com/braidjs/braid/commit/41f6159))
+- **site:** serve the site at oss.braidcloud.com ([bffb5ba](https://github.com/braidjs/braid/commit/bffb5ba))
+
+### 🩹 Fixes
+
+- **core:** storage views answer to Storage.prototype; faster, safer echoes ([6cb00b6](https://github.com/braidjs/braid/commit/6cb00b6))
+- **core:** cross-frame replies reach every listener style; script-set URLs resolve into the fragment ([9276e97](https://github.com/braidjs/braid/commit/9276e97))
+- **core:** release failed boots, close slot races, tighten prefetch ([0d2011d](https://github.com/braidjs/braid/commit/0d2011d))
+- **core:** bound recovery and skip what retrying cannot fix ([b8e254c](https://github.com/braidjs/braid/commit/b8e254c))
+- **core:** parse sanitized writes in context, and close the audit's bypasses ([bf4b5ba](https://github.com/braidjs/braid/commit/bf4b5ba))
+- **core:** run only what Braid neutralized, never what a fragment writes ([83d70e1](https://github.com/braidjs/braid/commit/83d70e1))
+- **core:** mark host scripts started the browser's way, not by shadowing ([b2478c1](https://github.com/braidjs/braid/commit/b2478c1))
+- **core,angular:** loading-state review fixes ([3e77812](https://github.com/braidjs/braid/commit/3e77812))
+- **core,gateway:** script-set URLs use the gateway's base and never double-prefix; once means once ([efd93f4](https://github.com/braidjs/braid/commit/efd93f4))
+- **core,gateway:** decide what runs by provenance, not by markers ([b3e5393](https://github.com/braidjs/braid/commit/b3e5393))
+- **core,gateway:** never leave a host script the browser could run ([c6780dd](https://github.com/braidjs/braid/commit/c6780dd))
+- **core,gateway,registry:** prerequisites review fixes ([20903df](https://github.com/braidjs/braid/commit/20903df))
+- **gateway:** never coalesce two fragments' fetches into one response ([c74a7c2](https://github.com/braidjs/braid/commit/c74a7c2))
+- **gateway:** fetch hooks always end, run the fetch, and baggage is matched safely ([f015f08](https://github.com/braidjs/braid/commit/f015f08))
+- **gateway:** give a realm stub with a policy its own ETag ([c4af3de](https://github.com/braidjs/braid/commit/c4af3de))
+- **gateway,core:** cookie scoping review fixes ([5fd9f31](https://github.com/braidjs/braid/commit/5fd9f31))
+- **gateway,core:** deliver late markup only when it is complete and genuine ([ad40964](https://github.com/braidjs/braid/commit/ad40964))
+- **gateway,core:** keep bad network entries from breaking startup ([359da14](https://github.com/braidjs/braid/commit/359da14))
+- **otel:** one trace context per fragment request, the fetch span active, no context baggage ([cc8fae8](https://github.com/braidjs/braid/commit/cc8fae8))
+- **site:** write llms.txt and llms-full.txt as ASCII ([dcf35c6](https://github.com/braidjs/braid/commit/dcf35c6))
+- **site:** name astral characters whole in the ASCII guard ([17e705a](https://github.com/braidjs/braid/commit/17e705a))
+- **site:** spell em dashes as "--" in the llms files ([6b47dcb](https://github.com/braidjs/braid/commit/6b47dcb))
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.6.0 (2026-10-27)
 
 ### 🚀 Features
