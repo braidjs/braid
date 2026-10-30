@@ -91,6 +91,7 @@ export class CheckoutPageComponent {
 | `(ready)` | `EventEmitter<{ fragmentId: string }>` | Emitted when fragment completes mounting and hydration. |
 | `(failed)` | `EventEmitter<BraidFragmentError>` | Emitted on load/mount error with failure stage & fix hint. |
 | `(fragmentEvent)` | `EventEmitter<{ type: string; detail: unknown }>` | Emitted when fragment dispatches a custom event. |
+| content | projected | `<div slot="loading">` and `<p slot="fallback">` children reach the slot: shown while the fragment boots, and if it fails. See `@braidlabs/core`, "Loading and fallback". |
 | `state()` | `Signal<'idle' \| 'loading' \| 'ready' \| 'error'>` | Signal reflecting current slot lifecycle state. |
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
 

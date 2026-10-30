@@ -37,7 +37,27 @@ function render() {
   return { fixture, slot };
 }
 
+@Component({
+  standalone: true,
+  imports: [BraidFragment],
+  template: `
+    <braid-fragment name="billing">
+      <div slot="loading" class="skeleton"></div>
+      <p slot="fallback">Billing is unavailable.</p>
+    </braid-fragment>
+  `,
+})
+class ProjectingHostComponent {}
+
 describe('BraidFragment', () => {
+  it('projects loading and fallback children into the slot', () => {
+    const fixture = TestBed.createComponent(ProjectingHostComponent);
+    fixture.detectChanges();
+    const slot = fixture.nativeElement.querySelector('fragment-slot') as HTMLElement;
+    expect(slot.querySelector(':scope > [slot="loading"].skeleton')).not.toBeNull();
+    expect(slot.querySelector(':scope > [slot="fallback"]')?.textContent).toBe('Billing is unavailable.');
+  });
+
   it('renders the fragment-slot element the gateway pierces into', () => {
     const { slot } = render();
 

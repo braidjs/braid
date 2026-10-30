@@ -97,6 +97,37 @@ reads the host's property live and writes it back, bare identifiers included:
 - **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
   reaches browsers on that schedule.
 
+### Loading and fallback
+
+A slot can carry host content for two moments: while its fragment boots, and if it fails.
+
+```html
+<fragment-slot name="orders" style="min-height: 320px">
+  <div slot="loading" class="skeleton" aria-hidden="true" inert></div>
+  <p slot="fallback">Orders are unavailable right now.</p>
+</fragment-slot>
+```
+
+- **The loading content shows only while nothing of the fragment is on screen.** The slot must be
+  `state="loading"` with nothing painted yet. It gives way the moment the fragment's document
+  paints, which is usually before the fragment is `ready`. It also gives way on `error` (the
+  fallback takes over) and on teardown. A server-rendered (pierced) fragment never shows it,
+  because its content is already there.
+- **After a delay.** It stays hidden for `--braid-loading-delay` (default `200ms`), so a fast boot
+  never flashes it. Set the variable on `:root` or on one slot; `0s` shows it at once.
+- **Optional.** Without a `slot="loading"` child, nothing changes. The slot carries
+  `aria-busy="true"` while its loading content may show.
+- **The host owns the look.**
+  - Reserve the slot's size (`min-height`, `aspect-ratio`) so the swap to real content doesn't
+    shift the page.
+  - Mark skeletons `aria-hidden` and `inert`.
+  - Keep shimmer animations inside `@media (prefers-reduced-motion: no-preference)`.
+- **Before the runtime loads,** a `slot="loading"` child is ordinary light DOM and renders as
+  such. Add `fragment-slot:not(:defined) > [slot] { display: none; }` to the host's CSS if it
+  should wait for the runtime instead.
+- **Not for untrusted fragments yet.** Their cross-origin frame doesn't show the loading slot.
+- Listen to `braid:state` on the slot (it doesn't bubble) to follow every state change.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a

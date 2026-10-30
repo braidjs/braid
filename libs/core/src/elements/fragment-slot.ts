@@ -91,7 +91,14 @@ export const SLOT_STYLES =
   ':host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }' +
   'slot[name="fallback"] { display: none; }' +
   ':host([state="gone"]) braid-document, :host([state="error"]) braid-document { display: none; }' +
-  ':host([state="gone"]) slot[name="fallback"], :host([state="error"]) slot[name="fallback"] { display: block; }';
+  ':host([state="gone"]) slot[name="fallback"], :host([state="error"]) slot[name="fallback"] { display: block; }' +
+  // A host's `slot="loading"` child shows while the fragment boots and nothing of it is on screen
+  // yet — never for a pierced slot, whose root has no loading slot. After --braid-loading-delay,
+  // so a fast boot never flashes it: a zero-length animation that holds it hidden until then.
+  'slot[name="loading"] { display: none; }' +
+  ':host([state="loading"]) braid-document:empty ~ slot[name="loading"] {' +
+  ' display: block; animation: braid-loading-in 0s linear var(--braid-loading-delay, 200ms) backwards; }' +
+  '@keyframes braid-loading-in { from, to { visibility: hidden; } }';
 
 /**
  * Ensures the shadow root can present host-provided fallback content:
@@ -105,6 +112,17 @@ export const SLOT_STYLES =
  * client-rendered fragments would be missing from exactly the pages that server-render because
  * their first paint matters.
  */
+/**
+ * Adds the slot a host's `slot="loading"` child projects into. Only on roots the client builds:
+ * a pierced fragment already has its content on screen, so it never shows a loading state.
+ */
+export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
+  if (shadowRoot.querySelector('slot[name="loading"]')) return;
+  const loading = document.createElement('slot');
+  loading.name = 'loading';
+  shadowRoot.append(loading);
+}
+
 export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
   if (shadowRoot.querySelector('slot[name="fallback"]')) return;
 
@@ -177,11 +195,21 @@ export class FragmentSlot extends HTMLElement {
    * — which matters because the page most in need of a fallback is the one whose JavaScript is
    * already in trouble.
    */
+  #setAriaBusy = false;
+
   #setState(next: FragmentSlotState): void {
     if (this.#state === next) return;
     const previous = this.#state;
     this.#state = next;
     this.setAttribute('state', next);
+    // busy while a host-provided loading state may be showing; only ever removing what this set
+    if (next === 'loading' && this.querySelector(':scope > [slot="loading"]')) {
+      this.setAttribute('aria-busy', 'true');
+      this.#setAriaBusy = true;
+    } else if (this.#setAriaBusy) {
+      this.removeAttribute('aria-busy');
+      this.#setAriaBusy = false;
+    }
     this.dispatchEvent(new CustomEvent('braid:state', { detail: { state: next, previous, fragmentId: this.name } }));
   }
 
@@ -426,6 +454,7 @@ export class FragmentSlot extends HTMLElement {
       }
 
       ensureFallbackSlot(shadowRoot);
+      if (!piercedContentRoot) ensureLoadingSlot(shadowRoot);
 
       // Prerequisites the host's markup declares start now, alongside the realm and the document;
       // the manifest's arrive with the realm stub. Either way the fragment's code waits for them.
@@ -721,6 +750,7 @@ export class FragmentSlot extends HTMLElement {
     const contentRoot = document.createElement('braid-document');
     shadowRoot.replaceChildren(styleSheet, contentRoot);
     ensureFallbackSlot(shadowRoot);
+    ensureLoadingSlot(shadowRoot);
 
     // before anything of the fragment exists: no realm, nothing mounted
     if (requires.length) await awaitPrerequisites(requires, fragmentId, signal);
