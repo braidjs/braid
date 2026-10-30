@@ -1144,10 +1144,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       // Coalesced only when the manifest declares no access rules. A gated fragment's response
       // depends on an authorization decision this layer has already made per-request, and sharing
       // one across two callers would share that decision with it.
-      const key =
+      const requestKey =
         singleFlight && fragment.coalesce !== false && !hasAccessRules(fragment) && fragment.redirect !== 'navigate'
           ? singleFlightKey(fragmentRequest, fragmentRequestUrl.href, extraHeaderNames)
           : null;
+      // keyed by fragment too: two fragments' fetcher-function endpoints are asked for the same URL
+      // (the path alone) and must never be handed each other's response
+      const key = requestKey === null ? null : `${fragment.id}\u0000${requestKey}`;
 
       const response = key
         ? await singleFlight!.run(key, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }))

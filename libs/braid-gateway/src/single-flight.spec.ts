@@ -391,3 +391,23 @@ describe('gateway fragment coalescing', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('coalescing across fragments', () => {
+  it("never hands one fragment another's response, even when their endpoints see the same URL", async () => {
+    // fetcher-function endpoints are asked for the path alone, so two fragments' document requests
+    // arrive with identical URLs and headers
+    const slow = (body: string) => (async () => (await new Promise((r) => setTimeout(r, 20)), new Response(body))) as unknown as typeof fetch;
+    const gateway = createGateway({
+      registry: [
+        { id: 'one', endpoint: slow('<p>one</p>') },
+        { id: 'two', endpoint: slow('<p>two</p>') },
+      ],
+    });
+    const [one, two] = await Promise.all(
+      ['one', 'two'].map((id) => gateway.handle(new Request(`https://shell.example/__braid/frag/${id}/`))),
+    );
+    expect(await one!.text()).toBe('<p>one</p>');
+    expect(await two!.text()).toBe('<p>two</p>');
+  });
+});
+
