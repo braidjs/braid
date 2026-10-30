@@ -6,6 +6,8 @@ const DOCUMENT =
   '<braid-html><braid-body><h1>Invoices</h1>' +
   '<script type="inert" data-script-type="module" src="/__braid/frag/billing/main.js"></script>' +
   '<script type="inert" src="/__braid/frag/billing/legacy.js"></script>' +
+  '<script type="inert" src="https://tracker.example/t.js"></script>' +
+  '<script type="inert" src="/__braid/frag/other/stolen.js"></script>' +
   '</braid-body></braid-html>';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
@@ -77,17 +79,25 @@ describe('prefetchFragment()', () => {
     expect(documentRequests()).toHaveLength(1);
   });
 
-  it('hints the realm stub, and the document’s scripts in the CORS mode the realm will use', async () => {
+  it('hints the document’s own scripts in the CORS mode the realm will use, and nothing else', async () => {
     prefetchFragment('billing', '/billing/invoices');
     await settle();
     const hints = [...document.head.querySelectorAll<HTMLLinkElement>('link[rel="prefetch"]')].map((link) => [
       link.getAttribute('href'),
       link.getAttribute('crossorigin'),
     ]);
+    // no realm stub (an iframe navigation does not reuse a host prefetch), and nothing outside the
+    // fragment's namespace
     expect(hints).toEqual([
-      ['/__braid/realm/billing/', null],
-      ['/__braid/frag/billing/main.js', ''],
-      ['/__braid/frag/billing/legacy.js', null],
+      [`${location.origin}/__braid/frag/billing/main.js`, ''],
+      [`${location.origin}/__braid/frag/billing/legacy.js`, null],
     ]);
+  });
+
+  it('hints each script once, however often the link is hovered', async () => {
+    prefetchFragment('billing', '/billing/invoices');
+    prefetchFragment('billing', '/billing/settings');
+    await settle();
+    expect(document.head.querySelectorAll('link[rel="prefetch"]')).toHaveLength(2);
   });
 });

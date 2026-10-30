@@ -1,5 +1,5 @@
 import { getBraidConfig } from '../config.js';
-import { braidRealmUrl } from '../protocol.js';
+import { braidFragmentUrl } from '../protocol.js';
 
 /**
  * How long a prefetched document waits for its slot. Long enough to cover hover-to-click and a
@@ -21,8 +21,8 @@ const prefetched = new Map<string, Prefetched>();
 const keyOf = (fragmentId: string, routeSrcUrl: URL) => `${fragmentId} ${routeSrcUrl.pathname}${routeSrcUrl.search}`;
 
 /**
- * Starts a prefetch: the document now, held for {@link takePrefetchedDocument}; the realm stub and
- * the document's scripts as HTTP-cache hints. `fetchDocument` is the slot's own document fetch,
+ * Starts a prefetch: the document now, held for {@link takePrefetchedDocument}; the document's
+ * scripts as HTTP-cache hints. `fetchDocument` is the slot's own document fetch,
  * passed in so this module does not import the slot. See `prefetchFragment`.
  */
 export function startPrefetch(fragmentId: string, route: string, fetchDocument: (url: URL, signal: AbortSignal) => DocumentResult): void {
@@ -40,9 +40,17 @@ export function startPrefetch(fragmentId: string, route: string, fetchDocument: 
   }, PREFETCH_TTL_MS);
   prefetched.set(key, { document: result, controller, expiry });
 
-  hint(braidRealmUrl(fragmentId, '/', '', getBraidConfig().basePath), null);
+  // The realm stub is not hinted: a host-document prefetch does not satisfy the realm iframe's
+  // navigation in Chrome's cache, so it would only be fetched twice.
   void result.then(({ html, isHtml }) => {
-    if (isHtml) for (const script of scriptsIn(html)) hint(script.href, script.crossorigin);
+    if (!isHtml) return;
+    // only the fragment's own namespace, as the gateway's own hints are: a document does not get to
+    // make the host fetch whatever URL it names
+    const namespace = new URL(`${braidFragmentUrl(fragmentId, '/', '', getBraidConfig().basePath)}`, location.origin).href;
+    for (const script of scriptsIn(html)) {
+      const url = new URL(script.href, document.baseURI).href;
+      if (url.startsWith(namespace)) hint(url, script.crossorigin);
+    }
   }, () => undefined);
 }
 
@@ -61,13 +69,17 @@ export function takePrefetchedDocument(fragmentId: string, routeSrcUrl: URL, sig
   return entry.document;
 }
 
-/** Drops every held prefetch. For tests, and for hosts that sign a user out. */
+/**
+ * Drops every held prefetch. Call it when the user signs out or switches account: a held document
+ * was rendered for whoever was signed in when it was fetched.
+ */
 export function clearPrefetchedFragments(): void {
   for (const entry of prefetched.values()) {
     clearTimeout(entry.expiry);
     entry.controller.abort();
   }
   prefetched.clear();
+  hinted.clear();
 }
 
 /**
@@ -84,7 +96,12 @@ function scriptsIn(html: string): { href: string; crossorigin: string | null }[]
   });
 }
 
+/** Hrefs already hinted on this page, so hovering the same link again adds nothing to `<head>`. */
+const hinted = new Set<string>();
+
 function hint(href: string, crossorigin: string | null): void {
+  if (hinted.has(href)) return;
+  hinted.add(href);
   const link = document.createElement('link');
   link.rel = 'prefetch';
   link.href = href;

@@ -19,7 +19,7 @@ import { compatAdapter } from './adapters/compat-adapter.js';
 import { customElementAdapter } from './adapters/custom-element-adapter.js';
 import { contractAdapter } from './adapters/contract-adapter.js';
 import { FragmentSlot } from './elements/fragment-slot.js';
-import { BraidLate } from './elements/late-content.js';
+import { BraidLate, BraidLateEnd } from './elements/late-content.js';
 
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
@@ -34,6 +34,7 @@ export { contractAdapter } from './adapters/contract-adapter.js';
 export { defineFragment } from './env/define-fragment.js';
 export type { FragmentDefinition } from './env/define-fragment.js';
 export { FragmentSlot, prefetchFragment } from './elements/fragment-slot.js';
+export { clearPrefetchedFragments } from './elements/prefetch.js';
 export type { FragmentSlotState } from './elements/fragment-slot.js';
 export { braidContext, createContextBus } from './context/context-bus.js';
 export type { ContextBus } from './context/context-bus.js';
@@ -79,6 +80,7 @@ export function initBraid(options: BraidOptions = {}): void {
   // before that slot boots and decides whether it was pierced.
   if (!customElements.get('braid-late')) {
     customElements.define('braid-late', BraidLate);
+    customElements.define('braid-late-end', BraidLateEnd);
   }
   if (!customElements.get('fragment-slot')) {
     customElements.define('fragment-slot', FragmentSlot);

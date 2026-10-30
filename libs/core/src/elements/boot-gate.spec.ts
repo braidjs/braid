@@ -5,8 +5,8 @@ import { createBootGate, parseBootMode } from './boot-gate.js';
 const realmFrames = () => document.querySelectorAll('iframe[name^="braid:"]').length;
 
 /** A slot that looks pierced: a shadow root holding a `<braid-document>`, as the gateway writes it. */
-function piercedSlot(name: string, boot: string, content = '<a href="/next">Next</a>'): HTMLElement {
-  const slot = document.createElement('fragment-slot');
+function piercedSlot(name: string, boot: string, content = '<a href="/next">Next</a>', tag = 'fragment-slot'): HTMLElement {
+  const slot = document.createElement(tag);
   slot.setAttribute('name', name);
   slot.setAttribute('boot', boot);
   const root = slot.attachShadow({ mode: 'open' });
@@ -16,8 +16,8 @@ function piercedSlot(name: string, boot: string, content = '<a href="/next">Next
   return slot;
 }
 
-/** Lets the slot's queued boot steps run. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+/** Lets the slot's queued boot steps run, including an interaction boot's wait for the next paint. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 40));
 
 describe('parseBootMode()', () => {
   it('defaults to eager, and falls back to it for an unknown value', () => {
@@ -154,6 +154,39 @@ describe('<fragment-slot boot>', () => {
     expect(seen).toHaveLength(2);
   });
 
+  it('lets go when the fragment fails, so its links and the host fallback work again', async () => {
+    const slot = piercedSlot('billing', 'interaction');
+    document.body.append(slot);
+    await settle();
+    const link = slot.shadowRoot!.querySelector('a')!;
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+
+    slot.dispatchEvent(new CustomEvent('braid:state', { detail: { state: 'error', fragmentId: 'billing' } }));
+    const after = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true });
+    link.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+
+    // and the click it held is not replayed by a later ready
+    const seen = vi.fn();
+    link.addEventListener('click', seen);
+    slot.dispatchEvent(new CustomEvent('braid:ready'));
+    await settle();
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('boots once when reloaded while still waiting for its trigger', async () => {
+    document.body.innerHTML = '<fragment-slot name="billing" boot="visible"></fragment-slot>';
+    const slot = document.querySelector('fragment-slot') as HTMLElement & { reload(): Promise<void> };
+    await settle();
+    void slot.reload();
+    await settle();
+    expect(realmFrames()).toBe(1);
+
+    intersect?.([{ isIntersecting: true }]);
+    await settle();
+    expect(realmFrames()).toBe(1);
+  });
+
   it('drops what it held when the slot leaves the DOM before boot finishes', async () => {
     const slot = piercedSlot('billing', 'interaction');
     document.body.append(slot);
@@ -171,10 +204,11 @@ describe('<fragment-slot boot>', () => {
 });
 
 describe('createBootGate()', () => {
+  // a plain host element: a real slot would add its own gate to the same shadow root
   afterEach(() => document.body.replaceChildren());
 
   it('replays a held submit through requestSubmit, keeping its submitter', async () => {
-    const slot = piercedSlot('billing', 'interaction', '<form><button name="go">Go</button></form>');
+    const slot = piercedSlot('billing', 'interaction', '<form><button name="go">Go</button></form>', 'div');
     document.body.append(slot);
     const gate = createBootGate(slot, 'interaction', { pierced: true, fragmentId: 'billing' });
     const form = slot.shadowRoot!.querySelector('form')!;
@@ -191,10 +225,47 @@ describe('createBootGate()', () => {
     expect(requestSubmit).toHaveBeenCalledWith(button);
   });
 
+  it('keeps one action per element, and replays them one task apart', async () => {
+    const slot = piercedSlot('billing', 'interaction', '<button id="pay">Pay</button><a href="/x">x</a>', 'div');
+    document.body.append(slot);
+    const gate = createBootGate(slot, 'interaction', { pierced: true, fragmentId: 'billing' });
+    const pay = slot.shadowRoot!.querySelector('button')!;
+    const link = slot.shadowRoot!.querySelector('a')!;
+    const order: string[] = [];
+    pay.addEventListener('click', () => order.push('pay'));
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      order.push('link');
+    });
+    for (let i = 0; i < 3; i++) pay.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+
+    gate.replay();
+    expect(order).toEqual(['pay']);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(order).toEqual(['pay', 'link']);
+  });
+
+  it('submits without a submitter the fragment replaced, rather than throwing', async () => {
+    const slot = piercedSlot('billing', 'interaction', '<form><button>Go</button></form>', 'div');
+    document.body.append(slot);
+    const gate = createBootGate(slot, 'interaction', { pierced: true, fragmentId: 'billing' });
+    const form = slot.shadowRoot!.querySelector('form')!;
+    const button = form.querySelector('button')!;
+    const requestSubmit = vi.spyOn(form, 'requestSubmit').mockImplementation(() => undefined);
+    const submit = new Event('submit', { bubbles: true, cancelable: true, composed: true });
+    Object.defineProperty(submit, 'submitter', { value: button });
+    form.dispatchEvent(submit);
+
+    button.replaceWith(document.createElement('button'));
+    gate.replay();
+    expect(requestSubmit).toHaveBeenCalledWith(undefined);
+  });
+
   it('skips a held click whose element was replaced, and warns in dev mode', async () => {
     initBraid({ dev: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const slot = piercedSlot('billing', 'interaction');
+    const slot = piercedSlot('billing', 'interaction', undefined, 'div');
     document.body.append(slot);
     const gate = createBootGate(slot, 'interaction', { pierced: true, fragmentId: 'billing' });
     const link = slot.shadowRoot!.querySelector('a')!;
@@ -210,7 +281,7 @@ describe('createBootGate()', () => {
   });
 
   it('never fires after dispose', async () => {
-    const slot = piercedSlot('billing', 'interaction');
+    const slot = piercedSlot('billing', 'interaction', undefined, 'div');
     document.body.append(slot);
     const gate = createBootGate(slot, 'interaction', { pierced: true, fragmentId: 'billing' });
     const fired = vi.fn();
