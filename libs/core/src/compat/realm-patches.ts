@@ -7,6 +7,7 @@ import { assert } from '../utils/assert.js';
 import { installDocumentFacade } from './document-facade.js';
 import { createDocumentOverrides } from './document-overrides.js';
 import { createFragmentBoundary, FragmentBoundary } from './fragment-boundary.js';
+import { createHtmlPolicy, HtmlPolicyMode } from './html-policy.js';
 import { makeScriptBornInert } from './born-inert-scripts.js';
 import { navigationBus, ensureHostNavigationSources } from './navigation-bus.js';
 import { createRealmNavigator } from './service-worker.js';
@@ -42,6 +43,7 @@ export function initializeRealmContext(
   fragmentAbortController: AbortController,
   sharedGlobals: readonly string[] = [],
   storagePartition?: string,
+  htmlPolicy?: HtmlPolicyMode,
 ): RealmContext {
   assert(realm.window !== null && realm.document !== null, 'attempted to patch the realm before it was ready');
 
@@ -66,6 +68,7 @@ export function initializeRealmContext(
     shadowRoot: fragmentShadowRoot,
     braidDocumentElement,
     abortSignal: fragmentAbortController.signal,
+    ...(htmlPolicy ? { htmlPolicy: createHtmlPolicy(htmlPolicy, realm.fragmentId, mainDocument) } : {}),
   });
 
   /** ---------------------------------------------- Window Patches ------------------------------------------------ */

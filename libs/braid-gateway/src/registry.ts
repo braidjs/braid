@@ -69,6 +69,8 @@ export interface FragmentManifest {
      * default), its own (`'partitioned'`), or a store shared by name (`{ partition: 'kcd' }`).
      */
     storage?: 'partitioned' | 'shared' | { partition: string };
+    /** What the fragment's own runtime HTML writes may contain: `'sanitize'` or `'report'`. */
+    html?: 'report' | 'sanitize';
     /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */
     sharedGlobals?: string[];
   };
@@ -333,6 +335,13 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
           `host must be written in punycode (xn--…), and IP v6 literals cannot be expressed in a CSP source`,
       );
     }
+  }
+  const html: unknown = manifest.capabilities?.html;
+  if (html !== undefined && html !== 'report' && html !== 'sanitize') {
+    console.warn(
+      `braid-gateway: manifest "${manifest.id}" declares capabilities.html ${JSON.stringify(html)}, which is ignored — ` +
+        `use "report" or "sanitize"`,
+    );
   }
   if (manifest.stream !== undefined && manifest.stream !== 'in-order' && manifest.stream !== 'out-of-order') {
     throw new Error(

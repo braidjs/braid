@@ -36,6 +36,7 @@ import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
 import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
 import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
 import { createRecovery } from './recovery.js';
+import { resolveHtmlPolicy } from '../compat/html-policy.js';
 
 /**
  * What the slot reports about its fragment.
@@ -736,6 +737,7 @@ export class FragmentSlot extends HTMLElement {
       const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal) : undefined;
       if (signal.aborted) return;
       const storagePartition = resolveStoragePartition(capabilities, fragmentId);
+      const htmlPolicy = resolveHtmlPolicy(capabilities, fragmentId);
 
       // nothing of the fragment's has run yet; its content may already be painted, inert
       await Promise.all([earlyPrerequisites, latePrerequisites]);
@@ -754,6 +756,7 @@ export class FragmentSlot extends HTMLElement {
         env,
         sharedGlobals: resolveSharedGlobals(capabilities),
         ...(storagePartition === null ? {} : { storagePartition }),
+        ...(htmlPolicy === null ? {} : { htmlPolicy }),
         ...(realmGlobals ? { realmGlobals } : {}),
         signal,
       });
