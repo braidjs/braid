@@ -129,9 +129,11 @@ export interface FragmentManifest {
    *
    * `in-order` (the default) waits there, up to `timeoutMs`, so everything after the slot waits too.
    * `out-of-order` streams on past the empty slot and sends the fragment's markup at the end of the
-   * document once it arrives; the client moves it into the slot. A fragment that is already in by
-   * the time its slot streams is inlined either way, so the slot shifts layout only when waiting
-   * would have held up the page. Reserve the slot's space in host CSS to keep that shift at zero.
+   * document once it arrives; the client moves it into the slot. A fragment whose response headers
+   * are in by the time its slot streams, or a turn of the event loop later, is inlined either way,
+   * so the slot shifts layout only when waiting would have held up the page. Reserve the slot's
+   * space in host CSS to keep that shift at zero, and keep the fragment holding the page's largest
+   * content in-order.
    */
   stream?: 'in-order' | 'out-of-order';
   /**

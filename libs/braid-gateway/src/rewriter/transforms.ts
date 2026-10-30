@@ -420,6 +420,13 @@ export interface PendingPierceTarget extends Pick<PierceTarget, 'fragmentId' | '
  */
 export const BRAID_LATE_TAG = 'braid-late';
 
+/**
+ * Closes a `<braid-late>` with content. The client delivers late markup when this is parsed: by then
+ * the declarative shadow root before it is attached, which it is not when `<braid-late>`'s own start
+ * tag is — the moment its element callbacks run if the runtime is already loaded.
+ */
+export const BRAID_LATE_END_TAG = 'braid-late-end';
+
 export interface PierceOptions {
   /** The shell application's HTML. */
   shell: ReadableStream<Uint8Array>;
@@ -475,8 +482,33 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
   for (const fragment of options.fragments) {
     if ('settled' in fragment) void fragment.settled.then(() => settledIds.add(fragment.fragmentId), () => undefined);
   }
+  /**
+   * Whether a fragment has answered, or answers within one more turn of the event loop. The grace
+   * turn keeps a fragment that is effectively instant — one that answered while the shell's first
+   * chunk was still being parsed — inline, where it causes no layout shift, instead of deferring it.
+   */
+  const settlesSoon = (target: PendingPierceTarget): Promise<boolean> =>
+    settledIds.has(target.fragmentId)
+      ? Promise.resolve(true)
+      : new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(settledIds.has(target.fragmentId)), 0);
+          void target.settled.then(
+            () => {
+              clearTimeout(timer);
+              resolve(true);
+            },
+            () => undefined,
+          );
+        });
+
   /** Slots the stream went past; their markup follows at the end of the document. */
   const late: PendingPierceTarget[] = [];
+  /**
+   * Pairs each deferred slot with its late markup. Minted per response, so markup the gateway did not
+   * write — a fragment's own `<braid-late>`, or anything injected into the page — cannot know it and
+   * cannot fill another fragment's slot.
+   */
+  let lateToken: string | undefined;
 
   const settle = async (target: PierceTarget | PendingPierceTarget): Promise<PierceTarget> =>
     'settled' in target
@@ -518,28 +550,41 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
   };
 
   /**
-   * The markup of every slot the stream went past, each sent as soon as it settles — so one slow
-   * fragment never holds up another that has already answered. A fragment with nothing to show
-   * still gets an (empty) element, which tells the client to boot that slot itself now rather
-   * than wait for the document to finish.
+   * The markup of every slot the stream went past, each sent as soon as its response headers are in,
+   * in that order — so a fragment that has answered is not held up behind one that has not. (Its
+   * body still streams in full before the next is sent.) A fragment with nothing to show still gets
+   * an element, marked empty, which tells the client to boot that slot itself now rather than wait
+   * for the document to finish.
    */
   const lateContent = (): Injection | undefined => {
     const waiting = late.splice(0);
     if (!waiting.length) return undefined;
+    const token = escapeAttribute(lateToken!);
     return toReadableStream(
       (async function* () {
-        const inFlight = new Map(waiting.map((target) => [target.fragmentId, settle(target)]));
+        // `settle` is not meant to reject, but if preparing a fragment ever throws, that one slot
+        // boots client-side rather than the whole tail of the document being lost
+        const inFlight = new Map(
+          waiting.map((target) => [
+            target.fragmentId,
+            settle(target).catch((): PierceTarget => ({ fragmentId: target.fragmentId, content: null })),
+          ]),
+        );
         while (inFlight.size) {
           const target = await Promise.race(inFlight.values());
           inFlight.delete(target.fragmentId);
-          const name = escapeAttribute(target.fragmentId);
+          const open = `<${BRAID_LATE_TAG} for="${escapeAttribute(target.fragmentId)}" token="${token}"`;
           if (!target.content) {
             const reason = target.fallbackReason ? ` data-braid-fallback="${escapeAttribute(target.fallbackReason)}"` : '';
-            yield* readAll(concatStreams([`<${BRAID_LATE_TAG} for="${name}"${reason} hidden></${BRAID_LATE_TAG}>`]));
+            yield* readAll(concatStreams([`${open} data-braid-empty=""${reason} hidden></${BRAID_LATE_TAG}>`]));
             continue;
           }
           yield* readAll(
-            concatStreams([`<${BRAID_LATE_TAG} for="${name}" hidden>`, ...shadowRoot(target), `</${BRAID_LATE_TAG}>`]),
+            concatStreams([
+              `${open} hidden>`,
+              ...shadowRoot(target),
+              `<${BRAID_LATE_END_TAG}></${BRAID_LATE_END_TAG}></${BRAID_LATE_TAG}>`,
+            ]),
           );
         }
       })(),
@@ -615,30 +660,30 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
 
   /** Fills a pierced slot once its fragment has settled. The one place the stream waits for it. */
   async function pierceSlot(tag: StartTag, unsettled: PierceTarget | PendingPierceTarget): Promise<void> {
-    if ('settled' in unsettled && unsettled.outOfOrder && !settledIds.has(unsettled.fragmentId)) {
+    const declared = tag.getAttribute('src');
+    if (unsettled.src && declared && declared !== unsettled.src) {
+      // Two sources of truth that disagree: the gateway pierced content from one path while
+      // the client will boot the fragment at another, so the widget changes under the user
+      // the moment it hydrates. Cheap to say, and invisible otherwise.
+      console.warn(
+        `braid-gateway: slot for fragment "${unsettled.fragmentId}" declares src="${declared}" ` +
+          `but its manifest declares src="${unsettled.src}" — the pierced content and the client ` +
+          `boot would come from different paths`,
+      );
+    }
+    if (unsettled.src && !declared) tag.setAttribute('src', unsettled.src);
+
+    if ('settled' in unsettled && unsettled.outOfOrder && !(await settlesSoon(unsettled))) {
       // Waiting here would hold up everything after the slot. Mark it, so the client waits for the
       // late markup instead of fetching, and stream on.
-      if (unsettled.src && !tag.getAttribute('src')) tag.setAttribute('src', unsettled.src);
-      tag.setAttribute('data-braid-deferred', '');
+      lateToken ??= crypto.randomUUID();
+      tag.setAttribute('data-braid-deferred', lateToken);
       late.push(unsettled);
       return;
     }
 
     // everything before the slot is already out
     const target = await settle(unsettled);
-
-    const declared = tag.getAttribute('src');
-    if (target.src && declared && declared !== target.src) {
-      // Two sources of truth that disagree: the gateway pierced content from one path while
-      // the client will boot the fragment at another, so the widget changes under the user
-      // the moment it hydrates. Cheap to say, and invisible otherwise.
-      console.warn(
-        `braid-gateway: slot for fragment "${target.fragmentId}" declares src="${declared}" ` +
-          `but its manifest declares src="${target.src}" — the pierced content and the client ` +
-          `boot would come from different paths`,
-      );
-    }
-    if (target.src && !declared) tag.setAttribute('src', target.src);
 
     if (!target.content) {
       // nothing to pierce: mark the slot so the page can style a skeleton, and let the

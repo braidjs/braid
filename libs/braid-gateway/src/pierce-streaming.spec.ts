@@ -123,7 +123,8 @@ describe('out-of-order pierce streaming', () => {
     const reader = (await gateway.handle(navigation, shell))!.body!.getReader();
     // the footer is after the slot, and arrives while the fragment is still out
     const early = await readUntil(reader, '<footer>end</footer>');
-    expect(early).toContain('<fragment-slot name="billing" data-braid-deferred="">');
+    const token = /data-braid-deferred="([0-9a-f-]{36})"/.exec(early)?.[1];
+    expect(token).toBeDefined();
     expect(early).not.toContain('<h2>Invoices</h2>');
 
     fragment.open(new Response('<h2>Invoices</h2>', { headers: { 'content-type': 'text/html' } }));
@@ -131,8 +132,10 @@ describe('out-of-order pierce streaming', () => {
     const decoder = new TextDecoder();
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) rest += decoder.decode(chunk.value);
 
-    expect(rest).toContain('<braid-late for="billing" hidden><template shadowrootmode="open">');
+    expect(rest).toContain(`<braid-late for="billing" token="${token}" hidden><template shadowrootmode="open">`);
     expect(rest).toContain('<h2>Invoices</h2>');
+    // closed by a sentinel after the shadow root, so an early-loaded client delivers once it exists
+    expect(rest).toContain('</template><braid-late-end></braid-late-end></braid-late>');
     // still inside the body, so the parser builds it into the same document
     expect(rest.indexOf('</braid-late>')).toBeLessThan(rest.indexOf('</body>'));
   });
@@ -157,8 +160,10 @@ describe('out-of-order pierce streaming', () => {
     const decoder = new TextDecoder();
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) rest += decoder.decode(chunk.value);
 
-    expect(early).toContain('<fragment-slot name="billing" data-braid-deferred="">');
-    expect(rest).toContain('<braid-late for="billing" data-braid-fallback="placeholder" hidden></braid-late>');
+    const token = /data-braid-deferred="([0-9a-f-]{36})"/.exec(early)?.[1];
+    expect(rest).toContain(
+      `<braid-late for="billing" token="${token}" data-braid-empty="" data-braid-fallback="placeholder" hidden></braid-late>`,
+    );
   });
 
   it('times out at the end of the document rather than at the slot', async () => {
@@ -170,6 +175,29 @@ describe('out-of-order pierce streaming', () => {
     const html = await (await gateway.handle(navigation, shell))!.text();
     expect(html.indexOf('<footer>end</footer>')).toBeLessThan(html.indexOf('<braid-late for="billing"'));
     expect(html).toContain('data-braid-fallback="placeholder"');
+  });
+
+  it('mints a fresh token for every response', async () => {
+    const tokenOf = async () => {
+      const fragment = gated<Response>();
+      const reader = (await outOfOrderGateway(fragment.promise).handle(navigation, shell))!.body!.getReader();
+      const early = await readUntil(reader, '<footer>end</footer>');
+      fragment.open(new Response('<h2>Invoices</h2>', { headers: { 'content-type': 'text/html' } }));
+      await reader.cancel();
+      return /data-braid-deferred="([^"]+)"/.exec(early)?.[1];
+    };
+    const [first, second] = [await tokenOf(), await tokenOf()];
+    expect(first).toBeTruthy();
+    expect(first).not.toBe(second);
+  });
+
+  it('inlines a fragment that answers within a turn of the slot streaming, rather than deferring it', async () => {
+    const soon = new Promise<Response>((resolve) =>
+      queueMicrotask(() => resolve(new Response('<h2>Invoices</h2>', { headers: { 'content-type': 'text/html' } }))),
+    );
+    const html = await (await outOfOrderGateway(soon).handle(navigation, shell))!.text();
+    expect(html).not.toContain('braid-late');
+    expect(html.indexOf('<h2>Invoices</h2>')).toBeLessThan(html.indexOf('<footer>'));
   });
 
   it('rejects an unknown stream value', () => {
