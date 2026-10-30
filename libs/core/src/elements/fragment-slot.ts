@@ -69,6 +69,22 @@ export function slotStateFor(liveness: LivenessState): FragmentSlotState {
 }
 
 /**
+ * Whether a slot sits in another fragment's DOM: some shadow root above it belongs to a slot. A
+ * host's own components may keep slots in their shadow roots; those are the host's.
+ */
+export function insideAnotherFragment(slot: Element): boolean {
+  // the native method: a slot a compat fragment wrote is stamped, and its own getRootNode() answers
+  // with the fragment's virtual document instead of the shadow root it is really in
+  const rootOf = (node: Node) => nativeGetRootNode.call(node);
+  for (let root = rootOf(slot); root instanceof ShadowRoot; root = rootOf(root.host)) {
+    if (root.host.localName === 'fragment-slot') return true;
+  }
+  return false;
+}
+
+const nativeGetRootNode = Node.prototype.getRootNode;
+
+/**
  * Finds server-rendered fragment content the gateway pierced into a slot.
  *
  * Deliberately a direct-children scan rather than `querySelector(':scope > braid-document')`:
@@ -511,6 +527,21 @@ export class FragmentSlot extends HTMLElement {
             ? '<fragment-slot name="..."> must name a fragment registered in the gateway'
             : '<fragment-slot name="..."> needs a name to identify this fragment in errors and ' +
               'capability grants — it is not looked up in a registry on this tier',
+        });
+      }
+
+      /**
+       * An `entry` names the code a realm runs, so only the host may give one. A slot inside
+       * another fragment's DOM was written by that fragment — perhaps from data it rendered — and
+       * may compose registered fragments, whose code the registry names, but not bring its own.
+       */
+      if (this.hasAttribute('entry') && insideAnotherFragment(this)) {
+        throw new BraidError(`a <fragment-slot> inside another fragment may not declare an entry`, {
+          fragmentId,
+          stage: 'slot-config',
+          fixHint:
+            `register fragment "${fragmentId}" in the gateway and compose it by name, or move the slot into ` +
+            `the host page's own DOM`,
         });
       }
 

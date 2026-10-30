@@ -85,3 +85,26 @@ including its CSP, not the shell's.
 Both cases follow from the same fact: registering a trusted fragment grants it the user's session.
 When that is not acceptable for a fragment, the answer is `trust="untrusted"`, not more
 sanitization.
+
+## Markup a compat fragment writes at runtime
+
+The gateway's rules cover the markup a fragment *sends*. Markup its code *writes* afterwards, with
+`innerHTML` or `insertAdjacentHTML`, goes into the host document as written. Two things about it
+are enforced on every compat fragment, with no option to set:
+
+- **Braid's markers are Braid's.** The gateway and the compat boundary neutralize scripts as
+  `type="inert"`, and preload links as `rel="inert-*"`, then bring them back to life in the
+  fragment's realm. Only markers Braid set are activated: the gateway's prepared markup, scripts the
+  boundary neutralized on insertion, scripts the fragment created (which are born inert), and clones
+  of these. A `<script type="inert">` or `<link rel="inert-modulepreload">` that a fragment
+  *writes* (often user data it rendered) stays exactly as inert as it would be natively.
+- **Parsed scripts never run.** A browser never runs a `<script>` that `innerHTML` parsed, not even
+  after it is moved. The boundary now treats such scripts, and clones of them, the same way when the
+  fragment moves them, instead of running them in the realm.
+- **A nested slot cannot bring its own code.** A `<fragment-slot>` inside another fragment's DOM
+  may compose registered fragments by name, but it may not declare an `entry`. Such a slot fails
+  with a `slot-config` error. An `entry` names the code a realm runs, so only the host page may
+  give one. Slots inside the host's own components' shadow roots are the host's and are unaffected.
+
+To also strip handlers and `javascript:` URLs from those writes, opt in to `capabilities.html`
+(see `@braidlabs/core`, "Sanitizing a fragment's own HTML writes").

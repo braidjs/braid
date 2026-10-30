@@ -3,6 +3,7 @@
  * arbitrary pre-bound native method wrappers. */
 import { assert } from '../utils/assert.js';
 import { getInternalReference } from './metadata.js';
+import { isBornInertScript } from './born-inert-scripts.js';
 
 /**
  * Script execution machinery for compat fragments: any script that enters a fragment's DOM is
@@ -297,6 +298,35 @@ export function attachScriptToRealm({
 }
 
 /**
+ * The scripts and preload links Braid itself made inert, and so may bring back to life.
+ *
+ * `type="inert"` and `rel="inert-*"` are markers, and markers can be forged. A fragment that writes
+ * `<script type="inert">…</script>` through `innerHTML` — user data, typically — wrote a script that
+ * never runs natively: parsed scripts never do, and `inert` is no type a browser runs. Activating
+ * every marked script that reaches the DOM would run it in the realm. So only these are activated:
+ * scripts and links neutralized here, the gateway's markup present when the fragment boundary was
+ * created (see `markBraidInertContent`), born-inert scripts, and clones of any of them.
+ */
+const braidInert = new WeakSet<Element>();
+
+export function markBraidInert(element: Element): void {
+  braidInert.add(element);
+}
+
+export function isBraidInert(element: Element): boolean {
+  return braidInert.has(element) || (element instanceof HTMLScriptElement && isBornInertScript(element));
+}
+
+/** The marker selector: what Braid neutralizes, and the gateway too. */
+export const INERT_SELECTOR =
+  'script[type="inert"],link[rel="inert-preload"],link[rel="inert-prefetch"],link[rel="inert-modulepreload"]';
+
+/** Marks every inert script and link under `root` as Braid's: the gateway's prepared content. */
+export function markBraidInertContent(root: ParentNode): void {
+  root.querySelectorAll(INERT_SELECTOR).forEach(markBraidInert);
+}
+
+/**
  * Set the type attribute of a script element to "inert".
  *
  * This prevents the script from executing in the main JS context when the script is attached to
@@ -308,6 +338,7 @@ export function setInertScriptType(script: HTMLScriptElement) {
     script.setAttribute('data-script-type', scriptType);
   }
   script.setAttribute('type', 'inert');
+  markBraidInert(script);
 }
 
 /**
@@ -329,6 +360,7 @@ export function setInertLinkRel(link: HTMLLinkElement) {
   const linkRel = link.rel;
   if (linkRel) {
     link.rel = 'inert-' + linkRel;
+    markBraidInert(link);
   }
 }
 
