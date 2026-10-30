@@ -5,9 +5,9 @@ import { endpoint, html, launch, readySlots, startHost, type Host } from './harn
 /**
  * What a real browser does today when two trusted fragments each run their own auth client.
  *
- * These pin current behaviour, measured rather than assumed, and are the evidence behind
- * docs/multi-issuer-auth-plan.md. A later change that alters one of them is either the fix the
- * plan calls for — and flips the assertion — or a regression.
+ * These pinned the behaviour as measured, and are the evidence behind
+ * docs/multi-issuer-auth-plan.md. The storage tests still describe shared fragments (partitioned
+ * ones are e2e/storage-partition.e2e.ts); the message tests were flipped by the P4 fix.
  */
 
 type Probe = { fragment: string; kind: string; detail?: unknown }[];
@@ -73,9 +73,10 @@ beforeAll(async () => {
         {
           id: 'msg',
           endpoint: endpoint((path) => {
-            if (path.endsWith('/reply-parent.html')) return html(replyParent);
-            if (path.endsWith('/reply-relative.html')) return html(`<script>parent.postMessage({ probe: 'relative' }, '*')</script>`);
-            if (path.endsWith('/reply-opener.html')) return html(replyOpener);
+            // exact paths: a URL the client re-rooted twice must not be answered
+            if (path === '/reply-parent.html') return html(replyParent);
+            if (path === '/reply-relative.html') return html(`<script>parent.postMessage({ probe: 'relative' }, '*')</script>`);
+            if (path === '/reply-opener.html') return html(replyOpener);
             return html(messagingFragment);
           }),
         },
@@ -139,28 +140,28 @@ describe('two fragments with different issuers on one page, today', () => {
     expect(keys).toContain('okta-token-storage');
   });
 
-  it('delivers a hidden auth iframe reply to a fragment addEventListener, but not to window.onmessage', async () => {
+  // Fixed by P4: every reply reaches both listener styles exactly once, wherever it lands.
+  const count = (values: unknown[], value: string) => values.filter((v) => v === value).length;
+
+  it('delivers a hidden auth iframe reply to addEventListener and to window.onmessage, once each', async () => {
     const { probe } = await run();
-    expect(find(probe, 'msg', 'listener').map((e) => e.detail)).toContain('iframe-to-parent');
-    expect(find(probe, 'msg', 'onmessage').map((e) => e.detail)).not.toContain('iframe-to-parent');
+    for (const style of ['listener', 'onmessage']) {
+      expect(count(find(probe, 'msg', style).map((e) => e.detail), 'iframe-to-parent'), style).toBe(1);
+    }
   });
 
-  it("resolves a realm-created iframe's relative src against the host page, not the fragment", async () => {
-    // A relative redirect_uri on a hidden iframe therefore loads a host URL, not the fragment's page,
-    // and the reply never comes.
-    const { probe, page } = await run();
-    expect(find(probe, 'msg', 'relative-src')[0]?.detail).toBe(new URL('reply-relative.html', page.url()).href);
-    expect(find(probe, 'msg', 'listener').map((e) => e.detail)).not.toContain('relative');
+  it("resolves a realm-created iframe's relative src against the fragment, so its reply arrives", async () => {
+    const { probe } = await run();
+    expect(find(probe, 'msg', 'relative-src')[0]?.detail).toMatch(/\/__braid\/frag\/msg\/reply-relative\.html$/);
+    expect(count(find(probe, 'msg', 'listener').map((e) => e.detail), 'relative')).toBe(1);
   });
 
-  it('delivers popup replies to opener and self-posts to window.onmessage, but not to a fragment addEventListener', async () => {
-    // The mirror image of the iframe case: these land on the realm window itself, which only a
-    // native handler sees, while compat listeners are registered on the fragment and the host.
+  it('delivers popup replies to opener and self-posts to both listener styles, once each', async () => {
     const { probe } = await run();
-    const listener = find(probe, 'msg', 'listener').map((e) => e.detail);
-    const onmessage = find(probe, 'msg', 'onmessage').map((e) => e.detail);
-    expect(onmessage).toEqual(expect.arrayContaining(['popup-to-opener', 'self']));
-    expect(listener).not.toContain('popup-to-opener');
-    expect(listener).not.toContain('self');
+    for (const style of ['listener', 'onmessage']) {
+      const delivered = find(probe, 'msg', style).map((e) => e.detail);
+      expect(count(delivered, 'popup-to-opener'), style).toBe(1);
+      expect(count(delivered, 'self'), style).toBe(1);
+    }
   });
 });

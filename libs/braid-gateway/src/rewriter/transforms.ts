@@ -276,7 +276,7 @@ function asUrlParserReadsIt(rawUrl: string): string {
 
 /** Rewrites a tag's subresource URLs into the fragment's namespace. */
 function rewriteSubresourceUrls(tag: StartTag, fragmentRoot: string, baseHref: string): void {
-  const attributes = SUBRESOURCE_ATTRIBUTES[tag.tagName];
+  const attributes = Object.hasOwn(SUBRESOURCE_ATTRIBUTES, tag.tagName) ? SUBRESOURCE_ATTRIBUTES[tag.tagName] : undefined;
   if (!attributes) return;
 
   for (const attributeName of attributes) {
@@ -304,6 +304,8 @@ function namespaceUrl(rawUrl: string, fragmentRoot: string, baseHref: string): s
   if (!url || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) {
     return null;
   }
+  // already inside the namespace (a fragment that writes its own re-rooted URLs): leave it
+  if (url === fragmentRoot || url.startsWith(`${fragmentRoot}/`)) return null;
 
   // resolve exactly as the browser would have in the fragment's own document, then re-root it
   const resolved = new URL(url, `http://braid.invalid${baseHref.startsWith('/') ? baseHref : `/${baseHref}`}`);

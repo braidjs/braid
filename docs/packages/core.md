@@ -97,6 +97,22 @@ reads the host's property live and writes it back, bare identifiers included:
 - **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
   reaches browsers on that schedule.
 
+### Cross-frame messages
+
+A compat fragment's `message` listener hears every reply meant for it, once each, whether it
+arrives on the host window or the realm window, and whether it was registered with
+`addEventListener('message')` or `window.onmessage`:
+
+- an iframe in the fragment's DOM, such as a silent-renew frame, posts to `parent`, the host
+  window;
+- a popup posts to `opener`, the realm window;
+- the fragment can also post to itself.
+
+`event.origin` and `event.source` are untouched, so a library's own origin checks still apply.
+That matters, because both styles also hear every other message posted to the host window,
+other fragments' traffic included: check `event.origin` and `event.source` before trusting one.
+A `{ once: true }` listener fires once, whichever window the message lands on.
+
 ### Per-fragment storage
 
 A compat fragment's realm is same-origin, so its `localStorage` and `sessionStorage` are the host

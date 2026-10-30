@@ -11,6 +11,7 @@ import {
 } from './script-execution.js';
 import { removeBornInertShadowing, unwrapBornInertScriptToLive } from './born-inert-scripts.js';
 import { isDevMode } from '../config.js';
+import { fragmentRootOf, subresourceUrlOverrides, type FragmentUrlBase } from './subresource-urls.js';
 
 /**
  * The fragment boundary: all main-realm interception is confined here — the
@@ -272,6 +273,16 @@ export function createFragmentBoundary(options: {
     ...makeHtmlParsingOverrides(native.elementInnerHTML),
   };
 
+  /**
+   * What a URL set from fragment script resolves against, read when it is set: the namespace from
+   * the realm's base, and the fragment's own `<base href>` from its markup — the two the gateway
+   * uses for the same URL in markup, so markup and script agree on every route.
+   */
+  const urlBase = (): FragmentUrlBase => ({
+    root: fragmentRootOf(realmDocument.baseURI),
+    baseHref: braidDocumentElement.querySelector('base[href]')?.getAttribute('href') ?? '/',
+  });
+
   function stampNode(node: Node): void {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     if (stampedNodes.has(node)) return;
@@ -284,7 +295,12 @@ export function createFragmentBoundary(options: {
 
     let stampedProto = stampedProtos.get(proto);
     if (!stampedProto) {
-      stampedProto = Object.create(proto, elementOverrides);
+      // a subresource URL the fragment's code sets resolves into its namespace, as one in its
+      // markup does (see subresource-urls.ts); keyed by prototype, which fixes the element type
+      stampedProto = Object.create(proto, {
+        ...elementOverrides,
+        ...subresourceUrlOverrides(proto, (node as Element).localName, urlBase),
+      });
       stampedProtos.set(proto, stampedProto!);
       stampedProtoSet.add(stampedProto!);
     }

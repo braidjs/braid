@@ -401,6 +401,10 @@ export function initializeRealmContext(
 
   // A list of events for which we don't want to retarget listeners as these events are dispatched in the realm.
   const realmEvents = ['load', 'popstate', 'beforeunload', 'unload'];
+  // events delivered natively at the realm window as well as relayed from the host (see below)
+  const realmWindowMessageEvents = ['message', 'messageerror'];
+  // the wrappers that make a `once` message listener fire once across both windows, by listener
+  const onceMessageListeners = new WeakMap<object, Map<string, EventListener>>();
 
   // Maps realm EventTargets (window and document) to a target in the main context
   const realmTargetToFragmentTarget = (target: EventTarget): EventTarget => {
@@ -484,6 +488,25 @@ export function initializeRealmContext(
           : typeof optionsOrCapture === 'object'
             ? optionsOrCapture ?? {}
             : {};
+
+      // A `once` message listener is registered on two windows (see below), and each registration
+      // would fire once. Wrap it so that the first delivery, from either, removes both.
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName) && options.once) {
+        const capture = Boolean(options.capture);
+        const onceListener = function (this: unknown, event: Event) {
+          compatRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, { capture });
+          return typeof appListenerOrObject === 'function'
+            ? (appListenerOrObject as EventListener).call(this, event)
+            : appListenerOrObject.handleEvent(event);
+        };
+        let byType = onceMessageListeners.get(appListenerOrObject);
+        if (!byType) onceMessageListeners.set(appListenerOrObject, (byType = new Map()));
+        // as natively, adding the same listener again changes nothing
+        if (byType.has(`${eventName}:${capture}`)) return;
+        byType.set(`${eventName}:${capture}`, onceListener);
+        compatAddEventListener.call(realmWindow, eventName, onceListener, { ...options, once: false });
+        return;
+      }
 
       // browsers default to passive events for the following events
       // https://dom.spec.whatwg.org/#default-passive-value
@@ -695,6 +718,13 @@ export function initializeRealmContext(
 
       // register the listener on the main window, document, <html>, or <body> target
       mainProxyListenerTarget.addEventListener(eventName, mainProxyListener, mainProxyListenerOptions);
+
+      // A message can land on either window: an iframe in the fragment's DOM posts to its parent,
+      // the host; a popup's `opener` and a self-post are the realm itself. A realm-window listener
+      // hears both, natively — each event is dispatched at exactly one of them, so once.
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalAddEventListener.call(realmWindow, eventName, appListenerOrObject, mainProxyListenerOptions);
+      }
     },
   });
 
@@ -715,6 +745,18 @@ export function initializeRealmContext(
       if (realmEvents.includes(eventName) && originalListenerTarget === realmWindow) {
         originalRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, optionsOrCapture);
         return;
+      }
+
+      // a `once` message listener is registered under its wrapper (see compatAddEventListener)
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        const capture = typeof optionsOrCapture === 'boolean' ? optionsOrCapture : Boolean(optionsOrCapture?.capture);
+        const byType = onceMessageListeners.get(appListenerOrObject);
+        const wrapper = byType?.get(`${eventName}:${capture}`);
+        if (wrapper) {
+          byType!.delete(`${eventName}:${capture}`);
+          compatRemoveEventListener.call(realmWindow, eventName, wrapper, { capture });
+          return;
+        }
       }
 
       const appListener =
@@ -739,11 +781,30 @@ export function initializeRealmContext(
 
       Reflect.apply(originalRemoveEventListener, compatListenerTarget, modifiedArgumentsList);
       mainWindow.removeEventListener(eventName, mainProxyListener, optionsOrCapture as EventListenerOptions);
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, optionsOrCapture);
+      }
     },
   });
 
   realmWindow.addEventListener = realmDocument.addEventListener = compatAddEventListener;
   realmWindow.removeEventListener = realmDocument.removeEventListener = compatRemoveEventListener;
+
+  // `window.onmessage = fn` would natively hear only the realm window, missing every reply posted
+  // to the host — an auth iframe's, say. Owning the property routes it through the compat listener,
+  // which hears both windows (see the message registration above).
+  for (const eventName of realmWindowMessageEvents) {
+    let handler: ((this: Window, event: MessageEvent) => unknown) | null = null;
+    realmWindow.addEventListener(eventName, (event) => handler?.call(realmWindow, event as MessageEvent));
+    Object.defineProperty(realmWindow, `on${eventName}`, {
+      get: () => handler,
+      set: (value: unknown) => {
+        handler = typeof value === 'function' ? (value as typeof handler) : null;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
 
   if (partition) {
     // `cookieStore` reads and writes the raw jar, around the scoped `document.cookie`; libraries
