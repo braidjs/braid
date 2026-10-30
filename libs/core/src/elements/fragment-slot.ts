@@ -31,6 +31,7 @@ import {
   resolveSharedGlobals,
   resolveStoragePartition,
 } from '../weave/capabilities.js';
+import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
 
 /**
  * What the slot reports about its fragment.
@@ -418,6 +419,13 @@ export class FragmentSlot extends HTMLElement {
 
       ensureFallbackSlot(shadowRoot);
 
+      // Prerequisites the host's markup declares start now, alongside the realm and the document;
+      // the manifest's arrive with the realm stub. Either way the fragment's code waits for them.
+      const markupRequires = parseRequires(this.getAttribute('requires'));
+      const earlyPrerequisites = markupRequires.length ? awaitPrerequisites(markupRequires, fragmentId, signal) : null;
+      // awaited below; until then a failure must not surface as an unhandled rejection
+      earlyPrerequisites?.catch(() => undefined);
+
       /**
        * Boot the realm and fetch the fragment's document at the same time, unless it was
        * already pierced in. Both go through the gateway's namespaces, addressed by id.
@@ -458,6 +466,10 @@ export class FragmentSlot extends HTMLElement {
       // The gateway stamps the manifest-declared adapter onto the realm stub; unknown adapters
       // fail as a named error, and an undeclared adapter resolves to the default (compat).
       const adapter = resolveAdapter(realm.manifestAdapter, fragmentId);
+
+      const manifestRequires = parseRequires(realm.adapterOptions['requires']).filter((key) => !markupRequires.includes(key));
+      const latePrerequisites = manifestRequires.length ? awaitPrerequisites(manifestRequires, fragmentId, signal) : null;
+      latePrerequisites?.catch(() => undefined);
 
       if (!htmlResult.ok && adapter.needsDocument !== false) {
         // The fragment sent the user somewhere else — a login, almost always — and the gateway has
@@ -569,6 +581,10 @@ export class FragmentSlot extends HTMLElement {
       if (signal.aborted) return;
       const storagePartition = resolveStoragePartition(capabilities, fragmentId);
 
+      // nothing of the fragment's has run yet; its content may already be painted, inert
+      await Promise.all([earlyPrerequisites, latePrerequisites]);
+      if (signal.aborted) return;
+
       await adapter.boot({
         fragmentId,
         shadowRoot,
@@ -628,7 +644,12 @@ export class FragmentSlot extends HTMLElement {
               cause: error,
             });
 
-      console.error(braidError);
+      // a user without access to a prerequisite is an outcome, not a failure: fallback, no alarm
+      if (braidError instanceof NotEntitledError) {
+        if (isDevMode()) console.debug(`[braid:${fragmentId}] ${braidError.message}; showing the fallback`);
+      } else {
+        console.error(braidError);
+      }
       this.dispatchEvent(
         new CustomEvent('braid:error', {
           detail: {

@@ -10,6 +10,7 @@
 
 import type { HostContract } from './weave/contract.js';
 import type { FragmentCapabilities } from './weave/capabilities.js';
+import type { PrerequisiteResolver } from './elements/prerequisites.js';
 
 export interface BraidOptions {
   /**
@@ -99,6 +100,19 @@ export interface BraidOptions {
    * fragment documents from `/manage/__braid/…`. Call `initBraid` before any slot connects.
    */
   basePath?: string;
+  /**
+   * Resolvers for mount prerequisites: named things that must be ready before a fragment's code
+   * runs, such as a warm session for its authorization server. Keyed by exact key or by a
+   * `prefix*` pattern. A fragment declares the keys it needs with `<fragment-slot requires="…">`
+   * or its manifest's `requires`. See `elements/prerequisites.ts`.
+   *
+   * ```ts
+   * initBraid({ prerequisites: { 'session:*': (key, { signal }) => sessions.ensure(key, { signal }) } });
+   * ```
+   */
+  prerequisites?: Record<string, PrerequisiteResolver>;
+  /** How long a prerequisite may take before its fragment fails. Defaults to 15 seconds. */
+  prerequisiteTimeoutMs?: number;
 }
 
 /** See {@link BraidOptions.realmGlobals}. */
@@ -116,6 +130,8 @@ interface ResolvedBraidConfig {
   sharedGlobals?: string[];
   realmGlobals?: RealmGlobalsHook;
   onHostNavigation?: (notify: () => void) => void;
+  prerequisites?: Record<string, PrerequisiteResolver>;
+  prerequisiteTimeoutMs?: number;
 }
 
 const config: ResolvedBraidConfig = {
@@ -141,6 +157,15 @@ export function setBraidConfig(options: BraidOptions = {}): void {
   }
   if (options.onHostNavigation) {
     config.onHostNavigation = options.onHostNavigation;
+  }
+  if (options.prerequisites) {
+    config.prerequisites = options.prerequisites;
+  }
+  if (options.prerequisiteTimeoutMs !== undefined) {
+    if (!Number.isFinite(options.prerequisiteTimeoutMs) || options.prerequisiteTimeoutMs <= 0) {
+      throw new Error(`braid: prerequisiteTimeoutMs must be a positive number of milliseconds`);
+    }
+    config.prerequisiteTimeoutMs = options.prerequisiteTimeoutMs;
   }
   // Kept in sync with the gateway's normalizeBasePath: a path the URL parser would rewrite (`/café`,
   // a dot segment) could never match the parsed pathnames the gateway compares it to.

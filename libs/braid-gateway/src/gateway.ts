@@ -1674,6 +1674,7 @@ function adapterOptionsMeta(fragment: ResolvedFragmentManifest, basePath: string
   // Capabilities ride the same stub as the adapter options: the client needs them before it opens
   // the boundary, and the stub is the one thing it reads before anything else crosses.
   if (fragment.capabilities) options['capabilities'] = fragment.capabilities;
+  if (fragment.requires?.length) options['requires'] = fragment.requires;
 
   if (Object.keys(options).length === 0) return '';
 
