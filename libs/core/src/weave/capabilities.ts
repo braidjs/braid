@@ -22,8 +22,9 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * `network` is advisory on the trusted tier by default: it documents intent and feeds the registry's
  * analysis. A gateway with `realmPolicy` turns the registry's grant into a `connect-src` policy on
  * the realm's own document, which the browser enforces (or reports) for the realm's requests. That
- * is all it covers: a trusted fragment is same-origin, so code that deliberately reaches the host
- * realm's `fetch` is outside it, and Braid does not patch host globals to close that gap. A tripwire
+ * is all it covers: what the realm calls on the host's behalf — `navigator.sendBeacon` (a compat
+ * realm's `navigator` is the host's), a `sharedGlobals` client — and code that deliberately reaches
+ * the host realm's `fetch` are outside it, and Braid does not patch host globals to close that gap. A tripwire
  * for accidents and naive exfiltration, stated as one. A grant passed only to `initBraid` cannot
  * reach the realm's headers, and stays advisory.
  */

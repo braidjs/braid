@@ -319,14 +319,18 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
   ) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
   }
+  // Warned, not thrown: `network` was advisory before `realmPolicy` existed, and a gateway that never
+  // turns the policy on must not refuse to start over an entry it would never use. With a policy on,
+  // these entries are left out of it, so the policy is stricter for them, never looser.
   const network = manifest.capabilities?.network;
   if (network !== undefined) {
     const invalid = Array.isArray(network) ? network.filter((entry) => !isOriginSource(entry)) : [network];
     if (invalid.length) {
-      throw new Error(
+      console.warn(
         `braid-gateway: manifest "${manifest.id}" has capabilities.network entries that are not plain origins: ` +
-          `${invalid.map((entry) => JSON.stringify(entry)).join(', ')} — list origins only, e.g. ` +
-          `"https://api.example.com" or "wss://*.example.com:443", since they become a connect-src policy`,
+          `${invalid.map((entry) => JSON.stringify(entry)).join(', ')} — they are left out of any realm policy. ` +
+          `List origins only, e.g. "https://api.example.com" or "wss://*.example.com:443"; an internationalised ` +
+          `host must be written in punycode (xn--…), and IP v6 literals cannot be expressed in a CSP source`,
       );
     }
   }
@@ -357,7 +361,7 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
  * port, and nothing else. Nothing else may reach the header — a path widens or narrows matching in
  * ways nobody reviewing a manifest expects, and a quote, `;` or `,` would inject a directive.
  */
-function isOriginSource(entry: unknown): boolean {
+export function isOriginSource(entry: unknown): boolean {
   return typeof entry === 'string' && /^(https?|wss?):\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:(\d{1,5}|\*))?$/i.test(entry);
 }
 

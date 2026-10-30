@@ -18,6 +18,7 @@ import {
   canFetch,
   canList,
   hasAccessRules,
+  isOriginSource,
   Principal,
   Registry,
   RegistryRefresh,
@@ -208,11 +209,13 @@ export interface GatewayOptions {
    * - `'report'` — as `Content-Security-Policy-Report-Only`. Nothing is blocked; the client logs
    *   each request that would have been, under the fragment's name. Start here.
    * - `'enforce'` — as `Content-Security-Policy`. The browser blocks the realm's own `fetch`, XHR,
-   *   WebSocket, EventSource and `sendBeacon` calls to any other origin.
+   *   WebSocket and EventSource requests to any other origin (and JSON module imports, which CSP
+   *   counts as connections).
    *
    * It governs what the fragment's realm does, not what the host document does: markup the
-   * fragment puts in the page is under the host's policy, and code that deliberately reaches into
-   * the host realm can get around it. It is a tripwire for accidents and naive supply-chain
+   * fragment puts in the page is under the host's policy, and so is anything the realm calls on the
+   * host's behalf — `navigator.sendBeacon` (a compat realm's `navigator` is the host's), and any
+   * `sharedGlobals` client. Code that deliberately reaches into the host realm gets around it too. It is a tripwire for accidents and naive supply-chain
    * exfiltration, not a security boundary — the trusted tier has none. Fragments that declare no
    * `network` are untouched.
    */
@@ -788,12 +791,15 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           // returning visitor's fragment boot never waits on it — the cost is that the first boot
           // after a re-pin may use the previous stub once, while the new one is fetched.
           const network = fragment.capabilities?.network;
-          // the realm's own document, so this governs the realm's requests and nothing of the host's
+          // The realm's own document, so this governs the realm's requests and nothing of the host's.
+          // Only plain origins reach the header (the registry warned about the rest), and an empty
+          // list is the strictest declaration there is: the host origin only.
+          const origins = Array.isArray(network) ? network.filter(isOriginSource) : [];
           const policy: Record<string, string> =
-            realmPolicy && network?.length
+            realmPolicy && Array.isArray(network)
               ? {
                   [realmPolicy === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only']:
-                    `connect-src 'self' ${network.join(' ')}`,
+                    ["connect-src 'self'", ...origins].join(' '),
                 }
               : {};
           // The policy is part of the representation: a browser revalidating a stub cached with an

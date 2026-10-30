@@ -212,22 +212,33 @@ createGateway({
 - **What gets sent.** The realm stub of every compat or custom-element fragment that declares
   `network` carries `connect-src 'self' <its origins>`. With `'report'` it goes as
   `Content-Security-Policy-Report-Only`, with `'enforce'` as `Content-Security-Policy`.
-- **What it covers.** The realm's own `fetch`, XHR, WebSocket, EventSource and `sendBeacon` calls.
-  `'self'` is the host origin, so the fragment's own namespace and the host's APIs stay reachable.
-- **What it does not cover.** Markup the fragment puts in the page (images, form actions) is under
-  the host's policy. Code that deliberately reaches into the host realm can use the host's `fetch`.
-  It catches accidents and naive supply-chain exfiltration; it is not a boundary, because the
+- **What it covers.** The realm's own `fetch`, XHR, WebSocket and EventSource requests, and JSON
+  module imports (CSP counts those as connections, so a fragment importing JSON from a CDN needs
+  that origin listed). `'self'` is the host origin, so the fragment's own namespace and the host's
+  APIs stay reachable.
+- **What it does not cover.** Several things stay under the host's policy:
+  - markup the fragment puts in the page (images, form actions);
+  - `navigator.sendBeacon`, because a compat realm's `navigator` is the host's;
+  - any client the host shares through `sharedGlobals`;
+  - code that deliberately reaches into the host realm.
+
+  It catches accidents and naive supply-chain exfiltration. It is not a boundary, because the
   trusted tier has none.
 - **What you see.** The client logs every request the policy blocks, or would have blocked, with
   the fragment's name and the URL. Start with `'report'`, read the console, add what is missing,
   then switch to `'enforce'`.
 - **Entries must be plain origins.** A scheme, a host (optionally `*.`-prefixed) and an optional
-  port: `https://api.example.com`, `wss://*.push.example.com:443`. Anything else, such as a path,
-  a quote, `;` or `,`, is refused when the registry loads, so a manifest cannot add a directive.
+  port: `https://api.example.com`, `wss://*.push.example.com:443`. Write internationalised hosts in
+  punycode (`xn--…`). IPv6 literals cannot be expressed in a CSP source.
+- **Anything else is left out, with a warning.** A path, a quote, `;` or `,` is warned about when
+  the registry loads and kept out of the policy, so a manifest cannot add a directive. Leaving an
+  entry out makes the policy stricter, never looser. A gateway without `realmPolicy` still starts.
+- **An empty list is the strictest declaration:** `connect-src 'self'`, the host origin only.
 - **It is the registry's grant only.** A grant passed to `initBraid({ capabilities })` never
   reaches the realm's headers.
-- **Unchanged without it.** With no `realmPolicy`, or for a fragment that declares no `network`,
-  stubs are unchanged.
+- **Unchanged without it.** With no `realmPolicy`, or for a fragment with no `network` at all,
+  stubs are unchanged. A stub that carries a policy has its own `ETag`, so turning the policy on,
+  off or between modes reaches browsers that cached the old stub.
 
 ## Per-fragment cookies
 

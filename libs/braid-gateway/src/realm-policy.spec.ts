@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createGateway } from './gateway.js';
 import type { FragmentManifest } from './registry.js';
 
@@ -65,13 +65,25 @@ describe('realm network policy', () => {
     "'self'",
     'api.example',
     'javascript:alert(1)',
-  ])('refuses the network entry %j when the registry loads', (entry) => {
+  ])('keeps the entry %j out of the policy, and warns', async (entry) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const response = (await stub({ capabilities: { network: ['https://ok.example', entry] } }, 'enforce'))!;
+    expect(response.headers.get('content-security-policy')).toBe("connect-src 'self' https://ok.example");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('manifest "billing" has capabilities.network entries'));
+    warn.mockRestore();
+  });
+
+  it('still starts a gateway without realmPolicy whose manifests carry such entries', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(() =>
-      createGateway({
-        registry: [{ id: 'billing', endpoint: 'https://billing.internal', capabilities: { network: [entry] } }],
-        realmPolicy: 'enforce',
-      }),
-    ).toThrow(/manifest "billing" has capabilities.network entries/);
+      createGateway({ registry: [{ id: 'billing', endpoint: 'https://billing.internal', capabilities: { network: ['api.example'] } }] }),
+    ).not.toThrow();
+    warn.mockRestore();
+  });
+
+  it('treats an empty list as the strictest declaration: the host origin only', async () => {
+    const response = (await stub({ capabilities: { network: [] } }, 'enforce'))!;
+    expect(response.headers.get('content-security-policy')).toBe("connect-src 'self'");
   });
 
   it('refuses an unknown realmPolicy', () => {

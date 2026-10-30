@@ -444,9 +444,16 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
 function reportPolicyViolations(realmDocument: Document, fragmentId: string): void {
   realmDocument.addEventListener('securitypolicyviolation', (event) => {
     const what = event.disposition === 'report' ? 'would have blocked' : 'blocked';
+    // the origin only: a full URL's query can carry tokens, and the origin is what the grant names
+    let origin = event.blockedURI;
+    try {
+      origin = new URL(event.blockedURI).origin;
+    } catch {
+      // not a URL (a keyword such as "inline"); shown as it is
+    }
     console.warn(
-      `[braid:${fragmentId}] the realm's policy ${what} a request to ${event.blockedURI || 'an inline source'} ` +
-        `(${event.effectiveDirective}) — add its origin to the manifest's capabilities.network if the fragment needs it`,
+      `[braid:${fragmentId}] the realm's policy ${what} a request to ${origin} (${event.effectiveDirective}) — ` +
+        `add that origin to the manifest's capabilities.network if the fragment needs it`,
     );
   });
 }
