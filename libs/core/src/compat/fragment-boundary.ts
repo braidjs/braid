@@ -11,6 +11,7 @@ import {
 } from './script-execution.js';
 import { removeBornInertShadowing, unwrapBornInertScriptToLive } from './born-inert-scripts.js';
 import { isDevMode } from '../config.js';
+import { subresourceUrlOverrides } from './subresource-urls.js';
 
 /**
  * The fragment boundary: all main-realm interception is confined here — the
@@ -284,7 +285,12 @@ export function createFragmentBoundary(options: {
 
     let stampedProto = stampedProtos.get(proto);
     if (!stampedProto) {
-      stampedProto = Object.create(proto, elementOverrides);
+      // a subresource URL the fragment's code sets resolves into its namespace, as one in its
+      // markup does (see subresource-urls.ts); keyed by prototype, which fixes the element type
+      stampedProto = Object.create(proto, {
+        ...elementOverrides,
+        ...subresourceUrlOverrides(proto, (node as Element).localName, () => realmDocument.baseURI),
+      });
       stampedProtos.set(proto, stampedProto!);
       stampedProtoSet.add(stampedProto!);
     }

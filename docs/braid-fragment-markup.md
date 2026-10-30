@@ -22,6 +22,11 @@ cross-origin iframe, and the gateway never touches its markup.
 | `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept | a `javascript:` frame runs on parse with the host's origin; `data:` and `blob:` are refused alongside it as the same shape — a document the markup carries inline |
 | relative and root-relative subresource URLs (`img[src]`, `link[href]`, …) | resolved against the fragment's `<base href>`, then re-rooted under `/__braid/frag/<id>/` (behind the gateway's `basePath`, if it has one) | they would otherwise resolve against the host page |
 
+The same rule applies to subresource URLs that the fragment's *code* sets, through the property
+(`frame.src = 'silent-renew.html'`) or `setAttribute`. The client applies it when the URL is set,
+so a hidden auth iframe or a lazily set image loads from the fragment rather than the host.
+Navigation targets (`a[href]`, `form[action]`) are left alone in both cases.
+
 Whenever a frame loses an attribute, and when a meta refresh is defanged, the tag is marked with
 what was removed:
 

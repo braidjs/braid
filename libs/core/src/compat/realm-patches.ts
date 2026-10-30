@@ -401,6 +401,8 @@ export function initializeRealmContext(
 
   // A list of events for which we don't want to retarget listeners as these events are dispatched in the realm.
   const realmEvents = ['load', 'popstate', 'beforeunload', 'unload'];
+  // events delivered natively at the realm window as well as relayed from the host (see below)
+  const realmWindowMessageEvents = ['message', 'messageerror'];
 
   // Maps realm EventTargets (window and document) to a target in the main context
   const realmTargetToFragmentTarget = (target: EventTarget): EventTarget => {
@@ -695,6 +697,13 @@ export function initializeRealmContext(
 
       // register the listener on the main window, document, <html>, or <body> target
       mainProxyListenerTarget.addEventListener(eventName, mainProxyListener, mainProxyListenerOptions);
+
+      // A message can land on either window: an iframe in the fragment's DOM posts to its parent,
+      // the host; a popup's `opener` and a self-post are the realm itself. A realm-window listener
+      // hears both, natively — each event is dispatched at exactly one of them, so once.
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalAddEventListener.call(realmWindow, eventName, appListenerOrObject, mainProxyListenerOptions);
+      }
     },
   });
 
@@ -739,11 +748,28 @@ export function initializeRealmContext(
 
       Reflect.apply(originalRemoveEventListener, compatListenerTarget, modifiedArgumentsList);
       mainWindow.removeEventListener(eventName, mainProxyListener, optionsOrCapture as EventListenerOptions);
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, optionsOrCapture);
+      }
     },
   });
 
   realmWindow.addEventListener = realmDocument.addEventListener = compatAddEventListener;
   realmWindow.removeEventListener = realmDocument.removeEventListener = compatRemoveEventListener;
+
+  // `window.onmessage = fn` would natively hear only the realm window, missing every reply posted
+  // to the host — an auth iframe's, say. Owning the property routes it through the compat listener,
+  // which hears both windows (see the message registration above).
+  let onmessage: ((this: Window, event: MessageEvent) => unknown) | null = null;
+  realmWindow.addEventListener('message', (event) => onmessage?.call(realmWindow, event as MessageEvent));
+  Object.defineProperty(realmWindow, 'onmessage', {
+    get: () => onmessage,
+    set: (handler: unknown) => {
+      onmessage = typeof handler === 'function' ? (handler as typeof onmessage) : null;
+    },
+    configurable: true,
+    enumerable: true,
+  });
 
   if (partition) {
     // `cookieStore` reads and writes the raw jar, around the scoped `document.cookie`; libraries
