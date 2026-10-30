@@ -787,19 +787,23 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
           // returning visitor's fragment boot never waits on it — the cost is that the first boot
           // after a re-pin may use the previous stub once, while the new one is fetched.
-          const etag = await stubEtag(stub);
           const network = fragment.capabilities?.network;
-          const cacheHeaders: Record<string, string> = {
-            [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
-            ETag: etag,
-            'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
-            // the realm's own document, so this governs the realm's requests and nothing of the host's
-            ...(realmPolicy && network?.length
+          // the realm's own document, so this governs the realm's requests and nothing of the host's
+          const policy: Record<string, string> =
+            realmPolicy && network?.length
               ? {
                   [realmPolicy === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only']:
                     `connect-src 'self' ${network.join(' ')}`,
                 }
-              : {}),
+              : {};
+          // The policy is part of the representation: a browser revalidating a stub cached with an
+          // old policy must get a 200 with the new one (or none), not a 304 that leaves it in place.
+          const etag = await stubEtag(Object.keys(policy).length ? `${stub}\n${JSON.stringify(policy)}` : stub);
+          const cacheHeaders: Record<string, string> = {
+            [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
+            ETag: etag,
+            'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
+            ...policy,
           };
           if (etagMatches(request.headers.get('if-none-match'), etag)) {
             return new Response(null, { status: 304, headers: cacheHeaders });

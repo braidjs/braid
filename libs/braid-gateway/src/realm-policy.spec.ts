@@ -43,6 +43,20 @@ describe('realm network policy', () => {
     expect(await withoutOption.text()).toBe(await (await stub(network, 'enforce'))!.text());
   });
 
+  it('gives a stub with a policy its own ETag, so turning the policy on or off is never answered 304', async () => {
+    const plain = (await stub(network))!.headers.get('etag');
+    const enforced = (await stub(network, 'enforce'))!.headers.get('etag');
+    const reported = (await stub(network, 'report'))!.headers.get('etag');
+    expect(new Set([plain, enforced, reported]).size).toBe(3);
+
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: 'https://billing.internal', ...network }] });
+    const revalidated = await gateway.handle(
+      new Request(stubRequest.url, { headers: { 'if-none-match': enforced! } }),
+      notFound,
+    );
+    expect(revalidated!.status).toBe(200);
+  });
+
   it.each([
     'https://api.example/v1',
     "https://api.example 'unsafe-inline'",
