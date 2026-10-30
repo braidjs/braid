@@ -75,6 +75,21 @@ export type RegistryEvent =
   | { kind: 'registry'; outcome: 'refreshed'; fragmentCount: number; at: number }
   | { kind: 'registry'; outcome: 'failed'; error: string; at: number };
 
+/** A fragment fetch about to start, as {@link TelemetryOptions.onFragmentFetch} is told of it. */
+export interface FragmentFetchStart {
+  fragmentId: string;
+  phase: FragmentFetchEvent['phase'];
+  method: string;
+}
+
+/** What a fetch hook hands back: headers for the fragment request, and a callback for its end. */
+export interface FragmentFetchHooks {
+  /** Set on the fragment request — trace context, say — over anything already there. */
+  headers?: Record<string, string>;
+  /** Called once with the same event `on` receives, and the error when the fetch threw. */
+  end?: (event: FragmentFetchEvent, error?: unknown) => void;
+}
+
 export interface TelemetryOptions {
   /**
    * Called for every event.
@@ -84,7 +99,15 @@ export interface TelemetryOptions {
    * one *is* wrapped — a broken telemetry sink must not fail the request it is describing, because
    * the whole point is to be safe to leave on in production.
    */
-  on: (event: TelemetryEvent) => void;
+  on?: (event: TelemetryEvent) => void;
+  /**
+   * Called as each fragment fetch starts — after the credential rules and `additionalHeaders`,
+   * before the circuit breaker — for a hook that needs the start, not just the outcome: a tracing
+   * integration opening a span and propagating its context (see `@braidlabs/otel`).
+   *
+   * On the request path, so it must be cheap, and muted like `on` if it throws.
+   */
+  onFragmentFetch?: (fetch: FragmentFetchStart) => FragmentFetchHooks | void;
   /**
    * Collect web vitals in the browser and report them here. Off by default.
    *

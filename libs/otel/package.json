@@ -1,0 +1,37 @@
+{
+  "name": "@braidlabs/otel",
+  "version": "0.0.1",
+  "description": "OpenTelemetry for Braid: every fragment fetch the gateway makes as a span in your existing traces, attributed to its fragment, with trace context propagated to the fragment's endpoint. Brings no SDK of its own — spans go to whatever tracer provider you register (NodeSDK, a Honeycomb distro, dd-trace).",
+  "keywords": ["braid", "micro-frontends", "opentelemetry", "otel", "tracing", "observability"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@braidlabs/gateway": "^0.0.1",
+    "@opentelemetry/api": "^1.3.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/braidjs/braid.git",
+    "directory": "libs/otel"
+  },
+  "homepage": "https://github.com/braidjs/braid#readme",
+  "bugs": {
+    "url": "https://github.com/braidjs/braid/issues"
+  }
+}

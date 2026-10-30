@@ -29,6 +29,7 @@ import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
 import { scopeRequestCookies, scopeResponseCookies, scopeSetCookie, storagePartitionOf, withoutScopedCookies } from './cookie-scope.js';
+import { fragmentBaggage, type BaggageOptions } from './baggage.js';
 import {
   parseOriginRules,
   resolveRedirectTarget,
@@ -38,6 +39,9 @@ import {
 import {
   parseVitalsBeacon,
   vitalsCollectorScript,
+  type FragmentFetchEvent,
+  type FragmentFetchHooks,
+  type FragmentFetchStart,
   type TelemetryEvent,
   type TelemetryOptions,
 } from './telemetry.js';
@@ -131,6 +135,13 @@ export interface GatewayOptions {
    * throws forwards nothing. The same decision applies to websocket upgrades.
    */
   forwardCredentials?: boolean | ((fragment: FragmentManifest) => boolean);
+  /**
+   * W3C `baggage` for fragment requests. By default a fragment receives none: the browser's header
+   * is dropped rather than copied into every backend. Allowlist the inbound keys to keep, with an
+   * optional pattern for their values, and add members of the gateway's own. Only fragments that
+   * `forwardCredentials` allows receive any. See `baggage.ts`.
+   */
+  baggage?: BaggageOptions;
   /**
    * More request headers that carry the caller's identity, stripped alongside `cookie`,
    * `authorization` and `proxy-authorization` whenever {@link GatewayOptions.forwardCredentials}
@@ -343,6 +354,11 @@ export interface UpgradeTarget {
    * `Set-Cookie` it relays to the browser.
    */
   setCookie?: (line: string) => string;
+  /**
+   * The `baggage` header the upgrade carries instead of the caller's, or `null` for none (see
+   * `GatewayOptions.baggage`). A binding must apply it: the caller's own is never forwarded as is.
+   */
+  baggage?: string | null;
 }
 
 /** What the gateway tells a `documents` hook about the registry it is serving right now. */
@@ -545,10 +561,36 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   function emit(event: TelemetryEvent): void {
     if (!telemetry || telemetryBroken) return;
     try {
-      telemetry.on(event);
+      telemetry.on?.(event);
     } catch (error) {
-      telemetryBroken = true;
-      console.error('[braid-gateway] telemetry hook threw; telemetry disabled for this process', error);
+      muteTelemetry(error);
+    }
+  }
+
+  function muteTelemetry(error: unknown): void {
+    telemetryBroken = true;
+    console.error('[braid-gateway] telemetry hook threw; telemetry disabled for this process', error);
+  }
+
+  /** Opens a fragment fetch's telemetry hooks, muted like `emit` if they throw. */
+  function startFetchTelemetry(start: FragmentFetchStart): FragmentFetchHooks | undefined {
+    if (!telemetry?.onFragmentFetch || telemetryBroken) return undefined;
+    try {
+      return telemetry.onFragmentFetch(start) ?? undefined;
+    } catch (error) {
+      muteTelemetry(error);
+      return undefined;
+    }
+  }
+
+  /** Emits a fragment fetch's outcome, and ends its hooks. */
+  function emitFetch(hooks: FragmentFetchHooks | undefined, event: FragmentFetchEvent, error?: unknown): void {
+    emit(event);
+    if (!hooks?.end || telemetryBroken) return;
+    try {
+      hooks.end(event, error);
+    } catch (thrown) {
+      muteTelemetry(thrown);
     }
   }
 
@@ -765,6 +807,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           credentialHeaders,
           via: appendHop(request),
           ...(cookie === undefined ? {} : { cookie }),
+          baggage: forwardCredentials ? fragmentBaggage(request, options.baggage) : null,
           ...(partition === null ? {} : { setCookie: (line: string) => scopeSetCookie(line, partition) }),
         };
       } catch {
@@ -1056,6 +1099,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       else fragmentRequest.headers.delete('cookie');
     }
 
+    // Baggage only as the deployment allows, and only inside its trust boundary (see baggage.ts).
+    fragmentRequest.headers.delete('baggage');
+    const baggage = forwardCredentials ? fragmentBaggage(request, options.baggage) : null;
+    if (baggage) fragmentRequest.headers.set('baggage', baggage);
+
     // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
     // of gateways accumulates one entry each — see BRAID_MAX_HOPS.
     fragmentRequest.headers.set(BRAID_VIA_HEADER, appendHop(request));
@@ -1120,10 +1168,19 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // per-fragment timeout budget from the manifest
     const timeoutSignal = AbortSignal.timeout(fragment.timeoutMs);
 
+    // A tracing hook opens its span here and propagates it: after every other header, so its trace
+    // context is the one the endpoint sees, whatever the caller sent.
+    const fetchTelemetry = startFetchTelemetry({ fragmentId: fragment.id, phase, method: fragmentRequest.method });
+    if (fetchTelemetry?.headers) {
+      // a tracestate belongs to the traceparent it came with
+      if ('traceparent' in fetchTelemetry.headers) fragmentRequest.headers.delete('tracestate');
+      for (const [name, value] of Object.entries(fetchTelemetry.headers)) fragmentRequest.headers.set(name, value);
+    }
+
     // Refuse before spending the budget. The caller's fallback handling is identical either way —
     // this only changes how long it waits to get there.
     if (breaker && !breaker.allows(fragment.id)) {
-      emit({
+      emitFetch(fetchTelemetry, {
         kind: 'fragment-fetch',
         fragmentId: fragment.id,
         phase,
@@ -1161,7 +1218,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       if (response.status >= 500) breaker?.failed(fragment.id);
       else breaker?.succeeded(fragment.id);
 
-      emit({
+      emitFetch(fetchTelemetry, {
         kind: 'fragment-fetch',
         fragmentId: fragment.id,
         phase,
@@ -1176,14 +1233,18 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       return { ok: true, response, fragmentRequestUrl, strippedUrl };
     } catch (error) {
       breaker?.failed(fragment.id);
-      emit({
-        kind: 'fragment-fetch',
-        fragmentId: fragment.id,
-        phase,
-        outcome: timeoutSignal.aborted ? 'timeout' : 'error',
-        durationMs: performance.now() - startedAt,
-        at: Date.now(),
-      });
+      emitFetch(
+        fetchTelemetry,
+        {
+          kind: 'fragment-fetch',
+          fragmentId: fragment.id,
+          phase,
+          outcome: timeoutSignal.aborted ? 'timeout' : 'error',
+          durationMs: performance.now() - startedAt,
+          at: Date.now(),
+        },
+        error,
+      );
       return { ok: false, error, timedOut: timeoutSignal.aborted };
     }
   }

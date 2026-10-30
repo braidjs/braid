@@ -188,3 +188,29 @@ Limits:
   this change. A sliding session is refreshed by the fragment's next namespace request.
 - **`cookieStore` is not available in a partitioned realm.** It reads and writes the raw jar.
   Libraries fall back to `document.cookie`, which is scoped.
+
+## Baggage
+
+The gateway doesn't copy the browser's W3C `baggage` header to fragment endpoints. Baggage is
+arbitrary key/value context that any page script or extension can set, and it would otherwise flow
+into every backend behind every fragment. Say what may pass:
+
+```ts
+createGateway({
+  registry,
+  baggage: {
+    // inbound keys to keep, optionally with a pattern their value must match in full
+    forward: { tenant: /[a-z0-9-]+/, experiment: /[a-z]+/ },
+    // members of the gateway's own; they win over a client's with the same key
+    set: (request) => ({ 'deployment.environment': 'production' }),
+  },
+});
+```
+
+- **Properties are dropped.** Member properties (`;…`) are removed, and members that don't parse
+  are skipped.
+- **Size limits.** A header over the W3C limits (8192 bytes, 180 members) is dropped whole.
+- **Trust boundary.** Only fragments that `forwardCredentials` allows receive any baggage. The
+  same holds for websocket upgrades: a binding other than the Node one must apply
+  `UpgradeTarget.baggage`.
+- **Tracing.** For OpenTelemetry tracing of fragment fetches, see [@braidlabs/otel](./otel.md).
