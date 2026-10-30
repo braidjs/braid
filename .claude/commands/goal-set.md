@@ -43,7 +43,8 @@ Add `security-auditor` if the change touches auth, input handling, secrets,
 network, or file paths. If any returns FAIL, uncheck the items it disputes and
 keep working.
 
-**Step 4 — ship.** Delegate to the `shipper` subagent.
+**Step 4 — ship.** Commit and push yourself, following the SHIP step of the
+`pipeline` skill.
 
 **If you get stuck**, do not ask me and wait. Add a line starting with `BLOCKED:`
 to `.claude/current-goal.md` explaining precisely what is blocking you and what
