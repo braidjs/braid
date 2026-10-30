@@ -11,7 +11,7 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * | `context` | **Braid** — the bus is ours | yes | yes |
  * | `sandbox` | the browser | n/a — no frame to sandbox | yes |
  * | `permissions` | the browser (Permissions-Policy) | n/a | yes |
- * | `network` | the browser (CSP), or nobody | **advisory only** | CSP on the fragment's own origin |
+ * | `network` | the browser (CSP on the realm), or nobody | advisory, or the realm's own requests with the gateway's `realmPolicy` | CSP on the fragment's own origin |
  * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
  * | `storage` | **Braid** — realm-window storage views | compat fragments | n/a — the browser already partitions a cross-origin frame |
  *
@@ -19,10 +19,14 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment
  * read" became a question asked in exactly one place instead of a check to remember at every read.
  *
- * `network` is listed as advisory on the trusted tier rather than omitted. A trusted fragment runs
- * in a same-origin realm with the host's `fetch`; Braid does not patch host globals and will not
- * start, so this grant documents intent and feeds the registry's analysis. Recording that honestly
- * is better than either enforcing it badly or leaving people to assume it works.
+ * `network` is advisory on the trusted tier by default: it documents intent and feeds the registry's
+ * analysis. A gateway with `realmPolicy` turns the registry's grant into a `connect-src` policy on
+ * the realm's own document, which the browser enforces (or reports) for the realm's requests. That
+ * is all it covers: what the realm calls on the host's behalf — `navigator.sendBeacon` (a compat
+ * realm's `navigator` is the host's), a `sharedGlobals` client — and code that deliberately reaches
+ * the host realm's `fetch` are outside it, and Braid does not patch host globals to close that gap. A tripwire
+ * for accidents and naive exfiltration, stated as one. A grant passed only to `initBraid` cannot
+ * reach the realm's headers, and stays advisory.
  */
 
 export interface ContextGrants {

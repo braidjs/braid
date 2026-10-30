@@ -24,6 +24,8 @@ export interface BraidErrorInit {
   /** The likely fix, phrased as an instruction to the developer. */
   fixHint?: string;
   docsUrl?: string;
+  /** The HTTP status that caused it, when a response did. Redirects (status 0 in a browser) count as 302. */
+  httpStatus?: number;
 }
 
 export class BraidError extends Error {
@@ -31,6 +33,7 @@ export class BraidError extends Error {
   readonly stage: BraidErrorStage;
   readonly fixHint?: string;
   readonly docsUrl?: string;
+  readonly httpStatus?: number;
 
   constructor(message: string, init: BraidErrorInit) {
     const hint = init.fixHint ? `\nLikely fix: ${init.fixHint}` : '';
@@ -41,5 +44,6 @@ export class BraidError extends Error {
     this.stage = init.stage;
     this.fixHint = init.fixHint;
     this.docsUrl = init.docsUrl;
+    this.httpStatus = init.httpStatus;
   }
 }

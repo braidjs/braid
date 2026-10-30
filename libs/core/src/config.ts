@@ -9,6 +9,7 @@
  */
 
 import type { HostContract } from './weave/contract.js';
+import { DEFAULT_RECOVERY, MAX_RECOVERY_ATTEMPTS, type RecoveryPolicy } from './elements/recovery.js';
 import type { FragmentCapabilities } from './weave/capabilities.js';
 import type { PrerequisiteResolver } from './elements/prerequisites.js';
 
@@ -113,6 +114,13 @@ export interface BraidOptions {
   prerequisites?: Record<string, PrerequisiteResolver>;
   /** How long a prerequisite may take before its fragment fails. Defaults to 15 seconds. */
   prerequisiteTimeoutMs?: number;
+  /**
+   * Reboot a fragment that fails for a reason a retry can fix — its fetch, its realm, its
+   * handshake or mount failed, or it stopped answering (`gone`) — up to three times per mount, after
+   * 1, 4 and 16 seconds. Off by default. `true` takes those defaults; an object sets them. See
+   * `elements/recovery.ts` for what is and is not retried.
+   */
+  recover?: boolean | { attempts?: number; delayMs?: number };
 }
 
 /** See {@link BraidOptions.realmGlobals}. */
@@ -132,6 +140,7 @@ interface ResolvedBraidConfig {
   onHostNavigation?: (notify: () => void) => void;
   prerequisites?: Record<string, PrerequisiteResolver>;
   prerequisiteTimeoutMs?: number;
+  recover?: RecoveryPolicy;
 }
 
 const config: ResolvedBraidConfig = {
@@ -166,6 +175,21 @@ export function setBraidConfig(options: BraidOptions = {}): void {
       throw new Error(`braid: prerequisiteTimeoutMs must be a positive number of milliseconds`);
     }
     config.prerequisiteTimeoutMs = options.prerequisiteTimeoutMs;
+  }
+  if (options.recover !== undefined) {
+    if (options.recover === false) {
+      delete config.recover;
+    } else {
+      const given = options.recover === true ? {} : options.recover;
+      const attempts = given.attempts ?? DEFAULT_RECOVERY.attempts;
+      const delayMs = given.delayMs ?? DEFAULT_RECOVERY.delayMs;
+      if (!Number.isInteger(attempts) || attempts < 1 || attempts > MAX_RECOVERY_ATTEMPTS || !Number.isFinite(delayMs) || delayMs < 0) {
+        throw new Error(
+          `braid: recover needs 1 to ${MAX_RECOVERY_ATTEMPTS} attempts and a delayMs of zero or more`,
+        );
+      }
+      config.recover = { attempts, delayMs };
+    }
   }
   // Kept in sync with the gateway's normalizeBasePath: a path the URL parser would rewrite (`/café`,
   // a dot segment) could never match the parsed pathnames the gateway compares it to.

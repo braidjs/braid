@@ -18,6 +18,7 @@ import {
   canFetch,
   canList,
   hasAccessRules,
+  isOriginSource,
   Principal,
   Registry,
   RegistryRefresh,
@@ -198,6 +199,27 @@ export interface GatewayOptions {
    * `sec-fetch-dest` into the edge's cache key. See `docs/braid-cdn.md`.
    */
   pierceCacheControl?: 'private' | 'preserve';
+  /**
+   * Whether a fragment's `capabilities.network` is turned into a policy on its realm.
+   *
+   * By default the grant is advisory on the trusted tier: it documents intent and feeds the
+   * registry's analysis. With this set, the realm stub of every compat or custom-element fragment
+   * that declares one carries `connect-src 'self' <its origins>`:
+   *
+   * - `'report'` — as `Content-Security-Policy-Report-Only`. Nothing is blocked; the client logs
+   *   each request that would have been, under the fragment's name. Start here.
+   * - `'enforce'` — as `Content-Security-Policy`. The browser blocks the realm's own `fetch`, XHR,
+   *   WebSocket and EventSource requests to any other origin (and JSON module imports, which CSP
+   *   counts as connections).
+   *
+   * It governs what the fragment's realm does, not what the host document does: markup the
+   * fragment puts in the page is under the host's policy, and so is anything the realm calls on the
+   * host's behalf — `navigator.sendBeacon` (a compat realm's `navigator` is the host's), and any
+   * `sharedGlobals` client. Code that deliberately reaches into the host realm gets around it too. It is a tripwire for accidents and naive supply-chain
+   * exfiltration, not a security boundary — the trusted tier has none. Fragments that declare no
+   * `network` are untouched.
+   */
+  realmPolicy?: 'report' | 'enforce';
   /**
    * Called for every document request that reaches the shell, with which fragments composed into
    * it. This is what makes traffic-informed impact analysis possible: "after this change, 43 of
@@ -425,6 +447,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   }
   const mode = options.mode ?? 'development';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
+  const realmPolicy = options.realmPolicy;
+  if (realmPolicy !== undefined && realmPolicy !== 'report' && realmPolicy !== 'enforce') {
+    throw new Error(`braid-gateway: realmPolicy must be "report" or "enforce", not "${String(realmPolicy)}"`);
+  }
   const additionalHeaders = options.additionalHeaders ?? {};
   const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
     ? additionalHeaders
@@ -764,11 +790,26 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
           // returning visitor's fragment boot never waits on it — the cost is that the first boot
           // after a re-pin may use the previous stub once, while the new one is fetched.
-          const etag = await stubEtag(stub);
-          const cacheHeaders = {
+          const network = fragment.capabilities?.network;
+          // The realm's own document, so this governs the realm's requests and nothing of the host's.
+          // Only plain origins reach the header (the registry warned about the rest), and an empty
+          // list is the strictest declaration there is: the host origin only.
+          const origins = Array.isArray(network) ? network.filter(isOriginSource) : [];
+          const policy: Record<string, string> =
+            realmPolicy && Array.isArray(network)
+              ? {
+                  [realmPolicy === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only']:
+                    ["connect-src 'self'", ...origins].join(' '),
+                }
+              : {};
+          // The policy is part of the representation: a browser revalidating a stub cached with an
+          // old policy must get a 200 with the new one (or none), not a 304 that leaves it in place.
+          const etag = await stubEtag(Object.keys(policy).length ? `${stub}\n${JSON.stringify(policy)}` : stub);
+          const cacheHeaders: Record<string, string> = {
             [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
             ETag: etag,
             'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
+            ...policy,
           };
           if (etagMatches(request.headers.get('if-none-match'), etag)) {
             return new Response(null, { status: 304, headers: cacheHeaders });

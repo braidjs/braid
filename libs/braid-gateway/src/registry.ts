@@ -319,6 +319,21 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
   ) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
   }
+  // Warned, not thrown: `network` was advisory before `realmPolicy` existed, and a gateway that never
+  // turns the policy on must not refuse to start over an entry it would never use. With a policy on,
+  // these entries are left out of it, so the policy is stricter for them, never looser.
+  const network = manifest.capabilities?.network;
+  if (network !== undefined) {
+    const invalid = Array.isArray(network) ? network.filter((entry) => !isOriginSource(entry)) : [network];
+    if (invalid.length) {
+      console.warn(
+        `braid-gateway: manifest "${manifest.id}" has capabilities.network entries that are not plain origins: ` +
+          `${invalid.map((entry) => JSON.stringify(entry)).join(', ')} — they are left out of any realm policy. ` +
+          `List origins only, e.g. "https://api.example.com" or "wss://*.example.com:443"; an internationalised ` +
+          `host must be written in punycode (xn--…), and IP v6 literals cannot be expressed in a CSP source`,
+      );
+    }
+  }
   if (manifest.stream !== undefined && manifest.stream !== 'in-order' && manifest.stream !== 'out-of-order') {
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" declares stream: "${String(manifest.stream)}" — ` +
@@ -339,6 +354,15 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     fallback: manifest.fallback ?? 'placeholder',
     bound: manifest.bound ?? true,
   };
+}
+
+/**
+ * An origin as a CSP source expression: a scheme, a host (optionally `*.`-prefixed), an optional
+ * port, and nothing else. Nothing else may reach the header — a path widens or narrows matching in
+ * ways nobody reviewing a manifest expects, and a quote, `;` or `,` would inject a directive.
+ */
+export function isOriginSource(entry: unknown): boolean {
+  return typeof entry === 'string' && /^(https?|wss?):\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:(\d{1,5}|\*))?$/i.test(entry);
 }
 
 /**

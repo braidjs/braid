@@ -35,6 +35,7 @@ import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequis
 import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
 import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
 import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
+import { createRecovery } from './recovery.js';
 
 /**
  * What the slot reports about its fragment.
@@ -192,6 +193,18 @@ export class FragmentSlot extends HTMLElement {
   #bootGate: { gate: BootGate; listening: AbortController } | undefined;
   /** Which scheduled boot is current: a disconnect or reload makes an older one's trigger moot. */
   #scheduleGeneration = 0;
+  /** Reboots a fragment that failed for a fixable reason, when the host opted in. */
+  #recovery = createRecovery({
+    policy: () => getBraidConfig().recover,
+    announce: (event) =>
+      this.dispatchEvent(new CustomEvent('braid:recovering', { detail: { fragmentId: this.name, ...event } })),
+    // only if it still needs it: a host may have reloaded it, or it may have come back on its own
+    reboot: () => {
+      if (this.isConnected && (this.#state === 'error' || this.#state === 'gone')) {
+        this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] recovery failed`, error));
+      }
+    },
+  });
   /** Set by reload(): a reload must re-fetch, never re-adopt the pierced content. */
   #forceFetch = false;
   /** Which boot is current: a teardown or a newer boot makes an older one's outcome moot. */
@@ -238,6 +251,8 @@ export class FragmentSlot extends HTMLElement {
     this.setAttribute('state', next);
     if (next !== 'loading') this.#clearBusy();
     this.dispatchEvent(new CustomEvent('braid:state', { detail: { state: next, previous, fragmentId: this.name } }));
+    // not over unsaved work: a fragment that declared some may yet come back with it
+    if (next === 'gone' && this.#dirty === null) this.#recovery.onGone();
   }
 
   get name(): string {
@@ -367,6 +382,7 @@ export class FragmentSlot extends HTMLElement {
   disconnectedCallback() {
     this.#bootScheduled = false;
     this.#scheduleGeneration++;
+    this.#recovery.reset();
     this.#releaseBootGate();
     // Not awaited, because `disconnectedCallback` cannot be. The close runs on after the element
     // has left the DOM — which is exactly the window a flush needs, and the reason the fragment's
@@ -375,7 +391,16 @@ export class FragmentSlot extends HTMLElement {
     this.#booted = false;
   }
 
+  /**
+   * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
+   * scheduled recovery reboot: the host has taken over.
+   */
   async reload(): Promise<void> {
+    this.#recovery.reset();
+    await this.#reload();
+  }
+
+  async #reload(): Promise<void> {
     // A reload boots now, whatever the slot was waiting for: its trigger, or late markup, which
     // would otherwise arrive later and replace the content this boot fetched.
     this.#scheduleGeneration++;
@@ -797,6 +822,7 @@ export class FragmentSlot extends HTMLElement {
           },
         }),
       );
+      this.#recovery.onError(braidError, notEntitled);
     }
   }
 
@@ -1196,6 +1222,7 @@ export async function fetchFragmentHtml(
       {
         fragmentId,
         stage: 'fragment-fetch',
+        httpStatus: response.status || 302,
         fixHint:
           `a fragment's document must not redirect — it is fetched, not navigated to. Usually the request is ` +
           `missing authentication and the fragment is sending it to a login page: handle auth inside ` +
@@ -1217,6 +1244,7 @@ export async function fetchFragmentHtml(
     throw new BraidError(`the gateway responded with HTTP ${response.status} for "${documentUrl}"`, {
       fragmentId,
       stage: 'fragment-fetch',
+      httpStatus: response.status,
       fixHint:
         response.status === 404
           ? `register a manifest for fragment id "${fragmentId}" in the gateway registry`
