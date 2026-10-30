@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
+import { context, propagation, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { createGateway, type FragmentManifest, type TelemetryEvent } from '@braidlabs/gateway';
@@ -24,9 +26,10 @@ afterEach(async () => {
   await provider.shutdown();
   trace.disable();
   context.disable();
+  propagation.disable();
 });
 
-type Seen = Record<string, { traceparent: string | null; tracestate: string | null }[]>;
+type Seen = Record<string, { traceparent: string | null; tracestate: string | null; baggage?: string | null; activeSpanId?: string }[]>;
 
 function endpoints(
   seen: Seen,
@@ -37,7 +40,12 @@ function endpoints(
     pierce: ['/page'],
     endpoint: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
-      (seen[id] ??= []).push({ traceparent: request.headers.get('traceparent'), tracestate: request.headers.get('tracestate') });
+      (seen[id] ??= []).push({
+        traceparent: request.headers.get('traceparent'),
+        tracestate: request.headers.get('tracestate'),
+        ...(request.headers.has('baggage') ? { baggage: request.headers.get('baggage') } : {}),
+        activeSpanId: trace.getActiveSpan()?.spanContext().spanId,
+      });
       return respond(id, init?.signal);
     }) as typeof fetch,
   });
@@ -74,9 +82,110 @@ describe('otelGatewayTelemetry()', () => {
       expect(span.spanContext().traceId).toBe(server.spanContext().traceId);
       expect(span.parentSpanContext?.spanId).toBe(server.spanContext().spanId);
       expect(span.attributes).toMatchObject({ 'braid.fetch.phase': 'pierce', 'braid.fetch.outcome': 'ok', 'http.response.status_code': 200 });
-      // the endpoint's parent is its own span — not the browser's trace, and without its tracestate
-      expect(seen[id]![0]).toEqual({ traceparent: `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`, tracestate: null });
+      // the endpoint's parent is its own span — not the browser's trace, and without its tracestate —
+      // and that span is the active one while the endpoint is fetched, so an HTTP client's nests under it
+      expect(seen[id]![0]).toEqual({
+        traceparent: `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`,
+        tracestate: null,
+        activeSpanId: span.spanContext().spanId,
+      });
     }
+  });
+
+  it('still ends every span when an `on` it was given throws', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const gateway = createGateway({
+      registry: ['orders', 'billing'].map(endpoints({})),
+      telemetry: otelGatewayTelemetry({
+        on: () => {
+          throw new Error('broken sink');
+        },
+      }),
+    });
+    await (await gateway.handle(navigation(), shell))!.text();
+    expect(exporter.getFinishedSpans().map((span) => span.name).sort()).toEqual(['GET billing', 'GET orders']);
+    error.mockRestore();
+  });
+
+  it('marks a fetch that joined one already in flight as coalesced', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const gateway = createGateway({
+      registry: [endpoints({}, async () => (await gate, new Response('ok')))('orders')],
+      telemetry: otelGatewayTelemetry(),
+    });
+    const pending = [1, 2].map(() => gateway.handle(new Request('https://shell.example/__braid/frag/orders/x')));
+    await new Promise((r) => setTimeout(r, 10));
+    release();
+    await Promise.all(pending);
+    expect(exporter.getFinishedSpans().map((span) => span.attributes['braid.fetch.coalesced'] ?? false).sort()).toEqual([false, true]);
+  });
+
+  it('names a span for a method HTTP does not define by `HTTP`, so names stay bounded', async () => {
+    const gateway = createGateway({ registry: [endpoints({})('orders')], telemetry: otelGatewayTelemetry() });
+    await gateway.handle(new Request('https://shell.example/__braid/frag/orders/x', { method: 'PROPFIND' }));
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.name).toBe('HTTP orders');
+    expect(span!.attributes).toMatchObject({ 'http.request.method': '_OTHER', 'http.request.method_original': 'PROPFIND' });
+  });
+
+  describe('with the propagators NodeSDK registers by default', () => {
+    beforeEach(() => {
+      propagation.setGlobalPropagator(
+        new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] }),
+      );
+    });
+
+    const browserRequest = () =>
+      new Request('https://shell.example/__braid/frag/orders/x', {
+        headers: { traceparent: '00-ffffffffffffffffffffffffffffffff-ffffffffffffffff-01', tracestate: 'browser=1', baggage: 'tenant=acme,userId=42' },
+      });
+    // as an HTTP server instrumentation leaves it: the browser's baggage, extracted into the context
+    const asServer = (run: () => Promise<void>) =>
+      context.with(
+        propagation.setBaggage(context.active(), propagation.createBaggage({ tenant: { value: 'acme' }, userId: { value: '42' } })),
+        () => trace.getTracer('test').startActiveSpan('GET /page', { kind: SpanKind.SERVER }, async (server) => (await run(), server.end())),
+      );
+
+    it("propagates the fetch span with them, and never the context's baggage", async () => {
+      const seen: Seen = {};
+      const gateway = createGateway({
+        registry: [endpoints(seen)('orders')],
+        forwardCredentials: true,
+        baggage: { forward: ['tenant'] },
+        telemetry: otelGatewayTelemetry(),
+      });
+      await asServer(async () => void (await gateway.handle(browserRequest())));
+
+      const span = exporter.getFinishedSpans().find((s) => s.kind === SpanKind.CLIENT)!;
+      // only what the gateway's baggage option allows: the propagator adds nothing from the context
+      expect(seen['orders']![0]).toMatchObject({
+        traceparent: `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`,
+        tracestate: null,
+        baggage: 'tenant=acme',
+      });
+    });
+
+    it('leaves trace context to an HTTP-client instrumentation, and clears the caller’s for it', async () => {
+      // what OpenTelemetry's undici instrumentation does when it is enabled
+      const listener = () => undefined;
+      subscribe('undici:request:create', listener);
+      try {
+        const seen: Seen = {};
+        const gateway = createGateway({ registry: [endpoints(seen)('orders')], telemetry: otelGatewayTelemetry() });
+        await asServer(async () => void (await gateway.handle(browserRequest())));
+
+        const span = exporter.getFinishedSpans().find((s) => s.kind === SpanKind.CLIENT)!;
+        // it appends its own, so this sets none — and the browser's is gone, not appended to
+        expect(seen['orders']![0]).toMatchObject({ traceparent: null, tracestate: null, activeSpanId: span.spanContext().spanId });
+      } finally {
+        unsubscribe('undici:request:create', listener);
+      }
+    });
+  });
+
+  it('refuses an onFragmentFetch of its own, rather than silently replacing it', () => {
+    expect(() => otelGatewayTelemetry({ onFragmentFetch: () => undefined } as never)).toThrow(TypeError);
   });
 
   it('marks a timeout, an open breaker and a 5xx as errors with the right error.type', async () => {
@@ -90,7 +199,7 @@ describe('otelGatewayTelemetry()', () => {
         },
         endpoints(seen, () => new Response('down', { status: 503 }))('down'),
       ],
-      breaker: { failureThreshold: 1, cooldownMs: 60_000 },
+      breaker: { failureThreshold: 1, resetTimeoutMs: 60_000 },
       telemetry: otelGatewayTelemetry(),
     });
 
@@ -113,7 +222,7 @@ describe('otelGatewayTelemetry()', () => {
     const events: TelemetryEvent[] = [];
     const gateway = createGateway({
       registry: [endpoints({}, () => new Response('down', { status: 503 }))('down')],
-      breaker: { failureThreshold: 1, cooldownMs: 60_000 },
+      breaker: { failureThreshold: 1, resetTimeoutMs: 60_000 },
       telemetry: otelGatewayTelemetry({ on: (event) => events.push(event) }),
     });
 
