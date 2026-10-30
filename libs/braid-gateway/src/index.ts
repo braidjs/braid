@@ -28,7 +28,11 @@ export type {
   WebVitalName,
   BreakerEvent,
   RegistryEvent,
+  FragmentFetchStart,
+  FragmentFetchHooks,
 } from './telemetry.js';
+export { fragmentBaggage } from './baggage.js';
+export type { BaggageOptions } from './baggage.js';
 export {
   DEFAULT_ADAPTER,
   DEFAULT_TIMEOUT_MS,

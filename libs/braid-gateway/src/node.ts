@@ -226,6 +226,9 @@ export function toNodeUpgradeHandler(
       if (!target.forwardCredentials) {
         for (const name of target.credentialHeaders) delete headers[name];
       }
+      // baggage only as the gateway allows, like its fetches (see UpgradeTarget.baggage)
+      delete headers['baggage'];
+      if (target.baggage) headers['baggage'] = target.baggage;
       // the cookies this fragment may have, like its fetches (see UpgradeTarget.cookie)
       if (target.cookie !== undefined) {
         if (target.cookie === null) delete headers['cookie'];

@@ -114,6 +114,7 @@ export default defineConfig({
               { text: '@braidlabs/sw', link: '/packages/sw' },
               { text: '@braidlabs/console', link: '/packages/console' },
               { text: '@braidlabs/fdc3', link: '/packages/fdc3' },
+              { text: '@braidlabs/otel', link: '/packages/otel' },
             ],
           },
           {
