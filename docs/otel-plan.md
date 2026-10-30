@@ -105,24 +105,39 @@ Tasks:
 
 Acceptance criteria:
 
-- [ ] With a registered provider and an in-memory exporter, a request to a page piercing two
+- [x] With a registered provider and an in-memory exporter, a request to a page piercing two
       fragments, made inside an active parent span, exports two CLIENT spans sharing the parent's
       trace id, each with its `braid.fragment.id`, phase, outcome and status. (`npx nx test otel`)
-- [ ] Each fragment endpoint (a function endpoint in the spec) receives a `traceparent` whose span
+- [x] Each fragment endpoint (a function endpoint in the spec) receives a `traceparent` whose span
       id is its own CLIENT span's, even when the inbound request carried a different one.
-- [ ] A browser `baggage` header reaches no fragment by default; with `forward: ['tenant']`, only a
+- [x] A browser `baggage` header reaches no fragment by default; with `forward: ['tenant']`, only a
       valid `tenant` member arrives; an oversize or malformed header is dropped whole; a server-set
       key overrides the client's; a fragment outside the trust boundary receives no baggage.
-- [ ] A timeout, an open breaker (endpoint never called) and a 503 each show the right outcome,
+- [x] A timeout, an open breaker (endpoint never called) and a 503 each show the right outcome,
       `error.type` and ERROR status on the span.
-- [ ] With no `onFragmentFetch` configured, fragment request headers are exactly today's; with the
+- [x] With no `onFragmentFetch` configured, fragment request headers are exactly today's; with the
       API installed but no SDK registered, responses are byte-identical to a gateway without the
       plugin. (`npx nx test braid-gateway otel`)
-- [ ] `libs/braid-gateway/src/telemetry.spec.ts` passes unmodified, and a user `on` passed through
+- [x] `libs/braid-gateway/src/telemetry.spec.ts` passes unmodified, and a user `on` passed through
       `otelGatewayTelemetry` receives identical events.
-- [ ] A throwing hook is logged once and muted; the request still succeeds.
-- [ ] `CI=1 npx nx run-many -t lint test build` passes, and `check-publishable` passes with the new
+- [x] A throwing hook is logged once and muted; the request still succeeds.
+- [x] `CI=1 npx nx run-many -t lint test build` passes, and `check-publishable` passes with the new
       package and fails if the gateway is made to import `@opentelemetry/api`.
+
+As built (PR #62), after review and a probe against `@opentelemetry/instrumentation-undici`:
+
+- The fetch runs with Braid's CLIENT span active (a `run` hook), so an HTTP-client span nests
+  under it. When something hooks undici's request creation, that instrumentation writes the
+  fragment request's trace context and Braid writes none: it appends rather than replaces, and two
+  `traceparent` headers would leave the backend with neither. Otherwise Braid writes it with the
+  registered propagator, or a W3C `traceparent` when none is registered.
+- The fetch runs without the OpenTelemetry context's baggage, which NodeSDK's default propagators
+  would otherwise re-inject from the browser's header past the gateway's filter.
+- Baggage values must be W3C baggage octets; patterns match the whole decoded value statelessly;
+  `set(request, fragmentId)`; baggage is part of the single-flight key; coalesced fetches carry
+  `braid.fetch.coalesced`.
+- Not yet: a span for websocket upgrades, and web vitals as their own span or metric rather than
+  events on the beacon request's span.
 
 ### Phase 2 — Console Insights v1: permission and deep links
 
