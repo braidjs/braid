@@ -405,6 +405,7 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
       // The stub's <base> element is unaffected by replaceState and keeps relative url
       // resolution inside the namespace.
       iframe.contentWindow!.history.replaceState(null, '', routeSrcUrl.pathname + routeSrcUrl.search);
+      reportPolicyViolations(iframe.contentDocument!, fragmentId);
       resolveLoaded();
     } catch (error) {
       rejectLoaded(error);
@@ -431,6 +432,23 @@ async function createCompatHttpRealm(init: RealmInit): Promise<RealmHandle> {
   init.signal.addEventListener('abort', () => handle.dispose(), { once: true });
 
   return handle;
+}
+
+/**
+ * Names the fragment behind each request its realm's policy blocked, or would have.
+ *
+ * A gateway with `realmPolicy` turns a fragment's `capabilities.network` into a `connect-src` policy
+ * on its realm stub. The browser's own console message names the URL but not which of the page's
+ * fragments asked for it; this does. The listener is on the realm's document, not the host's.
+ */
+function reportPolicyViolations(realmDocument: Document, fragmentId: string): void {
+  realmDocument.addEventListener('securitypolicyviolation', (event) => {
+    const what = event.disposition === 'report' ? 'would have blocked' : 'blocked';
+    console.warn(
+      `[braid:${fragmentId}] the realm's policy ${what} a request to ${event.blockedURI || 'an inline source'} ` +
+        `(${event.effectiveDirective}) — add its origin to the manifest's capabilities.network if the fragment needs it`,
+    );
+  });
 }
 
 /**
