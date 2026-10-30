@@ -12,6 +12,7 @@ import {
   markBraidInertLink,
   markGatewayContent,
   markRunnable,
+  markStartedInPlace,
   restoreScriptType,
   alreadyExecutedScriptsAndLinks,
 } from './script-execution.js';
@@ -463,6 +464,8 @@ export function createFragmentBoundary(options: {
   // neutralized, and nothing of the fragment's has run yet to have written any of its own
   markGatewayContent(braidDocumentElement);
   carryProvenanceThroughTemplates(braidDocumentElement);
+  // before the observer starts, so moving them out and back is not mistaken for an insertion
+  markStartedInPlace(braidDocumentElement);
 
   /**
    * The boundary observer: activates inert scripts/preload-links that entered the fragment's
@@ -487,6 +490,8 @@ export function createFragmentBoundary(options: {
           stampTree(addedElement);
         }
 
+        // scripts that arrived by a path the boundary did not intercept were not marked started
+        markStartedInPlace(addedElement);
         activateInertScriptsAndLinks(addedElement);
       }
     }

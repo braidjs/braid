@@ -108,7 +108,7 @@ describe('what may run in the realm', () => {
     });
   });
 
-  it('keeps the host copy of a script that ran inert for good, reporting its real type', () => {
+  it('gives the host copy of a script that ran its real type back, and runs nothing more when it moves', () => {
     const { container, ran } = boundary();
     const script = document.createElement('script');
     makeScriptBornInert(script);
@@ -116,11 +116,10 @@ describe('what may run in the realm', () => {
     script.textContent = 'once()';
     container.append(script);
     expect(ran()).toEqual(['once()']);
-    // the browser never marked the host element started, so it must never carry a live type
-    expect(Element.prototype.getAttribute.call(script, 'type')).toBe('inert');
-    expect(script.type).toBe('module');
-    expect(script.getAttribute('type')).toBe('module');
-    // and moving it, as a host moving the slot would, runs nothing more
+    // marked started the browser's way before insertion (verified in Chromium: jsdom has no such
+    // flag to observe), so its real type is safe to give back, and selectors by type still match
+    expect(Element.prototype.getAttribute.call(script, 'type')).toBe('module');
+    expect(container.querySelector('script[type="module"]')).toBe(script);
     const other = document.createElement('div');
     container.append(other);
     other.append(script);
@@ -149,11 +148,10 @@ describe('what may run in the realm', () => {
     expect(ran()).toEqual([]);
   });
 
-  it('leaves a contextual-fragment script of an exotic JavaScript type inert in the host', () => {
+  it('never runs a contextual-fragment script, whatever JavaScript type it has', async () => {
     const { container, ran } = boundary();
     container.append(document.createRange().createContextualFragment('<script type="text/ecmascript">exotic()</script>'));
-    const script = container.querySelector('script')!;
-    expect(Element.prototype.getAttribute.call(script, 'type')).toBe('inert');
+    await tick();
     expect(ran()).toEqual([]);
   });
 

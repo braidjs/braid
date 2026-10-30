@@ -3,7 +3,7 @@
  * arbitrary pre-bound native method wrappers. */
 import { assert } from '../utils/assert.js';
 import { getInternalReference } from './metadata.js';
-import { isRunnable, keepInert, markRunnable } from './born-inert-scripts.js';
+import { isRunnable, markRunnable } from './born-inert-scripts.js';
 
 /**
  * Script execution machinery for compat fragments: any script that enters a fragment's DOM is
@@ -35,13 +35,12 @@ export function compatDomInsertion<T extends Node>(
       return doInsertTheNode();
     }
 
+    markStartedBeforeInsertion(nodeToInsert);
+
     // a script nothing of Braid's or the fragment's own document made, or one that has run: it
-    // never runs (again) anywhere
+    // never runs (again) anywhere — and, marked started, cannot in the host either
     if (!isRunnable(nodeToInsert) || alreadyExecutedScriptsAndLinks.has(nodeToInsert)) {
-      setInertScriptType(nodeToInsert);
-      const returnVal = doInsertTheNode();
-      leaveNeverRunning(nodeToInsert);
-      return returnVal;
+      return doInsertTheNode();
     }
 
     setInertScriptType(nodeToInsert);
@@ -72,6 +71,7 @@ export function compatDomInsertion<T extends Node>(
   }
 
   // otherwise, append the child and execute all nested scripts in the fragment's realm
+  markStartedBeforeInsertion(nodeToInsert);
   nestedScriptsAndLinks.forEach((element) => makeElementInert(element));
   const returnVal = doInsertTheNode();
   nestedScriptsAndLinks.forEach((element) => restoreElement(element));
@@ -101,6 +101,9 @@ export function compatMultiNodeDomInsertion(
   const scriptsAndLinks: (HTMLScriptElement | HTMLLinkElement)[] = [];
 
   for (const node of nodes) {
+    if (typeof node !== 'string' && !(node instanceof HTMLScriptElement && !node.src && !node.firstChild && !node.parentNode && isRunnable(node))) {
+      markStartedBeforeInsertion(node);
+    }
     if (typeof node === 'string') {
       console.warn(
         'Braid compat: string arguments to append/prepend/replaceChildren/replaceWith are not supported and could result in incorrect script execution. Inserted string: ',
@@ -148,8 +151,8 @@ function makeElementInert(element: HTMLScriptElement | HTMLLinkElement) {
 
 function restoreElement(element: HTMLScriptElement | HTMLLinkElement) {
   if (element instanceof HTMLScriptElement) {
-    if (isRunnable(element) && !alreadyExecutedScriptsAndLinks.has(element)) restoreScriptType(element);
-    else leaveNeverRunning(element);
+    // safe to give back its real type: the element was marked started before it was inserted
+    restoreScriptType(element);
   } else {
     // don't restore links as we currently don't have another way of keeping them inert
   }
@@ -226,8 +229,6 @@ export function executeInertScript(inertScript: HTMLScriptElement, realmDocument
   assert(!!(inertScript.src || inertScript.textContent), `Can't execute script without src or textContent!`);
 
   attachScriptToRealm({ inertScript, realmDocument });
-  // its copy runs in the realm; the host element must never be one the browser could run
-  keepInert(inertScript);
 
   return true;
 }
@@ -387,14 +388,93 @@ export function isExecutableType(type: string | null): boolean {
 }
 
 /**
- * A script that will never run stays neutralized after insertion, for good — unless it is a data
- * block (`application/json`, say), whose real type is restored: it runs nowhere either way, and
- * code that finds it by type must still find it.
+ * The host document never runs a fragment's script: Braid runs a fresh copy in the realm instead.
+ * But a host element the browser has not marked "already started" is one it will run — when it is
+ * next connected (the host moving the slot, a keyed list reordering, a portal), or when its type,
+ * text or `src` changes. So before a script is inserted into the fragment's DOM, it is marked
+ * started the browser's own way: connected once to a document with no browsing context, under an
+ * executable type and with some text. Preparing it there sets the flag, then stops because scripting
+ * is disabled, and the flag survives the move into the host. Its real attributes are put back, and
+ * it can never run in the host, whatever happens to it after.
  */
-function leaveNeverRunning(script: HTMLScriptElement): void {
-  if (isExecutableType(script.getAttribute('data-script-type'))) keepInert(script);
-  else restoreScriptType(script);
+let parkingDocument: Document | undefined;
+const startedInHost = new WeakSet<HTMLScriptElement>();
+
+function scriptsIn(root: Node): HTMLScriptElement[] {
+  if (root instanceof HTMLScriptElement) return [root];
+  if (root instanceof Element || root instanceof DocumentFragment) return [...root.querySelectorAll('script')];
+  return [];
 }
+
+/** Arms each script for marking: an executable type and some text, returning how to undo it. */
+function primeForMarking(scripts: HTMLScriptElement[]): () => void {
+  const saved = scripts.map((script) => {
+    const type = nativeGetAttribute.call(script, 'type');
+    const emptied = !script.hasAttribute('src') && script.textContent === '';
+    nativeSetAttribute.call(script, 'type', 'text/javascript');
+    if (emptied) script.textContent = '//';
+    return { script, type, emptied };
+  });
+  return () => {
+    for (const { script, type, emptied } of saved) {
+      if (type === null) nativeRemoveAttribute.call(script, 'type');
+      else nativeSetAttribute.call(script, 'type', type);
+      if (emptied) script.textContent = '';
+      startedInHost.add(script);
+    }
+  };
+}
+
+function parkingBody(): HTMLElement {
+  parkingDocument ??= document.implementation.createHTMLDocument('');
+  return parkingDocument.body;
+}
+
+/** Marks the scripts in a node about to be inserted, before it reaches the fragment's DOM. */
+export function markStartedBeforeInsertion(root: Node): void {
+  const scripts = scriptsIn(root).filter((script) => !startedInHost.has(script));
+  if (!scripts.length) return;
+  const restore = primeForMarking(scripts);
+  const body = parkingBody();
+  if (root instanceof DocumentFragment) {
+    const children = [...root.childNodes];
+    nativeAppend.call(body, ...children);
+    nativeFragmentAppend.call(root, ...children);
+  } else {
+    const parent = root.parentNode;
+    const next = root.nextSibling;
+    nativeAppendChild.call(body, root);
+    if (parent) nativeInsertBefore.call(parent, root, next);
+    else nativeRemove.call(root as ChildNode);
+  }
+  restore();
+}
+
+/**
+ * Marks scripts already in the fragment's DOM — the gateway's markup, or a script that arrived by a
+ * path the boundary does not intercept — by moving each out and back.
+ */
+export function markStartedInPlace(root: ParentNode): void {
+  const scripts = [...root.querySelectorAll('script')].filter((script) => !startedInHost.has(script as HTMLScriptElement)) as HTMLScriptElement[];
+  if (root instanceof HTMLScriptElement && !startedInHost.has(root)) scripts.unshift(root);
+  if (!scripts.length) return;
+  const restore = primeForMarking(scripts);
+  const body = parkingBody();
+  for (const script of scripts) {
+    const parent = script.parentNode;
+    const next = script.nextSibling;
+    nativeAppendChild.call(body, script);
+    if (parent) nativeInsertBefore.call(parent, script, next);
+    else nativeRemove.call(script);
+  }
+  restore();
+}
+
+const nativeAppendChild = Node.prototype.appendChild;
+const nativeInsertBefore = Node.prototype.insertBefore;
+const nativeRemove = Element.prototype.remove;
+const nativeAppend = Element.prototype.append;
+const nativeFragmentAppend = DocumentFragment.prototype.append;
 
 /**
  * Restore the original script type and erase any signs of us making the script inert.
