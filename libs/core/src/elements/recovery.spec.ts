@@ -20,14 +20,14 @@ describe('createRecovery()', () => {
   it('reboots after 1s, 4s and 16s, then gives up', () => {
     const subject = recovery();
     for (const expected of [1_000, 4_000, 16_000]) {
-      subject.onError('fragment-fetch', false);
+      subject.onError({ stage: 'fragment-fetch' }, false);
       expect(announced.at(-1)!.delayMs).toBe(expected);
       vi.advanceTimersByTime(expected - 1);
       const before = reboot.mock.calls.length;
       vi.advanceTimersByTime(1);
       expect(reboot).toHaveBeenCalledTimes(before + 1);
     }
-    subject.onError('fragment-fetch', false);
+    subject.onError({ stage: 'fragment-fetch' }, false);
     vi.advanceTimersByTime(100_000);
     expect(reboot).toHaveBeenCalledTimes(3);
     expect(announced.map((event) => event.attempt)).toEqual([1, 2, 3]);
@@ -43,14 +43,37 @@ describe('createRecovery()', () => {
   it.each(['slot-config', 'adapter-resolution', 'contract', 'context-version', 'prerequisite', 'teardown'] as const)(
     'never retries %s, which fails the same way every time',
     (stage) => {
-      recovery().onError(stage, false);
+      recovery().onError({ stage }, false);
       vi.advanceTimersByTime(100_000);
       expect(reboot).not.toHaveBeenCalled();
     },
   );
 
+  it.each([302, 401, 403, 404])('never retries a document that answered %i, which answers the same every time', (status) => {
+    recovery().onError({ stage: 'fragment-fetch', httpStatus: status }, false);
+    vi.advanceTimersByTime(100_000);
+    expect(reboot).not.toHaveBeenCalled();
+  });
+
+  it.each([408, 429, 500, 503])('retries a document that answered %i', (status) => {
+    recovery().onError({ stage: 'fragment-fetch', httpStatus: status }, false);
+    vi.advanceTimersByTime(1_000);
+    expect(reboot).toHaveBeenCalledOnce();
+  });
+
+  it('never waits longer than five minutes, however many attempts are allowed', () => {
+    policy = { attempts: 10, delayMs: 1_000 };
+    const subject = recovery();
+    for (let attempt = 0; attempt < 10; attempt++) {
+      subject.onError({ stage: 'realm-boot' }, false);
+      vi.advanceTimersByTime(5 * 60_000);
+    }
+    expect(Math.max(...announced.map((event) => event.delayMs))).toBe(5 * 60_000);
+    expect(reboot).toHaveBeenCalledTimes(10);
+  });
+
   it('never retries a user who is not entitled', () => {
-    recovery().onError('fragment-fetch', true);
+    recovery().onError({ stage: 'fragment-fetch' }, true);
     vi.advanceTimersByTime(100_000);
     expect(reboot).not.toHaveBeenCalled();
   });
@@ -58,7 +81,7 @@ describe('createRecovery()', () => {
   it('does nothing when the host did not opt in', () => {
     policy = undefined;
     const subject = recovery();
-    subject.onError('realm-boot', false);
+    subject.onError({ stage: 'realm-boot' }, false);
     subject.onGone();
     vi.advanceTimersByTime(100_000);
     expect(reboot).not.toHaveBeenCalled();
@@ -66,7 +89,7 @@ describe('createRecovery()', () => {
 
   it('schedules one reboot at a time', () => {
     const subject = recovery();
-    subject.onError('realm-boot', false);
+    subject.onError({ stage: 'realm-boot' }, false);
     subject.onGone();
     vi.advanceTimersByTime(1_000);
     expect(reboot).toHaveBeenCalledOnce();
@@ -75,11 +98,11 @@ describe('createRecovery()', () => {
 
   it('cancels a pending reboot and restores the budget on reset', () => {
     const subject = recovery();
-    subject.onError('realm-boot', false);
+    subject.onError({ stage: 'realm-boot' }, false);
     subject.reset();
     vi.advanceTimersByTime(100_000);
     expect(reboot).not.toHaveBeenCalled();
-    subject.onError('realm-boot', false);
+    subject.onError({ stage: 'realm-boot' }, false);
     expect(announced.at(-1)).toMatchObject({ attempt: 1, delayMs: 1_000 });
   });
 });
@@ -96,8 +119,14 @@ describe('initBraid({ recover })', () => {
     expect(getBraidConfig().recover).toBeUndefined();
   });
 
+  it('keeps the default for a key given as undefined', () => {
+    initBraid({ recover: { attempts: undefined, delayMs: 50 } });
+    expect(getBraidConfig().recover).toEqual({ attempts: 3, delayMs: 50 });
+  });
+
   it('refuses a nonsense policy', () => {
     expect(() => initBraid({ recover: { attempts: 0 } })).toThrow(/recover/);
+    expect(() => initBraid({ recover: { attempts: 11 } })).toThrow(/recover/);
     expect(() => initBraid({ recover: { delayMs: -1 } })).toThrow(/recover/);
   });
 });

@@ -232,18 +232,26 @@ document ends without its markup, the slot boots client-side.
 initBraid({ recover: true }); // or { attempts: 3, delayMs: 1000 }
 ```
 
-- **What triggers a reboot.** A fragment that fails for a reason a retry can fix is rebooted
-  (`reload()`) after 1, 4 and 16 seconds, at most three times per mount. Fixable means its document
-  fetch, its realm, its handshake, its boundary or its mount failed, or it stopped answering
-  (`gone`).
-- **What never retries.** A misconfigured slot, an adapter this client lacks, a contract the host
-  and fragment cannot agree on, a context version that cannot be bridged, a failed prerequisite,
-  and a user who is not entitled. Each of these fails the same way every time.
+- **What triggers a reboot.** A fragment that fails for a reason a retry can fix is rebooted after
+  1, 4 and 16 seconds, at most three times. Fixable means:
+  - its document fetch, realm, handshake, boundary or mount failed;
+  - or it stopped answering (`gone`).
+- **The limits.** At most 10 attempts may be configured, and no wait exceeds five minutes.
+- **What never retries.** Each of these fails the same way every time:
+  - a misconfigured slot;
+  - an adapter this client lacks;
+  - a contract the host and fragment cannot agree on;
+  - a context version that cannot be bridged;
+  - a failed prerequisite;
+  - a user who is not entitled;
+  - a document that answered with a redirect or a 4xx (other than 408 and 429).
+- **Unsaved work is left alone.** A fragment that goes `gone` while it has declared unsaved work
+  (`braid:dirty`) is not rebooted, because it may come back with that work.
 - **Each reboot is announced.** The slot dispatches `braid:recovering` with
   `{ fragmentId, attempt, delayMs, reason }` before it waits. The host's fallback content shows in
   the meantime, as it would without recovery.
-- **The budget is per mount.** Removing the slot cancels a pending reboot, and a slot inserted
-  again starts with a full budget.
+- **The budget lasts until the slot is removed or the host reloads it.** Either of those cancels a
+  pending reboot and restores the full budget. A slot that recovers on its own keeps what it spent.
 - **State is not restored.** The rebooted fragment starts fresh, like any reload.
 - **Off by default.** Without `recover`, a failed slot stays failed until the host reloads it.
 

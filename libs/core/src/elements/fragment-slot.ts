@@ -200,7 +200,9 @@ export class FragmentSlot extends HTMLElement {
       this.dispatchEvent(new CustomEvent('braid:recovering', { detail: { fragmentId: this.name, ...event } })),
     // only if it still needs it: a host may have reloaded it, or it may have come back on its own
     reboot: () => {
-      if (this.isConnected && (this.#state === 'error' || this.#state === 'gone')) void this.reload();
+      if (this.isConnected && (this.#state === 'error' || this.#state === 'gone')) {
+        this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] recovery failed`, error));
+      }
     },
   });
   /** Set by reload(): a reload must re-fetch, never re-adopt the pierced content. */
@@ -249,7 +251,8 @@ export class FragmentSlot extends HTMLElement {
     this.setAttribute('state', next);
     if (next !== 'loading') this.#clearBusy();
     this.dispatchEvent(new CustomEvent('braid:state', { detail: { state: next, previous, fragmentId: this.name } }));
-    if (next === 'gone') this.#recovery.onGone();
+    // not over unsaved work: a fragment that declared some may yet come back with it
+    if (next === 'gone' && this.#dirty === null) this.#recovery.onGone();
   }
 
   get name(): string {
@@ -388,7 +391,16 @@ export class FragmentSlot extends HTMLElement {
     this.#booted = false;
   }
 
+  /**
+   * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
+   * scheduled recovery reboot: the host has taken over.
+   */
   async reload(): Promise<void> {
+    this.#recovery.reset();
+    await this.#reload();
+  }
+
+  async #reload(): Promise<void> {
     // A reload boots now, whatever the slot was waiting for: its trigger, or late markup, which
     // would otherwise arrive later and replace the content this boot fetched.
     this.#scheduleGeneration++;
@@ -810,7 +822,7 @@ export class FragmentSlot extends HTMLElement {
           },
         }),
       );
-      this.#recovery.onError(braidError.stage, notEntitled);
+      this.#recovery.onError(braidError, notEntitled);
     }
   }
 
@@ -1210,6 +1222,7 @@ export async function fetchFragmentHtml(
       {
         fragmentId,
         stage: 'fragment-fetch',
+        httpStatus: response.status || 302,
         fixHint:
           `a fragment's document must not redirect — it is fetched, not navigated to. Usually the request is ` +
           `missing authentication and the fragment is sending it to a login page: handle auth inside ` +
@@ -1231,6 +1244,7 @@ export async function fetchFragmentHtml(
     throw new BraidError(`the gateway responded with HTTP ${response.status} for "${documentUrl}"`, {
       fragmentId,
       stage: 'fragment-fetch',
+      httpStatus: response.status,
       fixHint:
         response.status === 404
           ? `register a manifest for fragment id "${fragmentId}" in the gateway registry`

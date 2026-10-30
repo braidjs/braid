@@ -9,7 +9,7 @@
  */
 
 import type { HostContract } from './weave/contract.js';
-import { DEFAULT_RECOVERY, RecoveryPolicy } from './elements/recovery.js';
+import { DEFAULT_RECOVERY, MAX_RECOVERY_ATTEMPTS, type RecoveryPolicy } from './elements/recovery.js';
 import type { FragmentCapabilities } from './weave/capabilities.js';
 import type { PrerequisiteResolver } from './elements/prerequisites.js';
 
@@ -180,9 +180,13 @@ export function setBraidConfig(options: BraidOptions = {}): void {
     if (options.recover === false) {
       delete config.recover;
     } else {
-      const { attempts, delayMs } = { ...DEFAULT_RECOVERY, ...(options.recover === true ? {} : options.recover) };
-      if (!Number.isInteger(attempts) || attempts < 1 || !Number.isFinite(delayMs) || delayMs < 0) {
-        throw new Error(`braid: recover needs a positive whole number of attempts and a delayMs of zero or more`);
+      const given = options.recover === true ? {} : options.recover;
+      const attempts = given.attempts ?? DEFAULT_RECOVERY.attempts;
+      const delayMs = given.delayMs ?? DEFAULT_RECOVERY.delayMs;
+      if (!Number.isInteger(attempts) || attempts < 1 || attempts > MAX_RECOVERY_ATTEMPTS || !Number.isFinite(delayMs) || delayMs < 0) {
+        throw new Error(
+          `braid: recover needs 1 to ${MAX_RECOVERY_ATTEMPTS} attempts and a delayMs of zero or more`,
+        );
       }
       config.recover = { attempts, delayMs };
     }

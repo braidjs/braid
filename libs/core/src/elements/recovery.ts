@@ -1,4 +1,4 @@
-import type { BraidErrorStage } from '../errors.js';
+import type { BraidError, BraidErrorStage } from '../errors.js';
 
 /**
  * Self-healing slots: a fragment that fails for a reason a retry can fix is rebooted, a few times,
@@ -26,12 +26,29 @@ export interface RecoveryPolicy {
 
 export const DEFAULT_RECOVERY: RecoveryPolicy = { attempts: 3, delayMs: 1_000 };
 
+/** No reboot waits longer than this, however many attempts are allowed. */
+export const MAX_RECOVERY_DELAY_MS = 5 * 60_000;
+
+/** The most attempts a host may ask for: past this, a fragment is not recovering, it is down. */
+export const MAX_RECOVERY_ATTEMPTS = 10;
+
+/**
+ * A response that says the request itself is wrong — a 4xx, or a redirect (to a login, usually) —
+ * comes back the same on every retry. 408 and 429 are the exceptions: they ask to be retried.
+ */
+function isDeterministicResponse(status: number | undefined): boolean {
+  return status !== undefined && status >= 300 && status < 500 && status !== 408 && status !== 429;
+}
+
 export interface Recovery {
-  /** A boot failed at `stage`. Schedules a reboot if the stage is fixable and attempts remain. */
-  onError(stage: BraidErrorStage, notEntitled: boolean): void;
+  /** A boot failed. Schedules a reboot if the failure is fixable and attempts remain. */
+  onError(error: Pick<BraidError, 'stage' | 'httpStatus'>, notEntitled: boolean): void;
   /** The fragment stopped answering. Schedules a reboot if attempts remain. */
   onGone(): void;
-  /** Cancels a scheduled reboot and restores the full budget: the slot left the DOM. */
+  /**
+   * Cancels a scheduled reboot and restores the full budget: the slot left the DOM, or the host
+   * reloaded it itself.
+   */
   reset(): void;
 }
 
@@ -56,7 +73,7 @@ export function createRecovery(options: {
     const policy = options.policy();
     if (!policy || timer !== undefined || attempts >= policy.attempts) return;
     attempts++;
-    const delayMs = policy.delayMs * 4 ** (attempts - 1);
+    const delayMs = Math.min(policy.delayMs * 4 ** (attempts - 1), MAX_RECOVERY_DELAY_MS);
     options.announce({ attempt: attempts, delayMs, reason });
     timer = setTimeout(() => {
       timer = undefined;
@@ -65,8 +82,8 @@ export function createRecovery(options: {
   }
 
   return {
-    onError(stage, notEntitled) {
-      if (!notEntitled && RECOVERABLE_STAGES.has(stage)) schedule(stage);
+    onError({ stage, httpStatus }, notEntitled) {
+      if (!notEntitled && RECOVERABLE_STAGES.has(stage) && !isDeterministicResponse(httpStatus)) schedule(stage);
     },
     onGone() {
       schedule('gone');
