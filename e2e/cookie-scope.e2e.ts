@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { endpoint, html, launch, readySlots, startHost, type Host } from './harness.js';
-import { cookieScopePrefix as gatewayPrefix } from '../libs/braid-gateway/src/cookie-scope.js';
-import { cookieScopePrefix as clientPrefix } from '../libs/core/src/compat/cookie-partition.js';
+import {
+  cookieScopePrefix as gatewayPrefix,
+  scopeRequestCookies,
+  scopeSetCookie,
+} from '../libs/braid-gateway/src/cookie-scope.js';
+import { cookieScopePrefix as clientPrefix, partitionCookie } from '../libs/core/src/compat/cookie-partition.js';
 
 /**
  * Session cookies from authorization-code logins, in a real browser cookie jar.
@@ -62,6 +66,7 @@ function withWhoami(manifest: ReturnType<typeof fragment>) {
 let browser: Browser;
 let partitioned: Host;
 let shared: Host;
+let partitionedWithHostCookies: Host;
 
 beforeAll(async () => {
   browser = await launch();
@@ -70,6 +75,12 @@ beforeAll(async () => {
   partitioned = await startHost({
     gateway: { registry: [withWhoami(fragment('a', 'partitioned')), withWhoami(fragment('b', 'partitioned'))] },
     head: head(2),
+    body: '<fragment-slot name="a"></fragment-slot><fragment-slot name="b"></fragment-slot>',
+  });
+  partitionedWithHostCookies = await startHost({
+    gateway: { forwardCredentials: true, registry: [withWhoami(fragment('a', 'partitioned')), withWhoami(fragment('b', 'partitioned'))] },
+    // the host (or a proxy) has its own `session`, set first, as is usual
+    head: head(2).replace("document.cookie = 'theme=dark; Path=/';", "document.cookie = 'theme=dark; Path=/'; document.cookie = 'session=HOST; Path=/';"),
     body: '<fragment-slot name="a"></fragment-slot><fragment-slot name="b"></fragment-slot>',
   });
   shared = await startHost({
@@ -82,6 +93,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await partitioned?.close();
+  await partitionedWithHostCookies?.close();
   await shared?.close();
 });
 
@@ -142,9 +154,30 @@ describe('partitioned fragments', () => {
     await context.close();
   });
 
-  it('use one scope encoding in the gateway and the client', () => {
+  it("still send each backend its own session when the host has a cookie of the same name", async () => {
+    const { context, probe } = await run(partitionedWithHostCookies);
+    // own first, the host's same-named one left out: a backend reading the first `session` is right
+    expect(cookies(detail(probe, 'a', 'backend saw'))).toEqual(['csrf=a-token', 'pref-a=1', 'session=a-session', 'theme=dark']);
+    expect(cookies(detail(probe, 'b', 'backend saw'))).toEqual(['csrf=b-token', 'pref-b=1', 'session=b-session', 'theme=dark']);
+    await context.close();
+  });
+
+  it('use one scope encoding and one rule in the gateway and the client', () => {
     for (const name of ['a', 'kcd', 'a.b', 'a$b', 'ünï', 'with space', '(x)', 'a;b=c']) {
       expect(clientPrefix(name), name).toBe(gatewayPrefix(name));
+    }
+    // the duplicated logic agrees: what the client writes is what the gateway would have set, and
+    // what the client reads is what the gateway would send (host cookies included)
+    const lines = ['session=x; Domain=example.com; Path=/api; HttpOnly', '__Host-sid=y; Secure', '__secure-a=b', 'k=v=w; Max-Age=0'];
+    for (const line of lines) {
+      const writes: string[] = [];
+      partitionCookie({ get: () => '', set: (value) => void writes.push(value) }, 'kcd').set(line);
+      expect(writes[0], line).toBe(scopeSetCookie(line, 'kcd'));
+    }
+    const headers = ['braid$kcd$session=own; session=host; theme=dark', '__Host-braid$kcd$sid=1; braid$other$x=2', 'a=1'];
+    for (const header of headers) {
+      const read = partitionCookie({ get: () => header, set: () => undefined }, 'kcd').get();
+      expect(read, header).toBe(scopeRequestCookies(header, 'kcd', true) ?? '');
     }
   });
 });

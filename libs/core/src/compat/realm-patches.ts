@@ -746,6 +746,10 @@ export function initializeRealmContext(
   realmWindow.removeEventListener = realmDocument.removeEventListener = compatRemoveEventListener;
 
   if (partition) {
+    // `cookieStore` reads and writes the raw jar, around the scoped `document.cookie`; libraries
+    // feature-detect it and fall back to `document.cookie` when it is absent.
+    Object.defineProperty(realmWindow, 'cookieStore', { value: undefined, configurable: true, enumerable: true });
+
     // The browser fires `storage` natively at every same-origin window, the realm's included, and
     // a native `onstorage` handler would hear every partition's writes. Owning the property sends
     // the handler through the compat listener instead, where the partition filters it.

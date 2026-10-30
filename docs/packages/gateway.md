@@ -158,11 +158,19 @@ fragment's session. A fragment whose manifest sets `capabilities.storage` gets c
 - **On the way in**, the fragment's endpoint receives its own cookies under the names it set, on
   namespace, document, pierce and websocket requests alike. It gets them even when
   `forwardCredentials` is off, because its own login set them. The host's unscoped cookies are
-  added only when `forwardCredentials` allows. Another fragment's cookies are never sent.
+  added only when `forwardCredentials` allows. If one has the same name as the fragment's own, the
+  fragment's own wins. Another fragment's cookies are never sent, to partitioned and shared
+  fragments alike.
+- **`Clear-Site-Data` is dropped** from a partitioned fragment's responses. Otherwise one
+  fragment's logout would wipe every other fragment's cookies and storage along with its own.
 - **In the browser**, the fragment's `document.cookie` is the same scoped view (see
   `@braidlabs/core`, "Per-fragment storage").
 - **Named partitions share cookies.** Fragments with `{ "partition": "kcd" }` share one scope, so
-  fragments on one issuer keep one login.
+  fragments on one issuer keep one login. Each of their endpoints then receives the shared session
+  whatever `forwardCredentials` says, so name a partition across endpoints only when one team or
+  trust boundary owns them all.
+- **Compat fragments only.** Custom-element and contract fragments run in the host window, where
+  nothing would show them their cookies under their own names, so the grant is ignored for them.
 
 Limits:
 
@@ -174,3 +182,9 @@ Limits:
 - **A fragment's requests must go through its namespace** (`/__braid/frag/<id>/…`) for its cookies
   to reach its backend. A call to the host origin directly carries the scoped names, which the
   backend won't recognise.
+- **Every scoped cookie has `Path=/`.** A backend that sets one name on two paths keeps only one,
+  and a cookie the fragment writes from script with no `Path` lands on `/`.
+- **Pierced documents don't forward the fragment's `Set-Cookie`.** That was already true before
+  this change. A sliding session is refreshed by the fragment's next namespace request.
+- **`cookieStore` is not available in a partitioned realm.** It reads and writes the raw jar.
+  Libraries fall back to `document.cookie`, which is scoped.

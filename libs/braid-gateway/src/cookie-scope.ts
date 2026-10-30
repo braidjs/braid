@@ -25,8 +25,14 @@ const SCOPE_MARK = 'braid$';
 /** Cookie-name prefixes the browser enforces, which must stay at the front of the name. */
 const BROWSER_PREFIXES = ['__Host-', '__Secure-'] as const;
 
-/** The partition a fragment's cookies and storage live in, or `null` for the shared origin. */
-export function storagePartitionOf(fragment: Pick<FragmentManifest, 'id' | 'capabilities'>): string | null {
+/**
+ * The partition a fragment's cookies and storage live in, or `null` for the shared origin.
+ *
+ * Compat fragments only, as on the client: a custom-element or contract fragment runs in the host
+ * window, where nothing would show it its cookies under their own names again.
+ */
+export function storagePartitionOf(fragment: Pick<FragmentManifest, 'id' | 'capabilities' | 'adapter'>): string | null {
+  if ((fragment.adapter ?? 'compat') !== 'compat') return null;
   const grant: unknown = fragment.capabilities?.storage;
   if (grant === 'partitioned') return fragment.id;
   if (grant && typeof grant === 'object') {
@@ -45,9 +51,26 @@ export function cookieScopePrefix(partition: string): string {
   return `${SCOPE_MARK}${encoded}$`;
 }
 
+/** Splits off a `__Host-`/`__Secure-` prefix, matched without regard to case as browsers do. */
 function splitBrowserPrefix(name: string): [browserPrefix: string, rest: string] {
-  const prefix = BROWSER_PREFIXES.find((candidate) => name.startsWith(candidate));
-  return prefix ? [prefix, name.slice(prefix.length)] : ['', name];
+  const prefix = BROWSER_PREFIXES.find((candidate) => name.toLowerCase().startsWith(candidate.toLowerCase()));
+  return prefix ? [name.slice(0, prefix.length), name.slice(prefix.length)] : ['', name];
+}
+
+/** Whether a cookie name is in any fragment's scope. Nothing legitimate starts with the mark. */
+export function isScopedCookieName(name: string): boolean {
+  return splitBrowserPrefix(name.trim())[1].startsWith(SCOPE_MARK);
+}
+
+function parseCookieHeader(header: string): { name: string; cookie: string }[] {
+  return header
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((cookie) => {
+      const separator = cookie.indexOf('=');
+      return { name: separator === -1 ? cookie : cookie.slice(0, separator), cookie };
+    });
 }
 
 /**
@@ -81,25 +104,46 @@ export function scopeSetCookie(line: string, partition: string): string {
 export function scopeRequestCookies(header: string | null, partition: string, includeHost: boolean): string | null {
   if (!header) return null;
   const own = cookieScopePrefix(partition);
-  const out: string[] = [];
+  const mine: string[] = [];
+  const mineNames = new Set<string>();
+  const host: { name: string; cookie: string }[] = [];
 
-  for (const part of header.split(';')) {
-    const cookie = part.trim();
-    if (!cookie) continue;
-    const separator = cookie.indexOf('=');
-    const rawName = separator === -1 ? cookie : cookie.slice(0, separator);
-    const rest = separator === -1 ? '' : cookie.slice(separator);
+  for (const { name: rawName, cookie } of parseCookieHeader(header)) {
     const [browserPrefix, name] = splitBrowserPrefix(rawName);
-
-    if (name.startsWith(own)) out.push(`${browserPrefix}${name.slice(own.length)}${rest}`);
-    else if (!name.startsWith(SCOPE_MARK) && includeHost) out.push(cookie);
+    if (name.startsWith(own)) {
+      const ownName = `${browserPrefix}${name.slice(own.length)}`;
+      mine.push(`${ownName}${cookie.slice(rawName.length)}`);
+      mineNames.add(ownName);
+    } else if (!name.startsWith(SCOPE_MARK) && includeHost) {
+      host.push({ name: rawName, cookie });
+    }
   }
 
+  // the fragment's own cookie wins over a host cookie of the same name: parsers take the first
+  // occurrence, and the host's usually came first
+  const out = [...mine, ...host.filter(({ name }) => !mineNames.has(name)).map(({ cookie }) => cookie)];
   return out.length > 0 ? out.join('; ') : null;
 }
 
-/** Rewrites every `Set-Cookie` on `headers` into the partition's scope, in place. */
+/**
+ * The caller's cookies for a *shared* fragment under `forwardCredentials`: everything but the
+ * partitioned fragments' scoped cookies, which belong to their own fragments alone.
+ */
+export function withoutScopedCookies(header: string | null): string | null {
+  if (!header) return null;
+  const out = parseCookieHeader(header)
+    .filter(({ name }) => !isScopedCookieName(name))
+    .map(({ cookie }) => cookie);
+  return out.length > 0 ? out.join('; ') : null;
+}
+
+/**
+ * Rewrites every `Set-Cookie` on `headers` into the partition's scope, in place, and drops
+ * `Clear-Site-Data`, with which one fragment's logout would wipe every other fragment's cookies
+ * and storage along with its own.
+ */
 export function scopeResponseCookies(headers: Headers, partition: string): void {
+  headers.delete('clear-site-data');
   const lines = headers.getSetCookie();
   if (lines.length === 0) return;
   headers.delete('set-cookie');

@@ -55,6 +55,17 @@ describe('scopeRequestCookies()', () => {
     expect(scopeRequestCookies(header, 'billing', false)).toBe('session=b');
   });
 
+  it("lets the fragment's own cookie win over a host cookie of the same name", () => {
+    expect(scopeRequestCookies('session=host; theme=dark; braid$orders$session=own', 'orders', true)).toBe(
+      'session=own; theme=dark',
+    );
+  });
+
+  it('matches a __Host-/__Secure- prefix without regard to case', () => {
+    expect(scopeSetCookie('__host-sid=1; Secure', 'orders')).toBe('__host-braid$orders$sid=1; Path=/; Secure');
+    expect(scopeRequestCookies('__HOST-braid$orders$sid=1', 'orders', false)).toBe('__HOST-sid=1');
+  });
+
   it("adds the host's unscoped cookies only when forwardCredentials allows", () => {
     expect(scopeRequestCookies(header, 'orders', true)).toBe('session=a; __Host-sid=c; theme=dark');
     expect(scopeRequestCookies('theme=dark', 'orders', false)).toBeNull();
@@ -69,6 +80,9 @@ describe('storagePartitionOf()', () => {
     expect(storagePartitionOf({ id: 'orders', capabilities: { storage: 'shared' } })).toBeNull();
     expect(storagePartitionOf({ id: 'orders' })).toBeNull();
     expect(storagePartitionOf({ id: 'orders', capabilities: { storage: 'nope' as never } })).toBeNull();
+    // compat only: other adapters run in the host window, with no scoped document.cookie
+    expect(storagePartitionOf({ id: 'orders', adapter: 'custom-element', capabilities: { storage: 'partitioned' } })).toBeNull();
+    expect(storagePartitionOf({ id: 'orders', adapter: 'compat', capabilities: { storage: 'partitioned' } })).toBe('orders');
   });
 });
 
@@ -128,11 +142,25 @@ describe('a gateway composing partitioned fragments', () => {
     expect(seen.orders.at(-1)).toEqual({ cookie: 'session=o; shell=s' });
   });
 
-  it('leaves a shared fragment exactly as before', async () => {
+  it("leaves a shared fragment's own cookies alone, but keeps partitioned fragments' sessions from it", async () => {
     const { get, seen } = setup({ forwardCredentials: true });
-    const response = (await get('/__braid/frag/plain/login', 'braid$orders$session=o; shell=s'))!;
+    const response = (await get('/__braid/frag/plain/login', 'braid$orders$session=o; __Host-braid$orders$sid=x; shell=s'))!;
     expect(response.headers.getSetCookie()).toEqual(['session=plain-session; Path=/; HttpOnly']);
-    expect(seen.plain.at(-1)).toEqual({ cookie: 'braid$orders$session=o; shell=s' });
+    expect(seen.plain.at(-1)).toEqual({ cookie: 'shell=s' });
+  });
+
+  it("drops Clear-Site-Data from a partitioned fragment, so its logout cannot wipe the others'", async () => {
+    const gateway = createGateway({
+      registry: [
+        {
+          id: 'orders',
+          capabilities: { storage: 'partitioned' },
+          endpoint: (async () => new Response('bye', { headers: { 'clear-site-data': '"cookies", "storage"' } })) as typeof fetch,
+        },
+      ],
+    });
+    const response = (await gateway.handle(new Request('https://shell.example.com/__braid/frag/orders/logout')))!;
+    expect(response.headers.get('clear-site-data')).toBeNull();
   });
 
   it('shares cookies between fragments that name the same partition', async () => {

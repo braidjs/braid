@@ -10,8 +10,13 @@ function jar(contents: string): CookieAccessor & { writes: string[] } {
 describe('partitionCookie()', () => {
   it("reads its own cookies under their own names, plus the host's, never another partition's", () => {
     const native = jar('braid$orders$csrf=o; braid$billing$csrf=b; theme=dark; __Host-braid$orders$sid=s');
-    expect(partitionCookie(native, 'orders').get()).toBe('csrf=o; theme=dark; __Host-sid=s');
+    expect(partitionCookie(native, 'orders').get()).toBe('csrf=o; __Host-sid=s; theme=dark');
     expect(partitionCookie(native, 'billing').get()).toBe('csrf=b; theme=dark');
+  });
+
+  it('lets its own cookie win over a host cookie of the same name', () => {
+    const native = jar('session=host; theme=dark; braid$orders$session=own');
+    expect(partitionCookie(native, 'orders').get()).toBe('session=own; theme=dark');
   });
 
   it('writes into the partition, host-only on Path=/, keeping the other attributes', () => {
@@ -25,7 +30,7 @@ describe('partitionCookie()', () => {
     ]);
   });
 
-  it('ignores a write with no cookie name, as the browser does', () => {
+  it('drops a write with no cookie name rather than store it unscoped', () => {
     const native = jar('');
     partitionCookie(native, 'orders').set('=nameless');
     expect(native.writes).toEqual([]);

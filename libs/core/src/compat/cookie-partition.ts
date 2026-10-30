@@ -23,9 +23,10 @@ export function cookieScopePrefix(partition: string): string {
   return `${SCOPE_MARK}${encoded}$`;
 }
 
+/** Splits off a `__Host-`/`__Secure-` prefix, matched without regard to case as browsers do. */
 function splitBrowserPrefix(name: string): [browserPrefix: string, rest: string] {
-  const prefix = BROWSER_PREFIXES.find((candidate) => name.startsWith(candidate));
-  return prefix ? [prefix, name.slice(prefix.length)] : ['', name];
+  const prefix = BROWSER_PREFIXES.find((candidate) => name.toLowerCase().startsWith(candidate.toLowerCase()));
+  return prefix ? [name.slice(0, prefix.length), name.slice(prefix.length)] : ['', name];
 }
 
 export interface CookieAccessor {
@@ -39,7 +40,9 @@ export function partitionCookie(native: CookieAccessor, partition: string): Cook
 
   return {
     get() {
-      const visible: string[] = [];
+      const mine: string[] = [];
+      const mineNames = new Set<string>();
+      const host: { name: string; cookie: string }[] = [];
       for (const part of native.get().split(';')) {
         const cookie = part.trim();
         if (!cookie) continue;
@@ -47,10 +50,16 @@ export function partitionCookie(native: CookieAccessor, partition: string): Cook
         const rawName = separator === -1 ? cookie : cookie.slice(0, separator);
         const rest = separator === -1 ? '' : cookie.slice(separator);
         const [browserPrefix, name] = splitBrowserPrefix(rawName);
-        if (name.startsWith(own)) visible.push(`${browserPrefix}${name.slice(own.length)}${rest}`);
-        else if (!name.startsWith(SCOPE_MARK)) visible.push(cookie);
+        if (name.startsWith(own)) {
+          const ownName = `${browserPrefix}${name.slice(own.length)}`;
+          mine.push(`${ownName}${rest}`);
+          mineNames.add(ownName);
+        } else if (!name.startsWith(SCOPE_MARK)) {
+          host.push({ name: rawName, cookie });
+        }
       }
-      return visible.join('; ');
+      // the fragment's own cookie wins over a host cookie of the same name, as at its backend
+      return [...mine, ...host.filter(({ name }) => !mineNames.has(name)).map(({ cookie }) => cookie)].join('; ');
     },
 
     set(value) {

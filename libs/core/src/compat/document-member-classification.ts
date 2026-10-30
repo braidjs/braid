@@ -86,7 +86,6 @@ export const documentMemberClassification: Readonly<Record<string, DocumentMembe
 
   // --- native: audited, the realm document's native behavior is correct for fragments ---
 
-
   // fragments must see the fragment's window (the realm iframe's window), not the main window
   defaultView: 'native',
 
