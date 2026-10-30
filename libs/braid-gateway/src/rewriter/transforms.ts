@@ -204,6 +204,15 @@ export function prepareFragmentHtml(
           const rel = tag.getAttribute('rel');
           const href = tag.getAttribute('href');
           const crossorigin = tag.getAttribute('crossorigin');
+          // `inert-*` is Braid's own marker for a link it neutralized; markup that arrives with it
+          // already set would be revived by the client as though the gateway had written it
+          // A character reference the rewriter does not decode (`&#105;nert-…`) is read the same way
+          // by the browser, so any reference in a rel is treated as possibly the marker.
+          if (rel !== null && (/\binert-/i.test(rel) || rel.includes('&'))) {
+            tag.setAttribute('rel', `blocked-${rel}`);
+            tag.setAttribute('data-braid-blocked', 'rel');
+            return;
+          }
           if (rel === 'modulepreload') hint(href, crossorigin ?? '');
           if (rel === 'preload' && tag.getAttribute('as') === 'script') hint(href, crossorigin);
           if (rel === 'preload' || rel === 'prefetch' || rel === 'modulepreload') {
