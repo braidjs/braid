@@ -99,3 +99,11 @@ jobs:
         # a tag pointing at a release that never shipped.
         if: ${{ !inputs.dry-run }}
         run: git push --follow-tags origin HEAD:main
+
+      - name: Publish the GitHub release
+        # Last, against the pushed tag: the version's CHANGELOG.md section becomes the release notes
+        # on GitHub. See tools/release/github-release.mjs for why nx does not create it itself.
+        if: ${{ !inputs.dry-run }}
+        run: node tools/release/github-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
