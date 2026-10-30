@@ -31,6 +31,8 @@ export interface BraidFragmentProps {
   src?: string;
   /** Props handed to the fragment. Structured-cloned across the realm boundary. */
   props?: Record<string, unknown>;
+  /** Mount prerequisites the fragment waits for, space-separated (see `initBraid({ prerequisites })`). */
+  requires?: string;
   onReady?: (detail: { fragmentId: string }) => void;
   onError?: (detail: BraidFragmentError) => void;
   onFragmentEvent?: (detail: BraidFragmentEvent) => void;
@@ -39,6 +41,18 @@ export interface BraidFragmentProps {
   className?: string;
   style?: React.CSSProperties;
   ref?: Ref<BraidFragmentHandle>;
+  /**
+   * Host-provided content for the slot's named slots: a `slot="loading"` element shown while the
+   * fragment boots, a `slot="fallback"` one shown if it fails.
+   *
+   * ```tsx
+   * <BraidFragment name="orders">
+   *   <div slot="loading" aria-hidden="true" className="skeleton" />
+   *   <p slot="fallback">Orders are unavailable right now.</p>
+   * </BraidFragment>
+   * ```
+   */
+  children?: React.ReactNode;
 }
 
 type SlotElement = HTMLElement & {
@@ -65,6 +79,7 @@ export function BraidFragment({
   name,
   src,
   props,
+  requires,
   onReady,
   onError,
   onFragmentEvent,
@@ -72,6 +87,7 @@ export function BraidFragment({
   className,
   style,
   ref,
+  children,
 }: BraidFragmentProps) {
   const slotRef = useRef<SlotElement>(null);
   const [, setState] = useState<FragmentSlotState>('idle');
@@ -121,9 +137,12 @@ export function BraidFragment({
       ref={slotRef}
       name={name}
       {...(src === undefined ? {} : { src })}
+      {...(requires === undefined ? {} : { requires })}
       class={className}
       style={style}
-    />
+    >
+      {children}
+    </fragment-slot>
   );
 }
 

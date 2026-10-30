@@ -7,10 +7,13 @@ import { assert } from '../utils/assert.js';
 import { installDocumentFacade } from './document-facade.js';
 import { createDocumentOverrides } from './document-overrides.js';
 import { createFragmentBoundary, FragmentBoundary } from './fragment-boundary.js';
+import { createHtmlPolicy, HtmlPolicyMode } from './html-policy.js';
 import { makeScriptBornInert } from './born-inert-scripts.js';
 import { navigationBus, ensureHostNavigationSources } from './navigation-bus.js';
 import { createRealmNavigator } from './service-worker.js';
 import { installSharedGlobals } from './shared-globals.js';
+import { installStoragePartition, type StoragePartition } from './storage-partition.js';
+import { nativeCookieAccessor, partitionCookie } from './cookie-partition.js';
 import { RealmHandle } from '../realm/realm-manager.js';
 
 /**
@@ -39,6 +42,8 @@ export function initializeRealmContext(
   boundNavigation: boolean,
   fragmentAbortController: AbortController,
   sharedGlobals: readonly string[] = [],
+  storagePartition?: string,
+  htmlPolicy?: HtmlPolicyMode,
 ): RealmContext {
   assert(realm.window !== null && realm.document !== null, 'attempted to patch the realm before it was ready');
 
@@ -63,6 +68,21 @@ export function initializeRealmContext(
     shadowRoot: fragmentShadowRoot,
     braidDocumentElement,
     abortSignal: fragmentAbortController.signal,
+    ...(htmlPolicy ? { htmlPolicy: createHtmlPolicy(htmlPolicy, realm.fragmentId, mainDocument) } : {}),
+  });
+
+  // `document.importNode(template.content, true)` — how most libraries instantiate a template — makes
+  // the copy in the realm's own document, where the boundary's cloneNode does not run. The copy
+  // carries provenance all the same, so the gateway's template scripts still run once instantiated.
+  const nativeImportNode = realmDocument.importNode;
+  Object.defineProperty(realmDocument, 'importNode', {
+    configurable: true,
+    writable: true,
+    value: function importNode(this: Document, node: Node, deep?: boolean) {
+      const imported = nativeImportNode.call(this, node, deep);
+      fragmentBoundary.inheritProvenance(node, imported, Boolean(deep));
+      return imported;
+    },
   });
 
   /** ---------------------------------------------- Window Patches ------------------------------------------------ */
@@ -126,6 +146,13 @@ export function initializeRealmContext(
     configurable: true,
     enumerable: true,
   });
+
+  // A partitioned fragment gets Web Storage of its own instead of the host origin's. Before any
+  // fragment script, like every patch here; its `storage` events are translated in the proxy
+  // listener below, and `onstorage` is routed through it at the end of the event patches.
+  const partition: StoragePartition | null = storagePartition
+    ? installStoragePartition(realmWindow, mainWindow, storagePartition, fragmentAbortController.signal)
+    : null;
 
   // dispatch events onto the shadowRoot if the event is not one of the special realm events
   const originalDispatchEvent = realmWindow.dispatchEvent.bind(realmWindow);
@@ -363,23 +390,24 @@ export function initializeRealmContext(
     'currentScript',
   )!.get!.bind(realmDocument);
 
-  installDocumentFacade(
+  const documentOverrides = createDocumentOverrides({
     realmDocument,
-    createDocumentOverrides({
-      realmDocument,
-      mainDocument,
-      braidDocumentElement,
-      fragmentShadowRoot,
-      boundNavigation,
-      getRealmDocumentReadyState: () => fragmentShadowRoot[compatMetadataSymbol].documentReadyState,
-      // grab the currently executing script in the realm, and map it to its clone in the main document
-      getCurrentScript: () => execToInertScriptMap.get(getUnpatchedRealmDocumentCurrentScript()),
-      boundary: {
-        stampNode: fragmentBoundary.stampNode,
-        makeScriptBornInert,
-      },
-    }),
-  );
+    mainDocument,
+    braidDocumentElement,
+    fragmentShadowRoot,
+    boundNavigation,
+    getRealmDocumentReadyState: () => fragmentShadowRoot[compatMetadataSymbol].documentReadyState,
+    // grab the currently executing script in the realm, and map it to its clone in the main document
+    getCurrentScript: () => execToInertScriptMap.get(getUnpatchedRealmDocumentCurrentScript()),
+    boundary: {
+      stampNode: fragmentBoundary.stampNode,
+      makeScriptBornInert,
+    },
+    // a partitioned fragment sees its own cookies through document.cookie, as the gateway sends
+    // them to its endpoint
+    ...(storagePartition ? { cookie: partitionCookie(nativeCookieAccessor(realmDocument), storagePartition) } : {}),
+  });
+  installDocumentFacade(realmDocument, documentOverrides);
   // END> DOCUMENT PATCHES
 
   /** ---------------------------------------------- Event System Patches ------------------------------------------------ */
@@ -390,6 +418,10 @@ export function initializeRealmContext(
 
   // A list of events for which we don't want to retarget listeners as these events are dispatched in the realm.
   const realmEvents = ['load', 'popstate', 'beforeunload', 'unload'];
+  // events delivered natively at the realm window as well as relayed from the host (see below)
+  const realmWindowMessageEvents = ['message', 'messageerror'];
+  // the wrappers that make a `once` message listener fire once across both windows, by listener
+  const onceMessageListeners = new WeakMap<object, Map<string, EventListener>>();
 
   // Maps realm EventTargets (window and document) to a target in the main context
   const realmTargetToFragmentTarget = (target: EventTarget): EventTarget => {
@@ -473,6 +505,25 @@ export function initializeRealmContext(
           : typeof optionsOrCapture === 'object'
             ? optionsOrCapture ?? {}
             : {};
+
+      // A `once` message listener is registered on two windows (see below), and each registration
+      // would fire once. Wrap it so that the first delivery, from either, removes both.
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName) && options.once) {
+        const capture = Boolean(options.capture);
+        const onceListener = function (this: unknown, event: Event) {
+          compatRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, { capture });
+          return typeof appListenerOrObject === 'function'
+            ? (appListenerOrObject as EventListener).call(this, event)
+            : appListenerOrObject.handleEvent(event);
+        };
+        let byType = onceMessageListeners.get(appListenerOrObject);
+        if (!byType) onceMessageListeners.set(appListenerOrObject, (byType = new Map()));
+        // as natively, adding the same listener again changes nothing
+        if (byType.has(`${eventName}:${capture}`)) return;
+        byType.set(`${eventName}:${capture}`, onceListener);
+        compatAddEventListener.call(realmWindow, eventName, onceListener, { ...options, once: false });
+        return;
+      }
 
       // browsers default to passive events for the following events
       // https://dom.spec.whatwg.org/#default-passive-value
@@ -591,6 +642,10 @@ export function initializeRealmContext(
             return;
           }
 
+          // a partition hears only about its own keys, named as it named them
+          const storageView = partition && event.type === 'storage' ? partition.adaptEvent(event as StorageEvent) : undefined;
+          if (storageView === null) return;
+
           // capture properties of the original event
           const originalEventProps = {
             target: event.target,
@@ -627,6 +682,13 @@ export function initializeRealmContext(
               get() {
                 return realmWindow;
               },
+            });
+          }
+
+          if (storageView) {
+            Object.defineProperties(eventPatch, {
+              key: { get: () => storageView.key },
+              storageArea: { get: () => storageView.storageArea },
             });
           }
 
@@ -673,6 +735,13 @@ export function initializeRealmContext(
 
       // register the listener on the main window, document, <html>, or <body> target
       mainProxyListenerTarget.addEventListener(eventName, mainProxyListener, mainProxyListenerOptions);
+
+      // A message can land on either window: an iframe in the fragment's DOM posts to its parent,
+      // the host; a popup's `opener` and a self-post are the realm itself. A realm-window listener
+      // hears both, natively — each event is dispatched at exactly one of them, so once.
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalAddEventListener.call(realmWindow, eventName, appListenerOrObject, mainProxyListenerOptions);
+      }
     },
   });
 
@@ -693,6 +762,18 @@ export function initializeRealmContext(
       if (realmEvents.includes(eventName) && originalListenerTarget === realmWindow) {
         originalRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, optionsOrCapture);
         return;
+      }
+
+      // a `once` message listener is registered under its wrapper (see compatAddEventListener)
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        const capture = typeof optionsOrCapture === 'boolean' ? optionsOrCapture : Boolean(optionsOrCapture?.capture);
+        const byType = onceMessageListeners.get(appListenerOrObject);
+        const wrapper = byType?.get(`${eventName}:${capture}`);
+        if (wrapper) {
+          byType!.delete(`${eventName}:${capture}`);
+          compatRemoveEventListener.call(realmWindow, eventName, wrapper, { capture });
+          return;
+        }
       }
 
       const appListener =
@@ -717,11 +798,50 @@ export function initializeRealmContext(
 
       Reflect.apply(originalRemoveEventListener, compatListenerTarget, modifiedArgumentsList);
       mainWindow.removeEventListener(eventName, mainProxyListener, optionsOrCapture as EventListenerOptions);
+      if (originalListenerTarget === realmWindow && realmWindowMessageEvents.includes(eventName)) {
+        originalRemoveEventListener.call(realmWindow, eventName, appListenerOrObject, optionsOrCapture);
+      }
     },
   });
 
   realmWindow.addEventListener = realmDocument.addEventListener = compatAddEventListener;
   realmWindow.removeEventListener = realmDocument.removeEventListener = compatRemoveEventListener;
+
+  // `window.onmessage = fn` would natively hear only the realm window, missing every reply posted
+  // to the host — an auth iframe's, say. Owning the property routes it through the compat listener,
+  // which hears both windows (see the message registration above).
+  for (const eventName of realmWindowMessageEvents) {
+    let handler: ((this: Window, event: MessageEvent) => unknown) | null = null;
+    realmWindow.addEventListener(eventName, (event) => handler?.call(realmWindow, event as MessageEvent));
+    Object.defineProperty(realmWindow, `on${eventName}`, {
+      get: () => handler,
+      set: (value: unknown) => {
+        handler = typeof value === 'function' ? (value as typeof handler) : null;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
+
+  if (partition) {
+    // `cookieStore` reads and writes the raw jar, around the scoped `document.cookie`; libraries
+    // feature-detect it and fall back to `document.cookie` when it is absent.
+    Object.defineProperty(realmWindow, 'cookieStore', { value: undefined, configurable: true, enumerable: true });
+
+    // The browser fires `storage` natively at every same-origin window, the realm's included, and
+    // a native `onstorage` handler would hear every partition's writes. Owning the property sends
+    // the handler through the compat listener instead, where the partition filters it.
+    let onstorage: ((this: Window, event: StorageEvent) => unknown) | null = null;
+    realmWindow.addEventListener('storage', (event) => onstorage?.call(realmWindow, event as StorageEvent));
+    Object.defineProperty(realmWindow, 'onstorage', {
+      get: () => onstorage,
+      set: (handler: unknown) => {
+        onstorage = typeof handler === 'function' ? (handler as typeof onstorage) : null;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
 
   // END: EVENT SYSTEM PATCHES
 

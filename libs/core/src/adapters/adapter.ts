@@ -1,3 +1,4 @@
+import type { HtmlPolicyMode } from '../compat/html-policy.js';
 import { BraidError } from '../errors.js';
 import { FragmentEnv } from '../env/fragment-env.js';
 import { RealmHandle, RealmKind } from '../realm/realm-manager.js';
@@ -60,6 +61,16 @@ export interface AdapterBootContext {
    * sharing needs a same-origin realm, and the contract adapter's host API is the contract itself.
    */
   sharedGlobals?: readonly string[];
+  /**
+   * The Web Storage partition this fragment reads and writes, already resolved from its
+   * capabilities; absent for the shared, host-origin store. Read by the compat adapter only.
+   */
+  storagePartition?: string;
+  /**
+   * The fragment's HTML sink policy, already resolved from its capabilities; absent for none. Read
+   * by the compat adapter only.
+   */
+  htmlPolicy?: HtmlPolicyMode;
   /**
    * Values the host's `realmGlobals` hook gave this fragment, already resolved. Installed by the
    * compat and custom-element adapters before the fragment's code runs.

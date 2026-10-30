@@ -73,6 +73,12 @@ not a second copy of the vendor script. It is trusted tier only, and per-fragmen
 `capabilities.sharedGlobals` replaces it, with `[]` opting out. Fragments can then write those host
 globals.
 
+**Per-fragment storage.** If two trusted fragments' auth (or any library with fixed storage keys)
+clobbers the other's — tokens flipping between issuers, a sync listener copying the wrong value —
+the cause is the shared origin `localStorage`. Set `capabilities.storage: 'partitioned'` (or
+`{ partition: 'name' }` for fragments that should share one login) in the manifest. Compat only;
+it stops accidents, it is not a security boundary.
+
 ## The custom-element adapter
 
 For a fragment that already *is* a web component. No emulation, no fragment document — the

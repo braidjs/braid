@@ -49,7 +49,8 @@ export interface BraidFragmentEvent {
   selector: 'braid-fragment',
   standalone: true,
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
-  template: `<fragment-slot #slot [attr.name]="name()" [attr.src]="src() ?? null"></fragment-slot>`,
+  // projected, so `<div slot="loading">` and `<p slot="fallback">` children reach the slot's own slots
+  template: `<fragment-slot #slot [attr.name]="name()" [attr.src]="src() ?? null" [attr.requires]="requires() ?? null"><ng-content /></fragment-slot>`,
   styles: `
     :host,
     fragment-slot {
@@ -66,6 +67,8 @@ export class BraidFragment {
    * location, and navigations it performs drive the host URL.
    */
   readonly src = input<string>();
+  /** Mount prerequisites the fragment waits for, space-separated (see `initBraid({ prerequisites })`). */
+  readonly requires = input<string>();
 
   /** Props handed to the fragment. Structured-cloned across the realm boundary. */
   readonly props = input<Record<string, unknown>>();

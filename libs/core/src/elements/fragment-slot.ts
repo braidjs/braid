@@ -29,7 +29,14 @@ import {
   readCapabilities,
   resolveCapabilities,
   resolveSharedGlobals,
+  resolveStoragePartition,
 } from '../weave/capabilities.js';
+import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
+import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
+import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
+import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
+import { createRecovery } from './recovery.js';
+import { resolveHtmlPolicy } from '../compat/html-policy.js';
 
 /**
  * What the slot reports about its fragment.
@@ -62,6 +69,22 @@ export function slotStateFor(liveness: LivenessState): FragmentSlotState {
 }
 
 /**
+ * Whether a slot sits in another fragment's DOM: some shadow root above it belongs to a slot. A
+ * host's own components may keep slots in their shadow roots; those are the host's.
+ */
+export function insideAnotherFragment(slot: Element): boolean {
+  // the native method: a slot a compat fragment wrote is stamped, and its own getRootNode() answers
+  // with the fragment's virtual document instead of the shadow root it is really in
+  const rootOf = (node: Node) => nativeGetRootNode.call(node);
+  for (let root = rootOf(slot); root instanceof ShadowRoot; root = rootOf(root.host)) {
+    if (root.host.localName === 'fragment-slot') return true;
+  }
+  return false;
+}
+
+const nativeGetRootNode = Node.prototype.getRootNode;
+
+/**
  * Finds server-rendered fragment content the gateway pierced into a slot.
  *
  * Deliberately a direct-children scan rather than `querySelector(':scope > braid-document')`:
@@ -89,7 +112,26 @@ export const SLOT_STYLES =
   ':host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }' +
   'slot[name="fallback"] { display: none; }' +
   ':host([state="gone"]) braid-document, :host([state="error"]) braid-document { display: none; }' +
-  ':host([state="gone"]) slot[name="fallback"], :host([state="error"]) slot[name="fallback"] { display: block; }';
+  ':host([state="gone"]) slot[name="fallback"], :host([state="error"]) slot[name="fallback"] { display: block; }' +
+  // A host's `slot="loading"` child shows while the fragment boots and nothing of it is on screen
+  // yet — never for a pierced slot, whose root has no loading slot. After --braid-loading-delay,
+  // so a fast boot never flashes it: a zero-length animation that holds it hidden until then.
+  'slot[name="loading"] { display: none; }' +
+  ':host([state="loading"]) braid-document:empty ~ slot[name="loading"] {' +
+  ' display: block; animation: braid-loading-in 0s linear var(--braid-loading-delay, 200ms) backwards; }' +
+  '@keyframes braid-loading-in { from, to { visibility: hidden; } }';
+
+/**
+ * Adds the slot a host's `slot="loading"` child projects into. Only on roots the client builds: a
+ * pierced fragment already has its content on screen. (After `reload()` a pierced slot's root is
+ * rebuilt by the client, and can show its loading state like any other.)
+ */
+export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
+  if (shadowRoot.querySelector('slot[name="loading"]')) return;
+  const loading = document.createElement('slot');
+  loading.name = 'loading';
+  shadowRoot.append(loading);
+}
 
 /**
  * Ensures the shadow root can present host-provided fallback content:
@@ -128,6 +170,8 @@ export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
  * - `src` — optional route url for the fragment. When absent, the fragment is *bound*: it
  *   follows the host page's location and participates in host navigation.
  * - `props` — JSON attribute (or the `props` property) passed to the fragment instance.
+ * - `boot` — `eager` (default), `idle`, `visible`, or `interaction`: when to boot. Read when the
+ *   slot connects, or when a deferred slot's late markup arrives. See `boot-gate.ts`.
  *
  * Events: `braid:ready`, `braid:error` (detail includes stage + fix hint), `braid:event`
  * (fragment → host).
@@ -159,11 +203,55 @@ export class FragmentSlot extends HTMLElement {
   #dirty: string | null = null;
   #booted = false;
   #bootScheduled = false;
+  /**
+   * A deferred boot's gate and the listeners that replay or release it; undefined for an eager slot
+   * and once the slot leaves the DOM. Kept after the trigger fires, for the replay.
+   */
+  #bootGate: { gate: BootGate; listening: AbortController } | undefined;
+  /** Which scheduled boot is current: a disconnect or reload makes an older one's trigger moot. */
+  #scheduleGeneration = 0;
+  /** Reboots a fragment that failed for a fixable reason, when the host opted in. */
+  #recovery = createRecovery({
+    policy: () => getBraidConfig().recover,
+    announce: (event) =>
+      this.dispatchEvent(new CustomEvent('braid:recovering', { detail: { fragmentId: this.name, ...event } })),
+    // only if it still needs it: a host may have reloaded it, or it may have come back on its own
+    reboot: () => {
+      if (this.isConnected && (this.#state === 'error' || this.#state === 'gone')) {
+        this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] recovery failed`, error));
+      }
+    },
+  });
   /** Set by reload(): a reload must re-fetch, never re-adopt the pierced content. */
   #forceFetch = false;
+  /** Which boot is current: a teardown or a newer boot makes an older one's outcome moot. */
+  #bootGeneration = 0;
 
   get state(): FragmentSlotState {
     return this.#state;
+  }
+
+  /**
+   * The slot's own `aria-busy` before {@link #markBusy} set it — `null` for none — or `undefined`
+   * when the attribute is not the slot's doing, so whatever the host wrote is left as it is.
+   */
+  #busyRestore: string | null | undefined = undefined;
+
+  /**
+   * Busy while a host-provided loading state may be showing: a client-built root with a
+   * `slot="loading"` child, until first paint or the slot leaves `loading`.
+   */
+  #markBusy(): void {
+    if (this.#busyRestore !== undefined || !this.querySelector(':scope > [slot="loading"]')) return;
+    this.#busyRestore = this.getAttribute('aria-busy');
+    this.setAttribute('aria-busy', 'true');
+  }
+
+  #clearBusy(): void {
+    if (this.#busyRestore === undefined) return;
+    if (this.#busyRestore === null) this.removeAttribute('aria-busy');
+    else this.setAttribute('aria-busy', this.#busyRestore);
+    this.#busyRestore = undefined;
   }
 
   /**
@@ -178,7 +266,10 @@ export class FragmentSlot extends HTMLElement {
     const previous = this.#state;
     this.#state = next;
     this.setAttribute('state', next);
+    if (next !== 'loading') this.#clearBusy();
     this.dispatchEvent(new CustomEvent('braid:state', { detail: { state: next, previous, fragmentId: this.name } }));
+    // not over unsaved work: a fragment that declared some may yet come back with it
+    if (next === 'gone' && this.#dirty === null) this.#recovery.onGone();
   }
 
   get name(): string {
@@ -224,14 +315,7 @@ export class FragmentSlot extends HTMLElement {
       if (this.isConnected && this.#booted) {
         void this.reload();
       } else if (this.isConnected && !this.#booted && !this.#bootScheduled) {
-        this.#bootScheduled = true;
-        queueMicrotask(() => {
-          this.#bootScheduled = false;
-          if (this.isConnected && !this.#booted) {
-            this.#booted = true;
-            void this.#boot();
-          }
-        });
+        this.#scheduleBoot();
       }
     }
   }
@@ -246,19 +330,77 @@ export class FragmentSlot extends HTMLElement {
     if (!this.name && (this.hasAttribute('outlet') || this.hasAttribute('data-braid-in-outlet'))) {
       return;
     }
+    this.#scheduleBoot();
+  }
+
+  /**
+   * Boots once the slot's `boot` trigger fires — on the next microtask for an eager slot.
+   *
+   * The microtask is what lets a host set `props` or attributes in the same task that inserted the
+   * slot; a deferred slot waits longer still, and boots with whatever name it has by then.
+   */
+  #scheduleBoot(): void {
     this.#bootScheduled = true;
-    queueMicrotask(() => {
+    const schedule = ++this.#scheduleGeneration;
+    const current = () => schedule === this.#scheduleGeneration && this.isConnected && !this.#booted;
+    // A slot the gateway streamed past gets its markup at the end of the document; until then it
+    // cannot know whether it is pierced, which is what every boot mode decides on.
+    if (this.hasAttribute(DEFERRED_ATTRIBUTE)) {
+      void lateContentArrival(this).then(() => {
+        if (current()) this.#gateBoot(current);
+      });
+      return;
+    }
+    this.#gateBoot(current);
+  }
+
+  #gateBoot(current: () => boolean): void {
+    const start = () => {
       this.#bootScheduled = false;
-      if (!this.isConnected || this.#booted) {
-        return;
-      }
+      if (!current()) return;
       this.#booted = true;
       void this.#boot();
+    };
+
+    const mode = parseBootMode(this.getAttribute('boot'), this.name);
+    if (mode === 'eager') {
+      queueMicrotask(start);
+      return;
+    }
+
+    this.#releaseBootGate();
+    const gate = createBootGate(this, mode, {
+      pierced: findPiercedContentRoot(this.shadowRoot) !== null,
+      fragmentId: this.name,
     });
+    const listening = new AbortController();
+    this.#bootGate = { gate, listening };
+    // Replayed once the fragment can handle what was held. A fragment that fails, or is gone, never
+    // will: the gate lets go, so its content and the host's fallback are clickable again.
+    this.addEventListener('braid:ready', () => setTimeout(() => gate.replay(), 0), { once: true, signal: listening.signal });
+    this.addEventListener(
+      'braid:state',
+      (event) => {
+        const { state } = (event as CustomEvent<{ state: FragmentSlotState }>).detail;
+        if (state === 'error' || state === 'gone') this.#releaseBootGate();
+      },
+      { signal: listening.signal },
+    );
+    void gate.triggered.then(start);
+  }
+
+  /** Drops the slot's boot gate, its held actions, and the listeners waiting to replay them. */
+  #releaseBootGate(): void {
+    this.#bootGate?.gate.dispose();
+    this.#bootGate?.listening.abort();
+    this.#bootGate = undefined;
   }
 
   disconnectedCallback() {
     this.#bootScheduled = false;
+    this.#scheduleGeneration++;
+    this.#recovery.reset();
+    this.#releaseBootGate();
     // Not awaited, because `disconnectedCallback` cannot be. The close runs on after the element
     // has left the DOM — which is exactly the window a flush needs, and the reason the fragment's
     // realm is not disposed until the negotiation finishes.
@@ -266,7 +408,41 @@ export class FragmentSlot extends HTMLElement {
     this.#booted = false;
   }
 
+  /**
+   * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
+   * scheduled recovery reboot: the host has taken over.
+   */
+  /**
+   * A slot's `entry`, or its untrusted `src`, names the code a fragment runs — so only the host may
+   * give one. A slot inside another fragment's DOM was written by that fragment, perhaps from data it
+   * rendered, and may compose registered fragments, whose code the registry names, but not bring
+   * its own. An untrusted slot would also be handed whatever capabilities the host granted its name.
+   */
+  #assertHostDeclaresCode(fragmentId: string): void {
+    const bringsCode = this.hasAttribute('entry') || this.getAttribute('trust') === 'untrusted';
+    if (!bringsCode || !insideAnotherFragment(this)) return;
+    throw new BraidError(`a <fragment-slot> inside another fragment may not declare an entry or an untrusted src`, {
+      fragmentId,
+      stage: 'slot-config',
+      fixHint:
+        `register fragment "${fragmentId}" in the gateway and compose it by name, or move the slot into ` +
+        `the host page's own DOM`,
+    });
+  }
+
   async reload(): Promise<void> {
+    this.#recovery.reset();
+    await this.#reload();
+  }
+
+  async #reload(): Promise<void> {
+    // A reload boots now, whatever the slot was waiting for: its trigger, or late markup, which
+    // would otherwise arrive later and replace the content this boot fetched.
+    this.#scheduleGeneration++;
+    this.#bootScheduled = false;
+    this.#releaseBootGate();
+    this.removeAttribute(DEFERRED_ATTRIBUTE);
+    this.#booted = true;
     await this.#teardown('reload');
     this.#forceFetch = true;
     await this.#boot();
@@ -285,6 +461,7 @@ export class FragmentSlot extends HTMLElement {
     this.#liveness = undefined;
     this.#channel = undefined;
     this.#abortController = undefined;
+    this.#bootGeneration++;
 
     // Nothing mounted: the pre-Weave synchronous path, still the right one for an idle slot.
     if (!channel || !abortController) {
@@ -347,6 +524,7 @@ export class FragmentSlot extends HTMLElement {
     // A close still negotiating owns the shadow root until it finishes. Booting into it first
     // would render content that the completing close would then clear.
     await this.#closing;
+    const generation = ++this.#bootGeneration;
 
     try {
       if (!fragmentId) {
@@ -370,15 +548,21 @@ export class FragmentSlot extends HTMLElement {
         });
       }
 
+      this.#assertHostDeclaresCode(fragmentId);
+
       this.#setState('loading');
 
+      // Prerequisites the host's markup declares, on every tier: a gate that silently did not apply
+      // to some fragments would be worse than none.
+      const markupRequires = parseRequires(this.getAttribute('requires'));
+
       if (this.getAttribute('trust') === 'untrusted') {
-        await this.#bootUntrusted(fragmentId);
+        await this.#bootUntrusted(fragmentId, markupRequires);
         return;
       }
 
       if (this.getAttribute('adapter') === 'contract') {
-        await this.#bootContract(fragmentId);
+        await this.#bootContract(fragmentId, markupRequires);
         return;
       }
 
@@ -416,6 +600,20 @@ export class FragmentSlot extends HTMLElement {
       }
 
       ensureFallbackSlot(shadowRoot);
+      if (!piercedContentRoot) {
+        ensureLoadingSlot(shadowRoot);
+        this.#markBusy();
+      }
+
+      // Prerequisites the host's markup declares start now, alongside the realm and the document;
+      // the manifest's arrive with the realm stub. Either way the fragment's code waits for them.
+      const earlyPrerequisites = markupRequires.length ? awaitPrerequisites(markupRequires, fragmentId, signal) : null;
+      // awaited below; until then a failure must not surface as an unhandled rejection
+      earlyPrerequisites?.catch(() => undefined);
+      // A failing prerequisite ends the boot at once, not after the realm and the handshake: the
+      // fallback should not wait a round trip on a fragment the user was never going to see.
+      const failFast = <T>(step: Promise<T>): Promise<T> =>
+        earlyPrerequisites ? Promise.race([step, earlyPrerequisites.then(() => step)]) : step;
 
       /**
        * Boot the realm and fetch the fragment's document at the same time, unless it was
@@ -438,25 +636,33 @@ export class FragmentSlot extends HTMLElement {
       const paint = (html: string, isHtml: boolean) => {
         if (signal.aborted || !isHtml || !html.trim()) return;
         contentRoot.appendChild(parseFragmentContent(html, document));
+        // on screen now: the loading state has given way
+        this.#clearBusy();
         painted = true;
       };
 
-      const [htmlResult, realm] = await Promise.all([
+      const [htmlResult, realm] = await failFast(Promise.all([
         piercedContentRoot
           ? Promise.resolve({ ok: true as const, html: null })
-          : fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
+          : (takePrefetchedDocument(fragmentId, routeSrcUrl, signal) ?? fetchFragmentHtml(fragmentId, routeSrcUrl, signal)).then(
               ({ html, isHtml }) => {
-                paint(html, isHtml);
+                // nothing of a gated fragment goes on screen before its markup prerequisites hold
+                if (earlyPrerequisites) earlyPrerequisites.then(() => paint(html, isHtml), () => undefined);
+                else paint(html, isHtml);
                 return { ok: true as const, html };
               },
               (error: unknown) => ({ ok: false as const, error }),
             ),
         createRealm('compat-http', { fragmentId, routeUrl, bound, signal }),
-      ]);
+      ]));
 
       // The gateway stamps the manifest-declared adapter onto the realm stub; unknown adapters
       // fail as a named error, and an undeclared adapter resolves to the default (compat).
       const adapter = resolveAdapter(realm.manifestAdapter, fragmentId);
+
+      const manifestRequires = parseRequires(realm.adapterOptions['requires']).filter((key) => !markupRequires.includes(key));
+      const latePrerequisites = manifestRequires.length ? awaitPrerequisites(manifestRequires, fragmentId, signal) : null;
+      latePrerequisites?.catch(() => undefined);
 
       if (!htmlResult.ok && adapter.needsDocument !== false) {
         // The fragment sent the user somewhere else — a login, almost always — and the gateway has
@@ -560,11 +766,17 @@ export class FragmentSlot extends HTMLElement {
           props: structuredClone(this.#props),
         }),
       });
-      await opened;
+      await failFast(opened);
 
       if (signal.aborted) return;
 
       const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal) : undefined;
+      if (signal.aborted) return;
+      const storagePartition = resolveStoragePartition(capabilities, fragmentId);
+      const htmlPolicy = resolveHtmlPolicy(capabilities, fragmentId);
+
+      // nothing of the fragment's has run yet; its content may already be painted, inert
+      await Promise.all([earlyPrerequisites, latePrerequisites]);
       if (signal.aborted) return;
 
       await adapter.boot({
@@ -579,6 +791,8 @@ export class FragmentSlot extends HTMLElement {
         bound,
         env,
         sharedGlobals: resolveSharedGlobals(capabilities),
+        ...(storagePartition === null ? {} : { storagePartition }),
+        ...(htmlPolicy === null ? {} : { htmlPolicy }),
         ...(realmGlobals ? { realmGlobals } : {}),
         signal,
       });
@@ -613,7 +827,8 @@ export class FragmentSlot extends HTMLElement {
         console.debug(`[braid:${fragmentId}] ready`, { slot: this });
       }
     } catch (error) {
-      if (this.#abortController?.signal.aborted) return;
+      // a boot a teardown or a newer boot overtook has nothing to report — its abort is not a failure
+      if (generation !== this.#bootGeneration || this.#abortController?.signal.aborted) return;
 
       this.#setState('error');
       const braidError =
@@ -625,7 +840,15 @@ export class FragmentSlot extends HTMLElement {
               cause: error,
             });
 
-      console.error(braidError);
+      // a user without access to a prerequisite is an outcome, not a failure: fallback, no alarm,
+      // and none of the fragment's content left in the slot
+      const notEntitled = braidError instanceof NotEntitledError;
+      if (notEntitled) {
+        this.shadowRoot?.querySelector('braid-document')?.replaceChildren();
+        if (isDevMode()) console.debug(`[braid:${fragmentId}] ${braidError.message}; showing the fallback`);
+      } else {
+        console.error(braidError);
+      }
       this.dispatchEvent(
         new CustomEvent('braid:error', {
           detail: {
@@ -633,9 +856,12 @@ export class FragmentSlot extends HTMLElement {
             stage: braidError.stage,
             fixHint: braidError.fixHint,
             error: braidError,
+            // an outcome, not a failure: a host routing braid:error to monitoring can skip it
+            ...(notEntitled ? { notEntitled: true } : {}),
           },
         }),
       );
+      this.#recovery.onError(braidError, notEntitled);
     }
   }
 
@@ -655,7 +881,9 @@ export class FragmentSlot extends HTMLElement {
    * negotiation, capabilities, liveness and teardown — because all of it was built against the
    * boundary rather than against compat's machinery.
    */
-  async #bootContract(fragmentId: string): Promise<void> {
+  async #bootContract(fragmentId: string, requires: readonly string[]): Promise<void> {
+    // again where it is read: a `braid:state` listener runs between #boot's check and here
+    this.#assertHostDeclaresCode(fragmentId);
     const entry = this.getAttribute('entry');
     if (!entry) {
       throw new BraidError('a contract fragment needs an entry module', {
@@ -678,6 +906,12 @@ export class FragmentSlot extends HTMLElement {
     const contentRoot = document.createElement('braid-document');
     shadowRoot.replaceChildren(styleSheet, contentRoot);
     ensureFallbackSlot(shadowRoot);
+    ensureLoadingSlot(shadowRoot);
+    this.#markBusy();
+
+    // before anything of the fragment exists: no realm, nothing mounted
+    if (requires.length) await awaitPrerequisites(requires, fragmentId, signal);
+    if (signal.aborted) return;
 
     // The realm's base is the entry's own directory, not a gateway namespace: a contract fragment
     // fetches its assets from wherever it is hosted, directly.
@@ -783,7 +1017,9 @@ export class FragmentSlot extends HTMLElement {
    * same contract negotiation, the same liveness, the same negotiated teardown. That is the return
    * on having built the transport before the tier that needed it.
    */
-  async #bootUntrusted(fragmentId: string): Promise<void> {
+  async #bootUntrusted(fragmentId: string, requires: readonly string[]): Promise<void> {
+    // again where it is read: a `braid:state` listener runs between #boot's check and here
+    this.#assertHostDeclaresCode(fragmentId);
     const src = this.getAttribute('src');
     if (!src) {
       throw new BraidError('an untrusted fragment needs an explicit cross-origin src', {
@@ -802,6 +1038,10 @@ export class FragmentSlot extends HTMLElement {
     styleSheet.textContent = SLOT_STYLES;
     shadowRoot.replaceChildren(styleSheet);
     ensureFallbackSlot(shadowRoot);
+
+    // before anything of the fragment exists: no frame, no connection
+    if (requires.length) await awaitPrerequisites(requires, fragmentId, signal);
+    if (signal.aborted) return;
 
     /**
      * On this tier the capability block is not advisory: `sandbox` and `permissions` become real
@@ -939,6 +1179,30 @@ function redactedLocation(location: string | null, base: string): string | null 
 }
 
 /**
+ * Starts loading a fragment before its slot exists — from a link's hover, or a router's preload
+ * hook — so a navigation that is about to mount it finds the work already in flight.
+ *
+ * ```ts
+ * link.addEventListener('pointerenter', () => prefetchFragment('billing', '/billing/invoices'));
+ * ```
+ *
+ * `route` is what the slot will render: the destination page's path for a routed fragment, or the
+ * slot's `src` for a widget. Two things start:
+ *
+ * - the fragment's document, held for the next slot of that fragment and route to mount within
+ *   ten seconds (`PREFETCH_TTL_MS`) — so that slot makes no document request of its own;
+ * - the scripts the document names, in its own namespace, as `<link rel="prefetch">` the realm
+ *   then loads from the HTTP cache.
+ *
+ * Compat fragments only: contract and untrusted fragments load no Braid document. Calling it again
+ * for the same fragment and route while a prefetch is held does nothing. Call
+ * `clearPrefetchedFragments()` when the user signs out.
+ */
+export function prefetchFragment(fragmentId: string, route: string): void {
+  startPrefetch(fragmentId, route, (url, signal) => fetchFragmentHtml(fragmentId, url, signal));
+}
+
+/**
  * Fetches the fragment's document from the gateway's document namespace.
  *
  * Redirects are refused rather than followed. Followed, a cross-origin one (an auth redirect to an
@@ -956,6 +1220,7 @@ function redactedLocation(location: string | null, base: string): string | null 
  * kind of document it prepares (scripts inert, handlers stripped). Anything else is not safe to put
  * on screen ahead of the adapter.
  */
+
 export async function fetchFragmentHtml(
   fragmentId: string,
   routeSrcUrl: URL,
@@ -1000,6 +1265,7 @@ export async function fetchFragmentHtml(
       {
         fragmentId,
         stage: 'fragment-fetch',
+        httpStatus: response.status || 302,
         fixHint:
           `a fragment's document must not redirect — it is fetched, not navigated to. Usually the request is ` +
           `missing authentication and the fragment is sending it to a login page: handle auth inside ` +
@@ -1021,6 +1287,7 @@ export async function fetchFragmentHtml(
     throw new BraidError(`the gateway responded with HTTP ${response.status} for "${documentUrl}"`, {
       fragmentId,
       stage: 'fragment-fetch',
+      httpStatus: response.status,
       fixHint:
         response.status === 404
           ? `register a manifest for fragment id "${fragmentId}" in the gateway registry`

@@ -19,10 +19,40 @@ const nativeRemoveAttribute = Element.prototype.removeAttribute;
 
 const bornInertScripts = new WeakSet<HTMLScriptElement>();
 
+/**
+ * The scripts that may run in a fragment's realm at all: provenance, not markers.
+ *
+ * A marker — `type="inert"`, `data-script-type` — is an attribute, and markup can forge attributes.
+ * And a `<script>` that markup produced through any parser sink (`innerHTML`, `outerHTML`,
+ * `setHTMLUnsafe`, a template's content, `DOMParser`) is one the browser never runs. So a script
+ * runs only if one of these made it:
+ *
+ * - the fragment's own `document.createElement('script')`, which makes it born inert;
+ * - the gateway, whose prepared content is in the fragment's DOM when its boundary is created;
+ * - a clone, through the boundary, of one of these that has not run yet.
+ *
+ * Everything else stays neutralized, however it reaches the DOM. Membership outlives the born-inert
+ * shadowing, which is removed when the script is activated.
+ */
+const runnableScripts = new WeakSet<HTMLScriptElement>();
+
+export function markRunnable(script: HTMLScriptElement): void {
+  runnableScripts.add(script);
+}
+
+export function isRunnable(script: HTMLScriptElement): boolean {
+  return runnableScripts.has(script);
+}
+
 export function makeScriptBornInert(script: HTMLScriptElement): void {
   nativeSetAttribute.call(script, 'type', 'inert');
   bornInertScripts.add(script);
+  runnableScripts.add(script);
+  shadowType(script);
+}
 
+/** Reads and writes of `type` go to `data-script-type`, so the element itself stays inert. */
+function shadowType(script: HTMLScriptElement): void {
   Object.defineProperties(script, {
     type: {
       configurable: true,
@@ -48,6 +78,13 @@ export function makeScriptBornInert(script: HTMLScriptElement): void {
         return nativeGetAttribute.call(this, String(name).toLowerCase() === 'type' ? 'data-script-type' : name);
       },
     },
+    removeAttribute: {
+      configurable: true,
+      writable: true,
+      value: function removeAttribute(name: string) {
+        return nativeRemoveAttribute.call(this, String(name).toLowerCase() === 'type' ? 'data-script-type' : name);
+      },
+    },
   });
 }
 
@@ -66,7 +103,11 @@ export function removeBornInertShadowing(script: HTMLScriptElement): void {
   delete (script as any).type;
   delete (script as any).setAttribute;
   delete (script as any).getAttribute;
+  delete (script as any).removeAttribute;
   bornInertScripts.delete(script);
+  // A script whose own code set its type to `inert` (a library copying attributes from a script it
+  // found) is a data block that only looks like Braid's marker: it never runs, as natively.
+  if (nativeGetAttribute.call(script, 'data-script-type')?.trim().toLowerCase() === 'inert') runnableScripts.delete(script);
 }
 
 /**

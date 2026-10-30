@@ -1,0 +1,52 @@
+/* The host page's own styles. Sections carry theirs into their shadow roots (src/shared/fragment.css). */
+:root { --accent: #8EC5B4; }
+body { margin: 0; background: #F1ECE2; color: #121116; font-family: 'Bricolage Grotesque', system-ui, sans-serif; font-size: 17px; line-height: 1.55; font-optical-sizing: auto; }
+/* !important because each seam carries the design's inline `display: flex`. */
+body:not([data-seams]) .seam { display: none !important; }
+.wrap { max-width: 1360px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 48px); box-sizing: border-box; }
+a { color: #121116; } a:hover { color: #3346FF; }
+.on-ink a { color: #F1ECE2; } .on-ink a:hover { color: #A8DCCB; }
+.code { margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.7; white-space: pre; overflow-x: auto; color: #E9E5EE; }
+.tk-c { color: #8D8996; } .tk-k { color: #A8DCCB; } .tk-s { color: #B9C1FF; } .tk-t { color: #F1ECE2; font-weight: 700; }
+::selection { background: #3346FF; color: #F1ECE2; }
+/* Nav links get a full-size target, not just the width of their words. */
+.nav-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 999px; text-decoration: none; }
+.nav-link:hover { color: #121116; background: rgba(18, 17, 22, 0.07); }
+a:focus-visible, button:focus-visible { outline: 3px solid #3346FF; outline-offset: 3px; }
+
+/* Each homepage section is a live fragment with a prerendered copy right after it. The copy shows
+   until the fragment has mounted, and comes back if it errors or goes away, so a section is never
+   blank. `ready` is only the first mounted state: liveness then moves it to healthy, unobservable
+   (tab hidden) or suspect, all of which are still on screen. */
+fragment-slot { display: none; }
+fragment-slot:is([state="ready"], [state="healthy"], [state="unobservable"], [state="suspect"]) { display: block; }
+fragment-slot:is([state="ready"], [state="healthy"], [state="unobservable"], [state="suspect"]) + .ssr { display: none; }
+
+/* The two reference pages: a wide grid that folds to one column. */
+.sheet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 40px; }
+.sheet-span { grid-column: 1 / -1; }
+@media (min-width: 1240px) { .sheet-span-2 { grid-column: span 2; } }
+.sheet-code { margin: 0; padding: 12px 14px; background: #121116; border-radius: 4px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; white-space: pre; overflow-x: auto; color: #E9E5EE; }
+.sheet-lbl { margin: 16px 0 6px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.sheet-note { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+/* The contact form */
+.contact-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 28px 40px; margin-top: 40px; max-width: 960px; }
+.field-wide { grid-column: 1 / -1; }
+.field label { display: block; margin-bottom: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.field .optional { font-weight: 400; letter-spacing: .08em; text-transform: none; color: #5B5750; }
+.field input, .field textarea { box-sizing: border-box; width: 100%; min-height: 48px; padding: 12px 14px; border: 1.5px solid #121116; border-radius: 0; background: #FBF8F2; color: #121116; font: 17px/1.45 'Bricolage Grotesque', system-ui, sans-serif; }
+.field textarea { resize: vertical; }
+.field input:focus-visible, .field textarea:focus-visible { outline: 3px solid #3346FF; outline-offset: 2px; }
+.field [aria-invalid="true"] { border-color: #B3261E; border-width: 2px; }
+.field-hint { margin: 8px 0 0; font-size: 14px; color: #5B5750; }
+.field-error { margin: 8px 0 0; font-size: 14px; font-weight: 600; color: #B3261E; }
+.contact-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+.contact-submit { min-height: 52px; padding: 0 32px; border: 0; border-radius: 999px; background: #121116; color: #F1ECE2; font: 600 17px 'Bricolage Grotesque', system-ui, sans-serif; cursor: pointer; }
+.contact-submit:disabled { opacity: .6; cursor: progress; }
+.form-status { margin: 16px 0 0; max-width: 960px; font-weight: 600; }
+.form-noscript { margin: 32px 0 0; padding: 16px 20px; border: 1.5px solid #121116; font-weight: 600; }
+.form-sent { margin: 40px 0 0; padding: 24px; background: var(--accent); font-size: 20px; font-weight: 600; }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.table-box { overflow-x: auto; }

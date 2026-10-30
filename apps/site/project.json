@@ -1,0 +1,80 @@
+{
+  "name": "site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/site/src",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": ["esbuild"]
+        },
+        {
+          "env": "SITE_TURNSTILE_SITEKEY"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/dist/apps/site"],
+      "options": {
+        "command": "node apps/site/build.mjs --out dist/apps/site"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node apps/site/serve.mjs --dir dist/apps/site --port 4600"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node apps/site/dev.mjs --port 8787"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "vitest run --config apps/site/vitest.config.ts"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "commands": [
+          "eslint apps/site --ignore-pattern 'apps/site/infra/cdk.out/**'",
+          "tsc --noEmit -p apps/site/tsconfig.json"
+        ],
+        "parallel": false
+      }
+    },
+    "infra-synth": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk synth --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --quiet"
+      }
+    },
+    "infra-diff": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk diff --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out"
+      }
+    },
+    "infra-deploy": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cdk deploy --app \"node apps/site/infra/app.mjs\" --output apps/site/infra/cdk.out --outputs-file apps/site/infra/cdk.out/outputs.json"
+      }
+    }
+  }
+}

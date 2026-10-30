@@ -22,6 +22,21 @@ cross-origin iframe, and the gateway never touches its markup.
 | `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept | a `javascript:` frame runs on parse with the host's origin; `data:` and `blob:` are refused alongside it as the same shape — a document the markup carries inline |
 | relative and root-relative subresource URLs (`img[src]`, `link[href]`, …) | resolved against the fragment's `<base href>`, then re-rooted under `/__braid/frag/<id>/` (behind the gateway's `basePath`, if it has one) | they would otherwise resolve against the host page |
 
+The same rule applies to subresource URLs that the fragment's *code* sets, through the property
+(`frame.src = 'silent-renew.html'`) or `setAttribute`/`setAttributeNS`. The client applies it when
+the URL is set, against the same base the gateway uses (the fragment's own `<base href>`, default
+`/`). A hidden auth iframe or a lazily set image then loads from the fragment rather than the host,
+on every route. Navigation targets (`a[href]`, `form[action]`) are left alone in both cases.
+
+- **Reading an attribute back** returns the re-rooted path, as it does for prepared markup.
+  Setting it again is safe, because a URL already inside the fragment's namespace is left alone.
+- **Not covered:** HTML that fragment script inserts as a string (`innerHTML`,
+  `insertAdjacentHTML`, a template's content) and attributes set through `Attr` objects
+  (`setAttributeNode`, `attr.value`). Those keep their URLs as written, so they resolve against
+  the host page. Prefer absolute or root-relative URLs there.
+- **`srcset` candidates are split on commas,** in markup and script alike, so a candidate URL that
+  itself contains a comma isn't handled.
+
 Whenever a frame loses an attribute, and when a meta refresh is defanged, the tag is marked with
 what was removed:
 
@@ -70,3 +85,41 @@ including its CSP, not the shell's.
 Both cases follow from the same fact: registering a trusted fragment grants it the user's session.
 When that is not acceptable for a fragment, the answer is `trust="untrusted"`, not more
 sanitization.
+
+## Markup a compat fragment writes at runtime
+
+The gateway's rules cover the markup a fragment *sends*. Markup its code *writes* afterwards, with
+`innerHTML`, `outerHTML`, a template, a `Range` or any other parser, goes into the host document as
+written. On every compat fragment, with no option to set, the following is enforced:
+
+- **A script runs only if the fragment's own document or the gateway made it.** That means:
+  - a script the fragment created with `document.createElement('script')`;
+  - one in the gateway's prepared markup, including inside its templates;
+  - a clone, made through the boundary, of either, if it has not run yet.
+
+  A script that markup produced through a parser never runs, however it reaches the DOM: moved,
+  cloned, copied through a `Range`, or instantiated from a template the fragment wrote. That
+  matches the browser, which never runs a `<script>` that `innerHTML` parsed. The one stricter
+  case is `Range.createContextualFragment`: its scripts would run natively, and here they do not.
+  Create a script element instead. Every JavaScript type a browser runs counts as a script, not
+  only the common spellings (`application/javascript`, `text/ecmascript` and the rest).
+- **A script runs once, in the realm, and never in the host.** Braid runs a fresh copy of each
+  fragment script in the realm. Before the original reaches the fragment's DOM, the browser marks
+  it "already started": Braid connects it once to a document with no browsing context, where it is
+  prepared without running. So a host that later moves the slot (reordering a list, a portal, drag
+  and drop), or code that changes the script's type, text or `src`, cannot make the browser run it
+  in the host window. Scripts keep their real `type`, so selectors by type still match.
+- **Braid's markers are Braid's.** The gateway and the boundary neutralize scripts as
+  `type="inert"`, and preload links as `rel="inert-*"`. A script or link that *arrives* carrying
+  those markers, such as one a fragment wrote from user data, stays exactly as inert as it would be
+  natively. The gateway renames any `rel="inert-*"` it finds in a fragment's own markup.
+- **Data blocks keep their type.** A written `<script type="application/json">` is left in the DOM
+  with its type, so code that looks it up still finds it. It runs nowhere either way.
+- **A nested slot cannot bring its own code.** A `<fragment-slot>` inside another fragment's DOM
+  may compose registered fragments by name, but it may not declare an `entry` or be
+  `trust="untrusted"`. Such a slot fails with a `slot-config` error. Both name code (or an
+  origin) to run, and an untrusted slot would also receive whatever capabilities the host granted
+  its name. Slots inside the host's own components' shadow roots are the host's and are unaffected.
+
+To also strip handlers and `javascript:` URLs from those writes, opt in to `capabilities.html`
+(see `@braidlabs/core`, "Sanitizing a fragment's own HTML writes").

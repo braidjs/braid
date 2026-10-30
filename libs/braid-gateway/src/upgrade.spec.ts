@@ -32,7 +32,7 @@ async function listen(server: Server): Promise<{ origin: string; port: number }>
 }
 
 /** A minimal websocket-ish endpoint: completes the handshake, then echoes uppercase. */
-function upstreamWithSockets() {
+function upstreamWithSockets(handshakeHeaders = '') {
   const seenPaths: string[] = [];
   const seenHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const server = createServer((_req, res) => res.end('http'));
@@ -48,7 +48,7 @@ function upstreamWithSockets() {
     socket.write(
       'HTTP/1.1 101 Switching Protocols\r\n' +
         'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-        `Sec-WebSocket-Accept: ${accept}\r\nx-upstream: yes\r\n\r\n`,
+        `Sec-WebSocket-Accept: ${accept}\r\nx-upstream: yes\r\n${handshakeHeaders}\r\n`,
     );
     if (head?.length) socket.write(head.toString().toUpperCase());
     socket.on('data', (chunk: Buffer) => socket.write(chunk.toString().toUpperCase()));
@@ -164,6 +164,53 @@ describe('websocket pass-through', () => {
     expect(upstream.seenHeaders[1].authorization).toBe('Bearer user-token');
     // and the endpoint can tell a gateway sent it, which is what bounds a loop
     expect(upstream.seenHeaders[0]['x-braid-via']).toBe('braid');
+  });
+
+  it("sends the socket the gateway's baggage, never the caller's as it came", async () => {
+    const upstream = upstreamWithSockets();
+    const { origin } = await listen(upstream.server);
+    const baggage = { baggage: 'tenant=acme,userId=42' };
+
+    for (const forward of [undefined, ['tenant']]) {
+      const gateway = createGateway({
+        registry: [{ id: 'billing', endpoint: origin }],
+        forwardCredentials: true,
+        ...(forward ? { baggage: { forward } } : {}),
+      });
+      const host = hostServer(gateway);
+      host.on('upgrade', toNodeUpgradeHandler(gateway));
+      const { port } = await listen(host);
+      expect((await attemptUpgrade(port, '/__braid/frag/billing/live', baggage)).echo).toBe('PING');
+    }
+
+    expect(upstream.seenHeaders[0].baggage).toBeUndefined();
+    expect(upstream.seenHeaders[1].baggage).toBe('tenant=acme');
+  });
+
+  it("scopes a partitioned fragment's socket cookies both ways, and keeps them from shared fragments", async () => {
+    const upstream = upstreamWithSockets('Set-Cookie: wsid=1; Path=/; HttpOnly\r\n');
+    const { origin } = await listen(upstream.server);
+    const gateway = createGateway({
+      forwardCredentials: true,
+      registry: [
+        { id: 'billing', endpoint: origin, capabilities: { storage: 'partitioned' } },
+        { id: 'plain', endpoint: origin },
+      ],
+    });
+    const host = hostServer(gateway);
+    host.on('upgrade', toNodeUpgradeHandler(gateway));
+    const { port } = await listen(host);
+    const cookie = { cookie: 'braid$billing$session=own; braid$orders$session=other; theme=dark' };
+
+    const partitioned = await attemptUpgrade(port, '/__braid/frag/billing/live', cookie);
+    const shared = await attemptUpgrade(port, '/__braid/frag/plain/live', cookie);
+
+    // in: its own session under its own name, the host's theme, never another fragment's
+    expect(upstream.seenHeaders[0].cookie).toBe('session=own; theme=dark');
+    expect(upstream.seenHeaders[1].cookie).toBe('theme=dark');
+    // out: the handshake's cookie lands in the fragment's scope; a shared fragment's is untouched
+    expect(partitioned.head).toContain('set-cookie: braid$billing$wsid=1; Path=/; HttpOnly');
+    expect(shared.head).toContain('set-cookie: wsid=1; Path=/; HttpOnly');
   });
 
   it('leaves upgrades it does not own to the next handler', async () => {

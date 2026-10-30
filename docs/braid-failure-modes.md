@@ -207,6 +207,22 @@ otherwise). A return URL that lands on the wrong page is a
 `?next=` the gateway could not recognise: only a parameter whose whole value is the fragment's own URL is
 rewritten to the page the user was on.
 
+### Two fragments keep signing each other out
+
+**Symptom.** Two trusted fragments each work alone. Together, one of them keeps losing its
+session: its API calls get 401 or 403, it logs in again, and then the other one does. Often they
+use different identity providers, authorization servers or groups.
+
+**Cause.** They share the host origin. Either their auth libraries keep tokens under the same
+fixed storage key, or their backends set a session cookie with the same name and `Path=/`, so
+each login overwrites the other's.
+
+**Fix.** Set `capabilities.storage: 'partitioned'` on each fragment's manifest. Use
+`{ "partition": "name" }` for fragments that should share one login. Storage and cookies then
+stay per fragment (see `@braidlabs/core`, "Per-fragment storage", and `@braidlabs/gateway`,
+"Per-fragment cookies"). If a proxy in front of the gateway sets the cookies, give each of its
+routes its own session cookie name instead.
+
 ### One fragment's storage stops opening after another deploys
 
 **Symptom.** A fragment that worked yesterday can no longer read or write anything. Its errors name

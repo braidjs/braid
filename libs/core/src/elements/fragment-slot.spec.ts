@@ -3,6 +3,7 @@ import { BraidError } from '../errors.js';
 import {
   SLOT_STYLES,
   ensureFallbackSlot,
+  ensureLoadingSlot,
   fetchFragmentHtml,
   findPiercedContentRoot,
   FragmentRedirectError,
@@ -111,6 +112,33 @@ describe('ensureFallbackSlot()', () => {
     ensureFallbackSlot(shadowRoot);
 
     expect(shadowRoot.querySelectorAll('slot[name="fallback"]')).toHaveLength(1);
+  });
+});
+
+describe('ensureLoadingSlot()', () => {
+  it('adds the loading slot after the document, once', () => {
+    const slot = document.createElement('fragment-slot');
+    const shadowRoot = slot.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = SLOT_STYLES;
+    shadowRoot.append(style, document.createElement('braid-document'));
+    ensureFallbackSlot(shadowRoot);
+
+    ensureLoadingSlot(shadowRoot);
+    ensureLoadingSlot(shadowRoot);
+
+    expect(shadowRoot.querySelectorAll('slot[name="loading"]')).toHaveLength(1);
+    // after braid-document, so `braid-document:empty ~ slot[name="loading"]` can match it
+    expect([...shadowRoot.children].map((child) => child.localName)).toEqual(['style', 'braid-document', 'slot', 'slot']);
+    expect(shadowRoot.lastElementChild?.getAttribute('name')).toBe('loading');
+  });
+});
+
+describe('loading styling', () => {
+  it('shows the loading slot only while loading with nothing painted, after the delay variable', () => {
+    expect(SLOT_STYLES).toContain('slot[name="loading"] { display: none; }');
+    expect(SLOT_STYLES).toContain(':host([state="loading"]) braid-document:empty ~ slot[name="loading"]');
+    expect(SLOT_STYLES).toContain('var(--braid-loading-delay, 200ms)');
   });
 });
 

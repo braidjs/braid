@@ -61,3 +61,6 @@ docs/.vitepress/cache
 .claude/.goal-pause
 .claude/current-goal.md
 .claude/goal-archive/
+
+# AWS CDK synth output
+cdk.out/

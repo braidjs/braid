@@ -1,6 +1,6 @@
 # @braidlabs/fdc3
 
-An FDC3 2.2 Desktop Agent for Braid pages. Every composed fragment gets a `window.fdc3` bound to its
+An FDC3 3.0 Desktop Agent for Braid pages. Every composed fragment gets a `window.fdc3` bound to its
 own app identity. Fragments share user channels, app channels and intents, resolved against an FDC3
 App Directory that the Braid registry serves.
 
@@ -19,7 +19,8 @@ The agent is built on the FINOS reference implementation (`@finos/fdc3-web-impl`
 their first script runs. A fragment whose id has no directory record gets none.
 
 An intent raised to a fragment that is mounted but still booting is held until its listener
-arrives. Not supported yet: `fdc3.open()` and launching apps that aren't mounted, an intent resolver
-UI, and FDC3 for untrusted or contract fragments.
+arrives. Not supported yet: `fdc3.open()`, `fdc3.close()`, raising with `newInstance: true`, and
+launching apps that aren't mounted; an intent resolver UI; and FDC3 for untrusted or contract
+fragments.
 
 Full documentation: https://braidjs.github.io/braid/packages/fdc3

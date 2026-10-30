@@ -69,3 +69,32 @@ jobs:
         # for full-compilation-mode Angular libraries. This can, and it fails the PR instead of
         # the release.
         run: node tools/release/check-publishable.mjs
+
+  e2e:
+    # Real Chromium against a real gateway: storage events between realms, cross-frame messages,
+    # cookies, CSS that decides what is visible — what jsdom cannot show. Its own job so a browser
+    # problem never hides a red `verify`, and the other way round.
+    name: browser e2e
+    # Pinned, not `ubuntu-latest`: Playwright supports a fixed set of distributions per release,
+    # and a runner image that moves ahead of the pinned `playwright` fails before any test runs.
+    # Move this together with the `playwright` devDependency.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        # The browser build that matches the pinned `playwright` devDependency.
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npx tsc -p e2e
+
+      - name: Run
+        run: npm run e2e

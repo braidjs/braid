@@ -14,7 +14,8 @@ export type BraidErrorStage =
   | 'boundary' // a message across the fragment boundary failed, timed out, or arrived closed
   | 'handshake' // host and fragment could not agree on terms at connect time
   | 'teardown' // a fragment did not close cleanly within its deadline
-  | 'contract'; // host and fragment declared terms that do not meet
+  | 'contract' // host and fragment declared terms that do not meet
+  | 'prerequisite'; // a mount prerequisite failed, timed out, or the user is not entitled to it
 
 export interface BraidErrorInit {
   fragmentId: string;
@@ -23,6 +24,8 @@ export interface BraidErrorInit {
   /** The likely fix, phrased as an instruction to the developer. */
   fixHint?: string;
   docsUrl?: string;
+  /** The HTTP status that caused it, when a response did. Redirects (status 0 in a browser) count as 302. */
+  httpStatus?: number;
 }
 
 export class BraidError extends Error {
@@ -30,6 +33,7 @@ export class BraidError extends Error {
   readonly stage: BraidErrorStage;
   readonly fixHint?: string;
   readonly docsUrl?: string;
+  readonly httpStatus?: number;
 
   constructor(message: string, init: BraidErrorInit) {
     const hint = init.fixHint ? `\nLikely fix: ${init.fixHint}` : '';
@@ -40,5 +44,6 @@ export class BraidError extends Error {
     this.stage = init.stage;
     this.fixHint = init.fixHint;
     this.docsUrl = init.docsUrl;
+    this.httpStatus = init.httpStatus;
   }
 }

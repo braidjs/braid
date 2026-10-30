@@ -140,6 +140,8 @@ export function singleFlightKey(
     // chain: if a registry loops a fragment back through this gateway, the inner request would
     // otherwise wait on the outer one — itself — until the timeout.
     request.headers.get(BRAID_VIA_HEADER) ?? '',
+    // Context an endpoint may route or render on — a tenant, say (see `GatewayOptions.baggage`).
+    request.headers.get('baggage') ?? '',
     // Sorted, so the key does not depend on the order a host happened to build its object in.
     ...[...extraHeaders].sort().map((name) => `${name}=${request.headers.get(name) ?? ''}`),
   ].join('\n');

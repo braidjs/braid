@@ -64,7 +64,8 @@ These packages manage origin routing, streaming HTML composition, declarative sh
 | [`@braidlabs/registry`](./registry.md) | Immutable manifest snapshots, content-addressed versioning, and validation. | `createRegistry`, `validateManifest` |
 | [`@braidlabs/sw`](./sw.md) | Service Worker partition handler for skew-safe chunk delivery across rolling deploys. | `createBraidFetchHandler`, `braidServiceWorker` |
 | [`@braidlabs/console`](./console.md) | Visual registry inspector and gateway status dashboard. | `<BraidConsole>`, `mountConsole` |
-| [`@braidlabs/fdc3`](./fdc3.md) | FDC3 2.2 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory. | `createBraidDesktopAgent` |
+| [`@braidlabs/fdc3`](./fdc3.md) | FDC3 3.0 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory. | `createBraidDesktopAgent` |
+| [`@braidlabs/otel`](./otel.md) | OpenTelemetry for Braid: fragment fetches as spans in your existing traces, attributed per fragment. | `otelGatewayTelemetry` |
 
 ---
 

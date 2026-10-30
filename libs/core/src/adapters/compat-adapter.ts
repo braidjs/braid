@@ -24,7 +24,8 @@ export const compatAdapter: InstalledAdapter = {
   installsRealmGlobals: true,
 
   async boot(ctx: AdapterBootContext): Promise<void> {
-    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, sharedGlobals, realmGlobals, signal } = ctx;
+    const { fragmentId, shadowRoot, contentRoot, realm, html, pierced, bound, sharedGlobals, storagePartition, htmlPolicy, realmGlobals, signal } =
+      ctx;
 
     const fragmentShadowRoot = Object.assign(shadowRoot, {
       [compatMetadataSymbol]: { documentReadyState: 'loading' as DocumentReadyState },
@@ -56,6 +57,8 @@ export const compatAdapter: InstalledAdapter = {
       bound,
       fragmentAbortController,
       sharedGlobals ?? [],
+      storagePartition,
+      htmlPolicy,
     );
 
     // after the realm patches, so a name they define is not replaced; before any fragment script

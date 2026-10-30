@@ -30,6 +30,11 @@ export interface FragmentFetchEvent {
   outcome: 'ok' | 'error' | 'timeout' | 'shed';
   /** Absent when the fetch threw before a response existed. */
   status?: number;
+  /**
+   * `true` when this fetch joined an identical one already in flight (see `singleFlight`): its
+   * outcome is that fetch's, and no request of its own reached the endpoint.
+   */
+  coalesced?: boolean;
   durationMs: number;
   at: number;
 }
@@ -75,6 +80,33 @@ export type RegistryEvent =
   | { kind: 'registry'; outcome: 'refreshed'; fragmentCount: number; at: number }
   | { kind: 'registry'; outcome: 'failed'; error: string; at: number };
 
+/** A fragment fetch about to start, as {@link TelemetryOptions.onFragmentFetch} is told of it. */
+export interface FragmentFetchStart {
+  fragmentId: string;
+  phase: FragmentFetchEvent['phase'];
+  method: string;
+}
+
+/** What a fetch hook hands back: headers for the fragment request, and a callback for its end. */
+export interface FragmentFetchHooks {
+  /**
+   * Set on the fragment request — trace context, say — over anything already there; `null` removes
+   * one. A `traceparent` set or removed takes the caller's `tracestate` with it.
+   */
+  headers?: Record<string, string | null>;
+  /**
+   * Runs the endpoint fetch, so a tracing hook can make its span the active one there and an
+   * HTTP-client instrumentation's span nests under it. Must call `fetch` once and return its result.
+   * Not called for a fetch that joins one already in flight.
+   */
+  run?: <T>(fetch: () => T) => T;
+  /**
+   * Called once with the same event `on` receives, and the error when the fetch threw — even after
+   * a throwing hook has muted telemetry, so whatever it opened is closed.
+   */
+  end?: (event: FragmentFetchEvent, error?: unknown) => void;
+}
+
 export interface TelemetryOptions {
   /**
    * Called for every event.
@@ -84,7 +116,15 @@ export interface TelemetryOptions {
    * one *is* wrapped — a broken telemetry sink must not fail the request it is describing, because
    * the whole point is to be safe to leave on in production.
    */
-  on: (event: TelemetryEvent) => void;
+  on?: (event: TelemetryEvent) => void;
+  /**
+   * Called as each fragment fetch starts — after the credential rules and `additionalHeaders`,
+   * before the circuit breaker — for a hook that needs the start, not just the outcome: a tracing
+   * integration opening a span and propagating its context (see `@braidlabs/otel`).
+   *
+   * On the request path, so it must be cheap, and muted like `on` if it throws.
+   */
+  onFragmentFetch?: (fetch: FragmentFetchStart) => FragmentFetchHooks | void;
   /**
    * Collect web vitals in the browser and report them here. Off by default.
    *

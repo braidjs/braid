@@ -1,0 +1,16 @@
+/* Styles every section carries into its own shadow root. Classes do not cross the shadow
+   boundary, so these mirror the host's; custom properties (--accent) and inherited text styles do
+   cross, which is why the palette is defined once, on the host's :root. */
+:host { display: block; }
+.frag { color: #121116; font-family: 'Bricolage Grotesque', system-ui, sans-serif; font-size: 17px; line-height: 1.55; font-optical-sizing: auto; }
+.frag:not([data-seams]) .seam { display: none !important; } /* beats the seam's inline display */
+.wrap { max-width: 1360px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 48px); box-sizing: border-box; }
+a { color: #121116; } a:hover { color: #3346FF; }
+.on-ink a { color: #F1ECE2; } .on-ink a:hover { color: #A8DCCB; }
+.code { margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.7; white-space: pre; overflow-x: auto; color: #E9E5EE; }
+.tk-c { color: #8D8996; } .tk-k { color: #A8DCCB; } .tk-s { color: #B9C1FF; } .tk-t { color: #F1ECE2; font-weight: 700; }
+.dg { display: inline-block; min-width: max-content; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.25; color: #E9E5EE; font-variant-ligatures: none; }
+.dg-row { white-space: pre; }
+.dg-f { color: #8D8996; } .dg-s { color: #F1ECE2; } .dg-h { color: #D9D5DE; } .dg-r { color: #B9C1FF; } .dg-g { color: #F1ECE2; } .dg-t { color: #A9A5B0; } .dg-b { font-weight: 700; }
+::selection { background: #3346FF; color: #F1ECE2; }
+a:focus-visible, button:focus-visible { outline: 3px solid #3346FF; outline-offset: 3px; }

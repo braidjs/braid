@@ -28,6 +28,19 @@ describe('BraidFragment', () => {
     expect(slot.getAttribute('name')).toBe('billing');
   });
 
+  it('passes loading and fallback children through to the slot, and renders none when given none', () => {
+    const { slot } = render(
+      <BraidFragment name="billing">
+        <div slot="loading" className="skeleton" />
+        <p slot="fallback">Billing is unavailable.</p>
+      </BraidFragment>,
+    );
+    expect(slot.querySelector(':scope > [slot="loading"].skeleton')).not.toBeNull();
+    expect(slot.querySelector(':scope > [slot="fallback"]')?.textContent).toBe('Billing is unavailable.');
+
+    expect(render(<BraidFragment name="billing" />).slot.childElementCount).toBe(0);
+  });
+
   it('omits src entirely when unset, so the fragment is bound to the host location', () => {
     const { slot } = render(<BraidFragment name="billing" />);
 

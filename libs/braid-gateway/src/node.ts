@@ -226,6 +226,14 @@ export function toNodeUpgradeHandler(
       if (!target.forwardCredentials) {
         for (const name of target.credentialHeaders) delete headers[name];
       }
+      // baggage only as the gateway allows, like its fetches (see UpgradeTarget.baggage)
+      delete headers['baggage'];
+      if (target.baggage) headers['baggage'] = target.baggage;
+      // the cookies this fragment may have, like its fetches (see UpgradeTarget.cookie)
+      if (target.cookie !== undefined) {
+        if (target.cookie === null) delete headers['cookie'];
+        else headers['cookie'] = target.cookie;
+      }
 
       const upstream = transport.request({
         host: target.target.hostname,
@@ -239,7 +247,13 @@ export function toNodeUpgradeHandler(
         const statusLine =
           `HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}\r\n` +
           Object.entries(upstreamRes.headers)
-            .flatMap(([name, value]) => (Array.isArray(value) ? value.map((v) => `${name}: ${v}`) : [`${name}: ${value}`]))
+            .flatMap(([name, value]) => {
+              const values = Array.isArray(value) ? value : [value];
+              // a partitioned fragment's handshake cookies land in its scope, like any it sets
+              const relayed =
+                name === 'set-cookie' && target.setCookie ? values.map((v) => target.setCookie!(String(v))).filter(Boolean) : values;
+              return relayed.map((v) => `${name}: ${v}`);
+            })
             .join('\r\n') +
           '\r\n\r\n';
 

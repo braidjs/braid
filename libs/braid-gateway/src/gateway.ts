@@ -18,6 +18,7 @@ import {
   canFetch,
   canList,
   hasAccessRules,
+  isOriginSource,
   Principal,
   Registry,
   RegistryRefresh,
@@ -28,6 +29,8 @@ import {
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
+import { scopeRequestCookies, scopeResponseCookies, scopeSetCookie, storagePartitionOf, withoutScopedCookies } from './cookie-scope.js';
+import { fragmentBaggage, type BaggageOptions } from './baggage.js';
 import {
   parseOriginRules,
   resolveRedirectTarget,
@@ -37,6 +40,9 @@ import {
 import {
   parseVitalsBeacon,
   vitalsCollectorScript,
+  type FragmentFetchEvent,
+  type FragmentFetchHooks,
+  type FragmentFetchStart,
   type TelemetryEvent,
   type TelemetryOptions,
 } from './telemetry.js';
@@ -131,6 +137,13 @@ export interface GatewayOptions {
    */
   forwardCredentials?: boolean | ((fragment: FragmentManifest) => boolean);
   /**
+   * W3C `baggage` for fragment requests. By default a fragment receives none: the browser's header
+   * is dropped rather than copied into every backend. Allowlist the inbound keys to keep, with an
+   * optional pattern for their values, and add members of the gateway's own. Only fragments that
+   * `forwardCredentials` allows receive any. See `baggage.ts`.
+   */
+  baggage?: BaggageOptions;
+  /**
    * More request headers that carry the caller's identity, stripped alongside `cookie`,
    * `authorization` and `proxy-authorization` whenever {@link GatewayOptions.forwardCredentials}
    * does not allow a fragment.
@@ -186,6 +199,27 @@ export interface GatewayOptions {
    * `sec-fetch-dest` into the edge's cache key. See `docs/braid-cdn.md`.
    */
   pierceCacheControl?: 'private' | 'preserve';
+  /**
+   * Whether a fragment's `capabilities.network` is turned into a policy on its realm.
+   *
+   * By default the grant is advisory on the trusted tier: it documents intent and feeds the
+   * registry's analysis. With this set, the realm stub of every compat or custom-element fragment
+   * that declares one carries `connect-src 'self' <its origins>`:
+   *
+   * - `'report'` — as `Content-Security-Policy-Report-Only`. Nothing is blocked; the client logs
+   *   each request that would have been, under the fragment's name. Start here.
+   * - `'enforce'` — as `Content-Security-Policy`. The browser blocks the realm's own `fetch`, XHR,
+   *   WebSocket and EventSource requests to any other origin (and JSON module imports, which CSP
+   *   counts as connections).
+   *
+   * It governs what the fragment's realm does, not what the host document does: markup the
+   * fragment puts in the page is under the host's policy, and so is anything the realm calls on the
+   * host's behalf — `navigator.sendBeacon` (a compat realm's `navigator` is the host's), and any
+   * `sharedGlobals` client. Code that deliberately reaches into the host realm gets around it too. It is a tripwire for accidents and naive supply-chain
+   * exfiltration, not a security boundary — the trusted tier has none. Fragments that declare no
+   * `network` are untouched.
+   */
+  realmPolicy?: 'report' | 'enforce';
   /**
    * Called for every document request that reaches the shell, with which fragments composed into
    * it. This is what makes traffic-informed impact analysis possible: "after this change, 43 of
@@ -329,6 +363,24 @@ export interface UpgradeTarget {
   credentialHeaders: readonly string[];
   /** The `x-braid-via` value for the upstream request, this gateway's hop included. */
   via: string;
+  /**
+   * When present, the `Cookie` header the upgrade carries *instead of* the caller's (after the
+   * credential strip), or `null` for none: a partitioned fragment's own scoped cookies, or the
+   * caller's minus every partitioned fragment's (see cookie-scope.ts). A binding must apply it, or
+   * it forwards cookies that belong to other fragments.
+   */
+  cookie?: string | null;
+  /**
+   * For a partitioned fragment, rewrites a `Set-Cookie` line from the upstream's handshake response
+   * into the fragment's scope; an empty result means drop it. A binding must apply it to every
+   * `Set-Cookie` it relays to the browser.
+   */
+  setCookie?: (line: string) => string;
+  /**
+   * The `baggage` header the upgrade carries instead of the caller's, or `null` for none (see
+   * `GatewayOptions.baggage`). A binding must apply it: the caller's own is never forwarded as is.
+   */
+  baggage?: string | null;
 }
 
 /** What the gateway tells a `documents` hook about the registry it is serving right now. */
@@ -361,7 +413,9 @@ export interface BraidGateway {
    *
    * A binding other than `toNodeUpgradeHandler` **must** remove `credentialHeaders` from the
    * upstream request when `forwardCredentials` is false, and set `x-braid-via` to `via` — the
-   * socket otherwise carries the user's identity past the boundary every fetch respects.
+   * socket otherwise carries the user's identity past the boundary every fetch respects. It must
+   * also replace `cookie` with `cookie` when the target carries one, and pass every `Set-Cookie`
+   * of the handshake response through `setCookie` when the target carries that.
    *
    * @returns the endpoint URL to dial, whether the caller's credentials may go with it (the same
    *          {@link GatewayOptions.forwardCredentials} rule as a fetch) and which headers carry
@@ -393,6 +447,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   }
   const mode = options.mode ?? 'development';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
+  const realmPolicy = options.realmPolicy;
+  if (realmPolicy !== undefined && realmPolicy !== 'report' && realmPolicy !== 'enforce') {
+    throw new Error(`braid-gateway: realmPolicy must be "report" or "enforce", not "${String(realmPolicy)}"`);
+  }
   const additionalHeaders = options.additionalHeaders ?? {};
   const resolveAdditionalHeaders = typeof additionalHeaders === 'function'
     ? additionalHeaders
@@ -481,6 +539,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    */
   function warnIfNoIdentity(manifest: FragmentManifest): void {
     if (manifest.redirect !== 'navigate' || forwardsCredentialsTo(manifest) || options.additionalHeaders) return;
+    // a partitioned fragment always gets back the cookies its own login set
+    if (storagePartitionOf(manifest) !== null) return;
     if (warnedNoIdentity.has(manifest.id)) return;
     warnedNoIdentity.add(manifest.id);
     console.warn(
@@ -527,10 +587,74 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   function emit(event: TelemetryEvent): void {
     if (!telemetry || telemetryBroken) return;
     try {
-      telemetry.on(event);
+      telemetry.on?.(event);
     } catch (error) {
-      telemetryBroken = true;
-      console.error('[braid-gateway] telemetry hook threw; telemetry disabled for this process', error);
+      muteTelemetry(error);
+    }
+  }
+
+  function muteTelemetry(error: unknown): void {
+    telemetryBroken = true;
+    console.error('[braid-gateway] telemetry hook threw; telemetry disabled for this process', error);
+  }
+
+  /** Opens a fragment fetch's telemetry hooks, muted like `emit` if they throw. */
+  function startFetchTelemetry(start: FragmentFetchStart): FragmentFetchHooks | undefined {
+    if (!telemetry?.onFragmentFetch || telemetryBroken) return undefined;
+    try {
+      return telemetry.onFragmentFetch(start) ?? undefined;
+    } catch (error) {
+      muteTelemetry(error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Emits a fragment fetch's outcome, and ends its hooks — even once telemetry is muted, because a
+   * span opened before the mute would otherwise never close.
+   */
+  function emitFetch(hooks: FragmentFetchHooks | undefined, event: FragmentFetchEvent, error?: unknown): void {
+    emit(event);
+    if (!hooks?.end) return;
+    try {
+      hooks.end(event, error);
+    } catch (thrown) {
+      if (!telemetryBroken) muteTelemetry(thrown);
+    }
+  }
+
+  /** Applies a fragment fetch's hook headers to its request; a hook handing back bad ones is muted. */
+  function applyFetchHeaders(hooks: FragmentFetchHooks | undefined, fragmentRequest: Request): void {
+    if (!hooks?.headers) return;
+    try {
+      const headers = Object.entries(hooks.headers);
+      // validated whole before any is applied, and matched case-insensitively
+      const checked = new Headers(headers.map(([name, value]): [string, string] => [name, value ?? '']));
+      // a tracestate belongs to the traceparent it came with
+      if (checked.has('traceparent')) fragmentRequest.headers.delete('tracestate');
+      for (const [name, value] of headers) {
+        if (value === null) fragmentRequest.headers.delete(name);
+        else fragmentRequest.headers.set(name, value);
+      }
+    } catch (error) {
+      muteTelemetry(error);
+    }
+  }
+
+  /** The endpoint fetch, inside the hooks' `run` when they have one, muted like `emit` if it throws. */
+  function runFetch(hooks: FragmentFetchHooks | undefined, send: () => Promise<Response>): Promise<Response> {
+    if (!hooks?.run || telemetryBroken) return send();
+    let sent = false;
+    try {
+      return hooks.run(() => {
+        sent = true;
+        return send();
+      });
+    } catch (error) {
+      // a throw from the fetch itself is the fetch's to report; only a hook that failed first is muted
+      if (sent) throw error;
+      muteTelemetry(error);
+      return send();
     }
   }
 
@@ -666,11 +790,26 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           // at the edge, so a re-pin propagates quickly; stale-while-revalidate for a day, so a
           // returning visitor's fragment boot never waits on it — the cost is that the first boot
           // after a re-pin may use the previous stub once, while the new one is fetched.
-          const etag = await stubEtag(stub);
-          const cacheHeaders = {
+          const network = fragment.capabilities?.network;
+          // The realm's own document, so this governs the realm's requests and nothing of the host's.
+          // Only plain origins reach the header (the registry warned about the rest), and an empty
+          // list is the strictest declaration there is: the host origin only.
+          const origins = Array.isArray(network) ? network.filter(isOriginSource) : [];
+          const policy: Record<string, string> =
+            realmPolicy && Array.isArray(network)
+              ? {
+                  [realmPolicy === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only']:
+                    ["connect-src 'self'", ...origins].join(' '),
+                }
+              : {};
+          // The policy is part of the representation: a browser revalidating a stub cached with an
+          // old policy must get a 200 with the new one (or none), not a 304 that leaves it in place.
+          const etag = await stubEtag(Object.keys(policy).length ? `${stub}\n${JSON.stringify(policy)}` : stub);
+          const cacheHeaders: Record<string, string> = {
             [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
             ETag: etag,
             'Cache-Control': 'public, max-age=300, s-maxage=60, stale-while-revalidate=86400, stale-if-error=86400',
+            ...policy,
           };
           if (etagMatches(request.headers.get('if-none-match'), etag)) {
             return new Response(null, { status: 304, headers: cacheHeaders });
@@ -737,12 +876,18 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       strippedUrl.pathname = route.pathname;
 
       try {
+        const forwardCredentials = forwardsCredentialsTo(fragment);
+        const partition = storagePartitionOf(fragment);
+        const cookie = fragmentCookieHeader(request, fragment, forwardCredentials);
         return {
           fragmentId: fragment.id,
           target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
-          forwardCredentials: forwardsCredentialsTo(fragment),
+          forwardCredentials,
           credentialHeaders,
           via: appendHop(request),
+          ...(cookie === undefined ? {} : { cookie }),
+          baggage: forwardCredentials ? fragmentBaggage(request, options.baggage, fragment.id) : null,
+          ...(partition === null ? {} : { setCookie: (line: string) => scopeSetCookie(line, partition) }),
         };
       } catch {
         return null;
@@ -854,6 +999,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
+    // a partitioned fragment's cookies land in its own scope (see cookie-scope.ts)
+    const partition = storagePartitionOf(fragment);
+    if (partition !== null) scopeResponseCookies(forwarded.headers, partition);
     // set, not append: an endpoint that is itself a gateway has already named the fragment
     forwarded.headers.set(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
@@ -863,6 +1011,23 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       forwarded.headers.set('content-type', 'text/html; charset=utf-8');
     }
     return forwarded;
+  }
+
+  /**
+   * The `Cookie` header a fragment's endpoint receives, or `undefined` to leave the request as the
+   * credential rule left it.
+   *
+   * A partitioned fragment gets its own cookies — the ones its endpoint set, scoped by the gateway
+   * on the way out — whatever `forwardCredentials` says, since nothing of the shell's is in them;
+   * the host's own only when `forwardCredentials` allows. Any fragment forwarded the caller's cookies
+   * gets them without the partitioned fragments' scoped ones, which belong to those fragments alone.
+   * `null` means send none.
+   */
+  function fragmentCookieHeader(request: Request, fragment: FragmentManifest, forwardCredentials: boolean): string | null | undefined {
+    const partition = storagePartitionOf(fragment);
+    if (partition !== null) return scopeRequestCookies(request.headers.get('cookie'), partition, forwardCredentials);
+    if (forwardCredentials) return withoutScopedCookies(request.headers.get('cookie'));
+    return undefined;
   }
 
   /**
@@ -932,7 +1097,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
       'cache-control': 'no-store',
     });
-    for (const cookie of upstream.headers.getSetCookie()) headers.append('set-cookie', cookie);
+    const partition = storagePartitionOf(fragment);
+    for (const cookie of upstream.headers.getSetCookie()) {
+      const line = partition === null ? cookie : scopeSetCookie(cookie, partition);
+      if (line) headers.append('set-cookie', line);
+    }
 
     discardBody(upstream);
     return new Response(null, { status: 409, headers });
@@ -995,9 +1164,24 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
     // different origin by construction — so they are removed unless the host has said its whole
     // registry is inside one trust boundary. See `forwardCredentials`.
-    if (!forwardsCredentialsTo(fragment)) {
+    // once per request: a function-form rule need not answer the same way twice
+    const forwardCredentials = forwardsCredentialsTo(fragment);
+    if (!forwardCredentials) {
       for (const name of credentialHeaders) fragmentRequest.headers.delete(name);
     }
+
+    // Cookies, before the single-flight key below is taken, so two sessions never share a fetch.
+    // See `fragmentCookieHeader`.
+    const cookie = fragmentCookieHeader(request, fragment, forwardCredentials);
+    if (cookie !== undefined) {
+      if (cookie) fragmentRequest.headers.set('cookie', cookie);
+      else fragmentRequest.headers.delete('cookie');
+    }
+
+    // Baggage only as the deployment allows, and only inside its trust boundary (see baggage.ts).
+    fragmentRequest.headers.delete('baggage');
+    const baggage = forwardCredentials ? fragmentBaggage(request, options.baggage, fragment.id) : null;
+    if (baggage) fragmentRequest.headers.set('baggage', baggage);
 
     // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
     // of gateways accumulates one entry each — see BRAID_MAX_HOPS.
@@ -1063,10 +1247,15 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // per-fragment timeout budget from the manifest
     const timeoutSignal = AbortSignal.timeout(fragment.timeoutMs);
 
+    // A tracing hook opens its span here and propagates it: after every other header, so its trace
+    // context is the one the endpoint sees, whatever the caller sent.
+    const fetchTelemetry = startFetchTelemetry({ fragmentId: fragment.id, phase, method: fragmentRequest.method });
+    applyFetchHeaders(fetchTelemetry, fragmentRequest);
+
     // Refuse before spending the budget. The caller's fallback handling is identical either way —
     // this only changes how long it waits to get there.
     if (breaker && !breaker.allows(fragment.id)) {
-      emit({
+      emitFetch(fetchTelemetry, {
         kind: 'fragment-fetch',
         fragmentId: fragment.id,
         phase,
@@ -1080,6 +1269,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Measured around the fetch only. The header work above is this process's own time, and
     // attributing it to the fragment's endpoint would make every fragment look slower than it is.
     const startedAt = performance.now();
+    // Whether this caller's fetch joined one already in flight: then its trace context never
+    // reached the endpoint, and its telemetry says so.
+    let key: string | null = null;
+    let sent = false;
+    const coalesced = () => (key !== null && !sent ? { coalesced: true } : {});
 
     try {
       // don't follow redirects: they are sent all the way to the client, which can then decide
@@ -1087,21 +1281,26 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       // Coalesced only when the manifest declares no access rules. A gated fragment's response
       // depends on an authorization decision this layer has already made per-request, and sharing
       // one across two callers would share that decision with it.
-      const key =
+      const requestKey =
         singleFlight && fragment.coalesce !== false && !hasAccessRules(fragment) && fragment.redirect !== 'navigate'
           ? singleFlightKey(fragmentRequest, fragmentRequestUrl.href, extraHeaderNames)
           : null;
+      // keyed by fragment too: two fragments' fetcher-function endpoints are asked for the same URL
+      // (the path alone) and must never be handed each other's response
+      key = requestKey === null ? null : `${fragment.id}\u0000${requestKey}`;
 
-      const response = key
-        ? await singleFlight!.run(key, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }))
-        : await fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal });
+      const send = () => {
+        sent = true;
+        return runFetch(fetchTelemetry, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }));
+      };
+      const response = key ? await singleFlight!.run(key, send) : await send();
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
       if (response.status >= 500) breaker?.failed(fragment.id);
       else breaker?.succeeded(fragment.id);
 
-      emit({
+      emitFetch(fetchTelemetry, {
         kind: 'fragment-fetch',
         fragmentId: fragment.id,
         phase,
@@ -1110,20 +1309,26 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         // a reachable-but-broken endpoint into the same bucket as an unreachable one loses it.
         outcome: 'ok',
         status: response.status,
+        ...coalesced(),
         durationMs: performance.now() - startedAt,
         at: Date.now(),
       });
       return { ok: true, response, fragmentRequestUrl, strippedUrl };
     } catch (error) {
       breaker?.failed(fragment.id);
-      emit({
-        kind: 'fragment-fetch',
-        fragmentId: fragment.id,
-        phase,
-        outcome: timeoutSignal.aborted ? 'timeout' : 'error',
-        durationMs: performance.now() - startedAt,
-        at: Date.now(),
-      });
+      emitFetch(
+        fetchTelemetry,
+        {
+          kind: 'fragment-fetch',
+          fragmentId: fragment.id,
+          phase,
+          outcome: timeoutSignal.aborted ? 'timeout' : 'error',
+          ...coalesced(),
+          durationMs: performance.now() - startedAt,
+          at: Date.now(),
+        },
+        error,
+      );
       return { ok: false, error, timedOut: timeoutSignal.aborted };
     }
   }
@@ -1256,6 +1461,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       fragmentId: fragment.id,
       ...(fragment.src === undefined ? {} : { src: fragment.src }),
       bound: fragment.bound !== false,
+      ...(fragment.stream === 'out-of-order' ? { outOfOrder: true } : {}),
       settled: fragmentResults[index].then((result) => pierceContent(fragment, result)),
     }));
 
@@ -1617,6 +1823,7 @@ function adapterOptionsMeta(fragment: ResolvedFragmentManifest, basePath: string
   // Capabilities ride the same stub as the adapter options: the client needs them before it opens
   // the boundary, and the stub is the one thing it reads before anything else crosses.
   if (fragment.capabilities) options['capabilities'] = fragment.capabilities;
+  if (fragment.requires?.length) options['requires'] = fragment.requires;
 
   if (Object.keys(options).length === 0) return '';
 

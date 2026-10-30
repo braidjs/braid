@@ -6,11 +6,20 @@ import {
   compatMultiNodeDomInsertion,
   executeInertScript,
   executeInertPreloadLink,
+  INERT_SELECTOR,
+  isBraidInertLink,
+  isRunnable,
+  markBraidInertLink,
+  markGatewayContent,
+  markRunnable,
+  markStartedInPlace,
   restoreScriptType,
   alreadyExecutedScriptsAndLinks,
 } from './script-execution.js';
 import { removeBornInertShadowing, unwrapBornInertScriptToLive } from './born-inert-scripts.js';
 import { isDevMode } from '../config.js';
+import { fragmentRootOf, subresourceUrlOverrides, type FragmentUrlBase } from './subresource-urls.js';
+import type { HtmlPolicy } from './html-policy.js';
 
 /**
  * The fragment boundary: all main-realm interception is confined here — the
@@ -52,6 +61,8 @@ const native = {
   fragmentAppend: DocumentFragment.prototype.append,
   fragmentPrepend: DocumentFragment.prototype.prepend,
   fragmentReplaceChildren: DocumentFragment.prototype.replaceChildren,
+  elementBefore: Element.prototype.before,
+  elementAfter: Element.prototype.after,
   shadowRootInnerHTML: Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'innerHTML')!,
 };
 
@@ -60,6 +71,8 @@ export interface FragmentBoundary {
   stampNode(node: Node): void;
   /** Stamps an element (or DocumentFragment contents) and all its element descendants. */
   stampTree(root: Node): void;
+  /** Gives a copy of fragment DOM the provenance of what it copies (see `inheritProvenance`). */
+  inheritProvenance(source: Node, copy: Node, deep: boolean): void;
   /** Disconnects the boundary observer. Called when the fragment is destroyed. */
   disconnect(): void;
 }
@@ -69,8 +82,10 @@ export function createFragmentBoundary(options: {
   shadowRoot: ShadowRoot;
   braidDocumentElement: HTMLElement;
   abortSignal: AbortSignal;
+  /** Applied to the fragment's `innerHTML` and `insertAdjacentHTML` writes; see `html-policy.ts`. */
+  htmlPolicy?: HtmlPolicy;
 }): FragmentBoundary {
-  const { realmDocument, shadowRoot, braidDocumentElement, abortSignal } = options;
+  const { realmDocument, shadowRoot, braidDocumentElement, abortSignal, htmlPolicy } = options;
 
   const stampedNodes = new WeakSet<Node>();
   const stampedProtos = new Map<object, object>();
@@ -92,9 +107,83 @@ export function createFragmentBoundary(options: {
    */
   function reviveInertScript(script: HTMLScriptElement): void {
     unwrapBornInertScriptToLive(script);
-    if (script.getAttribute('type') === 'inert' && !alreadyExecutedScriptsAndLinks.has(script)) {
+    // only a script that may run at all: one markup wrote as `type="inert"` stays exactly that
+    if (script.getAttribute('type') === 'inert' && !alreadyExecutedScriptsAndLinks.has(script) && isRunnable(script)) {
       restoreScriptType(script);
     }
+  }
+
+  /**
+   * A clone carries its source's provenance, as the browser carries a script's started flag: a clone
+   * of a script that may run and has not yet may run, a clone of one that has run has run, and a
+   * clone of an inert link Braid made is Braid's. Matched by position: a deep clone has its source's
+   * shape. Only clones made through the boundary carry it — any other clone path (a `Range`, a
+   * fragment's own `DocumentFragment`) yields scripts that never run, which is the safe side.
+   */
+  function inheritProvenance(source: Node, clone: Node, deep: boolean): void {
+    if (!(source instanceof Element) && !(source instanceof DocumentFragment)) return;
+    const select = 'script,link[rel^="inert-"]';
+    const sources = [...(source instanceof Element && source.matches(select) ? [source] : [])];
+    const clones = [...(clone instanceof Element && clone.matches(select) ? [clone] : [])];
+    if (deep) {
+      sources.push(...source.querySelectorAll(select));
+      clones.push(...(clone as Element | DocumentFragment).querySelectorAll(select));
+    }
+    sources.forEach((element, index) => {
+      const copy = clones[index];
+      if (!copy || copy.localName !== element.localName) return;
+      if (element.localName === 'script') {
+        if (alreadyExecutedScriptsAndLinks.has(element as HTMLScriptElement)) alreadyExecutedScriptsAndLinks.add(copy as HTMLScriptElement);
+        else if (isRunnable(element as HTMLScriptElement)) markRunnable(copy as HTMLScriptElement);
+      } else if (isBraidInertLink(element as HTMLLinkElement)) {
+        markBraidInertLink(copy as HTMLLinkElement);
+      }
+    });
+    if (deep) inheritThroughTemplates(source, clone);
+  }
+
+  /**
+   * A template's content is copied with it, but no selector enters it: pair the templates up and
+   * carry provenance into each copied content, which can itself be instantiated later.
+   */
+  function inheritThroughTemplates(source: Element | DocumentFragment, clone: Node): void {
+    const sources = [...(source instanceof Element && source.localName === 'template' ? [source] : []), ...source.querySelectorAll('template')];
+    const clones = [
+      ...(clone instanceof Element && clone.localName === 'template' ? [clone] : []),
+      ...((clone as Element | DocumentFragment).querySelectorAll?.('template') ?? []),
+    ];
+    sources.forEach((template, index) => {
+      const copy = clones[index] as HTMLTemplateElement | undefined;
+      if (!copy) return;
+      inheritProvenance((template as HTMLTemplateElement).content, copy.content, true);
+      carryProvenanceOnClone(copy.content);
+    });
+  }
+
+  /**
+   * The gateway's templates hold scripts a fragment instantiates later, with
+   * `template.content.cloneNode(true)`. A template's content is a DocumentFragment, which the
+   * boundary does not stamp, so each one gets its own `cloneNode` that carries provenance — an own
+   * property of the fragment's DOM object, not a host prototype.
+   */
+  function carryProvenanceThroughTemplates(root: ParentNode): void {
+    for (const template of root.querySelectorAll('template')) {
+      const content = (template as HTMLTemplateElement).content;
+      carryProvenanceOnClone(content);
+      carryProvenanceThroughTemplates(content);
+    }
+  }
+
+  function carryProvenanceOnClone(content: DocumentFragment): void {
+    Object.defineProperty(content, 'cloneNode', {
+      configurable: true,
+      writable: true,
+      value: function templateContentCloneNode(this: DocumentFragment, deep?: boolean) {
+        const clone = native.cloneNode.call(this, deep);
+        inheritProvenance(this, clone, Boolean(deep));
+        return clone;
+      },
+    });
   }
 
   function prepareForInsertion<T extends Node>(node: T): T {
@@ -201,15 +290,27 @@ export function createFragmentBoundary(options: {
 
   function makeHtmlParsingOverrides(innerHTMLDescriptor: PropertyDescriptor): PropertyDescriptorMap {
     return {
-      // scripts parsed from html never execute (per spec), so parsing only needs stamp propagation
+      // Scripts parsed from html never execute (per spec), so parsing only needs stamp propagation.
+      // A fragment with an HTML policy has the markup parsed and cleaned first (`html-policy.ts`),
+      // and the result inserted natively, so the write means what the native setter would have.
       innerHTML: {
         configurable: true,
         enumerable: true,
         get(this: Element) {
           return innerHTMLDescriptor.get!.call(this);
         },
-        set(this: Element, value: string) {
-          innerHTMLDescriptor.set!.call(this, value);
+        set(this: Element | ShadowRoot, value: string) {
+          // a shadow root's markup is parsed with its host for context, as the native setter does
+          const context = this instanceof ShadowRoot ? this.host : this;
+          const cleaned = htmlPolicy?.filter(value === null ? '' : value, context, 'innerHTML');
+          if (cleaned) {
+            // a template's markup is its content, not its children
+            const target = this instanceof HTMLTemplateElement ? this.content : this;
+            if (target instanceof Element) native.elementReplaceChildren.call(target, cleaned);
+            else native.fragmentReplaceChildren.call(target, cleaned);
+          } else {
+            innerHTMLDescriptor.set!.call(this, value);
+          }
           stampTree(this);
         },
       },
@@ -233,12 +334,31 @@ export function createFragmentBoundary(options: {
       configurable: true,
       writable: true,
       value: function boundaryInsertAdjacentHTML(this: Element, position: InsertPosition, text: string) {
-        const result = native.insertAdjacentHTML.call(this, position, text);
         const lowercasePosition = String(position).toLowerCase();
-        stampTree(
-          lowercasePosition === 'afterbegin' || lowercasePosition === 'beforeend' ? this : this.parentNode ?? this,
-        );
-        return result;
+        const outside = lowercasePosition === 'beforebegin' || lowercasePosition === 'afterend';
+        const inside = lowercasePosition === 'afterbegin' || lowercasePosition === 'beforeend';
+        const parent = this.parentNode;
+        // the native method's context and errors, so a policy changes nothing but what is removed:
+        // outside the element, its parent is the context, or a <body> when the parent is no element
+        const context = inside
+          ? this
+          : parent instanceof Element
+            ? parent
+            : this.ownerDocument.createElement('body');
+        const cleaned =
+          htmlPolicy && (inside || (outside && parent && parent.nodeType !== Node.DOCUMENT_NODE))
+            ? htmlPolicy.filter(text, context, 'insertAdjacentHTML')
+            : null;
+        if (cleaned) {
+          if (lowercasePosition === 'beforebegin') native.elementBefore.call(this, cleaned);
+          else if (lowercasePosition === 'afterbegin') native.elementPrepend.call(this, cleaned);
+          else if (lowercasePosition === 'beforeend') native.elementAppend.call(this, cleaned);
+          else native.elementAfter.call(this, cleaned);
+        } else {
+          // also what throws for an unknown position, or outside an element with no parent
+          native.insertAdjacentHTML.call(this, position, text);
+        }
+        stampTree(inside ? this : this.parentNode ?? this);
       },
     },
     cloneNode: {
@@ -246,6 +366,7 @@ export function createFragmentBoundary(options: {
       writable: true,
       value: function boundaryCloneNode(this: Node, deep?: boolean) {
         const clone = native.cloneNode.call(this, deep);
+        inheritProvenance(this, clone, Boolean(deep));
         stampTree(clone);
         return clone;
       },
@@ -272,6 +393,16 @@ export function createFragmentBoundary(options: {
     ...makeHtmlParsingOverrides(native.elementInnerHTML),
   };
 
+  /**
+   * What a URL set from fragment script resolves against, read when it is set: the namespace from
+   * the realm's base, and the fragment's own `<base href>` from its markup — the two the gateway
+   * uses for the same URL in markup, so markup and script agree on every route.
+   */
+  const urlBase = (): FragmentUrlBase => ({
+    root: fragmentRootOf(realmDocument.baseURI),
+    baseHref: braidDocumentElement.querySelector('base[href]')?.getAttribute('href') ?? '/',
+  });
+
   function stampNode(node: Node): void {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     if (stampedNodes.has(node)) return;
@@ -284,7 +415,12 @@ export function createFragmentBoundary(options: {
 
     let stampedProto = stampedProtos.get(proto);
     if (!stampedProto) {
-      stampedProto = Object.create(proto, elementOverrides);
+      // a subresource URL the fragment's code sets resolves into its namespace, as one in its
+      // markup does (see subresource-urls.ts); keyed by prototype, which fixes the element type
+      stampedProto = Object.create(proto, {
+        ...elementOverrides,
+        ...subresourceUrlOverrides(proto, (node as Element).localName, urlBase),
+      });
       stampedProtos.set(proto, stampedProto!);
       stampedProtoSet.add(stampedProto!);
     }
@@ -324,6 +460,12 @@ export function createFragmentBoundary(options: {
   // stamp the initial fragment DOM (for pierced fragments this includes the SSR'ed content;
   // for slot-fetched fragments this is the already-inserted, neutralized content)
   stampTree(braidDocumentElement);
+  // that content is the gateway's: its scripts may run and its inert links are the ones it
+  // neutralized, and nothing of the fragment's has run yet to have written any of its own
+  markGatewayContent(braidDocumentElement);
+  carryProvenanceThroughTemplates(braidDocumentElement);
+  // before the observer starts, so moving them out and back is not mistaken for an insertion
+  markStartedInPlace(braidDocumentElement);
 
   /**
    * The boundary observer: activates inert scripts/preload-links that entered the fragment's
@@ -348,21 +490,24 @@ export function createFragmentBoundary(options: {
           stampTree(addedElement);
         }
 
+        // scripts that arrived by a path the boundary did not intercept were not marked started
+        markStartedInPlace(addedElement);
         activateInertScriptsAndLinks(addedElement);
       }
     }
   });
 
   function activateInertScriptsAndLinks(root: Element): void {
-    const inertSelector =
-      'script[type="inert"],link[rel="inert-preload"],link[rel="inert-prefetch"],link[rel="inert-modulepreload"]';
     const candidates: (HTMLScriptElement | HTMLLinkElement)[] = [];
-    if (root.matches(inertSelector)) {
+    if (root.matches(INERT_SELECTOR)) {
       candidates.push(root as HTMLScriptElement | HTMLLinkElement);
     }
-    candidates.push(...(root.querySelectorAll(inertSelector) as NodeListOf<HTMLScriptElement | HTMLLinkElement>));
+    candidates.push(...(root.querySelectorAll(INERT_SELECTOR) as NodeListOf<HTMLScriptElement | HTMLLinkElement>));
 
     for (const candidate of candidates) {
+      // a script that may not run, or a marker Braid did not set, is markup the fragment wrote, and
+      // it stays as inert as it would be natively — see `isRunnable`
+      if (candidate instanceof HTMLLinkElement ? !isBraidInertLink(candidate) : !isRunnable(candidate)) continue;
       if (candidate instanceof HTMLLinkElement) {
         executeInertPreloadLink(candidate, realmDocument);
       } else {
@@ -383,6 +528,7 @@ export function createFragmentBoundary(options: {
   return {
     stampNode,
     stampTree,
+    inheritProvenance,
     disconnect: () => observer.disconnect(),
   };
 }

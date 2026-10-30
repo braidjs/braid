@@ -2,23 +2,47 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "site",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "apps/site/serve.mjs",
+        "--dir",
+        "dist/apps/site",
+        "--port",
+        "4600"
+      ],
+      "port": 4600
+    },
+    {
+      "name": "site-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/site/dev.mjs", "--port", "8787"],
+      "port": 8787
+    },
+    {
+      "name": "site-subpath",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "apps/site/serve.mjs",
+        "--dir",
+        "dist/apps/site",
+        "--port",
+        "4601",
+        "--prefix",
+        "/braid-site/"
+      ],
+      "port": 4601
+    },
+    {
       "name": "prod-remote",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "nx",
-        "serve-dist",
-        "prod-remote"
-      ],
+      "runtimeArgs": ["nx", "serve-dist", "prod-remote"],
       "port": 4411
     },
     {
       "name": "prod-host",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "nx",
-        "serve-dist",
-        "prod-host"
-      ],
+      "runtimeArgs": ["nx", "serve-dist", "prod-host"],
       "port": 4410
     },
     {

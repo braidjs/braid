@@ -11,17 +11,23 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * | `context` | **Braid** — the bus is ours | yes | yes |
  * | `sandbox` | the browser | n/a — no frame to sandbox | yes |
  * | `permissions` | the browser (Permissions-Policy) | n/a | yes |
- * | `network` | the browser (CSP), or nobody | **advisory only** | CSP on the fragment's own origin |
+ * | `network` | the browser (CSP on the realm), or nobody | advisory, or the realm's own requests with the gateway's `realmPolicy` | CSP on the fragment's own origin |
  * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
+ * | `storage` | **Braid** — realm-window storage views | compat fragments | n/a — the browser already partitions a cross-origin frame |
+ * | `html` | **Braid** — the fragment boundary's stamped HTML sinks | compat fragments | n/a — its DOM is its own document |
  *
  * `context` is the one that matters most on the trusted tier, and the one Braid can actually
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment
  * read" became a question asked in exactly one place instead of a check to remember at every read.
  *
- * `network` is listed as advisory on the trusted tier rather than omitted. A trusted fragment runs
- * in a same-origin realm with the host's `fetch`; Braid does not patch host globals and will not
- * start, so this grant documents intent and feeds the registry's analysis. Recording that honestly
- * is better than either enforcing it badly or leaving people to assume it works.
+ * `network` is advisory on the trusted tier by default: it documents intent and feeds the registry's
+ * analysis. A gateway with `realmPolicy` turns the registry's grant into a `connect-src` policy on
+ * the realm's own document, which the browser enforces (or reports) for the realm's requests. That
+ * is all it covers: what the realm calls on the host's behalf — `navigator.sendBeacon` (a compat
+ * realm's `navigator` is the host's), a `sharedGlobals` client — and code that deliberately reaches
+ * the host realm's `fetch` are outside it, and Braid does not patch host globals to close that gap. A tripwire
+ * for accidents and naive exfiltration, stated as one. A grant passed only to `initBraid` cannot
+ * reach the realm's headers, and stays advisory.
  */
 
 export interface ContextGrants {
@@ -42,8 +48,19 @@ export interface FragmentCapabilities {
   permissions?: string[];
   /** Origins the fragment is expected to talk to. Advisory on the trusted tier — see above. */
   network?: string[];
-  /** Reserved for the storage-partitioning work. */
-  storage?: 'partitioned' | 'shared';
+  /**
+   * Whose Web Storage the fragment sees. `'shared'` (the default) is the host origin's, as for any
+   * same-origin frame. `'partitioned'` gives it a store of its own, keyed by fragment id;
+   * `{ partition }` names a store several fragments share. See `compat/storage-partition.ts`.
+   * Compat fragments only; ignored elsewhere.
+   */
+  storage?: StorageGrant;
+  /**
+   * What the fragment's own `innerHTML` and `insertAdjacentHTML` writes may put in the page:
+   * `'sanitize'` strips what could run, `'report'` only warns. Compat fragments only; see
+   * `compat/html-policy.ts`.
+   */
+  html?: 'report' | 'sanitize';
   /**
    * Host globals this fragment reads and writes as its own — see `BraidOptions.sharedGlobals`.
    * Replaces the host-wide default when present; `[]` opts the fragment out. Trusted tier only.
@@ -123,6 +140,25 @@ export function resolveSharedGlobals(capabilities: FragmentCapabilities | undefi
   // typo must share nothing, not one host-writing accessor per character.
   if (!Array.isArray(names)) return [];
   return names.filter((name): name is string => typeof name === 'string' && name !== '');
+}
+
+/** A fragment's Web Storage grant. */
+export type StorageGrant = 'shared' | 'partitioned' | { partition: string };
+
+/**
+ * The storage partition a fragment writes into, or `null` for the shared, host-origin store.
+ *
+ * The grant is manifest JSON, cast rather than parsed, so anything that is not exactly one of the
+ * two partitioned forms is the shared default — a typo must not quietly move a fragment's data.
+ */
+export function resolveStoragePartition(capabilities: FragmentCapabilities | undefined, fragmentId: string): string | null {
+  const grant: unknown = capabilities?.storage;
+  if (grant === 'partitioned') return fragmentId;
+  if (grant && typeof grant === 'object') {
+    const partition = (grant as { partition?: unknown }).partition;
+    if (typeof partition === 'string' && partition !== '') return partition;
+  }
+  return null;
 }
 
 /** Reads a capabilities block off a realm stub's adapter options, or off `initBraid` config. */

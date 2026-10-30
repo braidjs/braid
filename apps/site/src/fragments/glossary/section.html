@@ -1,0 +1,115 @@
+<section class="on-ink" aria-labelledby="how-h" style="background: #121116; color: #F1ECE2">
+  <div class="wrap" style="padding-top: 20px; padding-bottom: 112px">
+    <div class="seam" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 24px; padding: 8px 12px; margin-bottom: 28px; border: 1.5px dashed #F1ECE2; background: var(--accent); color: #121116; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.4">
+        <span>&lt;fragment-slot name="glossary" adapter="contract"&gt;</span>
+        <span>its own sealed space · started from blob:https://this-page/9e07…</span>
+      </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-end">
+      <div style="flex: 0 1 240px">
+        <p style="margin: 0; font-family: 'Instrument Serif', serif; font-size: clamp(96px, 11vw, 168px); line-height: 0.8">02</p>
+        <p style="margin: 16px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #A9A5B0">How it works,<br>one word at a time</p>
+      </div>
+      <div style="flex: 999 1 560px; min-width: 0">
+        <h2 id="how-h" style="margin: 0; max-width: 20ch; font-weight: 700; font-size: clamp(38px, 4.6vw, 66px); line-height: 0.98; letter-spacing: -0.035em">Words you'll hear a lot, in plain English.</h2>
+        <p style="margin: 20px 0 0; max-width: 44ch; font-family: 'Instrument Serif', serif; font-style: italic; font-size: clamp(21px, 2vw, 27px); line-height: 1.25; color: #D9D5DE">Some of these sound like a fantasy novel. They're simpler than they sound.</p>
+      </div>
+    </div>
+
+    <!-- fig. 1: a page with Braid running on it -->
+    <figure style="margin: 64px 0 0">
+      <figcaption style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; padding-top: 14px; margin-bottom: 18px; border-top: 1.5px solid #F1ECE2">
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase">Fig. 1 · One page, with Braid running on it</span>
+        <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-size: 21px; color: #D9D5DE">Three teams' apps on one page. Their code never meets.</span>
+      </figcaption>
+      <div style="overflow-x: auto; padding: 32px; border: 1.5px solid #34323C; border-radius: 6px; background: #17161C">
+        <div class="dg" role="img" aria-label="Diagram of a page with Braid running on it. The browser shows one page. Inside it, the host shell owns a nav and a footer, and holds three fragment slots: billing, payments and notifications. Each slot's shadow root shows that app's content right on the page, while a dotted line runs from each slot to its own hidden iframe realm, where that app's code runs with its own window and its own libraries. Below the page, the Braid gateway receives the request for the page, fetches the shell and every app at once from their own servers, stitches each app into its slot, and sends back one HTML response with every app already in it.">
+<div class="dg-row"><span class="dg-t dg-b">YOUR PAGE · what the browser shows                                            </span><span class="dg-r dg-b">HIDDEN REALMS · display:none</span></div>
+<div class="dg-row"><span>&#160;</span></div>
+<div class="dg-row"><span class="dg-f">┌──────────────────────────────────────────────────────────────┐</span></div>
+<div class="dg-row"><span class="dg-f">│</span><span class="dg-f"> ● ● ●  </span><span class="dg-t">acme.example/billing/invoices                         </span><span class="dg-f">│</span></div>
+<div class="dg-row"><span class="dg-f">├──────────────────────────────────────────────────────────────┤</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">╔══ </span><span class="dg-s dg-b">HOST SHELL · your app, owns the page</span><span class="dg-s"> ══════════════════╗</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║                                                          </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">┌─ </span><span class="dg-h dg-b">&lt;nav&gt; · part of the host</span><span class="dg-h"> ───────────────────────────┐ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">│  </span><span class="dg-b">acme</span><span class="dg-h">     Home    Billing    Orders    Reports       </span><span class="dg-h">│ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">└──────────────────────────────────────────────────────┘ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║                                                          </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">┌─ </span><span class="dg-b" style="color: var(--accent)">&lt;fragment-slot name="billing"&gt;</span><span style="color: var(--accent)"> ─────────────────────┐ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│  </span><span style="color: var(--accent)">#shadow-root</span><span class="dg-t">  ← its DOM lives here, in your page    </span><span style="color: var(--accent)">│ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">┌┄ </span><span class="dg-r dg-b">&lt;iframe hidden&gt;</span><span class="dg-r"> ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│  </span><span class="dg-b">Invoices                                            </span><span style="color: var(--accent)">│ </span><span class="dg-s">║</span><span class="dg-f"> │</span><span class="dg-t">  its code    </span><span class="dg-r">┆ </span><span class="dg-b">realm · billing                </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│</span><span>  INV-101   $450.00        Pending                    </span><span style="color: var(--accent)">├┄</span><span class="dg-s">╫</span><span class="dg-r">┄</span><span class="dg-f">┼</span><span class="dg-r">┄┄┄┄┄┄┄┄┄┄┄┄┄▶</span><span class="dg-r">┆</span><span> Angular · its own window       </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│</span><span>  INV-102   $1,200.00      Paid                       </span><span style="color: var(--accent)">│ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">┆</span><span> own globals, own modules       </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">└──────────────────────────────────────────────────────┘ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║                                                          </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">┌─ </span><span class="dg-b" style="color: var(--accent)">&lt;fragment-slot name="payments"&gt;</span><span style="color: var(--accent)"> ────────────────────┐ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">┌┄ </span><span class="dg-r dg-b">&lt;iframe hidden&gt;</span><span class="dg-r"> ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│  </span><span style="color: var(--accent)">#shadow-root                                        </span><span style="color: var(--accent)">│ </span><span class="dg-s">║</span><span class="dg-f"> │</span><span class="dg-t">  its code    </span><span class="dg-r">┆ </span><span class="dg-b">realm · payments               </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│</span><span>  Balance due  $1,650.00          </span><span class="dg-b">[ Pay now ]         </span><span style="color: var(--accent)">├┄</span><span class="dg-s">╫</span><span class="dg-r">┄</span><span class="dg-f">┼</span><span class="dg-r">┄┄┄┄┄┄┄┄┄┄┄┄┄▶</span><span class="dg-r">┆</span><span> React 19 · next door to 18     </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">└──────────────────────────────────────────────────────┘ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║                                                          </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">┌─ </span><span class="dg-b" style="color: var(--accent)">&lt;fragment-slot name="notifications"&gt;</span><span style="color: var(--accent)"> ───────────────┐ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">┌┄ </span><span class="dg-r dg-b">&lt;iframe hidden&gt;</span><span class="dg-r"> ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│  </span><span style="color: var(--accent)">#shadow-root                                        </span><span style="color: var(--accent)">│ </span><span class="dg-s">║</span><span class="dg-f"> │</span><span class="dg-t">  its code    </span><span class="dg-r">┆ </span><span class="dg-b">realm · notifications          </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">│</span><span>  ● 3 new · INV-102 was paid                          </span><span style="color: var(--accent)">├┄</span><span class="dg-s">╫</span><span class="dg-r">┄</span><span class="dg-f">┼</span><span class="dg-r">┄┄┄┄┄┄┄┄┄┄┄┄┄▶</span><span class="dg-r">┆</span><span> a widget on every page         </span><span class="dg-r">┆</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span style="color: var(--accent)">└──────────────────────────────────────────────────────┘ </span><span class="dg-s">║</span><span class="dg-f"> │              </span><span class="dg-r">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║                                                          </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">┌─ </span><span class="dg-h dg-b">&lt;footer&gt; · part of the host</span><span class="dg-h"> ────────────────────────┐ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">│</span><span class="dg-h">  © Acme · Privacy · Status                           </span><span class="dg-h">│ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">║ </span><span class="dg-h">└──────────────────────────────────────────────────────┘ </span><span class="dg-s">║</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">│ </span><span class="dg-s">╚══════════════════════════════════════════════════════════╝</span><span class="dg-f"> │</span></div>
+<div class="dg-row"><span class="dg-f">└──────────────────────────────────────────────────────────────┘</span></div>
+<div class="dg-row"><span class="dg-g">              │ </span><span style="color: var(--accent)">▲</span></div>
+<div class="dg-row"><span class="dg-t">GET /billing/ </span><span class="dg-g">│ </span><span style="color: var(--accent)">│</span><span class="dg-t">  one HTML response,</span></div>
+<div class="dg-row"><span class="dg-t">    invoices  </span><span class="dg-g">▼ </span><span style="color: var(--accent)">│</span><span class="dg-t">  every app already in it</span></div>
+<div class="dg-row"><span class="dg-g">┌</span><span class="dg-g">─ </span><span class="dg-g dg-b">BRAID GATEWAY</span><span class="dg-g"> ──────────────────────────────────────────────┐              </span><span class="dg-t dg-b">fragment servers</span></div>
+<div class="dg-row"><span class="dg-g">│</span><span class="dg-t"> middleware in your server, or at the edge                    </span><span class="dg-g">│</span></div>
+<div class="dg-row"><span class="dg-g">│</span><span style="color: var(--accent)"> 1</span><span>  fetches the shell and every app at once                   </span><span class="dg-g">├</span><span style="color: var(--accent)">─────────────▶</span><span> host app                   </span><span class="dg-t">:3000</span></div>
+<div class="dg-row"><span class="dg-g">│</span><span style="color: var(--accent)"> 2</span><span>  stitches each app into its slot as it streams             </span><span class="dg-g">├</span><span style="color: var(--accent)">─────────────▶</span><span> billing                    </span><span class="dg-t">:4201</span></div>
+<div class="dg-row"><span class="dg-g">│</span><span style="color: var(--accent)"> 3</span><span>  makes app scripts inert, re-arms them in a realm          </span><span class="dg-g">├</span><span style="color: var(--accent)">─────────────▶</span><span> payments                   </span><span class="dg-t">:4202</span></div>
+<div class="dg-row"><span class="dg-g">│</span><span style="color: var(--accent)"> 4</span><span>  forwards </span><span class="dg-b">/__braid/frag/:id/*</span><span> to each server               </span><span class="dg-g">├</span><span style="color: var(--accent)">─────────────▶</span><span> notifications              </span><span class="dg-t">:4203</span></div>
+<div class="dg-row"><span class="dg-g">└──────────────────────────────────────────────────────────────┘</span></div>
+<div class="dg-row"><span>&#160;</span></div>
+<div class="dg-row"><span class="dg-h">──</span><span class="dg-t"> host markup    </span><span class="dg-s">══</span><span class="dg-t"> host shell    </span><span style="color: var(--accent)">──</span><span class="dg-t"> &lt;fragment-slot&gt;    </span><span class="dg-r">┄┄</span><span class="dg-t"> hidden realm, where the code runs</span></div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- dictionary entries -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 0 48px; margin-top: 72px">
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">frag·ment <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">One of the apps on the page. It's a normal web app with its own team and its own deploys. Often it has no Braid code in it at all.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">host <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">The app that owns the page. It draws the layout and the menu, and it leaves spaces for the other apps.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">slot <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">One of those spaces. You write <span style="font-family: 'JetBrains Mono', monospace; font-size: 14px; color: #F1ECE2">&lt;fragment-slot name="billing"&gt;</span> and the billing app shows up there. That's all the host has to do.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">realm <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">The sealed-off space where an app's code runs. It's invisible, and nothing inside it can reach out and change your page.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">de·pend·en·cy graph <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">Every library your apps use, and every library those use. When apps share one, they have to agree on versions. With Braid, each app keeps its own.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">con·tract skew <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">When two apps were built at different times and now disagree on what their shared data looks like. Braid spots it, upgrades the data when it can, and says so clearly when it can't.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">pierc·ing <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">The server adds each app's content to the page before sending it, so people see it right away instead of watching an empty box.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">born in·ert <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">adjective</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">An app's content arrives switched off. Any scripts in it can't run on your page. They only run inside that app's own realm.</dd>
+      </dl>
+      <dl style="margin: 0; padding: 22px 0; border-top: 1.5px solid #F1ECE2">
+        <dt style="font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.03em">ad·apt·er <span style="font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; font-size: 20px; letter-spacing: 0; color: #A9A5B0">noun</span></dt>
+        <dd style="margin: 10px 0 0; color: #D9D5DE">How Braid starts an app. <b style="color: #F1ECE2">compat</b> works with apps you can't change. <b style="color: #F1ECE2">contract</b> is for apps written to work with Braid, and needs no server.</dd>
+      </dl>
+    </div>
+  </div>
+</section>

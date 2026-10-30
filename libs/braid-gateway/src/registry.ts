@@ -64,10 +64,22 @@ export interface FragmentManifest {
     sandbox?: string[];
     permissions?: string[];
     network?: string[];
-    storage?: 'partitioned' | 'shared';
+    /**
+     * Whose Web Storage this trusted (compat) fragment sees: the host origin's (`'shared'`, the
+     * default), its own (`'partitioned'`), or a store shared by name (`{ partition: 'kcd' }`).
+     */
+    storage?: 'partitioned' | 'shared' | { partition: string };
+    /** What the fragment's own runtime HTML writes may contain: `'sanitize'` or `'report'`. */
+    html?: 'report' | 'sanitize';
     /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */
     sharedGlobals?: string[];
   };
+  /**
+   * Mount prerequisites this fragment needs before its code runs — keys the host resolves with
+   * `initBraid({ prerequisites })`, such as `session:orders` for a warm session on the fragment's
+   * authorization server. Stamped onto the realm stub.
+   */
+  requires?: string[];
   /** Module entry for contract-mode fragments (unused by the compat adapter). */
   entry?: string;
   /**
@@ -114,6 +126,18 @@ export interface FragmentManifest {
   events?: Record<string, { detail: string }>;
   /** Per-fragment budget for endpoint fetches, in milliseconds. */
   timeoutMs?: number;
+  /**
+   * What the page stream does when it reaches this fragment's slot before the fragment has answered.
+   *
+   * `in-order` (the default) waits there, up to `timeoutMs`, so everything after the slot waits too.
+   * `out-of-order` streams on past the empty slot and sends the fragment's markup at the end of the
+   * document once it arrives; the client moves it into the slot. A fragment whose response headers
+   * are in by the time its slot streams, or a turn of the event loop later, is inlined either way,
+   * so the slot shifts layout only when waiting would have held up the page. Reserve the slot's
+   * space in host CSS to keep that shift at zero, and keep the fragment holding the page's largest
+   * content in-order.
+   */
+  stream?: 'in-order' | 'out-of-order';
   /**
    * Opt this fragment out of concurrent-fetch coalescing. Defaults to `true` (coalesced).
    *
@@ -291,6 +315,40 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     );
   }
 
+  if (
+    manifest.requires !== undefined &&
+    (!Array.isArray(manifest.requires) || manifest.requires.some((key) => typeof key !== 'string' || key.trim() === ''))
+  ) {
+    throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
+  }
+  // Warned, not thrown: `network` was advisory before `realmPolicy` existed, and a gateway that never
+  // turns the policy on must not refuse to start over an entry it would never use. With a policy on,
+  // these entries are left out of it, so the policy is stricter for them, never looser.
+  const network = manifest.capabilities?.network;
+  if (network !== undefined) {
+    const invalid = Array.isArray(network) ? network.filter((entry) => !isOriginSource(entry)) : [network];
+    if (invalid.length) {
+      console.warn(
+        `braid-gateway: manifest "${manifest.id}" has capabilities.network entries that are not plain origins: ` +
+          `${invalid.map((entry) => JSON.stringify(entry)).join(', ')} — they are left out of any realm policy. ` +
+          `List origins only, e.g. "https://api.example.com" or "wss://*.example.com:443"; an internationalised ` +
+          `host must be written in punycode (xn--…), and IP v6 literals cannot be expressed in a CSP source`,
+      );
+    }
+  }
+  const html: unknown = manifest.capabilities?.html;
+  if (html !== undefined && html !== 'report' && html !== 'sanitize') {
+    console.warn(
+      `braid-gateway: manifest "${manifest.id}" declares capabilities.html ${JSON.stringify(html)}, which is ignored — ` +
+        `use "report" or "sanitize"`,
+    );
+  }
+  if (manifest.stream !== undefined && manifest.stream !== 'in-order' && manifest.stream !== 'out-of-order') {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" declares stream: "${String(manifest.stream)}" — ` +
+        `use "in-order" or "out-of-order"`,
+    );
+  }
   if (manifest.redirect !== undefined && manifest.redirect !== 'error' && manifest.redirect !== 'navigate') {
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" declares redirect: "${String(manifest.redirect)}" — ` +
@@ -305,6 +363,15 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     fallback: manifest.fallback ?? 'placeholder',
     bound: manifest.bound ?? true,
   };
+}
+
+/**
+ * An origin as a CSP source expression: a scheme, a host (optionally `*.`-prefixed), an optional
+ * port, and nothing else. Nothing else may reach the header — a path widens or narrows matching in
+ * ways nobody reviewing a manifest expects, and a quote, `;` or `,` would inject a directive.
+ */
+export function isOriginSource(entry: unknown): boolean {
+  return typeof entry === 'string' && /^(https?|wss?):\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:(\d{1,5}|\*))?$/i.test(entry);
 }
 
 /**

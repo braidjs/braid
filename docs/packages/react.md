@@ -91,5 +91,6 @@ Works seamlessly with TanStack Router, React Router, Next.js, and Remix.
 | `onReady` | `({ fragmentId }) => void` | Triggered when fragment completes mounting and hydration. |
 | `onError` | `(error: BraidFragmentError) => void` | Triggered on load/mount error with failure stage & fix hint. |
 | `onFragmentEvent` | `({ type, detail }) => void` | Handles custom events dispatched by the fragment. |
+| `children` | `ReactNode` | Content for the slot's named slots: a `slot="loading"` element shown while the fragment boots, and a `slot="fallback"` one shown if it fails. See `@braidlabs/core`, "Loading and fallback". |
 | `onStateChange` | `(state: FragmentSlotState) => void` | Observes slot lifecycle (`idle`, `loading`, `ready`, `error`). |
 | `ref` | `Ref<BraidFragmentHandle>` | Access to `.reload()` and `.state`. |

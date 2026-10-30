@@ -21,7 +21,7 @@ in language that implies more than it delivers. The correction, stated plainly:
 | Realm | hidden same-origin iframe | visible cross-origin iframe |
 | Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
 | Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
-| Cookies & storage | **the host's** | its own, partitioned |
+| Cookies & storage | **the host's**; Web Storage can be per fragment (`capabilities.storage`) | its own, partitioned |
 | Host globals | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own |
 | Layout | participates in host layout | a rectangle the host sizes |
 | Accessibility | one tree | nested documents |
@@ -83,6 +83,10 @@ Use the **untrusted** tier when that sentence stops being true:
 **Registering a trusted fragment grants it the user's session.** Its realm is same-origin, so it
 shares the host's cookies and storage, and its DOM is in the host's document. If that sentence is
 uncomfortable for a given fragment, that fragment belongs in the untrusted tier.
+
+`capabilities.storage: 'partitioned'` doesn't change that. It gives a fragment Web Storage of its
+own so that fragments stop overwriting each other's keys by accident. A fragment that wants to
+read another's storage can still reach `top.localStorage`.
 
 ## Using the untrusted tier
 

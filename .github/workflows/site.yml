@@ -1,0 +1,110 @@
+name: Site
+
+# Builds apps/site and publishes it to AWS Amplify.
+#
+# Two jobs, on purpose. `build` installs dependencies, tests and builds, and has no way to reach AWS.
+# `publish` can reach AWS, but runs no npm code: it takes the built site as an artifact and publishes
+# it with the AWS CLI. Its role can only publish site content, and only from the `site-production`
+# environment. Infrastructure is never changed from CI; see apps/site/README.md.
+#
+# Needs the GitHub environment `site-production` (limited to the main branch) and these repository
+# variables (Settings → Secrets and variables → Actions → Variables). None of them is secret:
+#   AWS_PUBLISH_ROLE_ARN — the stack's PublishRoleArn output
+#   AMPLIFY_APP_ID       — the stack's AppId output
+#   TURNSTILE_SITEKEY    — the Turnstile widget's site key
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/site/**'
+      - 'libs/core/**'
+      - 'libs/skew/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time; never cancel one midway.
+concurrency:
+  group: site-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Until the stack exists and the role is known, skip rather than fail.
+    if: vars.AWS_PUBLISH_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      SITE_TURNSTILE_SITEKEY: ${{ vars.TURNSTILE_SITEKEY }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+    steps:
+      - name: Check the publish is configured
+        run: |
+          missing=""
+          [ -n "$SITE_TURNSTILE_SITEKEY" ] || missing="$missing TURNSTILE_SITEKEY"
+          [ -n "$AMPLIFY_APP_ID" ] || missing="$missing AMPLIFY_APP_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Set these repository variables:$missing"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx nx run-many -t lint test -p site
+      - run: npx nx build site
+      # _headers is the static build's header file; Amplify gets the same headers from the stack.
+      - name: Package the site
+        run: cd dist/apps/site && zip -qr "$RUNNER_TEMP/site.zip" . -x '_headers' -x '*.map'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: ${{ runner.temp }}/site.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: site-production
+    permissions:
+      contents: read
+      id-token: write # only this job can exchange GitHub's token for the publish role
+    env:
+      AWS_REGION: us-east-1
+      APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: ${{ runner.temp }}
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Publish to Amplify
+        run: |
+          set -euo pipefail
+          read -r job_id upload_url < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name main \
+            --query '[jobId, zipUploadUrl]' --output text)
+          curl --fail --silent --show-error --upload-file "$RUNNER_TEMP/site.zip" "$upload_url"
+          aws amplify start-deployment --app-id "$APP_ID" --branch-name main --job-id "$job_id" > /dev/null
+          for _ in $(seq 1 60); do
+            status=$(aws amplify get-job --app-id "$APP_ID" --branch-name main --job-id "$job_id" \
+              --query 'job.summary.status' --output text)
+            case "$status" in
+              SUCCEED) echo "Published job $job_id"; exit 0 ;;
+              FAILED|CANCELLED) echo "::error::The Amplify deployment ended $status"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::The Amplify deployment did not finish in five minutes"
+          exit 1

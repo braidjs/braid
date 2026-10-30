@@ -1,3 +1,43 @@
+## 0.6.0 (2026-10-27)
+
+### 🚀 Features
+
+- ⚠️  **fdc3:** report FDC3 3.0, refuse close() and newInstance:true at once ([2cf7d68](https://github.com/braidjs/braid/commit/2cf7d68))
+- **site:** the public site, as static files with no gateway ([e34c799](https://github.com/braidjs/braid/commit/e34c799))
+- **site:** "Interested in hosted Braid? Get in touch." on every page ([f444259](https://github.com/braidjs/braid/commit/f444259))
+- **site:** a working contact form on a Cloudflare Worker ([089ae5c](https://github.com/braidjs/braid/commit/089ae5c))
+- **site:** run the contact form as an AWS Lambda ([f3a4ce2](https://github.com/braidjs/braid/commit/f3a4ce2))
+- **site:** a local dev server with a working contact form ([af8d410](https://github.com/braidjs/braid/commit/af8d410))
+- **site:** the AWS stack for hosting and the contact form, in CDK ([e765d45](https://github.com/braidjs/braid/commit/e765d45))
+- **site:** canonical URLs, share cards and JSON-LD ([1731aad](https://github.com/braidjs/braid/commit/1731aad))
+- **site:** robots.txt, sitemap and llms.txt for crawlers ([64f6f5b](https://github.com/braidjs/braid/commit/64f6f5b))
+
+### 🩹 Fixes
+
+- **deps:** clear four high advisories published since the last audit ([4de9c1a](https://github.com/braidjs/braid/commit/4de9c1a))
+- **fdc3:** match intent listeners by context type, as FDC3 3.0 does ([997a3dc](https://github.com/braidjs/braid/commit/997a3dc))
+- **site:** keep live sections on screen, hide seams, fit phones ([3048006](https://github.com/braidjs/braid/commit/3048006))
+- **site:** harden the preview server and the build's output guard ([90f2266](https://github.com/braidjs/braid/commit/90f2266))
+- **site:** act on code review — dead CTA, anchor checks, contract, a11y ([d330850](https://github.com/braidjs/braid/commit/d330850))
+- **site:** quieter nav — four links, two buttons, hosted line in the dateline ([5878124](https://github.com/braidjs/braid/commit/5878124))
+- **site:** drop the date from the masthead dateline ([0b49751](https://github.com/braidjs/braid/commit/0b49751))
+- **site:** give nav links a full-size click target ([c746cc2](https://github.com/braidjs/braid/commit/c746cc2))
+- **site:** act on the security and code reviews of the contact form ([aa8fff5](https://github.com/braidjs/braid/commit/aa8fff5))
+- **site:** CI can only publish content; close the Function URL bypass ([4328f8e](https://github.com/braidjs/braid/commit/4328f8e))
+- **site:** trust GitHub's immutable OIDC subject for the publish role ([384558f](https://github.com/braidjs/braid/commit/384558f))
+- **site:** let the publish role create Amplify deployments ([e654795](https://github.com/braidjs/braid/commit/e654795))
+- **site:** make the llms-full converter strict, and its checks honest ([119d3a0](https://github.com/braidjs/braid/commit/119d3a0))
+
+### ⚠️  Breaking Changes
+
+- **fdc3:** report FDC3 3.0, refuse close() and newInstance:true at once  ([2cf7d68](https://github.com/braidjs/braid/commit/2cf7d68))
+  the agent reports FDC3 3.0, and the FINOS 3.0 directory drops
+  records whose optional fdc3Version range excludes 3.0.
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.5.0 (2026-10-23)
 
 ### 🚀 Features
