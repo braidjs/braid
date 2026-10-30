@@ -1018,6 +1018,8 @@ export class FragmentSlot extends HTMLElement {
    * on having built the transport before the tier that needed it.
    */
   async #bootUntrusted(fragmentId: string, requires: readonly string[]): Promise<void> {
+    // again where it is read: a `braid:state` listener runs between #boot's check and here
+    this.#assertHostDeclaresCode(fragmentId);
     const src = this.getAttribute('src');
     if (!src) {
       throw new BraidError('an untrusted fragment needs an explicit cross-origin src', {

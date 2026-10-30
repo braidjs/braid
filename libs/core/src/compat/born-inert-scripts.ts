@@ -48,7 +48,31 @@ export function makeScriptBornInert(script: HTMLScriptElement): void {
   nativeSetAttribute.call(script, 'type', 'inert');
   bornInertScripts.add(script);
   runnableScripts.add(script);
+  shadowType(script);
+}
 
+/**
+ * Keeps a script in the host document inert for good: after its copy has run in the realm, or when
+ * it may never run at all. Its `type` attribute stays `inert`, and its real type is what `type`,
+ * `getAttribute('type')` and friends report and change, as for a born-inert script.
+ *
+ * Why not restore the real type: the host element was inserted while inert, so the browser never
+ * marked it started. With a live type, the next time it became connected — the host moving the
+ * slot, a keyed list reordering, a portal — the browser would prepare and run it, natively, in the
+ * host window. Kept inert, there is nothing for the browser to run, however it is moved or changed.
+ */
+export function keepInert(script: HTMLScriptElement): void {
+  const current = nativeGetAttribute.call(script, 'type');
+  if (current !== 'inert') {
+    if (current === null) nativeRemoveAttribute.call(script, 'data-script-type');
+    else nativeSetAttribute.call(script, 'data-script-type', current);
+    nativeSetAttribute.call(script, 'type', 'inert');
+  }
+  shadowType(script);
+}
+
+/** Reads and writes of `type` go to `data-script-type`, so the element itself stays inert. */
+function shadowType(script: HTMLScriptElement): void {
   Object.defineProperties(script, {
     type: {
       configurable: true,
@@ -74,6 +98,13 @@ export function makeScriptBornInert(script: HTMLScriptElement): void {
         return nativeGetAttribute.call(this, String(name).toLowerCase() === 'type' ? 'data-script-type' : name);
       },
     },
+    removeAttribute: {
+      configurable: true,
+      writable: true,
+      value: function removeAttribute(name: string) {
+        return nativeRemoveAttribute.call(this, String(name).toLowerCase() === 'type' ? 'data-script-type' : name);
+      },
+    },
   });
 }
 
@@ -92,7 +123,11 @@ export function removeBornInertShadowing(script: HTMLScriptElement): void {
   delete (script as any).type;
   delete (script as any).setAttribute;
   delete (script as any).getAttribute;
+  delete (script as any).removeAttribute;
   bornInertScripts.delete(script);
+  // A script whose own code set its type to `inert` (a library copying attributes from a script it
+  // found) is a data block that only looks like Braid's marker: it never runs, as natively.
+  if (nativeGetAttribute.call(script, 'data-script-type')?.trim().toLowerCase() === 'inert') runnableScripts.delete(script);
 }
 
 /**

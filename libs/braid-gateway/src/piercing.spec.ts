@@ -30,6 +30,14 @@ describe('prepareFragmentHtml()', () => {
     expect(output).toContain('<link rel="inert-modulepreload" href="/__braid/frag/billing/y.js">');
   });
 
+  it('blocks a rel spelled with a character reference the browser would read as the marker', async () => {
+    const output = await collect(
+      prepareFragmentHtml(streamOf('<link rel="&#105;nert-modulepreload" href="https://evil.example/x.js">'), { fragmentId: 'billing' }),
+    );
+    expect(output).toContain('data-braid-blocked="rel"');
+    expect(output).not.toMatch(/rel="&#105;nert-modulepreload"/);
+  });
+
   it('rewrites the document singletons and neutralizes executables', async () => {
     const output = await collect(
       prepareFragmentHtml(

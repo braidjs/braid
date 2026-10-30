@@ -206,7 +206,9 @@ export function prepareFragmentHtml(
           const crossorigin = tag.getAttribute('crossorigin');
           // `inert-*` is Braid's own marker for a link it neutralized; markup that arrives with it
           // already set would be revived by the client as though the gateway had written it
-          if (rel?.trim().toLowerCase().startsWith('inert-')) {
+          // A character reference the rewriter does not decode (`&#105;nert-…`) is read the same way
+          // by the browser, so any reference in a rel is treated as possibly the marker.
+          if (rel !== null && (/\binert-/i.test(rel) || rel.includes('&'))) {
             tag.setAttribute('rel', `blocked-${rel}`);
             tag.setAttribute('data-braid-blocked', 'rel');
             return;

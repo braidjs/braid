@@ -70,6 +70,8 @@ export interface FragmentBoundary {
   stampNode(node: Node): void;
   /** Stamps an element (or DocumentFragment contents) and all its element descendants. */
   stampTree(root: Node): void;
+  /** Gives a copy of fragment DOM the provenance of what it copies (see `inheritProvenance`). */
+  inheritProvenance(source: Node, copy: Node, deep: boolean): void;
   /** Disconnects the boundary observer. Called when the fragment is destroyed. */
   disconnect(): void;
 }
@@ -129,12 +131,31 @@ export function createFragmentBoundary(options: {
     sources.forEach((element, index) => {
       const copy = clones[index];
       if (!copy || copy.localName !== element.localName) return;
-      if (element instanceof HTMLScriptElement) {
-        if (alreadyExecutedScriptsAndLinks.has(element)) alreadyExecutedScriptsAndLinks.add(copy as HTMLScriptElement);
-        else if (isRunnable(element)) markRunnable(copy as HTMLScriptElement);
+      if (element.localName === 'script') {
+        if (alreadyExecutedScriptsAndLinks.has(element as HTMLScriptElement)) alreadyExecutedScriptsAndLinks.add(copy as HTMLScriptElement);
+        else if (isRunnable(element as HTMLScriptElement)) markRunnable(copy as HTMLScriptElement);
       } else if (isBraidInertLink(element as HTMLLinkElement)) {
         markBraidInertLink(copy as HTMLLinkElement);
       }
+    });
+    if (deep) inheritThroughTemplates(source, clone);
+  }
+
+  /**
+   * A template's content is copied with it, but no selector enters it: pair the templates up and
+   * carry provenance into each copied content, which can itself be instantiated later.
+   */
+  function inheritThroughTemplates(source: Element | DocumentFragment, clone: Node): void {
+    const sources = [...(source instanceof Element && source.localName === 'template' ? [source] : []), ...source.querySelectorAll('template')];
+    const clones = [
+      ...(clone instanceof Element && clone.localName === 'template' ? [clone] : []),
+      ...((clone as Element | DocumentFragment).querySelectorAll?.('template') ?? []),
+    ];
+    sources.forEach((template, index) => {
+      const copy = clones[index] as HTMLTemplateElement | undefined;
+      if (!copy) return;
+      inheritProvenance((template as HTMLTemplateElement).content, copy.content, true);
+      carryProvenanceOnClone(copy.content);
     });
   }
 
@@ -147,17 +168,21 @@ export function createFragmentBoundary(options: {
   function carryProvenanceThroughTemplates(root: ParentNode): void {
     for (const template of root.querySelectorAll('template')) {
       const content = (template as HTMLTemplateElement).content;
-      Object.defineProperty(content, 'cloneNode', {
-        configurable: true,
-        writable: true,
-        value: function templateContentCloneNode(this: DocumentFragment, deep?: boolean) {
-          const clone = native.cloneNode.call(this, deep);
-          inheritProvenance(this, clone, Boolean(deep));
-          return clone;
-        },
-      });
+      carryProvenanceOnClone(content);
       carryProvenanceThroughTemplates(content);
     }
+  }
+
+  function carryProvenanceOnClone(content: DocumentFragment): void {
+    Object.defineProperty(content, 'cloneNode', {
+      configurable: true,
+      writable: true,
+      value: function templateContentCloneNode(this: DocumentFragment, deep?: boolean) {
+        const clone = native.cloneNode.call(this, deep);
+        inheritProvenance(this, clone, Boolean(deep));
+        return clone;
+      },
+    });
   }
 
   function prepareForInsertion<T extends Node>(node: T): T {
@@ -498,6 +523,7 @@ export function createFragmentBoundary(options: {
   return {
     stampNode,
     stampTree,
+    inheritProvenance,
     disconnect: () => observer.disconnect(),
   };
 }

@@ -3,7 +3,7 @@
  * arbitrary pre-bound native method wrappers. */
 import { assert } from '../utils/assert.js';
 import { getInternalReference } from './metadata.js';
-import { isRunnable, markRunnable } from './born-inert-scripts.js';
+import { isRunnable, keepInert, markRunnable } from './born-inert-scripts.js';
 
 /**
  * Script execution machinery for compat fragments: any script that enters a fragment's DOM is
@@ -35,11 +35,12 @@ export function compatDomInsertion<T extends Node>(
       return doInsertTheNode();
     }
 
-    // a script nothing of Braid's or the fragment's own document made: it never runs anywhere
-    if (!isRunnable(nodeToInsert)) {
+    // a script nothing of Braid's or the fragment's own document made, or one that has run: it
+    // never runs (again) anywhere
+    if (!isRunnable(nodeToInsert) || alreadyExecutedScriptsAndLinks.has(nodeToInsert)) {
       setInertScriptType(nodeToInsert);
       const returnVal = doInsertTheNode();
-      restoreIfDataBlock(nodeToInsert);
+      leaveNeverRunning(nodeToInsert);
       return returnVal;
     }
 
@@ -147,8 +148,8 @@ function makeElementInert(element: HTMLScriptElement | HTMLLinkElement) {
 
 function restoreElement(element: HTMLScriptElement | HTMLLinkElement) {
   if (element instanceof HTMLScriptElement) {
-    if (isRunnable(element)) restoreScriptType(element);
-    else restoreIfDataBlock(element);
+    if (isRunnable(element) && !alreadyExecutedScriptsAndLinks.has(element)) restoreScriptType(element);
+    else leaveNeverRunning(element);
   } else {
     // don't restore links as we currently don't have another way of keeping them inert
   }
@@ -218,13 +219,15 @@ export function executeInertScript(inertScript: HTMLScriptElement, realmDocument
 
   // If the script does not have a valid type attribute, treat the script node as a data block.
   // Data blocks live in the main document as-is.
-  if (!EXECUTABLE_TYPES.includes(inertScript.getAttribute('type'))) {
+  if (!isExecutableType(inertScript.getAttribute('type'))) {
     return false;
   }
 
   assert(!!(inertScript.src || inertScript.textContent), `Can't execute script without src or textContent!`);
 
   attachScriptToRealm({ inertScript, realmDocument });
+  // its copy runs in the realm; the host element must never be one the browser could run
+  keepInert(inertScript);
 
   return true;
 }
@@ -352,36 +355,62 @@ export function markGatewayContent(root: ParentNode): void {
  * the main document.
  */
 export function setInertScriptType(script: HTMLScriptElement) {
+  // `.type`, so a shadowed script (born inert, or kept inert) reports its real type
   const scriptType = script.type;
+  // always written, never kept: markup must not supply the "real" type Braid restores. Native
+  // methods, because a shadowed script's own redirect `type` writes to `data-script-type`.
   if (scriptType) {
-    script.setAttribute('data-script-type', scriptType);
+    nativeSetAttribute.call(script, 'data-script-type', scriptType);
+  } else {
+    nativeRemoveAttribute.call(script, 'data-script-type');
   }
-  script.setAttribute('type', 'inert');
+  nativeSetAttribute.call(script, 'type', 'inert');
 }
 
-/** Types the realm runs; anything else is a data block, which runs nowhere. */
-const EXECUTABLE_TYPES = ['module', 'text/javascript', 'importmap', 'speculationrules', '', null];
+/** The JavaScript MIME type essences a browser runs as a classic script (HTML, "JavaScript MIME type"). */
+const JAVASCRIPT_MIME_TYPES = new Set([
+  'application/ecmascript', 'application/javascript', 'application/x-ecmascript', 'application/x-javascript',
+  'text/ecmascript', 'text/javascript', 'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2',
+  'text/javascript1.3', 'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript',
+  'text/x-ecmascript', 'text/x-javascript',
+]);
 
 /**
- * A script that will never run is left neutralized after insertion — unless it is a data block
- * (`application/json`, say), whose real type is restored: it runs nowhere either way, and code that
- * finds it by type must still find it.
+ * Whether a browser would run a script of this type, as the HTML spec decides it: absent or empty is
+ * classic, and otherwise the type is trimmed and compared case-insensitively. Anything else is a
+ * data block.
  */
-function restoreIfDataBlock(script: HTMLScriptElement): void {
-  if (!EXECUTABLE_TYPES.includes(script.getAttribute('data-script-type'))) restoreScriptType(script);
+export function isExecutableType(type: string | null): boolean {
+  if (type === null) return true;
+  const essence = type.trim().toLowerCase();
+  return essence === '' || essence === 'module' || essence === 'importmap' || essence === 'speculationrules' || JAVASCRIPT_MIME_TYPES.has(essence);
+}
+
+/**
+ * A script that will never run stays neutralized after insertion, for good — unless it is a data
+ * block (`application/json`, say), whose real type is restored: it runs nowhere either way, and
+ * code that finds it by type must still find it.
+ */
+function leaveNeverRunning(script: HTMLScriptElement): void {
+  if (isExecutableType(script.getAttribute('data-script-type'))) keepInert(script);
+  else restoreScriptType(script);
 }
 
 /**
  * Restore the original script type and erase any signs of us making the script inert.
  */
 export function restoreScriptType(script: HTMLScriptElement) {
-  const scriptType = script.getAttribute('data-script-type');
-  script.removeAttribute('data-script-type');
-  script.removeAttribute('type');
+  const scriptType = nativeGetAttribute.call(script, 'data-script-type');
+  nativeRemoveAttribute.call(script, 'data-script-type');
+  nativeRemoveAttribute.call(script, 'type');
   if (scriptType) {
-    script.setAttribute('type', scriptType);
+    nativeSetAttribute.call(script, 'type', scriptType);
   }
 }
+
+const nativeSetAttribute = Element.prototype.setAttribute;
+const nativeGetAttribute = Element.prototype.getAttribute;
+const nativeRemoveAttribute = Element.prototype.removeAttribute;
 
 /**
  * Neutralizes the original link, so that it doesn't result in a duplicate network call.

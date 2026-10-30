@@ -101,7 +101,15 @@ written. On every compat fragment, with no option to set, the following is enfor
   cloned, copied through a `Range`, or instantiated from a template the fragment wrote. That
   matches the browser, which never runs a `<script>` that `innerHTML` parsed. The one stricter
   case is `Range.createContextualFragment`: its scripts would run natively, and here they do not.
-  Create a script element instead.
+  Create a script element instead. Every JavaScript type a browser runs counts as a script, not
+  only the common spellings (`application/javascript`, `text/ecmascript` and the rest).
+- **A script runs once, in the realm, and never in the host.** After a fragment script's copy runs
+  in the realm, the element left in the host document keeps `type="inert"` for good. Its `type`
+  property and `getAttribute('type')` still report its real type. So a host that moves the slot
+  (reordering a list, a portal, drag and drop) cannot make the browser run it a second time in the
+  host window. Scripts that never run are kept the same way, so changing their `type` later does
+  not arm them. Selectors that match a script by its type attribute (`script[type="module"]`) no
+  longer match it.
 - **Braid's markers are Braid's.** The gateway and the boundary neutralize scripts as
   `type="inert"`, and preload links as `rel="inert-*"`. A script or link that *arrives* carrying
   those markers, such as one a fragment wrote from user data, stays exactly as inert as it would be

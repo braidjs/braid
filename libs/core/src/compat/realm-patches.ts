@@ -71,6 +71,20 @@ export function initializeRealmContext(
     ...(htmlPolicy ? { htmlPolicy: createHtmlPolicy(htmlPolicy, realm.fragmentId, mainDocument) } : {}),
   });
 
+  // `document.importNode(template.content, true)` — how most libraries instantiate a template — makes
+  // the copy in the realm's own document, where the boundary's cloneNode does not run. The copy
+  // carries provenance all the same, so the gateway's template scripts still run once instantiated.
+  const nativeImportNode = realmDocument.importNode;
+  Object.defineProperty(realmDocument, 'importNode', {
+    configurable: true,
+    writable: true,
+    value: function importNode(this: Document, node: Node, deep?: boolean) {
+      const imported = nativeImportNode.call(this, node, deep);
+      fragmentBoundary.inheritProvenance(node, imported, Boolean(deep));
+      return imported;
+    },
+  });
+
   /** ---------------------------------------------- Window Patches ------------------------------------------------ */
 
   /**

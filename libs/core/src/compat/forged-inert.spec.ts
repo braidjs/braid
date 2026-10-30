@@ -108,6 +108,73 @@ describe('what may run in the realm', () => {
     });
   });
 
+  it('keeps the host copy of a script that ran inert for good, reporting its real type', () => {
+    const { container, ran } = boundary();
+    const script = document.createElement('script');
+    makeScriptBornInert(script);
+    script.type = 'module';
+    script.textContent = 'once()';
+    container.append(script);
+    expect(ran()).toEqual(['once()']);
+    // the browser never marked the host element started, so it must never carry a live type
+    expect(Element.prototype.getAttribute.call(script, 'type')).toBe('inert');
+    expect(script.type).toBe('module');
+    expect(script.getAttribute('type')).toBe('module');
+    // and moving it, as a host moving the slot would, runs nothing more
+    const other = document.createElement('div');
+    container.append(other);
+    other.append(script);
+    expect(ran()).toEqual(['once()']);
+  });
+
+  it('runs every JavaScript type the browser runs, not only the common spellings', () => {
+    const { container, ran } = boundary();
+    for (const type of ['application/javascript', ' TEXT/ECMASCRIPT ']) {
+      const script = document.createElement('script');
+      makeScriptBornInert(script);
+      script.type = type;
+      script.textContent = `typed('${type.trim()}')`;
+      container.append(script);
+    }
+    expect(ran()).toEqual(["typed('application/javascript')", "typed('TEXT/ECMASCRIPT')"]);
+  });
+
+  it('never runs a created script whose own code set its type to inert', () => {
+    const { container, ran } = boundary();
+    const script = document.createElement('script');
+    makeScriptBornInert(script);
+    script.type = 'inert';
+    script.textContent = 'copied()';
+    container.append(script);
+    expect(ran()).toEqual([]);
+  });
+
+  it('leaves a contextual-fragment script of an exotic JavaScript type inert in the host', () => {
+    const { container, ran } = boundary();
+    container.append(document.createRange().createContextualFragment('<script type="text/ecmascript">exotic()</script>'));
+    const script = container.querySelector('script')!;
+    expect(Element.prototype.getAttribute.call(script, 'type')).toBe('inert');
+    expect(ran()).toEqual([]);
+  });
+
+  it('carries provenance into nested gateway templates, and through importNode', async () => {
+    const { braidDocument, container, fragment, ran } = boundary(
+      '<template id="outer"><template id="inner"><script type="inert">nested()</script></template></template>' +
+        '<template id="imported"><script type="inert">imported()</script></template>',
+    );
+    const outer = (braidDocument.querySelector('#outer') as HTMLTemplateElement).content.cloneNode(true) as DocumentFragment;
+    const inner = outer.querySelector('template') as HTMLTemplateElement;
+    container.append(inner.content.cloneNode(true));
+
+    const source = (braidDocument.querySelector('#imported') as HTMLTemplateElement).content;
+    const copy = document.importNode(source, true);
+    // what the realm document's importNode does after its native copy
+    fragment.inheritProvenance(source, copy, true);
+    container.append(copy);
+    await tick();
+    expect(ran()).toEqual(['nested()', 'imported()']);
+  });
+
   it('keeps a data block’s type when it is moved, so code that finds it by type still does', () => {
     const { container, ran } = boundary();
     container.innerHTML = '<p><script type="application/json" id="state">{"a":1}</script></p>';
