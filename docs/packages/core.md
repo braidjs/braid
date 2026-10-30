@@ -226,6 +226,27 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Recovering from transient failures (opt-in)
+
+```ts
+initBraid({ recover: true }); // or { attempts: 3, delayMs: 1000 }
+```
+
+- **What triggers a reboot.** A fragment that fails for a reason a retry can fix is rebooted
+  (`reload()`) after 1, 4 and 16 seconds, at most three times per mount. Fixable means its document
+  fetch, its realm, its handshake, its boundary or its mount failed, or it stopped answering
+  (`gone`).
+- **What never retries.** A misconfigured slot, an adapter this client lacks, a contract the host
+  and fragment cannot agree on, a context version that cannot be bridged, a failed prerequisite,
+  and a user who is not entitled. Each of these fails the same way every time.
+- **Each reboot is announced.** The slot dispatches `braid:recovering` with
+  `{ fragmentId, attempt, delayMs, reason }` before it waits. The host's fallback content shows in
+  the meantime, as it would without recovery.
+- **The budget is per mount.** Removing the slot cancels a pending reboot, and a slot inserted
+  again starts with a full budget.
+- **State is not restored.** The rebooted fragment starts fresh, like any reload.
+- **Off by default.** Without `recover`, a failed slot stays failed until the host reloads it.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a
@@ -425,6 +446,8 @@ interface InitBraidOptions {
   onHostNavigation?: (notify: () => void) => void;
   /** The gateway's mount when the host does not own the domain root ('/manage'); must match the gateway's basePath. */
   basePath?: string;
+  /** Reboot fragments that fail for a fixable reason (see "Recovering from transient failures"). Off by default. */
+  recover?: boolean | { attempts?: number; delayMs?: number };
 }
 ```
 

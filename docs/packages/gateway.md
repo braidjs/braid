@@ -196,6 +196,39 @@ What it does not change, and what to plan for:
 - **Hosts that hydrate the whole document** will find `<braid-late>` nodes before `</body>`, and
   may see them as a mismatch. Hydrate an app root instead of `document`.
 
+## Realm network policy (opt-in)
+
+A manifest's `capabilities.network` lists the origins a fragment is expected to talk to. On the
+trusted tier it is advisory by default. Set `realmPolicy` and the gateway turns it into a policy on
+the fragment's realm:
+
+```ts
+createGateway({
+  registry: [{ id: 'billing', endpoint: 'https://billing.internal', capabilities: { network: ['https://api.stripe.com'] } }],
+  realmPolicy: 'report', // then 'enforce'
+});
+```
+
+- **What gets sent.** The realm stub of every compat or custom-element fragment that declares
+  `network` carries `connect-src 'self' <its origins>`. With `'report'` it goes as
+  `Content-Security-Policy-Report-Only`, with `'enforce'` as `Content-Security-Policy`.
+- **What it covers.** The realm's own `fetch`, XHR, WebSocket, EventSource and `sendBeacon` calls.
+  `'self'` is the host origin, so the fragment's own namespace and the host's APIs stay reachable.
+- **What it does not cover.** Markup the fragment puts in the page (images, form actions) is under
+  the host's policy. Code that deliberately reaches into the host realm can use the host's `fetch`.
+  It catches accidents and naive supply-chain exfiltration; it is not a boundary, because the
+  trusted tier has none.
+- **What you see.** The client logs every request the policy blocks, or would have blocked, with
+  the fragment's name and the URL. Start with `'report'`, read the console, add what is missing,
+  then switch to `'enforce'`.
+- **Entries must be plain origins.** A scheme, a host (optionally `*.`-prefixed) and an optional
+  port: `https://api.example.com`, `wss://*.push.example.com:443`. Anything else, such as a path,
+  a quote, `;` or `,`, is refused when the registry loads, so a manifest cannot add a directive.
+- **It is the registry's grant only.** A grant passed to `initBraid({ capabilities })` never
+  reaches the realm's headers.
+- **Unchanged without it.** With no `realmPolicy`, or for a fragment that declares no `network`,
+  stubs are unchanged.
+
 ## Per-fragment cookies
 
 Trusted fragments share the host origin's cookie jar. When fragments' backends finish an
