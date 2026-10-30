@@ -1,5 +1,5 @@
 import { braidFragmentUrl } from '../protocol.js';
-import { concatStreams, Injection, rewriteHtmlStream, StartTag } from './html-rewrite-stream.js';
+import { concatStreams, Injection, rewriteHtmlStream, StartTag, toReadableStream } from './html-rewrite-stream.js';
 
 /**
  * The composition protocol's HTML transforms, expressed against the owned rewriter.
@@ -404,7 +404,21 @@ export interface PierceTarget {
  */
 export interface PendingPierceTarget extends Pick<PierceTarget, 'fragmentId' | 'src' | 'bound'> {
   settled: Promise<Pick<PierceTarget, 'content' | 'fallbackReason' | 'after'>>;
+  /**
+   * Stream past this fragment's slot if it has not settled by the time the stream reaches it, and
+   * send its markup at the end of the document instead. See the manifest's `stream`.
+   */
+  outOfOrder?: boolean;
 }
+
+/**
+ * The element that carries a fragment's late markup, sent at the end of the document.
+ *
+ * Hidden, so a page without JavaScript shows the slot's skeleton rather than the fragment at the
+ * foot of the page; the client runtime defines it and moves its shadow root's content into the
+ * slot it names (see `@braidlabs/core`'s `late-content.ts`).
+ */
+export const BRAID_LATE_TAG = 'braid-late';
 
 export interface PierceOptions {
   /** The shell application's HTML. */
@@ -456,6 +470,13 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
   /** Fragments an outlet took, so a named slot that asks for one later can be told why it is empty. */
   const inOutlet = new Set<string>();
   let stylesInjected = false;
+  /** Fragments that have answered, so a slot can tell without waiting whether it would have to wait. */
+  const settledIds = new Set<string>();
+  for (const fragment of options.fragments) {
+    if ('settled' in fragment) void fragment.settled.then(() => settledIds.add(fragment.fragmentId), () => undefined);
+  }
+  /** Slots the stream went past; their markup follows at the end of the document. */
+  const late: PendingPierceTarget[] = [];
 
   const settle = async (target: PierceTarget | PendingPierceTarget): Promise<PierceTarget> =>
     'settled' in target
@@ -494,6 +515,41 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
     pending.clear();
     const orphans = (await Promise.all(remaining.map(settle))).filter((target) => target.content);
     return orphans.length ? concatStreams(orphans.map(orphanSlot)) : undefined;
+  };
+
+  /**
+   * The markup of every slot the stream went past, each sent as soon as it settles — so one slow
+   * fragment never holds up another that has already answered. A fragment with nothing to show
+   * still gets an (empty) element, which tells the client to boot that slot itself now rather
+   * than wait for the document to finish.
+   */
+  const lateContent = (): Injection | undefined => {
+    const waiting = late.splice(0);
+    if (!waiting.length) return undefined;
+    return toReadableStream(
+      (async function* () {
+        const inFlight = new Map(waiting.map((target) => [target.fragmentId, settle(target)]));
+        while (inFlight.size) {
+          const target = await Promise.race(inFlight.values());
+          inFlight.delete(target.fragmentId);
+          const name = escapeAttribute(target.fragmentId);
+          if (!target.content) {
+            const reason = target.fallbackReason ? ` data-braid-fallback="${escapeAttribute(target.fallbackReason)}"` : '';
+            yield* readAll(concatStreams([`<${BRAID_LATE_TAG} for="${name}"${reason} hidden></${BRAID_LATE_TAG}>`]));
+            continue;
+          }
+          yield* readAll(
+            concatStreams([`<${BRAID_LATE_TAG} for="${name}" hidden>`, ...shadowRoot(target), `</${BRAID_LATE_TAG}>`]),
+          );
+        }
+      })(),
+    );
+  };
+
+  /** Orphans, then late content: both belong at the end of the document. */
+  const endOfDocument = async (): Promise<Injection | undefined> => {
+    const parts = [await remainingOrphans(), lateContent()].filter((part): part is Injection => part !== undefined);
+    return parts.length ? concatStreams(parts) : undefined;
   };
 
   return rewriteHtmlStream(shell, {
@@ -547,18 +603,27 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
 
       body: {
         async endTag(tag) {
-          const orphans = await remainingOrphans();
-          if (orphans) tag.before(orphans);
+          const end = await endOfDocument();
+          if (end) tag.before(end);
         },
       },
     },
 
     // `</body>` is optional in HTML and frequently omitted — this is the safety net
-    onEnd: remainingOrphans,
+    onEnd: endOfDocument,
   });
 
   /** Fills a pierced slot once its fragment has settled. The one place the stream waits for it. */
   async function pierceSlot(tag: StartTag, unsettled: PierceTarget | PendingPierceTarget): Promise<void> {
+    if ('settled' in unsettled && unsettled.outOfOrder && !settledIds.has(unsettled.fragmentId)) {
+      // Waiting here would hold up everything after the slot. Mark it, so the client waits for the
+      // late markup instead of fetching, and stream on.
+      if (unsettled.src && !tag.getAttribute('src')) tag.setAttribute('src', unsettled.src);
+      tag.setAttribute('data-braid-deferred', '');
+      late.push(unsettled);
+      return;
+    }
+
     // everything before the slot is already out
     const target = await settle(unsettled);
 
@@ -609,4 +674,18 @@ function lazyText(text: () => string): ReadableStream<Uint8Array> {
 
 function escapeAttribute(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+/** Every chunk of a stream, for re-yielding inside another generator. */
+async function* readAll(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }

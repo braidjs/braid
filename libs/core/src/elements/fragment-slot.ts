@@ -33,6 +33,7 @@ import {
 } from '../weave/capabilities.js';
 import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
 import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
+import { lateContentArrival } from './late-content.js';
 
 /**
  * What the slot reports about its fragment.
@@ -302,6 +303,19 @@ export class FragmentSlot extends HTMLElement {
    */
   #scheduleBoot(): void {
     this.#bootScheduled = true;
+    // A slot the gateway streamed past gets its markup at the end of the document; until then it
+    // cannot know whether it is pierced, which is what every boot mode decides on.
+    const deferred = this.hasAttribute('data-braid-deferred');
+    if (deferred) {
+      void lateContentArrival(this).then(() => {
+        if (this.#bootScheduled && this.isConnected && !this.#booted) this.#gateBoot();
+      });
+      return;
+    }
+    this.#gateBoot();
+  }
+
+  #gateBoot(): void {
     const gate = createBootGate(this, parseBootMode(this.getAttribute('boot'), this.name), {
       pierced: findPiercedContentRoot(this.shadowRoot) !== null,
       fragmentId: this.name,

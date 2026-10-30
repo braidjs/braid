@@ -47,7 +47,9 @@ describe('<fragment-slot boot>', () => {
         constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
           intersect = callback;
         }
-        observe() {}
+        observe() {
+          // the test drives intersections itself, through the stored callback
+        }
         disconnect() {
           intersect = undefined;
         }

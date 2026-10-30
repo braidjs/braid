@@ -125,6 +125,16 @@ export interface FragmentManifest {
   /** Per-fragment budget for endpoint fetches, in milliseconds. */
   timeoutMs?: number;
   /**
+   * What the page stream does when it reaches this fragment's slot before the fragment has answered.
+   *
+   * `in-order` (the default) waits there, up to `timeoutMs`, so everything after the slot waits too.
+   * `out-of-order` streams on past the empty slot and sends the fragment's markup at the end of the
+   * document once it arrives; the client moves it into the slot. A fragment that is already in by
+   * the time its slot streams is inlined either way, so the slot shifts layout only when waiting
+   * would have held up the page. Reserve the slot's space in host CSS to keep that shift at zero.
+   */
+  stream?: 'in-order' | 'out-of-order';
+  /**
    * Opt this fragment out of concurrent-fetch coalescing. Defaults to `true` (coalesced).
    *
    * The gateway only shares a fetch between requests whose `cookie`, `authorization`, `user-agent`,
@@ -306,6 +316,12 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     (!Array.isArray(manifest.requires) || manifest.requires.some((key) => typeof key !== 'string' || key.trim() === ''))
   ) {
     throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
+  }
+  if (manifest.stream !== undefined && manifest.stream !== 'in-order' && manifest.stream !== 'out-of-order') {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" declares stream: "${String(manifest.stream)}" — ` +
+        `use "in-order" or "out-of-order"`,
+    );
   }
   if (manifest.redirect !== undefined && manifest.redirect !== 'error' && manifest.redirect !== 'navigate') {
     throw new Error(
