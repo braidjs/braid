@@ -25,11 +25,97 @@ export function storagePartitionPrefix(partition: string): string {
 
 type StorageName = 'localStorage' | 'sessionStorage';
 
+/** The realm's own `Storage` operations, captured before {@link patchStoragePrototype} wraps them. */
+interface StorageOps {
+  getItem(store: Storage, key: string): string | null;
+  setItem(store: Storage, key: string, value: string): void;
+  removeItem(store: Storage, key: string): void;
+  key(store: Storage, index: number): string | null;
+  length(store: Storage): number;
+}
+
+/** What a view does for each `Storage` member, with `this` already resolved to the view. */
+interface ViewMembers {
+  getItem(...args: unknown[]): string | null;
+  setItem(...args: unknown[]): void;
+  removeItem(...args: unknown[]): void;
+  clear(): void;
+  key(...args: unknown[]): string | null;
+  length(): number;
+}
+
+const METHODS = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+/** The argument counts `Storage`'s methods require, for the TypeError a native call throws. */
+const ARITY: Record<(typeof METHODS)[number], number> = { getItem: 1, setItem: 2, removeItem: 1, clear: 0, key: 1 };
+const patched = new WeakMap<object, { ops: StorageOps; views: WeakMap<object, ViewMembers> }>();
+
+function requireArguments(method: keyof typeof ARITY, args: unknown[]): void {
+  if (args.length < ARITY[method]) {
+    throw new TypeError(
+      `Failed to execute '${method}' on 'Storage': ${ARITY[method]} argument${ARITY[method] > 1 ? 's' : ''} required, but only ${args.length} present.`,
+    );
+  }
+}
+
+/**
+ * Makes the realm's own `Storage.prototype` answer for views, once per realm.
+ *
+ * A view is a Proxy, not a platform object, so the native methods would refuse it
+ * (`Storage.prototype.getItem.call(localStorage, k)` is an "Illegal invocation"). Wrapping them —
+ * the realm's copy only; the host's `Storage` is never touched — lets every route to a method work:
+ * `localStorage.getItem(k)`, `.call(localStorage, …)`, and a library that monkey-patches
+ * `Storage.prototype.setItem` sees the fragment's own key names. The views themselves call the
+ * captured originals, so such a patch runs once per call, as it would natively.
+ */
+function patchStoragePrototype(storagePrototype: object): { ops: StorageOps; views: WeakMap<object, ViewMembers> } {
+  const existing = patched.get(storagePrototype);
+  if (existing) return existing;
+
+  const descriptor = (name: string) => Object.getOwnPropertyDescriptor(storagePrototype, name);
+  const original = Object.fromEntries(METHODS.map((name) => [name, descriptor(name)!.value])) as Record<
+    (typeof METHODS)[number],
+    (...args: unknown[]) => unknown
+  >;
+  const originalLength = descriptor('length')!.get!;
+  const ops: StorageOps = {
+    getItem: (store, key) => original.getItem.call(store, key) as string | null,
+    setItem: (store, key, value) => void original.setItem.call(store, key, value),
+    removeItem: (store, key) => void original.removeItem.call(store, key),
+    key: (store, index) => original.key.call(store, index) as string | null,
+    length: (store) => originalLength.call(store) as number,
+  };
+  const views = new WeakMap<object, ViewMembers>();
+
+  for (const name of METHODS) {
+    // a method definition, so the wrapper keeps the native's name and is not a constructor
+    const wrapper = {
+      [name](this: unknown, ...args: unknown[]) {
+        const view = typeof this === 'object' && this !== null ? views.get(this) : undefined;
+        return view ? (view[name] as (...a: unknown[]) => unknown)(...args) : original[name].apply(this, args);
+      },
+    }[name];
+    Object.defineProperty(storagePrototype, name, { ...descriptor(name), value: wrapper });
+  }
+  Object.defineProperty(storagePrototype, 'length', {
+    ...descriptor('length'),
+    get(this: unknown) {
+      const view = typeof this === 'object' && this !== null ? views.get(this) : undefined;
+      return view ? view.length() : originalLength.call(this);
+    },
+  });
+
+  const record = { ops, views };
+  patched.set(storagePrototype, record);
+  return record;
+}
+
 /**
  * A `Storage` that reads and writes only the keys under `prefix`, with the prefix out of sight.
  *
  * A Proxy rather than a subclass, because `Storage` exposes its entries as named properties —
  * `localStorage.token = 'x'`, `Object.keys(localStorage)` — and only a Proxy can answer those.
+ * Members (`getItem`, `length`…) come from the realm's own `Storage.prototype`, patched to route a
+ * view to its own entries.
  */
 export function createStorageView(
   native: Storage,
@@ -38,73 +124,100 @@ export function createStorageView(
   /** Told of every write that changes the store, which is every write that raises a `storage` event. */
   onChange: (nativeKey: string, newValue: string | null) => void = () => undefined,
 ): Storage {
+  const { ops, views } = patchStoragePrototype(storagePrototype);
+
+  /**
+   * The partition's keys, scanned once and kept until the next microtask: a loop over `key(i)` up
+   * to `length` would otherwise rescan the whole origin store at every step. Nothing can change the
+   * store inside one synchronous run except this view, whose writes drop the cache.
+   */
+  let cachedKeys: string[] | null = null;
   const ownKeys = (): string[] => {
-    const keys: string[] = [];
-    for (let i = 0; i < native.length; i++) {
-      const key = native.key(i);
-      if (key !== null && key.startsWith(prefix)) keys.push(key.slice(prefix.length));
+    if (!cachedKeys) {
+      const keys: string[] = [];
+      const total = ops.length(native);
+      for (let i = 0; i < total; i++) {
+        const key = ops.key(native, i);
+        if (key !== null && key.startsWith(prefix)) keys.push(key.slice(prefix.length));
+      }
+      cachedKeys = keys;
+      queueMicrotask(() => {
+        cachedKeys = null;
+      });
     }
-    return keys;
+    return cachedKeys;
   };
 
   const set = (nativeKey: string, value: string): void => {
-    const changed = native.getItem(nativeKey) !== value;
-    native.setItem(nativeKey, value);
+    const changed = ops.getItem(native, nativeKey) !== value;
+    ops.setItem(native, nativeKey, value);
+    cachedKeys = null;
     if (changed) onChange(nativeKey, value);
   };
   const remove = (nativeKey: string): void => {
-    const existed = native.getItem(nativeKey) !== null;
-    native.removeItem(nativeKey);
+    const existed = ops.getItem(native, nativeKey) !== null;
+    ops.removeItem(native, nativeKey);
+    cachedKeys = null;
     if (existed) onChange(nativeKey, null);
   };
 
-  const methods = {
-    getItem: (key: string): string | null => native.getItem(prefix + String(key)),
-    setItem: (key: string, value: string): void => set(prefix + String(key), String(value)),
-    removeItem: (key: string): void => remove(prefix + String(key)),
+  const members: ViewMembers = {
+    getItem: (...args) => (requireArguments('getItem', args), ops.getItem(native, prefix + String(args[0]))),
+    setItem: (...args) => (requireArguments('setItem', args), set(prefix + String(args[0]), String(args[1]))),
+    removeItem: (...args) => (requireArguments('removeItem', args), remove(prefix + String(args[0]))),
     // removes this partition's entries one by one, so other partitions and the host keep theirs
-    clear: (): void => ownKeys().forEach((key) => remove(prefix + key)),
-    key: (index: number): string | null => ownKeys()[Math.trunc(Number(index))] ?? null,
+    clear: () => [...ownKeys()].forEach((key) => remove(prefix + key)),
+    // WebIDL `unsigned long`: NaN and undefined are 0, negatives wrap past the end
+    key: (...args) => (requireArguments('key', args), ownKeys()[Number(args[0]) >>> 0] ?? null),
+    length: () => ownKeys().length,
   };
 
-  const isMember = (property: PropertyKey): boolean =>
-    typeof property === 'symbol' || property in methods || property === 'length' || property in storagePrototype;
+  const isMember = (property: PropertyKey): boolean => property in storagePrototype;
+  const entry = (property: string): string | null => ops.getItem(native, prefix + property);
 
-  return new Proxy(Object.create(storagePrototype) as Storage, {
-    get(_target, property) {
-      if (property === 'length') return ownKeys().length;
-      if (typeof property === 'string' && property in methods) return methods[property as keyof typeof methods];
-      if (isMember(property)) return Reflect.get(storagePrototype, property);
+  const view = new Proxy(Object.create(storagePrototype) as Storage, {
+    get(target, property, receiver) {
+      if (typeof property === 'symbol') return Reflect.get(target, property, receiver);
+      if (isMember(property)) return Reflect.get(storagePrototype, property, receiver);
       // a named property: the entry, or undefined (not null) like a native Storage
-      return native.getItem(prefix + String(property)) ?? undefined;
+      return entry(property) ?? undefined;
     },
     // as natively: assigning any string property stores an entry (WebIDL's named setter wins on
     // [[Set]]), while reading a member name still finds the member
-    set(_target, property, value) {
-      if (typeof property === 'symbol') return false;
-      methods.setItem(property, value);
+    set(target, property, value) {
+      if (typeof property === 'symbol') return Reflect.set(target, property, value);
+      set(prefix + property, String(value));
       return true;
     },
-    has(_target, property) {
-      if (isMember(property)) return true;
-      return native.getItem(prefix + String(property)) !== null;
+    has(target, property) {
+      if (typeof property === 'symbol') return Reflect.has(target, property);
+      return isMember(property) || entry(property) !== null;
     },
-    deleteProperty(_target, property) {
-      if (typeof property === 'string') methods.removeItem(property);
+    deleteProperty(target, property) {
+      if (typeof property === 'symbol') return Reflect.deleteProperty(target, property);
+      remove(prefix + property);
       return true;
     },
-    ownKeys() {
-      return ownKeys();
+    ownKeys(target) {
+      return [...ownKeys(), ...Object.getOwnPropertySymbols(target)];
     },
-    getOwnPropertyDescriptor(_target, property) {
+    getOwnPropertyDescriptor(target, property) {
+      if (typeof property === 'symbol') return Reflect.getOwnPropertyDescriptor(target, property);
       if (isMember(property)) return undefined;
-      const value = native.getItem(prefix + String(property));
+      const value = entry(property);
       return value === null ? undefined : { value, writable: true, enumerable: true, configurable: true };
     },
-    defineProperty() {
-      return false;
+    defineProperty(target, property, descriptor) {
+      if (typeof property === 'symbol') return Reflect.defineProperty(target, property, descriptor);
+      // natively a data descriptor stores its value as an entry
+      if (!('value' in descriptor)) return false;
+      set(prefix + property, String(descriptor.value));
+      return true;
     },
   });
+
+  views.set(view, members);
+  return view;
 }
 
 /** What a `storage` event looks like from inside the partition, or `null` if it is not its event. */
@@ -156,17 +269,18 @@ export function installStoragePartition(
    * marked an echo — by a listener registered here, before any fragment code can add its own, so
    * it always sees the event first.
    */
-  const pending = new Map<string, number>();
+  const pending = new Map<string, number[]>();
   const echoes = new WeakSet<Event>();
-  const writeId = (area: StorageName, nativeKey: string, newValue: string | null) =>
-    `${area}\u0000${nativeKey}\u0000${newValue === null ? '\u0001' : newValue}`;
+  const writeId = (area: StorageName, nativeKey: string, newValue: string | null) => JSON.stringify([area, nativeKey, newValue]);
+  /** An echo arrives within a task or two; one that never comes must not swallow a later event. */
+  const ECHO_WINDOW_MS = 2_000;
 
   const view = (name: StorageName): Storage => {
     let existing = views.get(name);
     if (!existing) {
       existing = createStorageView(native[name](), prefix, storagePrototype, (nativeKey, newValue) => {
         const id = writeId(name, nativeKey, newValue);
-        pending.set(id, (pending.get(id) ?? 0) + 1);
+        pending.set(id, [...(pending.get(id) ?? []), Date.now() + ECHO_WINDOW_MS]);
       });
       views.set(name, existing);
     }
@@ -198,13 +312,19 @@ export function installStoragePartition(
       const name = areaOf(event);
       if (!name || event.key === null) return;
       const id = writeId(name, event.key, event.newValue);
-      const count = pending.get(id);
-      if (!count) return;
-      if (count === 1) pending.delete(id);
-      else pending.set(id, count - 1);
+      const now = Date.now();
+      const live = (pending.get(id) ?? []).filter((expires) => expires > now);
+      if (live.length === 0) {
+        pending.delete(id);
+        return;
+      }
+      live.shift();
+      if (live.length > 0) pending.set(id, live);
+      else pending.delete(id);
       echoes.add(event);
     },
-    signal ? { signal } : {},
+    // capture, so it runs before any listener a fragment adds, in either phase
+    signal ? { capture: true, signal } : { capture: true },
   );
 
   return {

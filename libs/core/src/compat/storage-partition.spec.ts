@@ -97,6 +97,58 @@ describe('installStoragePartition()', () => {
     });
   });
 
+  it('answers to Storage.prototype the way a native store does, so prototype tricks keep working', () => {
+    const a = realm();
+    installStoragePartition(a, window, 'a');
+
+    run(
+      a,
+      `localStorage.setItem('k', 'v');
+       var seen = [];
+       var originalSet = Storage.prototype.setItem;
+       // a library wrapping setItem, as some analytics and storage shims do
+       Storage.prototype.setItem = function (key, value) { seen.push(key); return originalSet.call(this, key, value); };
+       localStorage.setItem('wrapped', '1');
+       Storage.prototype.setItem = originalSet;
+       window.result = {
+         call: Storage.prototype.getItem.call(localStorage, 'k'),
+         length: Object.getOwnPropertyDescriptor(Storage.prototype, 'length').get.call(localStorage),
+         constructorIsStorage: localStorage.constructor === Storage,
+         sameMethod: localStorage.getItem === Storage.prototype.getItem,
+         iterable: Symbol.iterator in localStorage,
+         seen: seen,
+       };`,
+    );
+
+    expect(a.result).toEqual({ call: 'v', length: 2, constructorIsStorage: true, sameMethod: true, iterable: false, seen: ['wrapped'] });
+    // the host's Storage is untouched
+    expect(Storage.prototype.getItem.call(localStorage, `${storagePartitionPrefix('a')}k`)).toBe('v');
+  });
+
+  it("throws native argument errors and converts key()'s index like WebIDL", () => {
+    const a = realm();
+    installStoragePartition(a, window, 'a');
+    a.localStorage.setItem('only', '1');
+
+    expect(() => (a.localStorage.getItem as () => void)()).toThrow(/1 argument required/);
+    expect(() => (a.localStorage.setItem as (k: string) => void)('k')).toThrow(/2 arguments required/);
+    expect(a.localStorage.key(Number.NaN)).toBe('only');
+    expect(a.localStorage.key(-1)).toBeNull();
+    Object.defineProperty(a.localStorage, 'defined', { value: 'yes' });
+    expect(a.localStorage.getItem('defined')).toBe('yes');
+  });
+
+  it('keeps enumeration in step with its own writes inside one synchronous run', () => {
+    const a = realm();
+    installStoragePartition(a, window, 'a');
+    a.localStorage.setItem('one', '1');
+    expect(a.localStorage.length).toBe(1);
+    a.localStorage.setItem('two', '2');
+    expect(a.localStorage.length).toBe(2);
+    a.localStorage.removeItem('one');
+    expect(a.localStorage.key(0)).toBe('two');
+  });
+
   it('shares a named partition between fragments, and only between them', () => {
     const one = realm();
     const two = realm();

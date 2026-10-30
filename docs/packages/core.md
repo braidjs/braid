@@ -122,6 +122,17 @@ and copy the wrong value back. `capabilities.storage` gives a fragment a store o
   `localStorage.clear()` clears every partition too.
 - **Default is `'shared'`,** exactly as before. Compat fragments only; custom-element, contract
   and untrusted fragments ignore it.
+- **Turning it on starts the fragment empty.** Entries the fragment wrote while shared stay in
+  the origin store under their old names. It doesn't see them, and nothing migrates or removes
+  them.
+- **`'partitioned'` is shorthand for `{ partition: <fragment id> }`.** So a fragment named
+  `kcd` shares a store with fragments that name the partition `kcd`.
+- **Small differences from a native store:**
+  - `clear()` raises one `storage` event per removed entry, not one with `key === null`.
+  - An event's `key` and `storageArea` are translated only while the listener runs, so read
+    them before an `await`.
+  - A listener attached with the original `EventTarget.prototype.addEventListener` deliberately
+    goes around the filter.
 - **An accident barrier, not a security boundary.** Same-origin code can still reach
   `top.localStorage`. IndexedDB, Cache Storage, BroadcastChannel and cookies are not partitioned
   by this.
