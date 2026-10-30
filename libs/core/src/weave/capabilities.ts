@@ -14,6 +14,7 @@ import { getBraidConfig, isDevMode } from '../config.js';
  * | `network` | the browser (CSP on the realm), or nobody | advisory, or the realm's own requests with the gateway's `realmPolicy` | CSP on the fragment's own origin |
  * | `sharedGlobals` | **Braid** — realm-window accessors | compat and custom-element fragments | n/a — ignored, nothing to share across origins |
  * | `storage` | **Braid** — realm-window storage views | compat fragments | n/a — the browser already partitions a cross-origin frame |
+ * | `html` | **Braid** — the fragment boundary's stamped HTML sinks | compat fragments | n/a — its DOM is its own document |
  *
  * `context` is the one that matters most on the trusted tier, and the one Braid can actually
  * enforce there — because Phase 1 turned the context bus into a message, so "what may this fragment
@@ -54,6 +55,12 @@ export interface FragmentCapabilities {
    * Compat fragments only; ignored elsewhere.
    */
   storage?: StorageGrant;
+  /**
+   * What the fragment's own `innerHTML` and `insertAdjacentHTML` writes may put in the page:
+   * `'sanitize'` strips what could run, `'report'` only warns. Compat fragments only; see
+   * `compat/html-policy.ts`.
+   */
+  html?: 'report' | 'sanitize';
   /**
    * Host globals this fragment reads and writes as its own — see `BraidOptions.sharedGlobals`.
    * Replaces the host-wide default when present; `[]` opts the fragment out. Trusted tier only.

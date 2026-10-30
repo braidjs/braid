@@ -255,6 +255,45 @@ initBraid({ recover: true }); // or { attempts: 3, delayMs: 1000 }
 - **State is not restored.** The rebooted fragment starts fresh, like any reload.
 - **Off by default.** Without `recover`, a failed slot stays failed until the host reloads it.
 
+### Sanitizing a fragment's own HTML writes (opt-in)
+
+The gateway neutralizes the markup a fragment *sends*: no handler, script, `javascript:` frame or
+meta refresh in its server-rendered HTML runs in the host page. Markup a compat fragment's code
+*writes* at runtime has had no such treatment. `el.innerHTML = untrusted` with an `<img onerror>`
+compiles that handler in the host page's realm, because the element belongs to the host document.
+An XSS in one fragment becomes script in the shell.
+
+`capabilities.html`, from the registry manifest or `initBraid({ capabilities })`, applies the
+gateway's rules to those writes:
+
+```jsonc
+"capabilities": { "html": "report" }   // then "sanitize"
+```
+
+- **`"sanitize"` removes what could run:**
+  - `<script>` elements;
+  - `on*` attributes;
+  - `javascript:` URLs in `href`, `src`, `action`, `formaction` and `xlink:href`;
+  - `srcdoc`, and `data:`/`blob:` frame sources;
+  - `<meta http-equiv="refresh">`.
+
+  Everything else is written as before. The markup is parsed in an inert `<template>` and the
+  cleaned nodes are inserted directly. It is never serialized and parsed a second time, because a
+  second parse in a different context is how sanitizers get bypassed.
+- **`"report"` writes the markup unchanged.** It warns once per distinct finding, with the
+  fragment, the sink, and what `"sanitize"` would remove. It parses every write twice to find out,
+  so use it in development and staging, then switch to `"sanitize"`.
+- **What is covered.** `innerHTML` on the fragment's elements and shadow root, and
+  `insertAdjacentHTML`: the sinks the compat boundary already intercepts.
+- **What is not covered.**
+  - `outerHTML`, `setHTMLUnsafe`, and `Range.createContextualFragment`;
+  - attributes set one by one (`img.setAttribute('onerror', …)`, `a.href = 'javascript:…'`);
+  - contract, custom-element and untrusted fragments. An untrusted fragment's DOM is its own
+    document anyway.
+- **Legacy apps may depend on what it removes.** jQuery-era code often puts `onclick="…"` inside
+  HTML strings, and `"sanitize"` breaks it. That is what `"report"` is for.
+- **An unknown value is ignored, with a warning.** It never turns the policy on.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a

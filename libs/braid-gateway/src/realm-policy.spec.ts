@@ -86,6 +86,13 @@ describe('realm network policy', () => {
     expect(response.headers.get('content-security-policy')).toBe("connect-src 'self'");
   });
 
+  it('warns about, and so ignores, an unknown capabilities.html', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    createGateway({ registry: [{ id: 'billing', endpoint: 'https://billing.internal', capabilities: { html: 'strict' as never } }] });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('manifest "billing" declares capabilities.html "strict", which is ignored'));
+    warn.mockRestore();
+  });
+
   it('refuses an unknown realmPolicy', () => {
     expect(() => createGateway({ registry: [], realmPolicy: 'block' as never })).toThrow(/realmPolicy/);
   });
