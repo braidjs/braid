@@ -27,6 +27,7 @@ beforeAll(async () => {
         { id: 'gated', requires: ['hold'], endpoint: endpoint(() => html(content('gated'))) },
         { id: 'broken', endpoint: endpoint(async () => (await sleep(300), new Response('nope', { status: 500 }))) },
         { id: 'pierced', pierce: ['/'], endpoint: endpoint(() => html(content('pierced'))) },
+        { id: 'hostbusy', endpoint: endpoint(async () => (await sleep(800), html(content('hostbusy')))) },
       ],
     },
     head: `<style>[slot="loading"] { display: block; height: 40px; }</style>`,
@@ -39,6 +40,7 @@ beforeAll(async () => {
       )
       .concat(
         '<fragment-slot name="instant" style="--braid-loading-delay: 0s"><div slot="loading" id="instant-skeleton">…</div></fragment-slot>',
+        '<fragment-slot name="hostbusy" aria-busy="false"><div slot="loading">…</div></fragment-slot>',
       )
       .join(''),
   });
@@ -79,6 +81,8 @@ describe('slot="loading"', () => {
     await page.waitForTimeout(500);
     expect(await page.getAttribute('fragment-slot[name="gated"]', 'state')).toBe('loading');
     expect(await visible(page, '#gated-skeleton')).toBe(false);
+    // content is on screen, so the slot is no longer busy, though not yet ready
+    expect(await page.getAttribute('fragment-slot[name="gated"]', 'aria-busy')).toBeNull();
     await page.close();
   });
 
@@ -92,8 +96,11 @@ describe('slot="loading"', () => {
 
   it('never shows for a pierced fragment, whose content is already there', async () => {
     const page = await open();
+    // it really is pierced: its content is there from the first sample
+    expect(await page.evaluate(() => !!document.querySelector('fragment-slot[name="pierced"]')?.shadowRoot?.querySelector('#pierced-content'))).toBe(true);
     for (let i = 0; i < 10; i++) {
       expect(await visible(page, '#pierced-skeleton'), `sample ${i}`).toBe(false);
+      expect(await page.getAttribute('fragment-slot[name="pierced"]', 'aria-busy'), `sample ${i}`).toBeNull();
       await page.waitForTimeout(100);
     }
     await page.close();
@@ -104,6 +111,15 @@ describe('slot="loading"', () => {
     await page.waitForSelector('fragment-slot[name="instant"][state="loading"]', { state: 'attached' });
     await page.waitForTimeout(50);
     expect(await visible(page, '#instant-skeleton')).toBe(true);
+    await page.close();
+  });
+
+  it("puts back a host's own aria-busy once loading is over", async () => {
+    const page = await open();
+    await page.waitForSelector('fragment-slot[name="hostbusy"][state="loading"]', { state: 'attached' });
+    expect(await page.getAttribute('fragment-slot[name="hostbusy"]', 'aria-busy')).toBe('true');
+    await page.waitForSelector('fragment-slot[name="hostbusy"]:is([state="ready"], [state="healthy"])', { state: 'attached', timeout: 10_000 });
+    expect(await page.getAttribute('fragment-slot[name="hostbusy"]', 'aria-busy')).toBe('false');
     await page.close();
   });
 });

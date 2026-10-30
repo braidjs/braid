@@ -111,12 +111,17 @@ A slot can carry host content for two moments: while its fragment boots, and if 
 - **The loading content shows only while nothing of the fragment is on screen.** The slot must be
   `state="loading"` with nothing painted yet. It gives way the moment the fragment's document
   paints, which is usually before the fragment is `ready`. It also gives way on `error` (the
-  fallback takes over) and on teardown. A server-rendered (pierced) fragment never shows it,
-  because its content is already there.
+  fallback takes over) and on teardown. A server-rendered (pierced) fragment doesn't show it,
+  because its content is already there. After `reload()`, the slot fetches afresh and can show it.
+- **It suits documents that have something to show.** A fragment whose document is an empty app
+  shell (`<div id="app"></div>` plus a bundle) paints that empty shell at once. The loading content
+  then gives way to a blank area until the app renders. For such fragments, have the document
+  carry its own skeleton inside `#app` for the app to replace, or server-render them.
 - **After a delay.** It stays hidden for `--braid-loading-delay` (default `200ms`), so a fast boot
   never flashes it. Set the variable on `:root` or on one slot; `0s` shows it at once.
-- **Optional.** Without a `slot="loading"` child, nothing changes. The slot carries
-  `aria-busy="true"` while its loading content may show.
+- **Optional.** Without a `slot="loading"` child, nothing changes. While its loading content may
+  show (a client-built slot with a loading child, before first paint) the slot carries
+  `aria-busy="true"`. Afterwards it puts back whatever `aria-busy` the host had set.
 - **The host owns the look.**
   - Reserve the slot's size (`min-height`, `aspect-ratio`) so the swap to real content doesn't
     shift the page.

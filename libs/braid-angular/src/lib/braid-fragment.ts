@@ -50,9 +50,7 @@ export interface BraidFragmentEvent {
   standalone: true,
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   // projected, so `<div slot="loading">` and `<p slot="fallback">` children reach the slot's own slots
-  template: `<fragment-slot #slot [attr.name]="name()" [attr.src]="src() ?? null" [attr.requires]="requires() ?? null"
-    ><ng-content
-  /></fragment-slot>`,
+  template: `<fragment-slot #slot [attr.name]="name()" [attr.src]="src() ?? null" [attr.requires]="requires() ?? null"><ng-content /></fragment-slot>`,
   styles: `
     :host,
     fragment-slot {
