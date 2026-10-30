@@ -9,25 +9,71 @@ import type { FragmentCapabilities } from '../weave/capabilities.js';
  * `<img onerror>` compiles that handler in the host page's realm, because the element is the host
  * document's — an XSS in one fragment becomes script in the shell.
  *
- * - `'sanitize'` applies the gateway's rules to those writes: no `<script>`, no `on*` attribute, no
- *   `javascript:` URL, no inline or `data:`/`blob:` frame document, no meta refresh. The markup is
- *   parsed in an inert `<template>` and its cleaned nodes are inserted, never serialized and parsed
- *   again — a second parse in a different context is how sanitizers get bypassed.
+ * - `'sanitize'` removes what could run, or make Braid run something: every `<script>`, `on*`
+ *   attributes, `javascript:` URLs, frame documents from anything but http(s) (the gateway's
+ *   allowlist), SVG animation (which can set a link's `href`), meta refresh, `<base>`, Braid's own
+ *   elements (a written `<fragment-slot entry>` would boot a realm), and the `inert-*` links and
+ *   `data-script-type` markers only the gateway may write.
  * - `'report'` writes the markup unchanged, and warns once per distinct finding with what
  *   `'sanitize'` would have removed. It parses every write a second time to know, so it is for
  *   development and staging.
  *
+ * **Parsing is the native parse, somewhere harmless.** The markup is parsed by the browser's own
+ * fragment parser, with an element of the same name and namespace as the write's target for
+ * context, in a document with no browsing context — where nothing loads, runs or dispatches. So a
+ * write into an `<svg>` yields SVG, a `<tr>` into a `<table>` gets its `<tbody>`, exactly as the
+ * native setter would; only then are the cleaned nodes moved into the page. They are never
+ * serialized and parsed again: a second parse is how sanitizers get bypassed. Writes whose result
+ * is only ever text — into a `<textarea>`, `<style>`, `<script>`, `<title>` — and `TrustedHTML`
+ * values, which the host's own policy already vetted, are passed straight to the native setter.
+ * Any other value is converted to a string, as the native setter would, and cleaned.
+ *
+ * Not in scope: CSS. A written `<style>`, stylesheet link or `style` attribute can still restyle or
+ * overlay the host page.
+ *
  * Covered: `innerHTML` on the fragment's elements and shadow root, and `insertAdjacentHTML` — the
  * sinks the fragment boundary already stamps. Not covered: `outerHTML`, `setHTMLUnsafe`,
- * `Range.createContextualFragment`, and DOM a fragment builds attribute by attribute.
+ * `Range.createContextualFragment`, markup parsed elsewhere and then inserted (`DOMParser`,
+ * `document.implementation`, `jQuery.parseHTML`), `document.write`, captured native setters, and DOM
+ * a fragment builds attribute by attribute. A custom element the host defines upgrades wherever it
+ * is inserted, so its tag in written markup is as capable as the element is.
  */
 export type HtmlPolicyMode = 'report' | 'sanitize';
 
-/** Attributes whose value is a URL that runs on navigation or load. */
-const URL_ATTRIBUTES = ['href', 'src', 'action', 'formaction', 'xlink:href'];
+const XHTML = 'http://www.w3.org/1999/xhtml';
 
-/** Elements whose source is a document of its own. */
-const FRAME_ELEMENTS: Record<string, string> = { iframe: 'src', frame: 'src', embed: 'src', object: 'data' };
+/** Context elements whose fragment parse yields text only: no tag or attribute can result. */
+const TEXT_ONLY_CONTEXTS = new Set(['textarea', 'title', 'style', 'script', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'plaintext']);
+
+/** Attributes whose value is a URL that runs on navigation or load. */
+const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'xlink:href', 'data']);
+
+/**
+ * Elements removed outright, with what they would do:
+ * - SVG animation, which can set an `href` to `javascript:` (DOMPurify forbids these for the same
+ *   reason);
+ * - `<base>`, which re-roots how Braid resolves the fragment's own URLs;
+ * - Braid's own elements, which boot realms and deliver content when they connect.
+ */
+const REMOVED_ELEMENTS = new Map([
+  ['animate', 'SVG animation'],
+  ['set', 'SVG animation'],
+  ['animatemotion', 'SVG animation'],
+  ['animatetransform', 'SVG animation'],
+  ['discard', 'SVG animation'],
+  ['base', 'a <base>'],
+  ['fragment-slot', 'a <fragment-slot>'],
+  ['braid-late', 'a <braid-late>'],
+  ['braid-late-end', 'a <braid-late-end>'],
+]);
+
+/** Elements whose source is a document of its own, and the attribute that names it. */
+const FRAME_SOURCES = new Map([
+  ['iframe', 'src'],
+  ['frame', 'src'],
+  ['embed', 'src'],
+  ['object', 'data'],
+]);
 
 const MAX_WARNINGS = 50;
 
@@ -41,68 +87,121 @@ export function resolveHtmlPolicy(capabilities: FragmentCapabilities | undefined
 
 export interface HtmlPolicy {
   /**
-   * Parses `html` for a write through `sink`. Returns the cleaned nodes to insert in its place under
-   * `'sanitize'`, or null to write the original markup (`'report'`, after warning).
+   * Parses `markup` as a write into `context` through `sink`. Returns the cleaned nodes to insert
+   * in its place under `'sanitize'`, or null to let the native setter write `markup` as it is:
+   * always under `'report'` (after warning), and for writes that cannot produce markup.
    */
-  filter(html: string, sink: string): DocumentFragment | null;
+  filter(markup: unknown, context: Element, sink: string): DocumentFragment | null;
 }
 
 export function createHtmlPolicy(mode: HtmlPolicyMode, fragmentId: string, mainDocument: Document): HtmlPolicy {
   const warned = new Set<string>();
+  // no browsing context: nothing parsed here fetches, runs, or fires an event
+  const inert = mainDocument.implementation.createHTMLDocument('');
 
   return {
-    filter(html, sink) {
-      const template = mainDocument.createElement('template');
-      template.innerHTML = html;
-      const findings = clean(template.content);
+    filter(markup, context, sink) {
+      // a TrustedHTML was vetted by the host's own policy, and re-parsing it as a string here would
+      // be refused by that policy anyway; anything else is a string to the native setter, and here
+      const trustedTypes = (globalThis as { trustedTypes?: { isHTML(value: unknown): boolean } }).trustedTypes;
+      if (trustedTypes?.isHTML(markup)) return null;
+      markup = String(markup);
+      if (context.namespaceURI === XHTML && TEXT_ONLY_CONTEXTS.has(context.localName)) return null;
 
-      if (mode === 'sanitize') return template.content;
+      const parsingContext = inert.createElementNS(context.namespaceURI, context.localName);
+      parsingContext.innerHTML = markup as string;
+      const parsed = parsingContext instanceof HTMLTemplateElement ? parsingContext.content : parsingContext;
+      const findings = clean(parsed);
 
-      for (const finding of findings) {
-        const key = `${sink} ${finding}`;
-        if (warned.has(key) || warned.size >= MAX_WARNINGS) continue;
-        warned.add(key);
-        console.warn(`[braid:${fragmentId}] ${sink} wrote markup with ${finding}; capabilities.html "sanitize" would remove it`);
+      if (mode === 'report') {
+        for (const finding of findings) {
+          // keyed by what was found, not where: tag names are the writer's to choose, and a key per
+          // tag would let a flood of harmless ones use up the warnings before the one that matters
+          const key = `${sink} ${finding.kind}`;
+          if (warned.has(key)) continue;
+          if (warned.size === MAX_WARNINGS) {
+            warned.add(key);
+            console.warn(`[braid:${fragmentId}] further capabilities.html findings are not reported`);
+            continue;
+          }
+          if (warned.size > MAX_WARNINGS) continue;
+          warned.add(key);
+          console.warn(
+            `[braid:${fragmentId}] ${sink} wrote markup with ${finding.kind} on <${JSON.stringify(finding.element.slice(0, 32)).slice(1, -1)}>; ` +
+              `capabilities.html "sanitize" would remove it`,
+          );
+        }
+        return null;
       }
-      return null;
+
+      const fragment = inert.createDocumentFragment();
+      fragment.append(...parsed.childNodes);
+      return fragment;
     },
   };
 }
 
-/** Removes what may not run, and names what it removed. Mutates `root`. */
-function clean(root: DocumentFragment): string[] {
-  const findings: string[] = [];
-  // templates nest: their contents are separate fragments the tree walk does not enter
+interface Finding {
+  /** What was found: `an onerror handler`, `a <script>`. */
+  kind: string;
+  /** The element it was found on or as. */
+  element: string;
+}
+
+/** Removes what may run, and names what it removed. Mutates `root`. */
+function clean(root: ParentNode): Finding[] {
+  const findings: Finding[] = [];
+  const found = (kind: string, element: string) => findings.push({ kind, element });
+  // templates nest: their contents are separate fragments the selector does not enter
   const roots: ParentNode[] = [root];
   while (roots.length) {
     const current = roots.pop()!;
     for (const element of [...current.querySelectorAll('*')]) {
       const name = element.localName;
-      if (name === 'script') {
-        findings.push('a <script>');
+      const lowerName = name.toLowerCase();
+      // Every script, data blocks included: the compat boundary runs a `type="inert"` one in the
+      // realm, and a fragment's runtime markup has no need of either.
+      if (lowerName === 'script') {
+        found('a <script>', name);
         element.remove();
         continue;
       }
-      if (name === 'meta' && element.getAttribute('http-equiv')?.trim().toLowerCase() === 'refresh') {
-        findings.push('a meta refresh');
+      const removed = REMOVED_ELEMENTS.get(lowerName);
+      if (removed) {
+        found(removed, name);
         element.remove();
         continue;
       }
-      if (name === 'template') roots.push((element as HTMLTemplateElement).content);
+      if (lowerName === 'meta' && element.getAttribute('http-equiv')?.trim().toLowerCase() === 'refresh') {
+        found('a meta refresh', name);
+        element.remove();
+        continue;
+      }
+      // only the gateway writes these: the boundary turns them back into live preloads in the realm
+      if (lowerName === 'link' && /^inert-/i.test(element.getAttribute('rel')?.trim() ?? '')) {
+        found('an inert-* link', name);
+        element.remove();
+        continue;
+      }
+      if (lowerName === 'template') roots.push((element as HTMLTemplateElement).content);
 
       for (const attribute of [...element.attributes]) {
         const attributeName = attribute.name.toLowerCase();
-        if (/^on[a-z]+$/.test(attributeName)) {
-          findings.push(`an ${attributeName} handler on <${name}>`);
+        const attributeScheme = scheme(attribute.value);
+        if (/^on/.test(attributeName)) {
+          found(`an ${attributeName} handler`, name);
           element.removeAttribute(attribute.name);
-        } else if (attributeName === 'srcdoc') {
-          findings.push(`srcdoc on <${name}>`);
+        } else if (attributeName === 'srcdoc' || attributeName === 'data-script-type') {
+          found(attributeName, name);
           element.removeAttribute(attribute.name);
-        } else if (URL_ATTRIBUTES.includes(attributeName) && scheme(attribute.value) === 'javascript') {
-          findings.push(`a javascript: ${attributeName} on <${name}>`);
-          element.removeAttribute(attribute.name);
-        } else if (FRAME_ELEMENTS[name] === attributeName && ['data', 'blob'].includes(scheme(attribute.value) ?? '')) {
-          findings.push(`a ${scheme(attribute.value)}: document in <${name}>`);
+        } else if (FRAME_SOURCES.get(lowerName) === attributeName) {
+          // an allowlist, as the gateway's: a frame loads a document by URL, or none
+          if (attributeScheme !== undefined && attributeScheme !== 'http' && attributeScheme !== 'https' && attribute.value.trim().toLowerCase() !== 'about:blank') {
+            found(`a ${attributeScheme}: document`, name);
+            element.removeAttribute(attribute.name);
+          }
+        } else if (URL_ATTRIBUTES.has(attributeName) && attributeScheme === 'javascript') {
+          found(`a javascript: ${attributeName}`, name);
           element.removeAttribute(attribute.name);
         }
       }
@@ -111,7 +210,7 @@ function clean(root: DocumentFragment): string[] {
   return findings;
 }
 
-/** A URL's scheme as the URL parser reads it: tabs, newlines and surrounding controls ignored. */
+/** A URL's scheme as the URL parser reads it: tabs, newlines and leading controls ignored. */
 function scheme(value: string): string | undefined {
   // eslint-disable-next-line no-control-regex
   const url = value.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+/, '').toLowerCase();

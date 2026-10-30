@@ -54,6 +54,8 @@ const native = {
   fragmentAppend: DocumentFragment.prototype.append,
   fragmentPrepend: DocumentFragment.prototype.prepend,
   fragmentReplaceChildren: DocumentFragment.prototype.replaceChildren,
+  elementBefore: Element.prototype.before,
+  elementAfter: Element.prototype.after,
   shadowRootInnerHTML: Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'innerHTML')!,
 };
 
@@ -205,18 +207,24 @@ export function createFragmentBoundary(options: {
 
   function makeHtmlParsingOverrides(innerHTMLDescriptor: PropertyDescriptor): PropertyDescriptorMap {
     return {
-      // scripts parsed from html never execute (per spec), so parsing only needs stamp propagation
+      // Scripts parsed from html never execute (per spec), so parsing only needs stamp propagation.
+      // A fragment with an HTML policy has the markup parsed and cleaned first (`html-policy.ts`),
+      // and the result inserted natively, so the write means what the native setter would have.
       innerHTML: {
         configurable: true,
         enumerable: true,
         get(this: Element) {
           return innerHTMLDescriptor.get!.call(this);
         },
-        set(this: Element, value: string) {
-          const cleaned = htmlPolicy?.filter(String(value), 'innerHTML');
+        set(this: Element | ShadowRoot, value: string) {
+          // a shadow root's markup is parsed with its host for context, as the native setter does
+          const context = this instanceof ShadowRoot ? this.host : this;
+          const cleaned = htmlPolicy?.filter(value === null ? '' : value, context, 'innerHTML');
           if (cleaned) {
             // a template's markup is its content, not its children
-            (this instanceof HTMLTemplateElement ? this.content : this).replaceChildren(cleaned);
+            const target = this instanceof HTMLTemplateElement ? this.content : this;
+            if (target instanceof Element) native.elementReplaceChildren.call(target, cleaned);
+            else native.fragmentReplaceChildren.call(target, cleaned);
           } else {
             innerHTMLDescriptor.set!.call(this, value);
           }
@@ -244,24 +252,30 @@ export function createFragmentBoundary(options: {
       writable: true,
       value: function boundaryInsertAdjacentHTML(this: Element, position: InsertPosition, text: string) {
         const lowercasePosition = String(position).toLowerCase();
-        const cleaned = htmlPolicy?.filter(String(text), 'insertAdjacentHTML');
-        let result: void | undefined;
+        const outside = lowercasePosition === 'beforebegin' || lowercasePosition === 'afterend';
+        const inside = lowercasePosition === 'afterbegin' || lowercasePosition === 'beforeend';
+        const parent = this.parentNode;
+        // the native method's context and errors, so a policy changes nothing but what is removed:
+        // outside the element, its parent is the context, or a <body> when the parent is no element
+        const context = inside
+          ? this
+          : parent instanceof Element
+            ? parent
+            : this.ownerDocument.createElement('body');
+        const cleaned =
+          htmlPolicy && (inside || (outside && parent && parent.nodeType !== Node.DOCUMENT_NODE))
+            ? htmlPolicy.filter(text, context, 'insertAdjacentHTML')
+            : null;
         if (cleaned) {
-          const insert = {
-            beforebegin: () => this.before(cleaned),
-            afterbegin: () => this.prepend(cleaned),
-            beforeend: () => this.append(cleaned),
-            afterend: () => this.after(cleaned),
-          }[lowercasePosition];
-          if (!insert) throw new DOMException(`"${String(position)}" is not a valid insertAdjacentHTML position`, 'SyntaxError');
-          insert();
+          if (lowercasePosition === 'beforebegin') native.elementBefore.call(this, cleaned);
+          else if (lowercasePosition === 'afterbegin') native.elementPrepend.call(this, cleaned);
+          else if (lowercasePosition === 'beforeend') native.elementAppend.call(this, cleaned);
+          else native.elementAfter.call(this, cleaned);
         } else {
-          result = native.insertAdjacentHTML.call(this, position, text);
+          // also what throws for an unknown position, or outside an element with no parent
+          native.insertAdjacentHTML.call(this, position, text);
         }
-        stampTree(
-          lowercasePosition === 'afterbegin' || lowercasePosition === 'beforeend' ? this : this.parentNode ?? this,
-        );
-        return result;
+        stampTree(inside ? this : this.parentNode ?? this);
       },
     },
     cloneNode: {

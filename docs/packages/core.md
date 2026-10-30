@@ -263,31 +263,53 @@ meta refresh in its server-rendered HTML runs in the host page. Markup a compat 
 compiles that handler in the host page's realm, because the element belongs to the host document.
 An XSS in one fragment becomes script in the shell.
 
-`capabilities.html`, from the registry manifest or `initBraid({ capabilities })`, applies the
-gateway's rules to those writes:
+`capabilities.html`, from the registry manifest or `initBraid({ capabilities })`, applies rules
+like the gateway's to those writes:
 
 ```jsonc
 "capabilities": { "html": "report" }   // then "sanitize"
 ```
 
-- **`"sanitize"` removes what could run:**
-  - `<script>` elements;
+- **`"sanitize"` removes what could run, or make Braid run something:**
+  - every `<script>`, data blocks included (the compat boundary would run a `type="inert"` one in
+    the realm);
   - `on*` attributes;
-  - `javascript:` URLs in `href`, `src`, `action`, `formaction` and `xlink:href`;
-  - `srcdoc`, and `data:`/`blob:` frame sources;
-  - `<meta http-equiv="refresh">`.
-
-  Everything else is written as before. The markup is parsed in an inert `<template>` and the
-  cleaned nodes are inserted directly. It is never serialized and parsed a second time, because a
-  second parse in a different context is how sanitizers get bypassed.
-- **`"report"` writes the markup unchanged.** It warns once per distinct finding, with the
-  fragment, the sink, and what `"sanitize"` would remove. It parses every write twice to find out,
-  so use it in development and staging, then switch to `"sanitize"`.
+  - `javascript:` URLs in `href`, `src`, `action`, `formaction`, `xlink:href` and `data`;
+  - frame documents (`iframe`, `frame`, `embed`, `object`) from anything but an `http(s)` URL,
+    a relative one, or `about:blank`, as the gateway does, and `srcdoc`;
+  - SVG animation (`animate`, `set`, `animateMotion`, `animateTransform`, `discard`), which can set
+    a link's `href`;
+  - `<meta http-equiv="refresh">` and `<base>`;
+  - Braid's own elements (`fragment-slot`, `braid-late`) and the markers only the gateway writes
+    (`link[rel^="inert-"]`, `data-script-type`). A written `<fragment-slot entry>` would boot a
+    realm.
+- **Writes mean what they meant.** Markup is parsed by the browser's own parser, using an element
+  like the target for context, in a document where nothing loads or runs, and the cleaned nodes
+  are inserted. So `svg.innerHTML` yields SVG, a `<tr>` written into a table gets its `<tbody>`,
+  and `null` clears.
+  - Writes whose result is only text (into `textarea`, `style`, `script`, `title`) are written
+    natively.
+  - So are `TrustedHTML` values, which the host's own policy already vetted.
+  - Any other value is converted to a string and cleaned.
+  - Nothing is serialized and parsed a second time, which is how sanitizers get bypassed.
+- **Where it differs from the gateway.** The gateway leaves `javascript:` on links and forms
+  (`a`, `area`, `form`), because a user must click them, and keeps scripts inert rather than
+  removing them. `"sanitize"` removes both.
+- **`"report"` writes the markup unchanged.** It warns once per kind of finding and sink, up to 50,
+  then says it has stopped. It parses every write twice to find out, so use it in development and
+  staging, then switch to `"sanitize"`.
 - **What is covered.** `innerHTML` on the fragment's elements and shadow root, and
   `insertAdjacentHTML`: the sinks the compat boundary already intercepts.
-- **What is not covered.**
-  - `outerHTML`, `setHTMLUnsafe`, and `Range.createContextualFragment`;
+- **What is not covered:**
+  - `outerHTML`, `setHTMLUnsafe` and `Range.createContextualFragment`;
+  - markup parsed elsewhere and then inserted: `DOMParser`, `document.implementation`,
+    `jQuery.parseHTML` without a context;
+  - `document.write`, and native setters a fragment captured before the boundary stamped it;
   - attributes set one by one (`img.setAttribute('onerror', …)`, `a.href = 'javascript:…'`);
+  - CSS: a written `<style>`, stylesheet link or `style` attribute can still restyle or overlay the
+    host page;
+  - custom elements the host defines: they upgrade wherever they are inserted, so their tags in
+    written markup are as capable as the elements are;
   - contract, custom-element and untrusted fragments. An untrusted fragment's DOM is its own
     document anyway.
 - **Legacy apps may depend on what it removes.** jQuery-era code often puts `onclick="…"` inside
