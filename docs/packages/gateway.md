@@ -154,24 +154,42 @@ the slot waits with it, for up to the fragment's `timeoutMs`.
 ```
 
 - **Only a fragment that would hold the stream is moved.** If it has answered by the time its
-  slot streams, it is inlined exactly as `in-order` would inline it, byte for byte.
+  slot streams, or within one more turn of the event loop, it is inlined exactly as `in-order`
+  would inline it, byte for byte.
 - **Otherwise the slot is marked and the stream moves on.** The slot gets `data-braid-deferred`
-  and the rest of the page streams immediately. Before `</body>`, each late fragment's markup
-  follows as soon as it settles, in a hidden `<braid-late for="…">` carrying the same declarative
-  shadow root a pierce would. The client moves it into the slot.
+  and the markup after it streams immediately. Before `</body>`, each late fragment follows as
+  soon as it settles, in a hidden `<braid-late>` carrying the same declarative shadow root a pierce
+  would. The client moves it into the slot. A token minted per response pairs the two, so no other
+  markup can fill the slot.
 - **Failures fall back the same way.** A late fragment that fails or times out sends an empty
   `<braid-late>`, marked with its fallback, and the slot boots client-side. `error-html` content
   is delivered like any other content.
-- **A longer `timeoutMs` costs the rest of the page nothing now.** Waiting no longer holds up the
-  markup after the slot, so you can give a slow fragment the time it needs instead of falling back.
+- **"Answered" means its response headers arrived.** A fragment that sends headers quickly and then
+  streams a slow body is inlined, and its body still holds the stream. Late fragments are sent one
+  at a time in the order their headers arrive, so a slow body also delays the late fragments after
+  it.
 
-What it does not change:
+Use it for fragments below the fold or off the critical path. Keep in-order:
 
-- **`DOMContentLoaded` still waits for late fragments.** The response is open until they settle,
-  so deferred and module scripts in the host still run after them. The win is that the markup
-  after the slot parses and paints first.
-- **Layout can shift when the content lands.** Reserve the slot's space (`min-height`,
-  `aspect-ratio`) in host CSS, or style `fragment-slot[data-braid-deferred]` as a skeleton.
+- **The fragment that holds the page's largest content (the LCP element).** Moving it to the end
+  of the document delays that paint.
+- **Any fragment whose space you cannot reserve.** Without the space, its content landing late
+  shifts the page.
+
+What it does not change, and what to plan for:
+
+- **The rest of the page still waits for late fragments.** The response stays open until they
+  settle, so `DOMContentLoaded`, the `load` event, the host's `defer` and module scripts (its
+  hydration), eager fragment boots, and anything started on `load` all wait up to that fragment's
+  `timeoutMs`. What gets earlier is the markup after the slot, which parses and paints at once.
+  Keep `timeoutMs` modest, and load host scripts with `async` where they can run early.
+- **Late content paints when the client runtime runs.** Load it as a classic script in `<head>`,
+  or as `type="module" async`, so each late fragment moves in as it arrives. Loaded with `defer`, or
+  as a plain module script, it waits for the whole document, and so for the slowest late fragment.
+- **Reserve the slot's space.** Use `min-height` or `aspect-ratio` on the slot, or a skeleton on
+  `fragment-slot[data-braid-deferred]`, sized to the fragment's usual height. Content taller than
+  the reservation still shifts the page. A fragment that times out is fetched again client-side,
+  so its content lands later still.
 - **No inline script is added.** The move is done by the `<braid-late>` element the client runtime
   defines, so a strict CSP needs nothing new. Without JavaScript the late content stays hidden, and
   the slot shows whatever the host put in it.
