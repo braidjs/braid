@@ -34,6 +34,7 @@ import {
 import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
 import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
 import { lateContentArrival } from './late-content.js';
+import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
 
 /**
  * What the slot reports about its fragment.
@@ -545,7 +546,7 @@ export class FragmentSlot extends HTMLElement {
       const [htmlResult, realm] = await failFast(Promise.all([
         piercedContentRoot
           ? Promise.resolve({ ok: true as const, html: null })
-          : fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
+          : (takePrefetchedDocument(fragmentId, routeSrcUrl, signal) ?? fetchFragmentHtml(fragmentId, routeSrcUrl, signal)).then(
               ({ html, isHtml }) => {
                 // nothing of a gated fragment goes on screen before its markup prerequisites hold
                 if (earlyPrerequisites) earlyPrerequisites.then(() => paint(html, isHtml), () => undefined);
@@ -1090,6 +1091,29 @@ function redactedLocation(location: string | null, base: string): string | null 
  * kind of document it prepares (scripts inert, handlers stripped). Anything else is not safe to put
  * on screen ahead of the adapter.
  */
+/**
+ * Starts loading a fragment before its slot exists — from a link's hover, or a router's preload
+ * hook — so a navigation that is about to mount it finds the work already in flight.
+ *
+ * ```ts
+ * link.addEventListener('pointerenter', () => prefetchFragment('billing', '/billing/invoices'));
+ * ```
+ *
+ * `route` is what the slot will render: the destination page's path for a routed fragment, or the
+ * slot's `src` for a widget. Three things start:
+ *
+ * - the fragment's document, held for the next slot of that fragment and route to mount within
+ *   ten seconds (`PREFETCH_TTL_MS`) — so that slot makes no document request of its own;
+ * - the realm stub, as a `<link rel="prefetch">` the realm's iframe then loads from the HTTP cache;
+ * - the scripts the document names, the same way, once it arrives.
+ *
+ * Compat fragments only: contract and untrusted fragments load no Braid document. Calling it again
+ * for the same fragment and route while a prefetch is held does nothing.
+ */
+export function prefetchFragment(fragmentId: string, route: string): void {
+  startPrefetch(fragmentId, route, (url, signal) => fetchFragmentHtml(fragmentId, url, signal));
+}
+
 export async function fetchFragmentHtml(
   fragmentId: string,
   routeSrcUrl: URL,
