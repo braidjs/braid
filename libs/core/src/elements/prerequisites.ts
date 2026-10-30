@@ -61,28 +61,48 @@ interface InFlight {
   promise: Promise<PrerequisiteOutcome>;
   controller: AbortController;
   waiters: number;
+  settled: boolean;
+  timedOut: boolean;
 }
 
 /** One resolution per key at a time, shared by every slot waiting on it. */
 const inFlight = new Map<string, InFlight>();
 
 function shared(key: string, resolver: PrerequisiteResolver, timeoutMs: number): InFlight {
-  let entry = inFlight.get(key);
-  if (!entry) {
-    const controller = new AbortController();
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);
-    const promise = new Promise<PrerequisiteOutcome>((resolve, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      Promise.resolve()
-        .then(() => resolver(key, { signal }))
-        .then(resolve, reject);
-    }).finally(() => {
-      if (inFlight.get(key) === entry) inFlight.delete(key);
-    });
-    entry = { promise, controller, waiters: 0 };
-    inFlight.set(key, entry);
-  }
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const controller = new AbortController();
+  const entry: InFlight = { promise: undefined as never, controller, waiters: 0, settled: false, timedOut: false };
+  // a timer rather than AbortSignal.timeout, so a resolution that settles stops it: the resolver's
+  // signal must not abort later under a resolver still using it (a background refresh, say)
+  const timer = setTimeout(() => {
+    entry.timedOut = true;
+    controller.abort(new DOMException(`no answer within ${timeoutMs} ms`, 'TimeoutError'));
+  }, timeoutMs);
+
+  entry.promise = new Promise<PrerequisiteOutcome>((resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    Promise.resolve()
+      .then(() => resolver(key, { signal: controller.signal }))
+      .then(resolve, reject);
+  }).finally(() => {
+    entry.settled = true;
+    clearTimeout(timer);
+    if (inFlight.get(key) === entry) inFlight.delete(key);
+  });
+  // every waiter handles it; this keeps one abandoned by all from surfacing as unhandled
+  entry.promise.catch(() => undefined);
+
+  inFlight.set(key, entry);
   return entry;
+}
+
+/** A waiter leaving; the last one out abandons a resolution still running, and retires it at once. */
+function leave(key: string, entry: InFlight): void {
+  if (--entry.waiters > 0 || entry.settled) return;
+  if (inFlight.get(key) === entry) inFlight.delete(key);
+  entry.controller.abort(new DOMException('no fragment is waiting', 'AbortError'));
 }
 
 /**
@@ -94,56 +114,63 @@ function shared(key: string, resolver: PrerequisiteResolver, timeoutMs: number):
  */
 export async function awaitPrerequisites(keys: readonly string[], fragmentId: string, signal: AbortSignal): Promise<void> {
   const timeoutMs = getBraidConfig().prerequisiteTimeoutMs ?? DEFAULT_PREREQUISITE_TIMEOUT_MS;
+  if (signal.aborted) throw signal.reason;
 
-  await Promise.all(
-    keys.map(async (key) => {
-      const resolver = resolverFor(key);
-      if (!resolver) {
-        throw new BraidError(`no prerequisite resolver handles "${key}"`, {
-          fragmentId,
-          stage: 'prerequisite',
-          fixHint: `register one: initBraid({ prerequisites: { '${key}': (key, { signal }) => … } }), or a pattern like '${key.split(':')[0]}:*'`,
-        });
-      }
+  // the first key to fail ends the wait for the rest, so a user who cannot see the fragment does
+  // not go on to trigger its other prerequisites (an SSO hop for a session it will never use)
+  const done = new AbortController();
+  const waiting = AbortSignal.any([signal, done.signal]);
 
-      const entry = shared(key, resolver, timeoutMs);
-      entry.waiters++;
-      const leave = () => {
-        if (--entry.waiters === 0) entry.controller.abort(new DOMException('no fragment is waiting', 'AbortError'));
-      };
+  try {
+    await Promise.all(keys.map((key) => awaitOne(key, fragmentId, waiting, timeoutMs)));
+  } finally {
+    done.abort();
+  }
+}
 
-      let outcome: PrerequisiteOutcome;
-      try {
-        outcome = await new Promise<PrerequisiteOutcome>((resolve, reject) => {
-          if (signal.aborted) return reject(signal.reason);
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-          entry.promise.then(resolve, reject);
-        });
-      } catch (error) {
-        if (signal.aborted) throw error;
-        const timedOut = error instanceof DOMException && error.name === 'TimeoutError';
-        throw new BraidError(
-          timedOut ? `the prerequisite "${key}" did not resolve within ${timeoutMs} ms` : `the prerequisite "${key}" failed`,
-          { fragmentId, stage: 'prerequisite', cause: error, fixHint: `check the resolver registered for "${key}"` },
-        );
-      } finally {
-        leave();
-      }
+async function awaitOne(key: string, fragmentId: string, signal: AbortSignal, timeoutMs: number): Promise<void> {
+  const resolver = resolverFor(key);
+  if (!resolver) {
+    const pattern = key.includes(':') ? `'${key.slice(0, key.indexOf(':') + 1)}*'` : `'${key}'`;
+    throw new BraidError(`no prerequisite resolver handles "${key}"`, {
+      fragmentId,
+      stage: 'prerequisite',
+      fixHint: `register one: initBraid({ prerequisites: { ${pattern}: (key, { signal }) => … } })`,
+    });
+  }
+  if (signal.aborted) throw signal.reason;
 
-      if (outcome === 'not-entitled') {
-        throw new NotEntitledError(`not entitled to "${key}"`, {
-          fragmentId,
-          stage: 'prerequisite',
-          fixHint: 'expected for a user without access: the slot shows its fallback',
-        });
-      }
-      if (outcome !== 'ready') {
-        throw new BraidError(`the prerequisite "${key}" resolved to ${JSON.stringify(outcome)}`, {
-          fragmentId,
-          stage: 'prerequisite',
-          fixHint: "a resolver returns 'ready' or 'not-entitled'",
-        });
-      }
-    }),
-  );
+  const entry = shared(key, resolver, timeoutMs);
+  entry.waiters++;
+
+  let outcome: PrerequisiteOutcome;
+  try {
+    outcome = await new Promise<PrerequisiteOutcome>((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      entry.promise.then(resolve, reject);
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new BraidError(
+      entry.timedOut ? `the prerequisite "${key}" did not resolve within ${timeoutMs} ms` : `the prerequisite "${key}" failed`,
+      { fragmentId, stage: 'prerequisite', cause: error, fixHint: `check the resolver registered for "${key}"` },
+    );
+  } finally {
+    leave(key, entry);
+  }
+
+  if (outcome === 'not-entitled') {
+    throw new NotEntitledError(`not entitled to "${key}"`, {
+      fragmentId,
+      stage: 'prerequisite',
+      fixHint: 'expected for a user without access: the slot shows its fallback',
+    });
+  }
+  if (outcome !== 'ready') {
+    throw new BraidError(`the prerequisite "${key}" resolved to ${JSON.stringify(outcome)}`, {
+      fragmentId,
+      stage: 'prerequisite',
+      fixHint: "a resolver returns 'ready' or 'not-entitled'",
+    });
+  }
 }

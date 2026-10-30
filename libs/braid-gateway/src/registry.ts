@@ -301,6 +301,12 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     );
   }
 
+  if (
+    manifest.requires !== undefined &&
+    (!Array.isArray(manifest.requires) || manifest.requires.some((key) => typeof key !== 'string' || key.trim() === ''))
+  ) {
+    throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
+  }
   if (manifest.redirect !== undefined && manifest.redirect !== 'error' && manifest.redirect !== 'navigate') {
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" declares redirect: "${String(manifest.redirect)}" — ` +

@@ -93,6 +93,11 @@ describe('subgraph() limits on what a team registry can declare', () => {
     expect(granted.capabilities).toEqual({ context: { read: ['cart'] } });
   });
 
+  it("drops the team's own requires: which of the shell's resolvers run is the org's to decide", async () => {
+    const [manifest] = await team({ requires: ['session:any-audience'] });
+    expect(manifest.requires).toBeUndefined();
+  });
+
   it('keeps pierce patterns inside the routes the org gave the subgraph', async () => {
     await expect(team({ pierce: ['/orders', '/orders/*'] }, { routes: ['/orders/'] })).resolves.toHaveLength(1);
     await expect(team({ pierce: ['/orders/*', '/login'] }, { routes: ['/orders'] })).rejects.toThrow(

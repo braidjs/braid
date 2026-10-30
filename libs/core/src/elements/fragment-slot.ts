@@ -163,6 +163,8 @@ export class FragmentSlot extends HTMLElement {
   #bootScheduled = false;
   /** Set by reload(): a reload must re-fetch, never re-adopt the pierced content. */
   #forceFetch = false;
+  /** Which boot is current: a teardown or a newer boot makes an older one's outcome moot. */
+  #bootGeneration = 0;
 
   get state(): FragmentSlotState {
     return this.#state;
@@ -287,6 +289,7 @@ export class FragmentSlot extends HTMLElement {
     this.#liveness = undefined;
     this.#channel = undefined;
     this.#abortController = undefined;
+    this.#bootGeneration++;
 
     // Nothing mounted: the pre-Weave synchronous path, still the right one for an idle slot.
     if (!channel || !abortController) {
@@ -349,6 +352,7 @@ export class FragmentSlot extends HTMLElement {
     // A close still negotiating owns the shadow root until it finishes. Booting into it first
     // would render content that the completing close would then clear.
     await this.#closing;
+    const generation = ++this.#bootGeneration;
 
     try {
       if (!fragmentId) {
@@ -374,13 +378,17 @@ export class FragmentSlot extends HTMLElement {
 
       this.#setState('loading');
 
+      // Prerequisites the host's markup declares, on every tier: a gate that silently did not apply
+      // to some fragments would be worse than none.
+      const markupRequires = parseRequires(this.getAttribute('requires'));
+
       if (this.getAttribute('trust') === 'untrusted') {
-        await this.#bootUntrusted(fragmentId);
+        await this.#bootUntrusted(fragmentId, markupRequires);
         return;
       }
 
       if (this.getAttribute('adapter') === 'contract') {
-        await this.#bootContract(fragmentId);
+        await this.#bootContract(fragmentId, markupRequires);
         return;
       }
 
@@ -421,10 +429,13 @@ export class FragmentSlot extends HTMLElement {
 
       // Prerequisites the host's markup declares start now, alongside the realm and the document;
       // the manifest's arrive with the realm stub. Either way the fragment's code waits for them.
-      const markupRequires = parseRequires(this.getAttribute('requires'));
       const earlyPrerequisites = markupRequires.length ? awaitPrerequisites(markupRequires, fragmentId, signal) : null;
       // awaited below; until then a failure must not surface as an unhandled rejection
       earlyPrerequisites?.catch(() => undefined);
+      // A failing prerequisite ends the boot at once, not after the realm and the handshake: the
+      // fallback should not wait a round trip on a fragment the user was never going to see.
+      const failFast = <T>(step: Promise<T>): Promise<T> =>
+        earlyPrerequisites ? Promise.race([step, earlyPrerequisites.then(() => step)]) : step;
 
       /**
        * Boot the realm and fetch the fragment's document at the same time, unless it was
@@ -450,18 +461,20 @@ export class FragmentSlot extends HTMLElement {
         painted = true;
       };
 
-      const [htmlResult, realm] = await Promise.all([
+      const [htmlResult, realm] = await failFast(Promise.all([
         piercedContentRoot
           ? Promise.resolve({ ok: true as const, html: null })
           : fetchFragmentHtml(fragmentId, routeSrcUrl, signal).then(
               ({ html, isHtml }) => {
-                paint(html, isHtml);
+                // nothing of a gated fragment goes on screen before its markup prerequisites hold
+                if (earlyPrerequisites) earlyPrerequisites.then(() => paint(html, isHtml), () => undefined);
+                else paint(html, isHtml);
                 return { ok: true as const, html };
               },
               (error: unknown) => ({ ok: false as const, error }),
             ),
         createRealm('compat-http', { fragmentId, routeUrl, bound, signal }),
-      ]);
+      ]));
 
       // The gateway stamps the manifest-declared adapter onto the realm stub; unknown adapters
       // fail as a named error, and an undeclared adapter resolves to the default (compat).
@@ -573,7 +586,7 @@ export class FragmentSlot extends HTMLElement {
           props: structuredClone(this.#props),
         }),
       });
-      await opened;
+      await failFast(opened);
 
       if (signal.aborted) return;
 
@@ -632,7 +645,8 @@ export class FragmentSlot extends HTMLElement {
         console.debug(`[braid:${fragmentId}] ready`, { slot: this });
       }
     } catch (error) {
-      if (this.#abortController?.signal.aborted) return;
+      // a boot a teardown or a newer boot overtook has nothing to report — its abort is not a failure
+      if (generation !== this.#bootGeneration || this.#abortController?.signal.aborted) return;
 
       this.#setState('error');
       const braidError =
@@ -644,8 +658,11 @@ export class FragmentSlot extends HTMLElement {
               cause: error,
             });
 
-      // a user without access to a prerequisite is an outcome, not a failure: fallback, no alarm
-      if (braidError instanceof NotEntitledError) {
+      // a user without access to a prerequisite is an outcome, not a failure: fallback, no alarm,
+      // and none of the fragment's content left in the slot
+      const notEntitled = braidError instanceof NotEntitledError;
+      if (notEntitled) {
+        this.shadowRoot?.querySelector('braid-document')?.replaceChildren();
         if (isDevMode()) console.debug(`[braid:${fragmentId}] ${braidError.message}; showing the fallback`);
       } else {
         console.error(braidError);
@@ -657,6 +674,8 @@ export class FragmentSlot extends HTMLElement {
             stage: braidError.stage,
             fixHint: braidError.fixHint,
             error: braidError,
+            // an outcome, not a failure: a host routing braid:error to monitoring can skip it
+            ...(notEntitled ? { notEntitled: true } : {}),
           },
         }),
       );
@@ -679,7 +698,7 @@ export class FragmentSlot extends HTMLElement {
    * negotiation, capabilities, liveness and teardown — because all of it was built against the
    * boundary rather than against compat's machinery.
    */
-  async #bootContract(fragmentId: string): Promise<void> {
+  async #bootContract(fragmentId: string, requires: readonly string[]): Promise<void> {
     const entry = this.getAttribute('entry');
     if (!entry) {
       throw new BraidError('a contract fragment needs an entry module', {
@@ -702,6 +721,10 @@ export class FragmentSlot extends HTMLElement {
     const contentRoot = document.createElement('braid-document');
     shadowRoot.replaceChildren(styleSheet, contentRoot);
     ensureFallbackSlot(shadowRoot);
+
+    // before anything of the fragment exists: no realm, nothing mounted
+    if (requires.length) await awaitPrerequisites(requires, fragmentId, signal);
+    if (signal.aborted) return;
 
     // The realm's base is the entry's own directory, not a gateway namespace: a contract fragment
     // fetches its assets from wherever it is hosted, directly.
@@ -807,7 +830,7 @@ export class FragmentSlot extends HTMLElement {
    * same contract negotiation, the same liveness, the same negotiated teardown. That is the return
    * on having built the transport before the tier that needed it.
    */
-  async #bootUntrusted(fragmentId: string): Promise<void> {
+  async #bootUntrusted(fragmentId: string, requires: readonly string[]): Promise<void> {
     const src = this.getAttribute('src');
     if (!src) {
       throw new BraidError('an untrusted fragment needs an explicit cross-origin src', {
@@ -826,6 +849,10 @@ export class FragmentSlot extends HTMLElement {
     styleSheet.textContent = SLOT_STYLES;
     shadowRoot.replaceChildren(styleSheet);
     ensureFallbackSlot(shadowRoot);
+
+    // before anything of the fragment exists: no frame, no connection
+    if (requires.length) await awaitPrerequisites(requires, fragmentId, signal);
+    if (signal.aborted) return;
 
     /**
      * On this tier the capability block is not advisory: `sandbox` and `permissions` become real

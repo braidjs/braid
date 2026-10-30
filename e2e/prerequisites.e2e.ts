@@ -20,7 +20,7 @@ beforeAll(async () => {
   browser = await launch();
   host = await startHost({
     gateway: {
-      registry: [fragment('kcd'), fragment('kcd-two'), fragment('payroll', { requires: ['group:hr'] })],
+      registry: [fragment('kcd'), fragment('kcd-two'), fragment('payroll', { requires: ['group:hr'] }), fragment('secret'), fragment('waiting')],
     },
     head: `<script>
       window.__calls = [];
@@ -29,13 +29,17 @@ beforeAll(async () => {
     braidSource: `{
       prerequisites: {
         'session:*': function (key) { window.__calls.push(key); return window.__gate.then(function () { return 'ready'; }); },
-        'group:hr': function () { return 'not-entitled'; },
+        'group:hr': function () { window.__calls.push('group:hr'); return 'not-entitled'; },
+        'never': function () { return new Promise(function () {}); },
       },
     }`,
     body: `
       <fragment-slot name="kcd" requires="session:kcd"></fragment-slot>
       <fragment-slot name="kcd-two" requires="session:kcd"></fragment-slot>
-      <fragment-slot name="payroll"><p slot="fallback" id="payroll-fallback">Payroll is not available to you.</p></fragment-slot>`,
+      <fragment-slot name="payroll"><p slot="fallback" id="payroll-fallback">Payroll is not available to you.</p></fragment-slot>
+      <fragment-slot name="secret" requires="group:hr"><p slot="fallback" id="secret-fallback">no</p></fragment-slot>
+      <fragment-slot name="waiting" requires="never"></fragment-slot>
+      <fragment-slot name="vendor" trust="untrusted" src="http://localhost:1/widget" requires="group:hr"><p slot="fallback" id="vendor-fallback">no</p></fragment-slot>`,
   });
 });
 
@@ -59,7 +63,7 @@ it("holds a fragment's code until its prerequisite is ready, resolving a shared 
   await page.waitForSelector('fragment-slot[name="kcd"]:is([state="ready"], [state="healthy"])', { state: 'attached' });
   await page.waitForSelector('fragment-slot[name="kcd-two"]:is([state="ready"], [state="healthy"])', { state: 'attached' });
   expect(await ran(page)).toEqual(expect.arrayContaining(['kcd', 'kcd-two']));
-  expect(await page.evaluate(() => (window as unknown as { __calls: string[] }).__calls)).toEqual(['session:kcd']);
+  expect(await page.evaluate(() => (window as unknown as { __calls: string[] }).__calls.filter((k) => k.startsWith('session:')))).toEqual(['session:kcd']);
   await page.close();
 });
 
@@ -75,3 +79,46 @@ it('shows the fallback, without logging a failure, to a user who is not entitled
   expect(errors).toEqual([]);
   await page.close();
 });
+
+it('never puts a markup-gated fragment on screen for a user who is not entitled', async () => {
+  const page = await browser.newPage();
+  await page.goto(host.url);
+  const seen: boolean[] = [];
+  for (let i = 0; i < 8; i++) {
+    seen.push(await page.evaluate(() => !!document.querySelector('fragment-slot[name="secret"]')?.shadowRoot?.querySelector('#secret-content')));
+    await page.waitForTimeout(50);
+  }
+  await page.waitForSelector('fragment-slot[name="secret"][state="error"]', { state: 'attached' });
+  expect(seen.every((present) => !present)).toBe(true);
+  expect(await page.isVisible('#secret-fallback')).toBe(true);
+  await page.close();
+});
+
+it('gates an untrusted fragment too: no frame is created for a user who is not entitled', async () => {
+  const page = await browser.newPage();
+  await page.goto(host.url);
+  await page.waitForSelector('fragment-slot[name="vendor"][state="error"]', { state: 'attached' });
+  expect(await page.evaluate(() => document.querySelector('fragment-slot[name="vendor"]')!.shadowRoot!.querySelector('iframe'))).toBeNull();
+  expect(await page.isVisible('#vendor-fallback')).toBe(true);
+  await page.close();
+});
+
+it('reports nothing when a slot is removed while it waits', async () => {
+  const page = await browser.newPage();
+  const errors: string[] = [];
+  page.on('console', (message) => message.type() === 'error' && errors.push(message.text()));
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await page.goto(host.url);
+  await page.evaluate(() => {
+    const slot = document.querySelector('fragment-slot[name="waiting"]')!;
+    (window as unknown as { __events: string[] }).__events = [];
+    slot.addEventListener('braid:error', () => (window as unknown as { __events: string[] }).__events.push('error'));
+  });
+  await page.waitForTimeout(400);
+  await page.evaluate(() => document.querySelector('fragment-slot[name="waiting"]')!.remove());
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { __events: string[] }).__events)).toEqual([]);
+  expect(errors).toEqual([]);
+  await page.close();
+});
+

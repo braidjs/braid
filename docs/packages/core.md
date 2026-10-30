@@ -124,16 +124,27 @@ or in the registry manifest:
 { "id": "payroll", "requires": ["group:hr"] }
 ```
 
-- **The fragment's code waits; its content does not.** A document fetched by the slot can still
-  paint inertly while the prerequisites resolve.
-- **When resolution starts:** keys from markup start resolving as the slot boots, alongside the
-  realm and document fetches. Keys from the manifest start when the realm stub arrives.
+- **The fragment's code waits for every key.**
+  - **Markup keys** (`requires` on the slot) start resolving as the slot boots, alongside the
+    realm and document fetches. Nothing of the fragment goes on screen until they hold.
+  - **Manifest keys** start when the realm stub arrives. The fragment's document may already be on
+    screen, inert, by then.
+  - **Every tier honours markup keys:** compat, contract and untrusted. On untrusted and contract
+    slots no frame or realm is created until the keys hold. Manifest keys exist only where the
+    gateway serves a realm stub.
+- **Not access control.** A prerequisite is about the experience. Withholding a fragment from users
+  who may not see it is the gateway's `access.fetch.roles`, which keeps its markup from ever
+  reaching them. A federated registry drops `requires` from team manifests, because which of the
+  shell's resolvers run is the org's decision.
 - **One resolution per key at a time,** however many slots wait on it. The resolver's `signal`
-  aborts once no slot is waiting.
+  aborts if every waiting slot goes away before it answers, or at the timeout, but never after it
+  answers. Answers are not cached: a later boot asks again, so a resolver should be cheap when
+  the thing is already ready. Removing a slot while it waits reports nothing.
 - **Outcomes:**
   - `'ready'` boots the fragment.
-  - `'not-entitled'` shows the slot's `fallback` and reports a `braid:error` with stage
-    `prerequisite`, without logging it as a failure.
+  - `'not-entitled'` shows the slot's `fallback`, clears any of the fragment's content, and
+    reports a `braid:error` with stage `prerequisite` and `notEntitled: true`, without logging it
+    as a failure. The error is a `NotEntitledError`. The fragment's other keys stop resolving.
   - A throw, any other value, or no answer within `prerequisiteTimeoutMs` (15 s by default) is
     a `prerequisite` error.
 - **Braid doesn't know what a key means.** A recipe for a page whose fragments use different

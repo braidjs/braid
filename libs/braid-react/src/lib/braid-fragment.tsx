@@ -31,6 +31,8 @@ export interface BraidFragmentProps {
   src?: string;
   /** Props handed to the fragment. Structured-cloned across the realm boundary. */
   props?: Record<string, unknown>;
+  /** Mount prerequisites the fragment waits for, space-separated (see `initBraid({ prerequisites })`). */
+  requires?: string;
   onReady?: (detail: { fragmentId: string }) => void;
   onError?: (detail: BraidFragmentError) => void;
   onFragmentEvent?: (detail: BraidFragmentEvent) => void;
@@ -65,6 +67,7 @@ export function BraidFragment({
   name,
   src,
   props,
+  requires,
   onReady,
   onError,
   onFragmentEvent,
@@ -121,6 +124,7 @@ export function BraidFragment({
       ref={slotRef}
       name={name}
       {...(src === undefined ? {} : { src })}
+      {...(requires === undefined ? {} : { requires })}
       class={className}
       style={style}
     />

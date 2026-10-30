@@ -79,6 +79,65 @@ describe('awaitPrerequisites()', () => {
   });
 });
 
+describe('awaitPrerequisites() at the edges', () => {
+  afterEach(() => setBraidConfig({ prerequisites: {}, prerequisiteTimeoutMs: 15_000 }));
+
+  it('joins nothing and leaves nothing unhandled when its signal is already aborted', async () => {
+    const resolver = vi.fn<PrerequisiteResolver>(() => new Promise(() => undefined));
+    setBraidConfig({ prerequisites: { k: resolver } });
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const aborted = AbortSignal.abort();
+    await expect(awaitPrerequisites(['k'], 'x', aborted)).rejects.toBe(aborted.reason);
+    await new Promise((r) => setTimeout(r, 10));
+    process.off('unhandledRejection', unhandled);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('starts a fresh resolution for a slot that arrives after every earlier one left', async () => {
+    const resolver = vi.fn<PrerequisiteResolver>(() => new Promise(() => undefined));
+    setBraidConfig({ prerequisites: { k: resolver } });
+    const first = new AbortController();
+    const abandoned = awaitPrerequisites(['k'], 'a', first.signal).catch(() => 'left');
+    await Promise.resolve();
+    first.abort();
+    await abandoned;
+
+    setBraidConfig({ prerequisites: { k: vi.fn<PrerequisiteResolver>(() => 'ready') } });
+    await expect(awaitPrerequisites(['k'], 'b', new AbortController().signal)).resolves.toBeUndefined();
+  });
+
+  it("does not abort a resolver's signal after it has answered", async () => {
+    let seen: AbortSignal | undefined;
+    setBraidConfig({ prerequisiteTimeoutMs: 20, prerequisites: { k: (_key, { signal }) => ((seen = signal), 'ready') } });
+    await awaitPrerequisites(['k'], 'x', new AbortController().signal);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(seen?.aborted).toBe(false);
+  });
+
+  it('stops waiting on the other keys once one is not entitled', async () => {
+    let sessionSignal: AbortSignal | undefined;
+    setBraidConfig({
+      prerequisites: {
+        'group:hr': () => 'not-entitled',
+        'session:*': (_key, { signal }) => ((sessionSignal = signal), new Promise(() => undefined)),
+      },
+    });
+    await expect(awaitPrerequisites(['session:hr', 'group:hr'], 'payroll', new AbortController().signal)).rejects.toBeInstanceOf(
+      NotEntitledError,
+    );
+    expect(sessionSignal?.aborted).toBe(true);
+  });
+
+  it("names a resolver's own TimeoutError a failure, not the prerequisite timeout", async () => {
+    setBraidConfig({ prerequisites: { k: () => Promise.reject(new DOMException('upstream', 'TimeoutError')) } });
+    const error = await awaitPrerequisites(['k'], 'x', new AbortController().signal).catch((e) => e);
+    expect(error.message).toContain('the prerequisite "k" failed');
+    expect(error.message).not.toContain('did not resolve');
+  });
+});
+
 describe('parseRequires()', () => {
   it('reads an attribute or a manifest list, dropping blanks and duplicates', () => {
     expect(parseRequires(' session:a  flag:b session:a ')).toEqual(['session:a', 'flag:b']);

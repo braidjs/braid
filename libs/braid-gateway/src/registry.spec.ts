@@ -12,6 +12,13 @@ describe('normalizeManifest()', () => {
     expect(resolved.fallback).toBe('placeholder');
   });
 
+  it('accepts requires as a list of keys, and refuses anything else', () => {
+    expect(normalizeManifest({ id: 'kcd', endpoint: 'https://kcd.internal', requires: ['session:kcd'] }).requires).toEqual(['session:kcd']);
+    for (const requires of ['session:kcd', [''], [1], {}]) {
+      expect(() => normalizeManifest({ id: 'kcd', endpoint: 'https://kcd.internal', requires: requires as never })).toThrow(/requires/);
+    }
+  });
+
   it('keeps a manifest-declared adapter', () => {
     const resolved = normalizeManifest({ id: 'checkout', endpoint: 'https://checkout.internal', adapter: 'react' });
     expect(resolved.adapter).toBe('react');
