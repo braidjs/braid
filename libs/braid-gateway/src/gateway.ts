@@ -28,6 +28,7 @@ import {
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
+import { scopeRequestCookies, scopeResponseCookies, scopeSetCookie, storagePartitionOf, withoutScopedCookies } from './cookie-scope.js';
 import {
   parseOriginRules,
   resolveRedirectTarget,
@@ -329,6 +330,19 @@ export interface UpgradeTarget {
   credentialHeaders: readonly string[];
   /** The `x-braid-via` value for the upstream request, this gateway's hop included. */
   via: string;
+  /**
+   * When present, the `Cookie` header the upgrade carries *instead of* the caller's (after the
+   * credential strip), or `null` for none: a partitioned fragment's own scoped cookies, or the
+   * caller's minus every partitioned fragment's (see cookie-scope.ts). A binding must apply it, or
+   * it forwards cookies that belong to other fragments.
+   */
+  cookie?: string | null;
+  /**
+   * For a partitioned fragment, rewrites a `Set-Cookie` line from the upstream's handshake response
+   * into the fragment's scope; an empty result means drop it. A binding must apply it to every
+   * `Set-Cookie` it relays to the browser.
+   */
+  setCookie?: (line: string) => string;
 }
 
 /** What the gateway tells a `documents` hook about the registry it is serving right now. */
@@ -361,7 +375,9 @@ export interface BraidGateway {
    *
    * A binding other than `toNodeUpgradeHandler` **must** remove `credentialHeaders` from the
    * upstream request when `forwardCredentials` is false, and set `x-braid-via` to `via` — the
-   * socket otherwise carries the user's identity past the boundary every fetch respects.
+   * socket otherwise carries the user's identity past the boundary every fetch respects. It must
+   * also replace `cookie` with `cookie` when the target carries one, and pass every `Set-Cookie`
+   * of the handshake response through `setCookie` when the target carries that.
    *
    * @returns the endpoint URL to dial, whether the caller's credentials may go with it (the same
    *          {@link GatewayOptions.forwardCredentials} rule as a fetch) and which headers carry
@@ -481,6 +497,8 @@ export function createGateway(options: GatewayOptions): BraidGateway {
    */
   function warnIfNoIdentity(manifest: FragmentManifest): void {
     if (manifest.redirect !== 'navigate' || forwardsCredentialsTo(manifest) || options.additionalHeaders) return;
+    // a partitioned fragment always gets back the cookies its own login set
+    if (storagePartitionOf(manifest) !== null) return;
     if (warnedNoIdentity.has(manifest.id)) return;
     warnedNoIdentity.add(manifest.id);
     console.warn(
@@ -737,12 +755,17 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       strippedUrl.pathname = route.pathname;
 
       try {
+        const forwardCredentials = forwardsCredentialsTo(fragment);
+        const partition = storagePartitionOf(fragment);
+        const cookie = fragmentCookieHeader(request, fragment, forwardCredentials);
         return {
           fragmentId: fragment.id,
           target: resolveEndpointUrl(fragment.endpoint, strippedUrl, fragment.id),
-          forwardCredentials: forwardsCredentialsTo(fragment),
+          forwardCredentials,
           credentialHeaders,
           via: appendHop(request),
+          ...(cookie === undefined ? {} : { cookie }),
+          ...(partition === null ? {} : { setCookie: (line: string) => scopeSetCookie(line, partition) }),
         };
       } catch {
         return null;
@@ -854,6 +877,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const forwarded = new Response(body, result.response);
     // this header means "the gateway verified this target"; a fragment does not get to send it
     forwarded.headers.delete(BRAID_REDIRECT_LOCATION_HEADER);
+    // a partitioned fragment's cookies land in its own scope (see cookie-scope.ts)
+    const partition = storagePartitionOf(fragment);
+    if (partition !== null) scopeResponseCookies(forwarded.headers, partition);
     // set, not append: an endpoint that is itself a gateway has already named the fragment
     forwarded.headers.set(BRAID_FRAGMENT_ID_HEADER, fragment.id);
     if (prepare) {
@@ -863,6 +889,23 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       forwarded.headers.set('content-type', 'text/html; charset=utf-8');
     }
     return forwarded;
+  }
+
+  /**
+   * The `Cookie` header a fragment's endpoint receives, or `undefined` to leave the request as the
+   * credential rule left it.
+   *
+   * A partitioned fragment gets its own cookies — the ones its endpoint set, scoped by the gateway
+   * on the way out — whatever `forwardCredentials` says, since nothing of the shell's is in them;
+   * the host's own only when `forwardCredentials` allows. Any fragment forwarded the caller's cookies
+   * gets them without the partitioned fragments' scoped ones, which belong to those fragments alone.
+   * `null` means send none.
+   */
+  function fragmentCookieHeader(request: Request, fragment: FragmentManifest, forwardCredentials: boolean): string | null | undefined {
+    const partition = storagePartitionOf(fragment);
+    if (partition !== null) return scopeRequestCookies(request.headers.get('cookie'), partition, forwardCredentials);
+    if (forwardCredentials) return withoutScopedCookies(request.headers.get('cookie'));
+    return undefined;
   }
 
   /**
@@ -932,7 +975,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       [BRAID_FRAGMENT_ID_HEADER]: fragment.id,
       'cache-control': 'no-store',
     });
-    for (const cookie of upstream.headers.getSetCookie()) headers.append('set-cookie', cookie);
+    const partition = storagePartitionOf(fragment);
+    for (const cookie of upstream.headers.getSetCookie()) {
+      const line = partition === null ? cookie : scopeSetCookie(cookie, partition);
+      if (line) headers.append('set-cookie', line);
+    }
 
     discardBody(upstream);
     return new Response(null, { status: 409, headers });
@@ -995,8 +1042,18 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Those authenticate the caller to the *shell's* origin, and a fragment endpoint is a
     // different origin by construction — so they are removed unless the host has said its whole
     // registry is inside one trust boundary. See `forwardCredentials`.
-    if (!forwardsCredentialsTo(fragment)) {
+    // once per request: a function-form rule need not answer the same way twice
+    const forwardCredentials = forwardsCredentialsTo(fragment);
+    if (!forwardCredentials) {
       for (const name of credentialHeaders) fragmentRequest.headers.delete(name);
+    }
+
+    // Cookies, before the single-flight key below is taken, so two sessions never share a fetch.
+    // See `fragmentCookieHeader`.
+    const cookie = fragmentCookieHeader(request, fragment, forwardCredentials);
+    if (cookie !== undefined) {
+      if (cookie) fragmentRequest.headers.set('cookie', cookie);
+      else fragmentRequest.headers.delete('cookie');
     }
 
     // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain

@@ -133,9 +133,13 @@ and copy the wrong value back. `capabilities.storage` gives a fragment a store o
     them before an `await`.
   - A listener attached with the original `EventTarget.prototype.addEventListener` deliberately
     goes around the filter.
+- **Cookies follow the same grant.** The gateway scopes the cookies a partitioned fragment's
+  backend sets and sends it only its own (see `@braidlabs/gateway`, "Per-fragment cookies"). The
+  fragment's `document.cookie` shows its own cookies under their own names, plus the host's;
+  cookies it writes from script go into its scope.
 - **An accident barrier, not a security boundary.** Same-origin code can still reach
-  `top.localStorage`. IndexedDB, Cache Storage, BroadcastChannel and cookies are not partitioned
-  by this.
+  `top.localStorage` and the raw cookie jar. IndexedDB, Cache Storage and BroadcastChannel are not
+  partitioned.
 
 Mounting in HTML:
 
