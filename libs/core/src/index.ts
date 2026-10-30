@@ -23,6 +23,8 @@ import { FragmentSlot } from './elements/fragment-slot.js';
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
 export type { BraidOptions, RealmGlobalsHook } from './config.js';
+export type { PrerequisiteOutcome, PrerequisiteResolver } from './elements/prerequisites.js';
+export { NotEntitledError } from './elements/prerequisites.js';
 export type { FragmentEnv, EnvDocument, EnvLocation, EnvHistory, EnvContext, EnvSubscribeOptions } from './env/fragment-env.js';
 export type { BraidAdapter } from './adapters/adapter.js';
 export { DEFAULT_ADAPTER } from './adapters/adapter.js';

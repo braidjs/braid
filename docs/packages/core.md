@@ -97,6 +97,66 @@ reads the host's property live and writes it back, bare identifiers included:
 - **Grants ride on the realm stub,** which is cached for up to an hour. Revoking a registry grant
   reaches browsers on that schedule.
 
+### Mount prerequisites
+
+Some fragments can't do anything useful until something outside them is ready, most often a
+session for their own authorization server. Without help, such a fragment boots, calls its API,
+gets a 401, hops through a login and retries, on every cold load. The host usually knows how to
+warm that session, so it registers resolvers, and fragments declare the keys they need:
+
+```ts
+initBraid({
+  prerequisites: {
+    // exact keys, or `prefix*` patterns
+    'session:*': (key, { signal }) => sessions.ensure(key.slice('session:'.length), { signal }),
+    'group:hr': async () => ((await me()).groups.includes('hr') ? 'ready' : 'not-entitled'),
+  },
+});
+```
+
+```html
+<fragment-slot name="kcd" requires="session:kcd"></fragment-slot>
+```
+
+or in the registry manifest:
+
+```jsonc
+{ "id": "payroll", "requires": ["group:hr"] }
+```
+
+- **The fragment's code waits for every key.**
+  - **Markup keys** (`requires` on the slot) start resolving as the slot boots, alongside the
+    realm and document fetches. Nothing of the fragment goes on screen until they hold.
+  - **Manifest keys** start when the realm stub arrives. The fragment's document may already be on
+    screen, inert, by then.
+  - **Every tier honours markup keys:** compat, contract and untrusted. On untrusted and contract
+    slots no frame or realm is created until the keys hold. Manifest keys exist only where the
+    gateway serves a realm stub.
+- **Not access control.** A prerequisite is about the experience. Withholding a fragment from users
+  who may not see it is the gateway's `access.fetch.roles`, which keeps its markup from ever
+  reaching them. A federated registry drops `requires` from team manifests, because which of the
+  shell's resolvers run is the org's decision.
+- **One resolution per key at a time,** however many slots wait on it. The resolver's `signal`
+  aborts if every waiting slot goes away before it answers, or at the timeout, but never after it
+  answers. Answers are not cached: a later boot asks again, so a resolver should be cheap when
+  the thing is already ready. Removing a slot while it waits reports nothing.
+- **Outcomes:**
+  - `'ready'` boots the fragment.
+  - `'not-entitled'` shows the slot's `fallback`, clears any of the fragment's content, and
+    reports a `braid:error` with stage `prerequisite` and `notEntitled: true`, without logging it
+    as a failure. The error is a `NotEntitledError`. The fragment's other keys stop resolving.
+  - A throw, any other value, or no answer within `prerequisiteTimeoutMs` (15 s by default) is
+    a `prerequisite` error.
+- **Braid doesn't know what a key means.** A recipe for a page whose fragments use different
+  identity providers or groups:
+  1. Map the user's groups to the gateway's `Principal.roles`, and set `access.fetch.roles` on
+     each fragment's manifest. A user without the group never receives that fragment at all.
+  2. For fragments that are composed, use a `session:<audience>` resolver that warms the
+     audience's session. One hop per audience, even across tabs, is the resolver's job; Web Locks
+     and a BroadcastChannel do it well.
+  3. Give each fragment its own storage and cookies with `capabilities.storage` (below), so the
+     sessions don't overwrite each other.
+
 ### Cross-frame messages
 
 A compat fragment's `message` listener hears every reply meant for it, once each, whether it

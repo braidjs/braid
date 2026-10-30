@@ -14,7 +14,8 @@ export type BraidErrorStage =
   | 'boundary' // a message across the fragment boundary failed, timed out, or arrived closed
   | 'handshake' // host and fragment could not agree on terms at connect time
   | 'teardown' // a fragment did not close cleanly within its deadline
-  | 'contract'; // host and fragment declared terms that do not meet
+  | 'contract' // host and fragment declared terms that do not meet
+  | 'prerequisite'; // a mount prerequisite failed, timed out, or the user is not entitled to it
 
 export interface BraidErrorInit {
   fragmentId: string;

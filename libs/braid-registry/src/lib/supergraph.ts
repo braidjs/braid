@@ -103,8 +103,11 @@ export function subgraph(options: SubgraphOptions): SubgraphSource {
         );
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- dropped: capabilities are the org's to grant
-      const { capabilities: _declaredByTeam, ...rest } = manifest;
+      // Dropped, both the org's to decide: capabilities are grants, and `requires` names the host's
+      // own resolvers to run — a team must not choose which of the shell's auth hops its fragment
+      // triggers (the org can still gate the fragment with `requires` on its slot in the shell).
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { capabilities: _declaredByTeam, requires: _requiredByTeam, ...rest } = manifest;
       const granted = options.capabilities?.[manifest.id];
       return {
         ...rest,

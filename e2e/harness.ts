@@ -32,6 +32,8 @@ export interface HostOptions {
   body: string;
   /** Passed to `initBraid` as JSON. */
   braid?: Record<string, unknown>;
+  /** Or: the `initBraid` options as a JavaScript expression, for options that are functions. */
+  braidSource?: string;
   /** Extra `<head>` markup, e.g. styles. */
   head?: string;
 }
@@ -47,7 +49,7 @@ export async function startHost(options: HostOptions): Promise<Host> {
   const gateway = createGateway({ mode: 'production', ...options.gateway });
   const middleware = toNodeMiddleware(gateway);
   const page = `<!doctype html><html><head><meta charset="utf-8">${options.head ?? ''}
-<script type="module">import { initBraid } from '/core.js'; initBraid(${JSON.stringify(options.braid ?? {})});</script>
+<script type="module">import { initBraid } from '/core.js'; initBraid(${options.braidSource ?? JSON.stringify(options.braid ?? {})});</script>
 </head><body>${options.body}</body></html>`;
 
   const server: Server = createServer((req, res) => {

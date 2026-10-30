@@ -72,6 +72,12 @@ export interface FragmentManifest {
     /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */
     sharedGlobals?: string[];
   };
+  /**
+   * Mount prerequisites this fragment needs before its code runs — keys the host resolves with
+   * `initBraid({ prerequisites })`, such as `session:orders` for a warm session on the fragment's
+   * authorization server. Stamped onto the realm stub.
+   */
+  requires?: string[];
   /** Module entry for contract-mode fragments (unused by the compat adapter). */
   entry?: string;
   /**
@@ -295,6 +301,12 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     );
   }
 
+  if (
+    manifest.requires !== undefined &&
+    (!Array.isArray(manifest.requires) || manifest.requires.some((key) => typeof key !== 'string' || key.trim() === ''))
+  ) {
+    throw new Error(`braid-gateway: manifest "${manifest.id}" has a requires that is not a list of non-empty keys`);
+  }
   if (manifest.redirect !== undefined && manifest.redirect !== 'error' && manifest.redirect !== 'navigate') {
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" declares redirect: "${String(manifest.redirect)}" — ` +
