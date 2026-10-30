@@ -109,6 +109,64 @@ and cache a composed response (a page pierced against a registry that has since 
 the stale artifact this package exists to avoid). Composed pages carry
 `x-braid-composed: offline` so a shell can say so rather than look merely slow.
 
+## The gateway in the worker, for static hosting (requirements, not built)
+
+Offline composition already runs the gateway's piercing in the worker. The open question is whether
+the worker can be the gateway **while online**, for a shell on purely static hosting (a bucket, a
+CDN, GitHub Pages) with no server in front of it. Nothing below is built. It records what an
+implementation must satisfy, so the design starts from the constraints rather than discovering them.
+
+**What it would do.** It would serve `/__braid/realm/:id/*` stubs, proxy `/__braid/frag/:id/*` and
+`/__braid/doc/:id/*` to each fragment's origin, and pierce document navigations, all with the
+gateway's own code. That is exactly what offline composition does now, but against the network.
+
+### Requirements
+
+1. **The first visit must work without a reload.** No worker is installed on a first visit, so the
+   design is:
+   - The static host serves the shell and realm stubs generated at build time. Stubs are
+     byte-stable per registry snapshot, so they can be plain files.
+   - The page registers the worker, and the worker calls `clients.claim()` for this mode. This is
+     a deliberate exception to the `claimClients: false` default above: there is no earlier worker
+     to swap out from under the page.
+   - Slots wait for `navigator.serviceWorker.ready`, with a timeout, before booting. From then on
+     the realm iframes' navigations and the namespace fetches are the worker's to answer.
+   - The first visit's first paint is not composed. Fragments boot client-side, which already works
+     without piercing. Every later navigation is composed by the worker.
+2. **Fragment origins must send CORS headers.** The worker fetches them cross-origin. Documents and
+   assets need `Access-Control-Allow-Origin` naming the shell's origin, and module scripts need it
+   regardless.
+3. **Authenticated fragments must be same-site with the shell** (subdomains of one registrable
+   domain). With credentials, the worker's cross-origin requests also need
+   `Access-Control-Allow-Credentials`. Across sites, third-party cookie blocking (Safari, Firefox,
+   and Chrome where enabled) drops the session. A fragment that needs login cookies from another
+   site cannot be composed this way, and the build should refuse its manifest rather than let it
+   fail at runtime.
+4. **There must be a fallback where no worker can run.** Some private-browsing modes and enterprise
+   policies disable service workers. Without a worker, compat fragments have no namespace, so the
+   page must boot those slots as contract or untrusted fragments, or show their fallback content.
+   It must never leave them half-booted.
+5. **What the server gateway enforces must stay enforced.** Today's server gateway strips
+   credentials (`forwardCredentials`), checks `access`, and decides redirects (`redirectOrigins`).
+   In the worker, all of that runs on the user's device, which makes it advisory: a user can
+   change it. Anything that must hold against the user stays on the fragment's own origin. The
+   docs must say so plainly, as the boundary docs do for trusted fragments.
+6. **The registry must be pinned.** The worker loads one snapshot (`snapshotUrl`), verifies it as
+   the registry does, and composes only from it. Updating the snapshot follows the worker's
+   version discipline (see below), so configuration churn never becomes an unannounced change of
+   composition mid-session.
+7. **The gateway core stays runtime-neutral.** No `node:` imports in the gateway, registry or
+   rewriter, which offline composition already depends on. A new dependency of the core that
+   breaks this breaks both.
+
+### Open questions
+
+- **Worker startup on every navigation.** A cold start can add tens of milliseconds on mobile.
+  Navigation preload can fetch the shell while the worker boots, but there is no server to ask for
+  the fragments early.
+- **Which `x-braid-composed` value** a worker-composed online page should carry, so it can be told
+  apart from a server-composed one in telemetry.
+
 ## The worker is itself a skew vector
 
 It is a long-lived deployment artifact that updates on its own schedule — a version boundary added

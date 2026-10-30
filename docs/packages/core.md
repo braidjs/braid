@@ -133,6 +133,69 @@ A slot can carry host content for two moments: while its fragment boots, and if 
 - **Not for untrusted fragments yet.** Their cross-origin frame doesn't show the loading slot.
 - Listen to `braid:state` on the slot (it doesn't bubble) to follow every state change.
 
+### Booting on intent
+
+By default a slot boots its fragment as soon as it connects. `boot` defers all of it: the realm
+iframe, the document fetch, and the fragment's framework and app.
+
+```html
+<fragment-slot name="reviews" boot="visible" style="min-height: 480px"></fragment-slot>
+<fragment-slot name="cart" boot="interaction"></fragment-slot>
+```
+
+| `boot` | Boots |
+| --- | --- |
+| `eager` (default) | at once, as before |
+| `idle` | when the browser is next idle, or after 2 seconds at the latest |
+| `visible` | when the slot comes within 200px of the viewport |
+| `interaction` | on the first pointer, key or focus event inside the slot |
+
+- **`interaction` is for server-rendered (pierced) slots.** Their content is on screen before any
+  of the fragment's code runs, so there is something to interact with. A slot that was not pierced
+  has nothing to show yet, so `interaction` behaves like `visible` there.
+- **Clicks and submits are held, not lost.** Between the first interaction and `braid:ready`, a
+  click or submit inside the slot is cancelled (a link is not followed, a form not posted). It is
+  then replayed on the same element once the fragment is ready. The host's bubbling listeners see it
+  once, as the replay; capturing listeners on `document` also see the cancelled original. Typed
+  text and focus need no replay, because they are already in the DOM the fragment adopts.
+- **Replay needs the fragment to adopt its markup.** A fragment whose framework re-renders over
+  the server-rendered DOM, rather than hydrating it, replaces the element that was clicked. That
+  click is dropped, with a warning in dev mode.
+- **The listeners are the slot's own.** They sit on the slot's shadow root, and `visible` observes
+  only the slot. Nothing is added to the host's `window` or `document`.
+- **Read once, when the slot connects.** Changing `boot` later has no effect until the slot is
+  re-inserted.
+
+### Prefetching before a slot exists
+
+On a page the gateway did not compose, typically a client-side navigation, a slot fetches its
+fragment's document only once it mounts. `prefetchFragment` starts that work early, from a link's
+hover or a router's preload hook:
+
+```ts
+import { prefetchFragment } from '@braidlabs/core';
+
+link.addEventListener('pointerenter', () => prefetchFragment('billing', '/billing/invoices'));
+```
+
+- **`route` is what the slot will render.** For a routed fragment that is the destination page's
+  path; for a widget it is the slot's `src`.
+- **The document is handed over once.** The next slot for that fragment and route to mount within
+  10 seconds uses it and makes no document request of its own. After 10 seconds the request is
+  aborted and dropped, so personalised markup is never shown long after it was rendered.
+- **The rest goes through the HTTP cache.** The realm stub, and the scripts the document names,
+  are added as `<link rel="prefetch">` in the CORS mode the realm will request them in.
+- **Compat fragments only.** Contract and untrusted fragments load no Braid document.
+
+### Late, out-of-order fragments
+
+A gateway can stream past a slow fragment's slot (manifest `stream: "out-of-order"`, see the gateway
+docs). The slot arrives marked `data-braid-deferred`, and the fragment's markup follows at the end
+of the document inside a hidden `<braid-late for="…">`. `initBraid()` defines that element: it moves
+the markup into the slot, which then boots exactly as a pierced slot does. If the fragment failed, or
+the document ends without its markup, the slot boots client-side. `boot` applies once the markup is
+in. Style `fragment-slot[data-braid-deferred]` to show a skeleton while it waits.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a
@@ -335,6 +398,11 @@ interface InitBraidOptions {
 }
 ```
 
+### `prefetchFragment(fragmentId: string, route: string): void`
+Starts loading a compat fragment's document, realm stub and scripts before its slot mounts. The next
+slot for that fragment and route to mount within 10 seconds uses the document. See "Prefetching
+before a slot exists".
+
 ### `FragmentSlotElement` (`<fragment-slot>`)
 DOM Properties and methods on the custom element:
 
@@ -343,6 +411,7 @@ DOM Properties and methods on the custom element:
 | `name` | `string` | The fragment ID registered in the gateway manifest. |
 | `trust` | `'trusted' \| 'untrusted'` | Trust level (`'trusted'` for realm isolation; `'untrusted'` for sandboxed iframe). |
 | `outlet` | attribute | Marks the slot the gateway fills with the page's routed fragment and names after it. A nameless outlet waits quietly, and boots when it is given a `name`. |
+| `boot` | attribute | When to boot: `eager` (default), `idle`, `visible`, or `interaction`. See "Booting on intent". |
 | `props` | `Record<string, unknown>` | Reactive props passed into the fragment. |
 | `state` | `'idle' \| 'loading' \| 'ready' \| 'error'` | Current lifecycle state of the slot. |
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |

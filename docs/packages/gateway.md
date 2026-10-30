@@ -130,6 +130,8 @@ interface FragmentManifest {
   timeoutMs?: number;
   /** Fallback strategy when upstream fails: 'placeholder' | 'omit' | 'error-html'. */
   fallback?: 'placeholder' | 'omit' | 'error-html';
+  /** Whether the page stream waits at this fragment's slot ('in-order', default) or streams past it. */
+  stream?: 'in-order' | 'out-of-order';
   /** Custom Element module entry (for custom-element adapter). */
   entry?: string;
   /** Custom Element tag name (for custom-element adapter). */
@@ -138,6 +140,43 @@ interface FragmentManifest {
   events?: string[];
 }
 ```
+
+## Streaming past a slow fragment
+
+The gateway fetches the shell and every pierced fragment at once. It splices each fragment in when
+the stream reaches its slot, and waits there if that fragment has not answered yet. Everything after
+the slot waits with it, for up to the fragment's `timeoutMs`.
+
+`stream: "out-of-order"` removes that wait for one fragment:
+
+```ts
+{ id: 'recommendations', endpoint: 'https://recs.internal', pierce: ['/product/*'], stream: 'out-of-order', timeoutMs: 4000 }
+```
+
+- **Only a fragment that would hold the stream is moved.** If it has answered by the time its
+  slot streams, it is inlined exactly as `in-order` would inline it, byte for byte.
+- **Otherwise the slot is marked and the stream moves on.** The slot gets `data-braid-deferred`
+  and the rest of the page streams immediately. Before `</body>`, each late fragment's markup
+  follows as soon as it settles, in a hidden `<braid-late for="…">` carrying the same declarative
+  shadow root a pierce would. The client moves it into the slot.
+- **Failures fall back the same way.** A late fragment that fails or times out sends an empty
+  `<braid-late>`, marked with its fallback, and the slot boots client-side. `error-html` content
+  is delivered like any other content.
+- **A longer `timeoutMs` costs the rest of the page nothing now.** Waiting no longer holds up the
+  markup after the slot, so you can give a slow fragment the time it needs instead of falling back.
+
+What it does not change:
+
+- **`DOMContentLoaded` still waits for late fragments.** The response is open until they settle,
+  so deferred and module scripts in the host still run after them. The win is that the markup
+  after the slot parses and paints first.
+- **Layout can shift when the content lands.** Reserve the slot's space (`min-height`,
+  `aspect-ratio`) in host CSS, or style `fragment-slot[data-braid-deferred]` as a skeleton.
+- **No inline script is added.** The move is done by the `<braid-late>` element the client runtime
+  defines, so a strict CSP needs nothing new. Without JavaScript the late content stays hidden, and
+  the slot shows whatever the host put in it.
+- **Hosts that hydrate the whole document** will find `<braid-late>` nodes before `</body>`, and
+  may see them as a mismatch. Hydrate an app root instead of `document`.
 
 ## Per-fragment cookies
 
