@@ -30,6 +30,11 @@ export interface FragmentFetchEvent {
   outcome: 'ok' | 'error' | 'timeout' | 'shed';
   /** Absent when the fetch threw before a response existed. */
   status?: number;
+  /**
+   * `true` when this fetch joined an identical one already in flight (see `singleFlight`): its
+   * outcome is that fetch's, and no request of its own reached the endpoint.
+   */
+  coalesced?: boolean;
   durationMs: number;
   at: number;
 }
@@ -84,9 +89,21 @@ export interface FragmentFetchStart {
 
 /** What a fetch hook hands back: headers for the fragment request, and a callback for its end. */
 export interface FragmentFetchHooks {
-  /** Set on the fragment request — trace context, say — over anything already there. */
-  headers?: Record<string, string>;
-  /** Called once with the same event `on` receives, and the error when the fetch threw. */
+  /**
+   * Set on the fragment request — trace context, say — over anything already there; `null` removes
+   * one. A `traceparent` set or removed takes the caller's `tracestate` with it.
+   */
+  headers?: Record<string, string | null>;
+  /**
+   * Runs the endpoint fetch, so a tracing hook can make its span the active one there and an
+   * HTTP-client instrumentation's span nests under it. Must call `fetch` once and return its result.
+   * Not called for a fetch that joins one already in flight.
+   */
+  run?: <T>(fetch: () => T) => T;
+  /**
+   * Called once with the same event `on` receives, and the error when the fetch threw — even after
+   * a throwing hook has muted telemetry, so whatever it opened is closed.
+   */
   end?: (event: FragmentFetchEvent, error?: unknown) => void;
 }
 

@@ -583,14 +583,52 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     }
   }
 
-  /** Emits a fragment fetch's outcome, and ends its hooks. */
+  /**
+   * Emits a fragment fetch's outcome, and ends its hooks — even once telemetry is muted, because a
+   * span opened before the mute would otherwise never close.
+   */
   function emitFetch(hooks: FragmentFetchHooks | undefined, event: FragmentFetchEvent, error?: unknown): void {
     emit(event);
-    if (!hooks?.end || telemetryBroken) return;
+    if (!hooks?.end) return;
     try {
       hooks.end(event, error);
     } catch (thrown) {
-      muteTelemetry(thrown);
+      if (!telemetryBroken) muteTelemetry(thrown);
+    }
+  }
+
+  /** Applies a fragment fetch's hook headers to its request; a hook handing back bad ones is muted. */
+  function applyFetchHeaders(hooks: FragmentFetchHooks | undefined, fragmentRequest: Request): void {
+    if (!hooks?.headers) return;
+    try {
+      const headers = Object.entries(hooks.headers);
+      // validated whole before any is applied, and matched case-insensitively
+      const checked = new Headers(headers.map(([name, value]): [string, string] => [name, value ?? '']));
+      // a tracestate belongs to the traceparent it came with
+      if (checked.has('traceparent')) fragmentRequest.headers.delete('tracestate');
+      for (const [name, value] of headers) {
+        if (value === null) fragmentRequest.headers.delete(name);
+        else fragmentRequest.headers.set(name, value);
+      }
+    } catch (error) {
+      muteTelemetry(error);
+    }
+  }
+
+  /** The endpoint fetch, inside the hooks' `run` when they have one, muted like `emit` if it throws. */
+  function runFetch(hooks: FragmentFetchHooks | undefined, send: () => Promise<Response>): Promise<Response> {
+    if (!hooks?.run || telemetryBroken) return send();
+    let sent = false;
+    try {
+      return hooks.run(() => {
+        sent = true;
+        return send();
+      });
+    } catch (error) {
+      // a throw from the fetch itself is the fetch's to report; only a hook that failed first is muted
+      if (sent) throw error;
+      muteTelemetry(error);
+      return send();
     }
   }
 
@@ -807,7 +845,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           credentialHeaders,
           via: appendHop(request),
           ...(cookie === undefined ? {} : { cookie }),
-          baggage: forwardCredentials ? fragmentBaggage(request, options.baggage) : null,
+          baggage: forwardCredentials ? fragmentBaggage(request, options.baggage, fragment.id) : null,
           ...(partition === null ? {} : { setCookie: (line: string) => scopeSetCookie(line, partition) }),
         };
       } catch {
@@ -1101,7 +1139,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     // Baggage only as the deployment allows, and only inside its trust boundary (see baggage.ts).
     fragmentRequest.headers.delete('baggage');
-    const baggage = forwardCredentials ? fragmentBaggage(request, options.baggage) : null;
+    const baggage = forwardCredentials ? fragmentBaggage(request, options.baggage, fragment.id) : null;
     if (baggage) fragmentRequest.headers.set('baggage', baggage);
 
     // Count this gateway as a hop. The inbound value came along with the copied headers, so a chain
@@ -1171,11 +1209,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // A tracing hook opens its span here and propagates it: after every other header, so its trace
     // context is the one the endpoint sees, whatever the caller sent.
     const fetchTelemetry = startFetchTelemetry({ fragmentId: fragment.id, phase, method: fragmentRequest.method });
-    if (fetchTelemetry?.headers) {
-      // a tracestate belongs to the traceparent it came with
-      if ('traceparent' in fetchTelemetry.headers) fragmentRequest.headers.delete('tracestate');
-      for (const [name, value] of Object.entries(fetchTelemetry.headers)) fragmentRequest.headers.set(name, value);
-    }
+    applyFetchHeaders(fetchTelemetry, fragmentRequest);
 
     // Refuse before spending the budget. The caller's fallback handling is identical either way —
     // this only changes how long it waits to get there.
@@ -1194,6 +1228,11 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // Measured around the fetch only. The header work above is this process's own time, and
     // attributing it to the fragment's endpoint would make every fragment look slower than it is.
     const startedAt = performance.now();
+    // Whether this caller's fetch joined one already in flight: then its trace context never
+    // reached the endpoint, and its telemetry says so.
+    let key: string | null = null;
+    let sent = false;
+    const coalesced = () => (key !== null && !sent ? { coalesced: true } : {});
 
     try {
       // don't follow redirects: they are sent all the way to the client, which can then decide
@@ -1207,11 +1246,13 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           : null;
       // keyed by fragment too: two fragments' fetcher-function endpoints are asked for the same URL
       // (the path alone) and must never be handed each other's response
-      const key = requestKey === null ? null : `${fragment.id}\u0000${requestKey}`;
+      key = requestKey === null ? null : `${fragment.id}\u0000${requestKey}`;
 
-      const response = key
-        ? await singleFlight!.run(key, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }))
-        : await fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal });
+      const send = () => {
+        sent = true;
+        return runFetch(fetchTelemetry, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }));
+      };
+      const response = key ? await singleFlight!.run(key, send) : await send();
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
@@ -1227,6 +1268,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         // a reachable-but-broken endpoint into the same bucket as an unreachable one loses it.
         outcome: 'ok',
         status: response.status,
+        ...coalesced(),
         durationMs: performance.now() - startedAt,
         at: Date.now(),
       });
@@ -1240,6 +1282,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
           fragmentId: fragment.id,
           phase,
           outcome: timeoutSignal.aborted ? 'timeout' : 'error',
+          ...coalesced(),
           durationMs: performance.now() - startedAt,
           at: Date.now(),
         },

@@ -166,6 +166,27 @@ describe('websocket pass-through', () => {
     expect(upstream.seenHeaders[0]['x-braid-via']).toBe('braid');
   });
 
+  it("sends the socket the gateway's baggage, never the caller's as it came", async () => {
+    const upstream = upstreamWithSockets();
+    const { origin } = await listen(upstream.server);
+    const baggage = { baggage: 'tenant=acme,userId=42' };
+
+    for (const forward of [undefined, ['tenant']]) {
+      const gateway = createGateway({
+        registry: [{ id: 'billing', endpoint: origin }],
+        forwardCredentials: true,
+        ...(forward ? { baggage: { forward } } : {}),
+      });
+      const host = hostServer(gateway);
+      host.on('upgrade', toNodeUpgradeHandler(gateway));
+      const { port } = await listen(host);
+      expect((await attemptUpgrade(port, '/__braid/frag/billing/live', baggage)).echo).toBe('PING');
+    }
+
+    expect(upstream.seenHeaders[0].baggage).toBeUndefined();
+    expect(upstream.seenHeaders[1].baggage).toBe('tenant=acme');
+  });
+
   it("scopes a partitioned fragment's socket cookies both ways, and keeps them from shared fragments", async () => {
     const upstream = upstreamWithSockets('Set-Cookie: wsid=1; Path=/; HttpOnly\r\n');
     const { origin } = await listen(upstream.server);
