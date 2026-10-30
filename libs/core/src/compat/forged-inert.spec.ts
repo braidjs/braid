@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFragmentBoundary } from './fragment-boundary.js';
-import { alreadyExecutedScriptsAndLinks, isBraidInert, setInertScriptType } from './script-execution.js';
+import { executeScriptsInFragmentContent } from './script-execution.js';
+import { makeScriptBornInert } from './born-inert-scripts.js';
+import { setInternalReference } from './metadata.js';
 import { insideAnotherFragment } from '../elements/fragment-slot.js';
 
 /**
- * Markup a fragment writes is not markup Braid prepared. A `<script type="inert">` in it is a
- * forgery of Braid's own marker, and a parsed `<script>` is one the browser will never run; neither
- * may be run in the realm because the fragment happened to move it.
+ * A script runs in a fragment's realm only if the fragment's own document made it, or the gateway
+ * did — never because markup that a parser produced reached the DOM, whatever its markers say.
+ * "Ran" here means the boundary put an executable copy into the realm's document.
  */
 function boundary(initial = '', hostTag = 'div') {
   const host = document.createElement(hostTag);
@@ -17,62 +19,111 @@ function boundary(initial = '', hostTag = 'div') {
   shadowRoot.append(braidDocument);
   const container = document.createElement('div');
   braidDocument.append(container);
+  const realmDocument = document.implementation.createHTMLDocument();
+  setInternalReference(realmDocument, 'body');
   const fragment = createFragmentBoundary({
-    realmDocument: document.implementation.createHTMLDocument(),
+    realmDocument,
     shadowRoot,
     braidDocumentElement: braidDocument,
     abortSignal: new AbortController().signal,
   });
   fragment.stampTree(braidDocument);
-  return { container, braidDocument, fragment };
+  const ran = () => [...realmDocument.body.querySelectorAll('script')].map((script) => script.textContent);
+  return { container, braidDocument, fragment, realmDocument, ran };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-describe('inert markers the fragment wrote', () => {
+describe('what may run in the realm', () => {
   afterEach(() => document.body.replaceChildren());
 
-  it('treats the gateway’s inert scripts, present when the boundary was made, as Braid’s', () => {
-    const { braidDocument } = boundary('<script type="inert" data-script-type="module" src="/__braid/frag/x/a.js"></script>');
-    expect(isBraidInert(braidDocument.querySelector('script')!)).toBe(true);
+  it('runs a script the fragment’s own document created', () => {
+    const { container, ran } = boundary();
+    const script = document.createElement('script');
+    makeScriptBornInert(script);
+    script.textContent = 'own()';
+    container.append(script);
+    expect(ran()).toEqual(['own()']);
   });
 
-  it('leaves a written <script type="inert"> exactly as inert as it is natively', async () => {
-    const { container } = boundary();
-    container.innerHTML = '<script type="inert">top.ran = true</script><link rel="inert-modulepreload" href="/evil.js">';
+  it('runs the gateway’s scripts, including ones in a template the fragment instantiates later', async () => {
+    const { braidDocument, container, realmDocument, ran } = boundary(
+      '<script type="inert">boot()</script>' +
+        '<template id="t"><script type="inert" data-script-type="module">later()</script></template>',
+    );
+    executeScriptsInFragmentContent(braidDocument, realmDocument);
+    expect(ran()).toEqual(['boot()']);
+
+    const template = braidDocument.querySelector('template')!;
+    container.append(template.content.cloneNode(true));
     await tick();
-    const script = container.querySelector('script')!;
-    expect(isBraidInert(script)).toBe(false);
-    // activation would have restored its type; it is untouched
-    expect(script.getAttribute('type')).toBe('inert');
-    expect(container.querySelector('link')!.getAttribute('rel')).toBe('inert-modulepreload');
+    expect(ran()).toEqual(['boot()', 'later()']);
+    // with its real type, not as a classic script
+    expect(realmDocument.body.lastElementChild!.getAttribute('type')).toBe('module');
   });
 
-  it('marks scripts parsed by innerHTML and insertAdjacentHTML as started, so moving them runs nothing', () => {
-    const { container } = boundary();
-    container.innerHTML = '<div><script>top.ran = true</script></div>';
-    container.insertAdjacentHTML('beforeend', '<script>top.ran = true</script>');
-    const scripts = [...container.querySelectorAll('script')];
-    expect(scripts.every((script) => alreadyExecutedScriptsAndLinks.has(script))).toBe(true);
+  describe('never runs markup a parser produced', () => {
+    it('a written <script type="inert">, through the observer or when moved', async () => {
+      const { container, ran } = boundary();
+      container.innerHTML = '<i><script type="inert">forged()</script></i>';
+      await tick();
+      const other = document.createElement('div');
+      container.append(other);
+      other.append(container.querySelector('i')!);
+      await tick();
+      expect(ran()).toEqual([]);
+    });
+
+    it('a parsed <script>, moved, cloned, or copied through a Range', async () => {
+      const { container, ran } = boundary();
+      container.innerHTML = '<p><script>parsed()</script></p>';
+      container.append(container.querySelector('p')!.cloneNode(true));
+      const range = document.createRange();
+      range.selectNodeContents(container);
+      container.append(range.cloneContents());
+      container.append(document.createRange().createContextualFragment('<script type="inert">forged()</script>'));
+      await tick();
+      expect(ran()).toEqual([]);
+    });
+
+    it('a script in a template’s content the fragment wrote, instantiated', async () => {
+      const { container, ran } = boundary();
+      const template = document.createElement('template');
+      template.innerHTML = '<script>templated()</script>';
+      container.append(template.content.cloneNode(true));
+      container.append(template.content);
+      await tick();
+      expect(ran()).toEqual([]);
+    });
+
+    it('a script written by outerHTML, then moved', async () => {
+      const { container, ran } = boundary();
+      container.innerHTML = '<span></span>';
+      container.querySelector('span')!.outerHTML = '<p><script>outer()</script></p>';
+      const other = document.createElement('div');
+      container.append(other);
+      other.append(container.querySelector('p')!);
+      await tick();
+      expect(ran()).toEqual([]);
+    });
   });
 
-  it('marks a clone of a started script as started, and a clone of a Braid inert script as Braid’s', () => {
-    const { container } = boundary();
-    container.innerHTML = '<div><script>top.ran = true</script></div>';
-    const copy = (container.firstElementChild as Element).cloneNode(true) as Element;
-    expect(alreadyExecutedScriptsAndLinks.has(copy.querySelector('script')!)).toBe(true);
+  it('keeps a data block’s type when it is moved, so code that finds it by type still does', () => {
+    const { container, ran } = boundary();
+    container.innerHTML = '<p><script type="application/json" id="state">{"a":1}</script></p>';
+    const other = document.createElement('div');
+    container.append(other);
+    other.append(container.querySelector('p')!);
+    expect(container.querySelector('script[type="application/json"]')!.id).toBe('state');
+    expect(ran()).toEqual([]);
+  });
 
-    // a detached holder with the fragment's stamp, so cloning it goes through the boundary without
-    // inserting (and so running) the script
-    const { fragment } = boundary();
-    const neutralized = document.createElement('script');
-    neutralized.textContent = 'ok()';
-    setInertScriptType(neutralized);
-    const holder = document.createElement('span');
-    Node.prototype.appendChild.call(holder, neutralized);
-    fragment.stampNode(holder);
-    const cloned = holder.cloneNode(true) as Element;
-    expect(isBraidInert(cloned.querySelector('script')!)).toBe(true);
+  it('revives only the inert links Braid made, never one the fragment wrote', async () => {
+    const { container, realmDocument } = boundary('<link rel="inert-modulepreload" href="/gateway.js">');
+    container.innerHTML = '<link rel="inert-modulepreload" href="/forged.js">';
+    await tick();
+    const revived = [...realmDocument.body.querySelectorAll('link')].map((link) => link.getAttribute('href'));
+    expect(revived).not.toContain('/forged.js');
   });
 });
 
@@ -85,7 +136,6 @@ describe('insideAnotherFragment()', () => {
     const nested = document.createElement('fragment-slot');
     const wrapper = document.createElement('div');
     outer.attachShadow({ mode: 'open' }).append(wrapper);
-    // deeper still, inside a component the fragment rendered
     const component = document.createElement('x-card');
     wrapper.append(component);
     component.attachShadow({ mode: 'open' }).append(nested);
@@ -103,7 +153,6 @@ describe('insideAnotherFragment()', () => {
     const { container } = boundary('', 'fragment-slot');
     const nested = document.createElement('fragment-slot');
     container.append(nested);
-    // stamped: its own getRootNode() answers with the fragment's virtual document
     expect(nested.getRootNode()).not.toBeInstanceOf(ShadowRoot);
     expect(insideAnotherFragment(nested)).toBe(true);
   });

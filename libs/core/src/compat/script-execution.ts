@@ -3,7 +3,7 @@
  * arbitrary pre-bound native method wrappers. */
 import { assert } from '../utils/assert.js';
 import { getInternalReference } from './metadata.js';
-import { isBornInertScript } from './born-inert-scripts.js';
+import { isRunnable, markRunnable } from './born-inert-scripts.js';
 
 /**
  * Script execution machinery for compat fragments: any script that enters a fragment's DOM is
@@ -30,9 +30,17 @@ export function compatDomInsertion<T extends Node>(
   // if the child is a script, then append and execute it in the fragment's realm
   if (nodeToInsert instanceof HTMLScriptElement) {
     // if the child is an unattached inline script that doesn't yet have any text content, then we need to treat it in a special way
-    if (!nodeToInsert.src && !nodeToInsert.firstChild && !nodeToInsert.parentNode) {
+    if (!nodeToInsert.src && !nodeToInsert.firstChild && !nodeToInsert.parentNode && isRunnable(nodeToInsert)) {
       prepareUnattachedInlineScript(nodeToInsert, realmDocument);
       return doInsertTheNode();
+    }
+
+    // a script nothing of Braid's or the fragment's own document made: it never runs anywhere
+    if (!isRunnable(nodeToInsert)) {
+      setInertScriptType(nodeToInsert);
+      const returnVal = doInsertTheNode();
+      restoreIfDataBlock(nodeToInsert);
+      return returnVal;
     }
 
     setInertScriptType(nodeToInsert);
@@ -105,7 +113,7 @@ export function compatMultiNodeDomInsertion(
     }
 
     if (node instanceof HTMLScriptElement) {
-      if (!node.src && !node.firstChild && !node.parentNode) {
+      if (!node.src && !node.firstChild && !node.parentNode && isRunnable(node)) {
         prepareUnattachedInlineScript(node, realmDocument);
       } else {
         scriptsAndLinks.push(node);
@@ -139,7 +147,8 @@ function makeElementInert(element: HTMLScriptElement | HTMLLinkElement) {
 
 function restoreElement(element: HTMLScriptElement | HTMLLinkElement) {
   if (element instanceof HTMLScriptElement) {
-    restoreScriptType(element);
+    if (isRunnable(element)) restoreScriptType(element);
+    else restoreIfDataBlock(element);
   } else {
     // don't restore links as we currently don't have another way of keeping them inert
   }
@@ -202,10 +211,14 @@ export function executeInertScript(inertScript: HTMLScriptElement, realmDocument
     return false;
   }
 
+  // nor one that was never Braid's or the fragment's own to run (see `isRunnable`)
+  if (!isRunnable(inertScript)) {
+    return false;
+  }
+
   // If the script does not have a valid type attribute, treat the script node as a data block.
   // Data blocks live in the main document as-is.
-  const validScriptTypes = ['module', 'text/javascript', 'importmap', 'speculationrules', '', null];
-  if (!validScriptTypes.includes(inertScript.getAttribute('type'))) {
+  if (!EXECUTABLE_TYPES.includes(inertScript.getAttribute('type'))) {
     return false;
   }
 
@@ -298,32 +311,38 @@ export function attachScriptToRealm({
 }
 
 /**
- * The scripts and preload links Braid itself made inert, and so may bring back to life.
- *
- * `type="inert"` and `rel="inert-*"` are markers, and markers can be forged. A fragment that writes
- * `<script type="inert">…</script>` through `innerHTML` — user data, typically — wrote a script that
- * never runs natively: parsed scripts never do, and `inert` is no type a browser runs. Activating
- * every marked script that reaches the DOM would run it in the realm. So only these are activated:
- * scripts and links neutralized here, the gateway's markup present when the fragment boundary was
- * created (see `markBraidInertContent`), born-inert scripts, and clones of any of them.
+ * The preload links Braid itself made inert (`rel="inert-*"`), and so may bring back to life. A link
+ * the fragment's markup wrote with that rel is a forgery of the marker: natively it does nothing,
+ * and here it stays that way. Scripts are decided by provenance instead — see `isRunnable`.
  */
-const braidInert = new WeakSet<Element>();
+const braidInertLinks = new WeakSet<HTMLLinkElement>();
 
-export function markBraidInert(element: Element): void {
-  braidInert.add(element);
+export function isBraidInertLink(link: HTMLLinkElement): boolean {
+  return braidInertLinks.has(link);
 }
 
-export function isBraidInert(element: Element): boolean {
-  return braidInert.has(element) || (element instanceof HTMLScriptElement && isBornInertScript(element));
+export function markBraidInertLink(link: HTMLLinkElement): void {
+  braidInertLinks.add(link);
 }
+
+export { isRunnable, markRunnable };
 
 /** The marker selector: what Braid neutralizes, and the gateway too. */
 export const INERT_SELECTOR =
   'script[type="inert"],link[rel="inert-preload"],link[rel="inert-prefetch"],link[rel="inert-modulepreload"]';
 
-/** Marks every inert script and link under `root` as Braid's: the gateway's prepared content. */
-export function markBraidInertContent(root: ParentNode): void {
-  root.querySelectorAll(INERT_SELECTOR).forEach(markBraidInert);
+/**
+ * Marks the gateway's prepared content under `root` as Braid's: its scripts may run, its inert links
+ * may be revived. Template contents included, which a selector does not enter.
+ */
+export function markGatewayContent(root: ParentNode): void {
+  const roots: ParentNode[] = [root];
+  while (roots.length) {
+    const current = roots.pop()!;
+    current.querySelectorAll('script').forEach((script) => markRunnable(script as HTMLScriptElement));
+    current.querySelectorAll('link[rel^="inert-"]').forEach((link) => markBraidInertLink(link as HTMLLinkElement));
+    current.querySelectorAll('template').forEach((template) => roots.push((template as HTMLTemplateElement).content));
+  }
 }
 
 /**
@@ -338,7 +357,18 @@ export function setInertScriptType(script: HTMLScriptElement) {
     script.setAttribute('data-script-type', scriptType);
   }
   script.setAttribute('type', 'inert');
-  markBraidInert(script);
+}
+
+/** Types the realm runs; anything else is a data block, which runs nowhere. */
+const EXECUTABLE_TYPES = ['module', 'text/javascript', 'importmap', 'speculationrules', '', null];
+
+/**
+ * A script that will never run is left neutralized after insertion — unless it is a data block
+ * (`application/json`, say), whose real type is restored: it runs nowhere either way, and code that
+ * finds it by type must still find it.
+ */
+function restoreIfDataBlock(script: HTMLScriptElement): void {
+  if (!EXECUTABLE_TYPES.includes(script.getAttribute('data-script-type'))) restoreScriptType(script);
 }
 
 /**
@@ -360,7 +390,7 @@ export function setInertLinkRel(link: HTMLLinkElement) {
   const linkRel = link.rel;
   if (linkRel) {
     link.rel = 'inert-' + linkRel;
-    markBraidInert(link);
+    markBraidInertLink(link);
   }
 }
 

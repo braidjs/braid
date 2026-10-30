@@ -20,6 +20,16 @@ function htmlResponse(body: string, init: ResponseInit = {}): Response {
 }
 
 describe('prepareFragmentHtml()', () => {
+  it('blocks a link that already carries Braid’s inert marker, so the client cannot revive it', async () => {
+    const output = await collect(
+      prepareFragmentHtml(streamOf('<link rel="inert-modulepreload" href="/x.js"><link rel="modulepreload" href="/y.js">'), {
+        fragmentId: 'billing',
+      }),
+    );
+    expect(output).toContain('<link rel="blocked-inert-modulepreload" href="/__braid/frag/billing/x.js" data-braid-blocked="rel">');
+    expect(output).toContain('<link rel="inert-modulepreload" href="/__braid/frag/billing/y.js">');
+  });
+
   it('rewrites the document singletons and neutralizes executables', async () => {
     const output = await collect(
       prepareFragmentHtml(

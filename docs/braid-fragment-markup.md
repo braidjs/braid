@@ -89,22 +89,30 @@ sanitization.
 ## Markup a compat fragment writes at runtime
 
 The gateway's rules cover the markup a fragment *sends*. Markup its code *writes* afterwards, with
-`innerHTML` or `insertAdjacentHTML`, goes into the host document as written. Two things about it
-are enforced on every compat fragment, with no option to set:
+`innerHTML`, `outerHTML`, a template, a `Range` or any other parser, goes into the host document as
+written. On every compat fragment, with no option to set, the following is enforced:
 
-- **Braid's markers are Braid's.** The gateway and the compat boundary neutralize scripts as
-  `type="inert"`, and preload links as `rel="inert-*"`, then bring them back to life in the
-  fragment's realm. Only markers Braid set are activated: the gateway's prepared markup, scripts the
-  boundary neutralized on insertion, scripts the fragment created (which are born inert), and clones
-  of these. A `<script type="inert">` or `<link rel="inert-modulepreload">` that a fragment
-  *writes* (often user data it rendered) stays exactly as inert as it would be natively.
-- **Parsed scripts never run.** A browser never runs a `<script>` that `innerHTML` parsed, not even
-  after it is moved. The boundary now treats such scripts, and clones of them, the same way when the
-  fragment moves them, instead of running them in the realm.
+- **A script runs only if the fragment's own document or the gateway made it.** That means:
+  - a script the fragment created with `document.createElement('script')`;
+  - one in the gateway's prepared markup, including inside its templates;
+  - a clone, made through the boundary, of either, if it has not run yet.
+
+  A script that markup produced through a parser never runs, however it reaches the DOM: moved,
+  cloned, copied through a `Range`, or instantiated from a template the fragment wrote. That
+  matches the browser, which never runs a `<script>` that `innerHTML` parsed. The one stricter
+  case is `Range.createContextualFragment`: its scripts would run natively, and here they do not.
+  Create a script element instead.
+- **Braid's markers are Braid's.** The gateway and the boundary neutralize scripts as
+  `type="inert"`, and preload links as `rel="inert-*"`. A script or link that *arrives* carrying
+  those markers, such as one a fragment wrote from user data, stays exactly as inert as it would be
+  natively. The gateway renames any `rel="inert-*"` it finds in a fragment's own markup.
+- **Data blocks keep their type.** A written `<script type="application/json">` is left in the DOM
+  with its type, so code that looks it up still finds it. It runs nowhere either way.
 - **A nested slot cannot bring its own code.** A `<fragment-slot>` inside another fragment's DOM
-  may compose registered fragments by name, but it may not declare an `entry`. Such a slot fails
-  with a `slot-config` error. An `entry` names the code a realm runs, so only the host page may
-  give one. Slots inside the host's own components' shadow roots are the host's and are unaffected.
+  may compose registered fragments by name, but it may not declare an `entry` or be
+  `trust="untrusted"`. Such a slot fails with a `slot-config` error. Both name code (or an
+  origin) to run, and an untrusted slot would also receive whatever capabilities the host granted
+  its name. Slots inside the host's own components' shadow roots are the host's and are unaffected.
 
 To also strip handlers and `javascript:` URLs from those writes, opt in to `capabilities.html`
 (see `@braidlabs/core`, "Sanitizing a fragment's own HTML writes").

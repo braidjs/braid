@@ -412,6 +412,24 @@ export class FragmentSlot extends HTMLElement {
    * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
    * scheduled recovery reboot: the host has taken over.
    */
+  /**
+   * A slot's `entry`, or its untrusted `src`, names the code a fragment runs — so only the host may
+   * give one. A slot inside another fragment's DOM was written by that fragment, perhaps from data it
+   * rendered, and may compose registered fragments, whose code the registry names, but not bring
+   * its own. An untrusted slot would also be handed whatever capabilities the host granted its name.
+   */
+  #assertHostDeclaresCode(fragmentId: string): void {
+    const bringsCode = this.hasAttribute('entry') || this.getAttribute('trust') === 'untrusted';
+    if (!bringsCode || !insideAnotherFragment(this)) return;
+    throw new BraidError(`a <fragment-slot> inside another fragment may not declare an entry or an untrusted src`, {
+      fragmentId,
+      stage: 'slot-config',
+      fixHint:
+        `register fragment "${fragmentId}" in the gateway and compose it by name, or move the slot into ` +
+        `the host page's own DOM`,
+    });
+  }
+
   async reload(): Promise<void> {
     this.#recovery.reset();
     await this.#reload();
@@ -530,20 +548,7 @@ export class FragmentSlot extends HTMLElement {
         });
       }
 
-      /**
-       * An `entry` names the code a realm runs, so only the host may give one. A slot inside
-       * another fragment's DOM was written by that fragment — perhaps from data it rendered — and
-       * may compose registered fragments, whose code the registry names, but not bring its own.
-       */
-      if (this.hasAttribute('entry') && insideAnotherFragment(this)) {
-        throw new BraidError(`a <fragment-slot> inside another fragment may not declare an entry`, {
-          fragmentId,
-          stage: 'slot-config',
-          fixHint:
-            `register fragment "${fragmentId}" in the gateway and compose it by name, or move the slot into ` +
-            `the host page's own DOM`,
-        });
-      }
+      this.#assertHostDeclaresCode(fragmentId);
 
       this.#setState('loading');
 
@@ -877,6 +882,8 @@ export class FragmentSlot extends HTMLElement {
    * boundary rather than against compat's machinery.
    */
   async #bootContract(fragmentId: string, requires: readonly string[]): Promise<void> {
+    // again where it is read: a `braid:state` listener runs between #boot's check and here
+    this.#assertHostDeclaresCode(fragmentId);
     const entry = this.getAttribute('entry');
     if (!entry) {
       throw new BraidError('a contract fragment needs an entry module', {

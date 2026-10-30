@@ -7,9 +7,11 @@ import {
   executeInertScript,
   executeInertPreloadLink,
   INERT_SELECTOR,
-  isBraidInert,
-  markBraidInert,
-  markBraidInertContent,
+  isBraidInertLink,
+  isRunnable,
+  markBraidInertLink,
+  markGatewayContent,
+  markRunnable,
   restoreScriptType,
   alreadyExecutedScriptsAndLinks,
 } from './script-execution.js';
@@ -102,19 +104,22 @@ export function createFragmentBoundary(options: {
    */
   function reviveInertScript(script: HTMLScriptElement): void {
     unwrapBornInertScriptToLive(script);
-    // only a script Braid neutralized: one written as `type="inert"` stays exactly that
-    if (script.getAttribute('type') === 'inert' && !alreadyExecutedScriptsAndLinks.has(script) && isBraidInert(script)) {
+    // only a script that may run at all: one markup wrote as `type="inert"` stays exactly that
+    if (script.getAttribute('type') === 'inert' && !alreadyExecutedScriptsAndLinks.has(script) && isRunnable(script)) {
       restoreScriptType(script);
     }
   }
 
   /**
-   * A clone of an inert script or link Braid made is Braid's too — natively, a clone of a script
-   * that has not run yet runs when inserted. Matched by position: a deep clone has its source's shape.
+   * A clone carries its source's provenance, as the browser carries a script's started flag: a clone
+   * of a script that may run and has not yet may run, a clone of one that has run has run, and a
+   * clone of an inert link Braid made is Braid's. Matched by position: a deep clone has its source's
+   * shape. Only clones made through the boundary carry it — any other clone path (a `Range`, a
+   * fragment's own `DocumentFragment`) yields scripts that never run, which is the safe side.
    */
-  function inheritBraidInert(source: Node, clone: Node, deep: boolean): void {
+  function inheritProvenance(source: Node, clone: Node, deep: boolean): void {
     if (!(source instanceof Element) && !(source instanceof DocumentFragment)) return;
-    const select = `${INERT_SELECTOR},script`;
+    const select = 'script,link[rel^="inert-"]';
     const sources = [...(source instanceof Element && source.matches(select) ? [source] : [])];
     const clones = [...(clone instanceof Element && clone.matches(select) ? [clone] : [])];
     if (deep) {
@@ -123,22 +128,36 @@ export function createFragmentBoundary(options: {
     }
     sources.forEach((element, index) => {
       const copy = clones[index];
-      if (!copy) return;
-      if (isBraidInert(element)) markBraidInert(copy);
-      // and a clone of a script that has started has started too, as the browser copies the flag
-      if (alreadyExecutedScriptsAndLinks.has(element as HTMLScriptElement)) {
-        alreadyExecutedScriptsAndLinks.add(copy as HTMLScriptElement);
+      if (!copy || copy.localName !== element.localName) return;
+      if (element instanceof HTMLScriptElement) {
+        if (alreadyExecutedScriptsAndLinks.has(element)) alreadyExecutedScriptsAndLinks.add(copy as HTMLScriptElement);
+        else if (isRunnable(element)) markRunnable(copy as HTMLScriptElement);
+      } else if (isBraidInertLink(element as HTMLLinkElement)) {
+        markBraidInertLink(copy as HTMLLinkElement);
       }
     });
   }
 
   /**
-   * Scripts an HTML parse produced. They never run natively — the parser marks them already
-   * started, and moving them later does not change that — so they must not run when the fragment
-   * moves them through the boundary either, which would otherwise run them in the realm.
+   * The gateway's templates hold scripts a fragment instantiates later, with
+   * `template.content.cloneNode(true)`. A template's content is a DocumentFragment, which the
+   * boundary does not stamp, so each one gets its own `cloneNode` that carries provenance — an own
+   * property of the fragment's DOM object, not a host prototype.
    */
-  function markParsedScripts(scripts: Iterable<HTMLScriptElement>): void {
-    for (const script of scripts) alreadyExecutedScriptsAndLinks.add(script);
+  function carryProvenanceThroughTemplates(root: ParentNode): void {
+    for (const template of root.querySelectorAll('template')) {
+      const content = (template as HTMLTemplateElement).content;
+      Object.defineProperty(content, 'cloneNode', {
+        configurable: true,
+        writable: true,
+        value: function templateContentCloneNode(this: DocumentFragment, deep?: boolean) {
+          const clone = native.cloneNode.call(this, deep);
+          inheritProvenance(this, clone, Boolean(deep));
+          return clone;
+        },
+      });
+      carryProvenanceThroughTemplates(content);
+    }
   }
 
   function prepareForInsertion<T extends Node>(node: T): T {
@@ -266,8 +285,6 @@ export function createFragmentBoundary(options: {
           } else {
             innerHTMLDescriptor.set!.call(this, value);
           }
-          // innerHTML replaced every child, so each script now in it came from this parse
-          if (!(this instanceof HTMLTemplateElement)) markParsedScripts(this.querySelectorAll('script'));
           stampTree(this);
         },
       },
@@ -306,9 +323,6 @@ export function createFragmentBoundary(options: {
           htmlPolicy && (inside || (outside && parent && parent.nodeType !== Node.DOCUMENT_NODE))
             ? htmlPolicy.filter(text, context, 'insertAdjacentHTML')
             : null;
-        // the scripts already there, so the ones this parse adds can be told apart afterwards
-        const region = inside ? this : parent;
-        const existing = new Set(region?.querySelectorAll('script') ?? []);
         if (cleaned) {
           if (lowercasePosition === 'beforebegin') native.elementBefore.call(this, cleaned);
           else if (lowercasePosition === 'afterbegin') native.elementPrepend.call(this, cleaned);
@@ -318,7 +332,6 @@ export function createFragmentBoundary(options: {
           // also what throws for an unknown position, or outside an element with no parent
           native.insertAdjacentHTML.call(this, position, text);
         }
-        if (region) markParsedScripts([...region.querySelectorAll('script')].filter((script) => !existing.has(script)));
         stampTree(inside ? this : this.parentNode ?? this);
       },
     },
@@ -327,7 +340,7 @@ export function createFragmentBoundary(options: {
       writable: true,
       value: function boundaryCloneNode(this: Node, deep?: boolean) {
         const clone = native.cloneNode.call(this, deep);
-        inheritBraidInert(this, clone, Boolean(deep));
+        inheritProvenance(this, clone, Boolean(deep));
         stampTree(clone);
         return clone;
       },
@@ -421,9 +434,10 @@ export function createFragmentBoundary(options: {
   // stamp the initial fragment DOM (for pierced fragments this includes the SSR'ed content;
   // for slot-fetched fragments this is the already-inserted, neutralized content)
   stampTree(braidDocumentElement);
-  // that content is the gateway's: its inert scripts and links are the ones it neutralized, and
-  // nothing of the fragment's has run yet to have written any of its own
-  markBraidInertContent(braidDocumentElement);
+  // that content is the gateway's: its scripts may run and its inert links are the ones it
+  // neutralized, and nothing of the fragment's has run yet to have written any of its own
+  markGatewayContent(braidDocumentElement);
+  carryProvenanceThroughTemplates(braidDocumentElement);
 
   /**
    * The boundary observer: activates inert scripts/preload-links that entered the fragment's
@@ -461,9 +475,9 @@ export function createFragmentBoundary(options: {
     candidates.push(...(root.querySelectorAll(INERT_SELECTOR) as NodeListOf<HTMLScriptElement | HTMLLinkElement>));
 
     for (const candidate of candidates) {
-      // a marker Braid did not set is markup the fragment wrote, and it stays as inert as it would be
-      // natively — see `isBraidInert`
-      if (!isBraidInert(candidate)) continue;
+      // a script that may not run, or a marker Braid did not set, is markup the fragment wrote, and
+      // it stays as inert as it would be natively — see `isRunnable`
+      if (candidate instanceof HTMLLinkElement ? !isBraidInertLink(candidate) : !isRunnable(candidate)) continue;
       if (candidate instanceof HTMLLinkElement) {
         executeInertPreloadLink(candidate, realmDocument);
       } else {
