@@ -13,8 +13,11 @@ export interface SiteStackProps extends StackProps {
   contactTo: string;
   /** The sender. Defaults to `contactTo`, which SES allows once that address is verified. */
   contactFrom?: string;
-  /** A custom domain, once there is one. Without it the site is main.<app>.amplifyapp.com. */
-  siteHostname?: string;
+  /**
+   * The site's hostname, attached to the Amplify app as its own domain (so it claims only this name,
+   * not its parent). The default main.<app>.amplifyapp.com keeps serving, but the form rejects it.
+   */
+  siteHostname: string;
   /** The repository whose deploys may publish the site, e.g. braidjs/braid. */
   githubRepo: string;
   /**
@@ -64,8 +67,15 @@ export class SiteStack extends Stack {
       platform: 'WEB',
       customHeaders: amplifyHeaders(props.headers),
     });
-    new amplify.CfnBranch(this, 'Main', { appId: app.attrAppId, branchName: 'main', stage: 'PRODUCTION', enableAutoBuild: false });
-    const siteOrigin = props.siteHostname ? `https://${props.siteHostname}` : `https://main.${app.attrDefaultDomain}`;
+    const branch = new amplify.CfnBranch(this, 'Main', { appId: app.attrAppId, branchName: 'main', stage: 'PRODUCTION', enableAutoBuild: false });
+    // The zone is in another account, so Amplify can't add the DNS records; see the README.
+    new amplify.CfnDomain(this, 'Domain', {
+      appId: app.attrAppId,
+      domainName: props.siteHostname,
+      subDomainSettings: [{ prefix: '', branchName: branch.attrBranchName }],
+      enableAutoSubDomain: false,
+    });
+    const siteOrigin = `https://${props.siteHostname}`;
     new ssm.StringParameter(this, 'SiteOrigin', { parameterName: PARAMETERS.siteOrigin, stringValue: siteOrigin });
 
     const table = new dynamodb.Table(this, 'RateLimit', {
@@ -93,6 +103,9 @@ export class SiteStack extends Stack {
         RATE_LIMIT_TABLE: table.tableName,
         CONTACT_TO: props.contactTo,
         CONTACT_FROM: contactFrom,
+        // A literal, so no cycle with the app, and changing it replaces warm instances, which
+        // cache the origin. lambda.ts falls back to the parameter when this is unset.
+        SITE_ORIGIN: siteOrigin,
         SITE_ORIGIN_PARAMETER: PARAMETERS.siteOrigin,
         PROXY_SECRET_PARAMETER: PARAMETERS.proxySecret,
         TURNSTILE_SECRET_PARAMETER: PARAMETERS.turnstileSecret,
