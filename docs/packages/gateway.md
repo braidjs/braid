@@ -138,3 +138,39 @@ interface FragmentManifest {
   events?: string[];
 }
 ```
+
+## Per-fragment cookies
+
+Trusted fragments share the host origin's cookie jar. When fragments' backends finish an
+authorization-code login by setting a session cookie, two of them setting `session` with `Path=/`
+overwrite each other. With `forwardCredentials`, every fragment's backend also receives every other
+fragment's session. A fragment whose manifest sets `capabilities.storage` gets cookies of its own:
+
+```jsonc
+{ "id": "orders", "endpoint": "https://orders.internal", "capabilities": { "storage": "partitioned" } }
+```
+
+- **On the way out**, the gateway renames each `Set-Cookie` from the fragment's endpoint into the
+  fragment's scope: `session=…` becomes `braid$orders$session=…`. A `__Host-` or `__Secure-` prefix
+  stays at the front. `Domain` is dropped and `Path` becomes `/`, so the cookie still arrives on
+  page requests and a pierced fragment renders signed in. This applies to namespace responses,
+  fragment documents and `redirect: 'navigate'` logins.
+- **On the way in**, the fragment's endpoint receives its own cookies under the names it set, on
+  namespace, document, pierce and websocket requests alike. It gets them even when
+  `forwardCredentials` is off, because its own login set them. The host's unscoped cookies are
+  added only when `forwardCredentials` allows. Another fragment's cookies are never sent.
+- **In the browser**, the fragment's `document.cookie` is the same scoped view (see
+  `@braidlabs/core`, "Per-fragment storage").
+- **Named partitions share cookies.** Fragments with `{ "partition": "kcd" }` share one scope, so
+  fragments on one issuer keep one login.
+
+Limits:
+
+- **Every scoped cookie travels on every request** to the origin. Large upstream sessions across
+  many fragments can exceed proxy header limits, which are commonly 8–16 KB.
+- **Only cookies that pass through the gateway are renamed.** A proxy *in front of* the gateway on
+  the same origin, such as an OIDC plugin at the edge, needs its own per-route session cookie
+  names.
+- **A fragment's requests must go through its namespace** (`/__braid/frag/<id>/…`) for its cookies
+  to reach its backend. A call to the host origin directly carries the scoped names, which the
+  backend won't recognise.

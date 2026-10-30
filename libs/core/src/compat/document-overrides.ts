@@ -1,5 +1,6 @@
 import { rewriteQuerySelector } from '../utils/selector-helpers.js';
 import { FacadeOverrides } from './document-facade.js';
+import { nativeCookieAccessor, type CookieAccessor } from './cookie-partition.js';
 
 /**
  * Hooks provided by the fragment boundary. Nodes created via the facade are stamped with the
@@ -16,6 +17,15 @@ export interface DocumentBoundaryHooks {
  * All dependencies are injected so that this module stays free of imports with side effects and
  * can be exercised by unit tests outside of a browser.
  */
+/** The realm document's native `cookie` accessor, if the engine has one where we can find it. */
+function findNativeCookie(realmDocument: Document): CookieAccessor | null {
+  try {
+    return nativeCookieAccessor(realmDocument);
+  } catch {
+    return null;
+  }
+}
+
 export interface DocumentOverridesContext {
   /** The document of the fragment's hidden realm iframe. */
   realmDocument: Document;
@@ -33,6 +43,11 @@ export interface DocumentOverridesContext {
   getCurrentScript: () => HTMLScriptElement | undefined;
   /** Boundary hooks; absent only in unit tests that exercise the overrides in isolation. */
   boundary?: DocumentBoundaryHooks;
+  /**
+   * `document.cookie` for a partitioned fragment (cookie-partition.ts). Absent for a shared one,
+   * which reads and writes the origin's jar natively.
+   */
+  cookie?: CookieAccessor;
 }
 
 /**
@@ -63,7 +78,16 @@ export function createDocumentOverrides(ctx: DocumentOverridesContext): FacadeOv
     return element;
   }
 
+  // the realm is same-origin, so the native accessor is the host origin's jar; captured before the
+  // facade swaps the document's prototype, which is the only reason it is an override at all
+  const nativeCookie = ctx.cookie ? null : findNativeCookie(realmDocument);
+
   return {
+    cookie: {
+      get: () => (ctx.cookie ? ctx.cookie.get() : (nativeCookie?.get() ?? '')),
+      set: (value: string) => (ctx.cookie ? ctx.cookie.set(value) : nativeCookie?.set(value)),
+    },
+
     title: {
       get: function () {
         return (

@@ -12,6 +12,7 @@ import { navigationBus, ensureHostNavigationSources } from './navigation-bus.js'
 import { createRealmNavigator } from './service-worker.js';
 import { installSharedGlobals } from './shared-globals.js';
 import { installStoragePartition, type StoragePartition } from './storage-partition.js';
+import { nativeCookieAccessor, partitionCookie } from './cookie-partition.js';
 import { RealmHandle } from '../realm/realm-manager.js';
 
 /**
@@ -372,23 +373,24 @@ export function initializeRealmContext(
     'currentScript',
   )!.get!.bind(realmDocument);
 
-  installDocumentFacade(
+  const documentOverrides = createDocumentOverrides({
     realmDocument,
-    createDocumentOverrides({
-      realmDocument,
-      mainDocument,
-      braidDocumentElement,
-      fragmentShadowRoot,
-      boundNavigation,
-      getRealmDocumentReadyState: () => fragmentShadowRoot[compatMetadataSymbol].documentReadyState,
-      // grab the currently executing script in the realm, and map it to its clone in the main document
-      getCurrentScript: () => execToInertScriptMap.get(getUnpatchedRealmDocumentCurrentScript()),
-      boundary: {
-        stampNode: fragmentBoundary.stampNode,
-        makeScriptBornInert,
-      },
-    }),
-  );
+    mainDocument,
+    braidDocumentElement,
+    fragmentShadowRoot,
+    boundNavigation,
+    getRealmDocumentReadyState: () => fragmentShadowRoot[compatMetadataSymbol].documentReadyState,
+    // grab the currently executing script in the realm, and map it to its clone in the main document
+    getCurrentScript: () => execToInertScriptMap.get(getUnpatchedRealmDocumentCurrentScript()),
+    boundary: {
+      stampNode: fragmentBoundary.stampNode,
+      makeScriptBornInert,
+    },
+    // a partitioned fragment sees its own cookies through document.cookie, as the gateway sends
+    // them to its endpoint
+    ...(storagePartition ? { cookie: partitionCookie(nativeCookieAccessor(realmDocument), storagePartition) } : {}),
+  });
+  installDocumentFacade(realmDocument, documentOverrides);
   // END> DOCUMENT PATCHES
 
   /** ---------------------------------------------- Event System Patches ------------------------------------------------ */

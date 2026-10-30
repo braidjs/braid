@@ -80,11 +80,12 @@ export const documentMemberClassification: Readonly<Record<string, DocumentMembe
   createRange: 'virtualized',
   createTextNode: 'virtualized',
   createTreeWalker: 'virtualized',
+  // the realm is same-origin, so it shares the cookie jar; a partitioned fragment (capabilities.storage)
+  // gets a scoped view of it instead (cookie-partition.ts), and a shared one the native jar
+  cookie: 'virtualized',
 
   // --- native: audited, the realm document's native behavior is correct for fragments ---
 
-  // the compat realm iframe is same-origin with the main document, so it shares the cookie jar
-  cookie: 'native',
 
   // fragments must see the fragment's window (the realm iframe's window), not the main window
   defaultView: 'native',

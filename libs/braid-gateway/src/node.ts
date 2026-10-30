@@ -226,6 +226,11 @@ export function toNodeUpgradeHandler(
       if (!target.forwardCredentials) {
         for (const name of target.credentialHeaders) delete headers[name];
       }
+      // a partitioned fragment's socket carries its own scoped cookies, like its fetches
+      if (target.cookie !== undefined) {
+        if (target.cookie === null) delete headers['cookie'];
+        else headers['cookie'] = target.cookie;
+      }
 
       const upstream = transport.request({
         host: target.target.hostname,
