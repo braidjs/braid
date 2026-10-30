@@ -32,6 +32,7 @@ import {
   resolveStoragePartition,
 } from '../weave/capabilities.js';
 import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
+import { BootGate, createBootGate, parseBootMode } from './boot-gate.js';
 
 /**
  * What the slot reports about its fragment.
@@ -149,6 +150,8 @@ export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
  * - `src` — optional route url for the fragment. When absent, the fragment is *bound*: it
  *   follows the host page's location and participates in host navigation.
  * - `props` — JSON attribute (or the `props` property) passed to the fragment instance.
+ * - `boot` — `eager` (default), `idle`, `visible`, or `interaction`: when to boot. Read when the
+ *   slot connects. See `boot-gate.ts`.
  *
  * Events: `braid:ready`, `braid:error` (detail includes stage + fix hint), `braid:event`
  * (fragment → host).
@@ -180,6 +183,8 @@ export class FragmentSlot extends HTMLElement {
   #dirty: string | null = null;
   #booted = false;
   #bootScheduled = false;
+  /** Waits for the slot's `boot` trigger; undefined once it has fired or the slot left the DOM. */
+  #bootGate: BootGate | undefined;
   /** Set by reload(): a reload must re-fetch, never re-adopt the pierced content. */
   #forceFetch = false;
   /** Which boot is current: a teardown or a newer boot makes an older one's outcome moot. */
@@ -271,14 +276,7 @@ export class FragmentSlot extends HTMLElement {
       if (this.isConnected && this.#booted) {
         void this.reload();
       } else if (this.isConnected && !this.#booted && !this.#bootScheduled) {
-        this.#bootScheduled = true;
-        queueMicrotask(() => {
-          this.#bootScheduled = false;
-          if (this.isConnected && !this.#booted) {
-            this.#booted = true;
-            void this.#boot();
-          }
-        });
+        this.#scheduleBoot();
       }
     }
   }
@@ -293,19 +291,39 @@ export class FragmentSlot extends HTMLElement {
     if (!this.name && (this.hasAttribute('outlet') || this.hasAttribute('data-braid-in-outlet'))) {
       return;
     }
+    this.#scheduleBoot();
+  }
+
+  /**
+   * Boots once the slot's `boot` trigger fires — on the next microtask for an eager slot.
+   *
+   * The microtask is what lets a host set `props` or attributes in the same task that inserted the
+   * slot; a deferred slot waits longer still, and boots with whatever name it has by then.
+   */
+  #scheduleBoot(): void {
     this.#bootScheduled = true;
-    queueMicrotask(() => {
+    const gate = createBootGate(this, parseBootMode(this.getAttribute('boot'), this.name), {
+      pierced: findPiercedContentRoot(this.shadowRoot) !== null,
+      fragmentId: this.name,
+    });
+    this.#bootGate = gate;
+    // replayed, if anything was held, once the fragment can handle it; dropped if it never can
+    this.addEventListener('braid:ready', () => setTimeout(() => gate.replay(), 0), { once: true });
+    void gate.triggered.then(() => queueMicrotask(() => {
+      if (this.#bootGate !== gate) return;
       this.#bootScheduled = false;
       if (!this.isConnected || this.#booted) {
         return;
       }
       this.#booted = true;
       void this.#boot();
-    });
+    }));
   }
 
   disconnectedCallback() {
     this.#bootScheduled = false;
+    this.#bootGate?.dispose();
+    this.#bootGate = undefined;
     // Not awaited, because `disconnectedCallback` cannot be. The close runs on after the element
     // has left the DOM — which is exactly the window a flush needs, and the reason the fragment's
     // realm is not disposed until the negotiation finishes.
