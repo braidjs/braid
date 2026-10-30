@@ -14,7 +14,7 @@
  */
 
 /** Attributes that point at a subresource the fragment owns, per element (as in the gateway). */
-export const SUBRESOURCE_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = {
+export const SUBRESOURCE_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = Object.assign(Object.create(null), {
   audio: ['src'],
   embed: ['src'],
   iframe: ['src'],
@@ -27,45 +27,55 @@ export const SUBRESOURCE_ATTRIBUTES: Readonly<Record<string, readonly string[]>>
   track: ['src'],
   use: ['href'],
   video: ['src', 'poster'],
-};
+});
 
 const NAMESPACE = /^(.*?\/__braid\/frag\/[^/]+)(\/.*)?$/;
 
 /**
- * One URL mapped into the fragment's namespace, given the realm document's base URL (which points
- * into that namespace). Absolute URLs, protocol-relative ones and pure fragments are returned as
- * they are, and so is anything when the base is not a fragment namespace.
+ * The fragment's namespace root (`/__braid/frag/<id>`, behind any gateway `basePath`), read off
+ * the realm document's base URL, which points into it. `null` when it does not.
  */
-export function fragmentSubresourceUrl(value: string, realmBaseUrl: string): string {
-  const url = value.trim();
-  if (!url || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) return value;
-
-  let basePath: string;
+export function fragmentRootOf(realmBaseUrl: string): string | null {
   try {
-    basePath = new URL(realmBaseUrl).pathname;
+    return NAMESPACE.exec(new URL(realmBaseUrl).pathname)?.[1] ?? null;
   } catch {
-    return value;
+    return null;
   }
-  const match = NAMESPACE.exec(basePath);
-  if (!match) return value;
-  const [, root, fragmentBase = '/'] = match;
-
-  // resolve as the fragment's own document would, then re-root — the gateway's rule exactly
-  const resolved = new URL(url, `http://braid.invalid${fragmentBase}`);
-  return `${root}${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
-/** Each candidate of a `srcset`, mapped, with its descriptor kept. */
-export function fragmentSrcset(value: string, realmBaseUrl: string): string {
+/**
+ * One URL mapped into the fragment's namespace — the gateway's `namespaceUrl`, exactly: resolved
+ * against the fragment's own `<base href>` (default `/`) as its document would, then re-rooted.
+ * Absolute URLs, protocol-relative ones, pure fragments and URLs already inside the namespace are
+ * returned as they are.
+ */
+export function fragmentSubresourceUrl(value: string, fragmentRoot: string, fragmentBaseHref = '/'): string {
+  const url = value.trim();
+  if (!url || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) return value;
+  // already re-rooted — markup the gateway prepared, an attribute read back and set again
+  if (url === fragmentRoot || url.startsWith(`${fragmentRoot}/`)) return value;
+
+  const resolved = new URL(url, `http://braid.invalid${fragmentBaseHref.startsWith('/') ? fragmentBaseHref : `/${fragmentBaseHref}`}`);
+  return `${fragmentRoot}${resolved.pathname}${resolved.search}${resolved.hash}`;
+}
+
+/** Each candidate of a `srcset`, mapped, with its descriptor kept (split as the gateway splits). */
+export function fragmentSrcset(value: string, fragmentRoot: string, fragmentBaseHref = '/'): string {
   return value
     .split(',')
     .map((candidate) => {
       const match = /^(\s*)(\S+)(\s*.*)$/.exec(candidate);
       if (!match) return candidate;
       const [, leading, url, descriptor] = match;
-      return `${leading}${fragmentSubresourceUrl(url, realmBaseUrl)}${descriptor}`;
+      return `${leading}${fragmentSubresourceUrl(url, fragmentRoot, fragmentBaseHref)}${descriptor}`;
     })
     .join(',');
+}
+
+/** Where a stamped element's URLs resolve: the namespace root, and the fragment's own base href. */
+export interface FragmentUrlBase {
+  root: string | null;
+  baseHref: string;
 }
 
 /**
@@ -73,13 +83,15 @@ export function fragmentSrcset(value: string, realmBaseUrl: string): string {
  * `setAttribute`/`setAttributeNS` map relative URLs into the fragment's namespace. Empty for an
  * element with no subresource attributes. Reading returns whatever the native getter does.
  */
-export function subresourceUrlOverrides(proto: object, localName: string, realmBaseUrl: () => string): PropertyDescriptorMap {
-  const attributes = SUBRESOURCE_ATTRIBUTES[localName];
+export function subresourceUrlOverrides(proto: object, localName: string, base: () => FragmentUrlBase): PropertyDescriptorMap {
+  const attributes = Object.hasOwn(SUBRESOURCE_ATTRIBUTES, localName) ? SUBRESOURCE_ATTRIBUTES[localName] : undefined;
   if (!attributes) return {};
 
   const rewrite = (name: string, value: unknown): unknown => {
     if (typeof value !== 'string' || !attributes.includes(name)) return value;
-    return name === 'srcset' ? fragmentSrcset(value, realmBaseUrl()) : fragmentSubresourceUrl(value, realmBaseUrl());
+    const { root, baseHref } = base();
+    if (root === null) return value;
+    return name === 'srcset' ? fragmentSrcset(value, root, baseHref) : fragmentSubresourceUrl(value, root, baseHref);
   };
 
   const overrides: PropertyDescriptorMap = {};

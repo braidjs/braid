@@ -73,9 +73,10 @@ beforeAll(async () => {
         {
           id: 'msg',
           endpoint: endpoint((path) => {
-            if (path.endsWith('/reply-parent.html')) return html(replyParent);
-            if (path.endsWith('/reply-relative.html')) return html(`<script>parent.postMessage({ probe: 'relative' }, '*')</script>`);
-            if (path.endsWith('/reply-opener.html')) return html(replyOpener);
+            // exact paths: a URL the client re-rooted twice must not be answered
+            if (path === '/reply-parent.html') return html(replyParent);
+            if (path === '/reply-relative.html') return html(`<script>parent.postMessage({ probe: 'relative' }, '*')</script>`);
+            if (path === '/reply-opener.html') return html(replyOpener);
             return html(messagingFragment);
           }),
         },

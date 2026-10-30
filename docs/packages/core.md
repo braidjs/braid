@@ -109,6 +109,9 @@ arrives on the host window or the realm window, and whether it was registered wi
 - the fragment can also post to itself.
 
 `event.origin` and `event.source` are untouched, so a library's own origin checks still apply.
+That matters, because both styles also hear every other message posted to the host window,
+other fragments' traffic included: check `event.origin` and `event.source` before trusting one.
+A `{ once: true }` listener fires once, whichever window the message lands on.
 
 ### Per-fragment storage
 
