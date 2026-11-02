@@ -11,7 +11,7 @@ const registeredMount = () =>
 
 let finishLoading: () => void;
 
-@Component({ selector: 'test-fragment', standalone: true, template: '<p>fragment</p>' })
+@Component({ selector: 'braid-test-fragment', standalone: true, template: '<p>fragment</p>' })
 class FragmentComponent implements OnInit {
   readonly #tasks = inject(PendingTasks);
   ngOnInit(): void {

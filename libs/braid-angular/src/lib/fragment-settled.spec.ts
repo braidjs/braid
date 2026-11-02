@@ -12,7 +12,7 @@ import { provideBraidFragment } from './fragment-settled';
 
 let finishLoading: () => void;
 
-@Component({ selector: 'test-app', standalone: true, template: '<p>app</p>' })
+@Component({ selector: 'braid-test-app', standalone: true, template: '<p>app</p>' })
 class AppComponent implements OnInit {
   readonly #tasks = inject(PendingTasks);
   ngOnInit(): void {
@@ -23,7 +23,7 @@ class AppComponent implements OnInit {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 async function bootstrap(): Promise<ApplicationRef> {
-  document.body.replaceChildren(document.createElement('test-app'));
+  document.body.replaceChildren(document.createElement('braid-test-app'));
   const app = await createApplication({ providers: [provideZonelessChangeDetection(), provideBraidFragment()] });
   app.bootstrap(AppComponent);
   return app;
@@ -45,7 +45,7 @@ describe('provideBraidFragment()', () => {
     const app = await bootstrap();
 
     await settle();
-    expect(document.querySelector('test-app p')?.textContent).toBe('app');
+    expect(document.querySelector('braid-test-app p')?.textContent).toBe('app');
     expect(reports).toBe(0);
 
     finishLoading();
