@@ -27,7 +27,10 @@ beforeAll(async () => {
       ],
     },
     body:
-      '<fragment-slot name="reports"></fragment-slot><fragment-slot name="silent" settle-timeout="1000"></fragment-slot>' +
+      // the skeleton pattern the slot's documentation gives, kept up until the fragment has settled
+      '<fragment-slot name="reports"></fragment-slot><div id="reports-skeleton" class="skeleton" hidden>…</div>' +
+      '<fragment-slot name="silent" settle-timeout="1000"></fragment-slot>' +
+      '<style>.skeleton { height: 40px; } fragment-slot:not([settled], [state="error"]) + .skeleton { display: block; }</style>' +
       `<script>
         window.settledEvents = [];
         for (const slot of document.querySelectorAll('fragment-slot')) {
@@ -48,8 +51,10 @@ describe('settled', () => {
     await page.goto(host.url);
     await page.waitForSelector('fragment-slot[name="reports"][state="healthy"]', { state: 'attached', timeout: 15_000 });
     expect(await page.getAttribute('fragment-slot[name="reports"]', 'settled')).toBeNull();
+    expect(await page.isVisible('#reports-skeleton')).toBe(true);
 
     await page.waitForSelector('fragment-slot[name="reports"][settled]', { state: 'attached', timeout: 10_000 });
+    expect(await page.isVisible('#reports-skeleton')).toBe(false);
     const events = await page.evaluate(() => (window as unknown as { settledEvents: unknown[] }).settledEvents);
     expect(events).toContainEqual({ fragmentId: 'reports', timedOut: false, state: 'healthy' });
     await page.close();

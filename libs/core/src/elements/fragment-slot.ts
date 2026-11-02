@@ -304,10 +304,14 @@ export class FragmentSlot extends HTMLElement {
    * is running, which is true from its first beat — while the application inside may still be
    * showing its own spinner. `settled` says the fragment has finished its own initial loading,
    * which only the fragment can know: it reports it (`env.settled()`, `provideBraidFragment()` in
-   * Angular), and a host keeps its skeleton up until then:
+   * Angular), and a host keeps its skeleton up until then. Not through `slot="loading"`, which is
+   * the slot's own boot-time state and gives way at first paint, but as a sibling the host styles:
    *
+   * ```html
+   * <fragment-slot name="contact"></fragment-slot><div class="skeleton" hidden></div>
+   * ```
    * ```css
-   * fragment-slot:not([settled], [state="error"]) > [slot="loading"] { display: block; }
+   * fragment-slot:not([settled], [state="error"]) + .skeleton { display: block; }
    * ```
    *
    * A fragment that never reports is settled anyway `settle-timeout` milliseconds after `ready`, with
