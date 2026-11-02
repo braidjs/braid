@@ -238,10 +238,19 @@ export function prepareFragmentHtml(
 /**
  * The media an `onload="this.media='…'"` handler switches a stylesheet to.
  *
- * Captured only when the value is a plain media query list — nothing a handler could smuggle out
- * of the attribute — so the result is the same either way the browser would read it.
+ * Captured only when the value is a plain media query list (range syntax included) — no quote or `&`,
+ * nothing a handler could smuggle out of the attribute — so the result is the same either way the
+ * browser would read it. The `this.onload=null` reset is accepted before or after.
  */
-const DEFERRED_STYLESHEET_ONLOAD = /^\s*(?:this\.onload\s*=\s*null\s*;?\s*)?this\.media\s*=\s*(['"])([\w\s(),:.-]+)\1\s*;?\s*$/;
+const DEFERRED_STYLESHEET_ONLOAD =
+  /^\s*(?:this\.onload\s*=\s*null\s*;\s*)?this\.media\s*=\s*(['"])([\w\s(),:.<>=/-]+)\1\s*(?:;\s*this\.onload\s*=\s*null\s*)?(?:;\s*)?$/;
+
+/**
+ * Longer than any real handler of that shape. The pattern is linear — no two whitespace runs are
+ * separated by only optional tokens, which made an earlier version quadratic on a long run of
+ * spaces — but a fragment's attribute is unbounded input, so it is not trusted to stay that way.
+ */
+const MAX_DEFERRED_STYLESHEET_ONLOAD = 512;
 
 /**
  * Applies the media a deferred stylesheet's `onload` would have switched it to.
@@ -257,7 +266,9 @@ const DEFERRED_STYLESHEET_ONLOAD = /^\s*(?:this\.onload\s*=\s*null\s*;?\s*)?this
  */
 function applyDeferredStylesheetMedia(tag: StartTag): void {
   if (!/(?:^|\s)stylesheet(?:\s|$)/i.test(tag.getAttribute('rel') ?? '')) return;
-  const media = DEFERRED_STYLESHEET_ONLOAD.exec(tag.getAttribute('onload') ?? '')?.[2];
+  const onload = tag.getAttribute('onload') ?? '';
+  if (onload.length > MAX_DEFERRED_STYLESHEET_ONLOAD) return;
+  const media = DEFERRED_STYLESHEET_ONLOAD.exec(onload)?.[2];
   if (media) tag.setAttribute('media', media.trim());
 }
 

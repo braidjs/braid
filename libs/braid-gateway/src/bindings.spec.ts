@@ -200,11 +200,49 @@ describe('h3 / Nitro', () => {
 });
 
 describe('Node response framing', () => {
+  it('drops the endpoint\'s hop-by-hop headers, and any its connection header names', async () => {
+    const gateway = createGateway({
+      registry: [
+        {
+          id: 'billing',
+          endpoint: (async () =>
+            new Response('x', {
+              headers: { 'content-type': 'text/javascript', 'transfer-encoding': 'identity', connection: 'keep-alive, x-hop', 'x-hop': '1', 'keep-alive': 'timeout=5' },
+            })) as unknown as typeof fetch,
+        },
+      ],
+    });
+    const response = await gateway.handle(new Request('http://localhost/__braid/frag/billing/a.js'), async () => new Response(null, { status: 404 }));
+
+    for (const name of ['transfer-encoding', 'connection', 'keep-alive', 'x-hop']) expect(response!.headers.has(name)).toBe(false);
+    expect(response!.headers.get('content-type')).toBe('text/javascript');
+    expect(await response!.text()).toBe('x');
+  });
+
   /**
    * `fetch` decodes a compressed upstream body but keeps the upstream's `content-encoding` and
    * `content-length`. Forwarded unchanged, Node writes the decoded bytes after a header promising
    * fewer, and the surplus lands at the head of the next response on the same keep-alive socket.
    */
+  it('asks a URL endpoint only for codings every fetch decodes, whatever the browser accepts', async () => {
+    let asked: string | undefined;
+    const upstream = await listen(
+      createServer((req, res) => {
+        asked = req.headers['accept-encoding'];
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': '2' }).end('ok');
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const response = await gateway.handle(
+      new Request('http://localhost/__braid/frag/billing/a.js', { headers: { 'accept-encoding': 'gzip, deflate, br, zstd' } }),
+      async () => new Response(null, { status: 404 }),
+    );
+
+    expect(asked).toBe('gzip, x-gzip, deflate, br');
+    expect(await response!.text()).toBe('ok');
+    expect(response!.headers.get('content-length')).toBe('2');
+  });
+
   it('forwards a compressed upstream body with headers that describe it, and keeps the socket usable', async () => {
     const { gzipSync } = await import('node:zlib');
     const { Agent, get } = await import('node:http');

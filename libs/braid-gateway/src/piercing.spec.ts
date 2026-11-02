@@ -90,6 +90,7 @@ describe('prepareFragmentHtml()', () => {
           streamOf(
             `<link rel="stylesheet" href="styles.css" media="print" onload="this.media='all'">` +
               `<link rel="stylesheet" href="b.css" media="print" onload="this.onload=null;this.media=&quot;screen and (min-width: 40em)&quot;">` +
+              `<link rel="stylesheet" href="d.css" media="print" onload="this.media='(width >= 40em)';this.onload=null">` +
               `<link rel="stylesheet" href="print.css" media="print">` +
               `<link rel="stylesheet" href="c.css" media="print" onload="this.media='all';host()">`,
           ),
@@ -99,10 +100,28 @@ describe('prepareFragmentHtml()', () => {
 
       expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/styles.css" media="all">');
       expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/b.css" media="screen and (min-width: 40em)">');
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/d.css" media="(width >= 40em)">');
       // a real print stylesheet, and a handler that does more than set the media, stay print-only
       expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/print.css" media="print">');
       expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/c.css" media="print">');
       expect(output).not.toMatch(/\sonload\s*=/i);
+    });
+
+    it('reads a fragment-supplied onload in linear time, whatever its length', async () => {
+      const spaces = ' '.repeat(200_000);
+      const started = performance.now();
+      const output = await collect(
+        prepareFragmentHtml(
+          streamOf(
+            `<link rel="stylesheet" href="a.css" media="print" onload="this.onload=null${spaces}x">` +
+              `<link rel="stylesheet" href="b.css" media="print" onload="this.media='all'${spaces}x">`,
+          ),
+          { fragmentId: 'billing' },
+        ),
+      );
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(output).not.toMatch(/\sonload\s*=/i);
+      expect(output.match(/media="print"/g)).toHaveLength(2);
     });
 
     it('leaves framework binding syntaxes alone', async () => {

@@ -1214,6 +1214,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     // the endpoint serves an embedded fragment, not a full document
     fragmentRequest.headers.set('sec-fetch-dest', 'empty');
+    // only codings every platform fetch decodes, so the coding of what comes back is known: a
+    // browser's `zstd` would come back decoded by some runtimes and not others (see `forwardable`)
+    if (fragmentFetch === globalThis.fetch) fragmentRequest.headers.set('accept-encoding', [...FETCH_DECODED_CODINGS].join(', '));
     fragmentRequest.headers.set('x-braid-fragment-mode', 'embedded');
 
     /**
@@ -1295,7 +1298,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       };
       const sentResponse = key ? await singleFlight!.run(key, send) : await send();
       // a function endpoint hands over its own bytes; only the platform fetch decodes them
-      const response = fragmentFetch === globalThis.fetch ? framedAsDecoded(sentResponse) : sentResponse;
+      const response = forwardable(sentResponse, fragmentFetch === globalThis.fetch);
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
@@ -1856,22 +1859,40 @@ function hopCount(request: Request): number {
 const FETCH_DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
 
 /**
- * A fetched response with headers that describe the body it actually carries.
- *
- * `fetch` decodes a compressed body but keeps the endpoint's `content-encoding` and
- * `content-length`, which describe the bytes on the wire, not the decoded body. Forwarded as they
- * are, the client gets a body it cannot decode and — worse, on Node, which writes whatever bytes
- * it is given — more bytes than the declared length on a keep-alive connection. The surplus is read
- * as the start of the *next* response on that socket, so a different request fails: Chrome retries
- * it on a fresh socket until it gives up with `ERR_TOO_MANY_RETRIES`. The length always goes (the
- * server frames the body itself); the coding goes when it is one `fetch` decoded.
+ * Headers that describe one connection, not the response (RFC 9110 §7.6.1). The gateway's
+ * connection to the client is its own; forwarding the endpoint's would let the endpoint frame it —
+ * a `transfer-encoding: identity` with the length removed leaves the body unframed on a keep-alive
+ * connection, and a proxy in front may read the rest as its next response.
  */
-function framedAsDecoded(response: Response): Response {
+const HOP_BY_HOP_HEADERS = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authenticate', 'proxy-authorization'];
+
+/**
+ * An endpoint's response with headers that describe what the gateway will actually send.
+ *
+ * Hop-by-hop headers always go, with any the endpoint's `connection` names. And when the platform
+ * `fetch` produced the response (`decodedByFetch`), the body was decoded but `content-encoding` and
+ * `content-length` still describe the bytes on the wire. Forwarded as they are, the client gets a
+ * body it cannot decode and — worse, on Node, which writes whatever bytes it is given — more bytes
+ * than the declared length on a keep-alive connection. The surplus is read as the start of the
+ * *next* response on that socket, so a different request fails. So when the coding is one `fetch`
+ * decoded, both go and the server frames the body itself; an identity response keeps its length.
+ *
+ * Only what the platform `fetch` returned: a function endpoint hands over its own bytes and is
+ * trusted to describe them — one that wraps `fetch` must drop these headers itself. On Workers,
+ * which would re-encode a passed-through body, this costs the compression of that one hop.
+ */
+function forwardable(response: Response, decodedByFetch: boolean): Response {
   const encoding = response.headers.get('content-encoding');
-  if (encoding === null && !response.headers.has('content-length')) return response;
+  const connection = response.headers.get('connection');
+  const reframe =
+    decodedByFetch && encoding !== null && encoding.split(',').every((coding) => FETCH_DECODED_CODINGS.has(coding.trim().toLowerCase()));
+  if (!reframe && !HOP_BY_HOP_HEADERS.some((name) => response.headers.has(name))) return response;
+
   const headers = new Headers(response.headers);
-  headers.delete('content-length');
-  if (encoding?.split(',').every((coding) => FETCH_DECODED_CODINGS.has(coding.trim().toLowerCase()))) {
+  for (const name of connection?.split(',') ?? []) if (name.trim()) headers.delete(name.trim());
+  for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
+  if (reframe) {
+    headers.delete('content-length');
     headers.delete('content-encoding');
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
