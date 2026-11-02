@@ -92,6 +92,56 @@ export function createFragmentBoundary(options: {
   const stampedProtoSet = new WeakSet<object>();
   let warnedAboutUnstampedEntry = false;
 
+  /**
+   * The method a node would have without this boundary's stamp: whatever its prototype chain
+   * provides above the stamp, read at call time.
+   *
+   * A custom element may override insertion on its own class — Stencil's scoped components do, to
+   * move light-DOM children into the element's inner slot. The stamp sits above that class, so
+   * calling the native method here would silently skip the override: children land on the host
+   * instead of in the slot, and an `insertBefore` whose reference the component had relocated
+   * throws `NotFoundError`. Anything not stamped by this boundary (the shadow root's own-property
+   * overrides) gets the native method.
+   */
+  function unstampedMethod(node: Node, name: string, nativeMethod: Function): Function {
+    let stampedProto = Object.getPrototypeOf(node);
+    while (stampedProto !== null && !stampedProtoSet.has(stampedProto)) stampedProto = Object.getPrototypeOf(stampedProto);
+    if (stampedProto === null) return nativeMethod;
+    const method = Reflect.get(Object.getPrototypeOf(stampedProto) ?? {}, name, node);
+    return typeof method === 'function' ? method : nativeMethod;
+  }
+
+  /**
+   * Custom elements stamped before their definition existed, by tag name.
+   *
+   * Upgrading an element replaces its prototype with the definition's, which drops the stamp. Most
+   * upgrades happen during an insertion the boundary stamps after anyway; this catches the rest —
+   * an element already in the fragment's DOM when its definition arrives.
+   */
+  const awaitingDefinition = new Map<string, Set<WeakRef<Element>>>();
+
+  function restampWhenDefined(element: Element): void {
+    const name = element.localName;
+    let waiting = awaitingDefinition.get(name);
+    if (!waiting) {
+      const elements = new Set<WeakRef<Element>>();
+      awaitingDefinition.set(name, (waiting = elements));
+      // the host's registry: fragment DOM lives in the host document, so that is what upgrades it
+      customElements.whenDefined(name).then(
+        () => {
+          awaitingDefinition.delete(name);
+          if (abortSignal.aborted) return;
+          for (const ref of elements) {
+            const element = ref.deref();
+            if (element) stampNode(element);
+          }
+        },
+        () => awaitingDefinition.delete(name),
+      );
+    }
+    waiting.add(new WeakRef(element));
+  }
+
   /** A node is inside this fragment's DOM iff its plain root is the fragment's shadow root. */
   function isInFragmentDom(node: Node): boolean {
     return native.getRootNode.call(node) === shadowRoot;
@@ -212,12 +262,12 @@ export function createFragmentBoundary(options: {
    * `compatDomInsertion`). In all cases the inserted subtree is stamped so the stamped set
    * stays closed.
    */
-  function makeSingleNodeInsertion(nativeFn: Function) {
+  function makeSingleNodeInsertion(name: string, nativeFn: Function) {
     return function boundaryInsertion<T extends Node>(this: Node, childNode: T): T {
       const args = arguments;
       const futureStamps = nodesToStampAfterInsertion(childNode);
       const doInsertTheNode = () => {
-        const result = nativeFn.apply(this, args);
+        const result = unstampedMethod(this, name, nativeFn).apply(this, args);
         futureStamps.forEach(stampTree);
         return result as T;
       };
@@ -236,7 +286,7 @@ export function createFragmentBoundary(options: {
     const args = arguments;
     const futureStamps = nodesToStampAfterInsertion(newChild);
     const doInsertTheNode = () => {
-      const result = native.replaceChild.apply(this, args as any);
+      const result = unstampedMethod(this, 'replaceChild', native.replaceChild).apply(this, args as any);
       futureStamps.forEach(stampTree);
       return result;
     };
@@ -252,7 +302,7 @@ export function createFragmentBoundary(options: {
   function boundaryInsertAdjacentElement(this: Element, where: InsertPosition, element: Element): Element | null {
     const args = arguments;
     const doInsertTheNode = () => {
-      const result = native.insertAdjacentElement.apply(this, args as any);
+      const result = unstampedMethod(this, 'insertAdjacentElement', native.insertAdjacentElement).apply(this, args as any);
       stampTree(element);
       return result;
     };
@@ -268,14 +318,14 @@ export function createFragmentBoundary(options: {
    * replaceWith): the native insertion runs once, after every node argument has been
    * preprocessed.
    */
-  function makeMultiNodeInsertion(nativeFn: Function) {
+  function makeMultiNodeInsertion(name: string, nativeFn: Function) {
     return function boundaryMultiInsertion(this: Node, ...nodes: (Node | string)[]) {
       const args = arguments;
       const nodeArgs = nodes.filter((node): node is Node => typeof node !== 'string');
       const futureStamps = nodeArgs.flatMap(nodesToStampAfterInsertion);
 
       const doInsertTheNodes = () => {
-        nativeFn.apply(this, args);
+        unstampedMethod(this, name, nativeFn).apply(this, args);
         futureStamps.forEach(stampTree);
       };
 
@@ -318,18 +368,18 @@ export function createFragmentBoundary(options: {
   }
 
   const elementOverrides: PropertyDescriptorMap = {
-    appendChild: { configurable: true, writable: true, value: makeSingleNodeInsertion(native.appendChild) },
-    insertBefore: { configurable: true, writable: true, value: makeSingleNodeInsertion(native.insertBefore) },
+    appendChild: { configurable: true, writable: true, value: makeSingleNodeInsertion('appendChild', native.appendChild) },
+    insertBefore: { configurable: true, writable: true, value: makeSingleNodeInsertion('insertBefore', native.insertBefore) },
     replaceChild: { configurable: true, writable: true, value: boundaryReplaceChild },
     insertAdjacentElement: { configurable: true, writable: true, value: boundaryInsertAdjacentElement },
-    append: { configurable: true, writable: true, value: makeMultiNodeInsertion(native.elementAppend) },
-    prepend: { configurable: true, writable: true, value: makeMultiNodeInsertion(native.elementPrepend) },
+    append: { configurable: true, writable: true, value: makeMultiNodeInsertion('append', native.elementAppend) },
+    prepend: { configurable: true, writable: true, value: makeMultiNodeInsertion('prepend', native.elementPrepend) },
     replaceChildren: {
       configurable: true,
       writable: true,
-      value: makeMultiNodeInsertion(native.elementReplaceChildren),
+      value: makeMultiNodeInsertion('replaceChildren', native.elementReplaceChildren),
     },
-    replaceWith: { configurable: true, writable: true, value: makeMultiNodeInsertion(native.elementReplaceWith) },
+    replaceWith: { configurable: true, writable: true, value: makeMultiNodeInsertion('replaceWith', native.elementReplaceWith) },
     insertAdjacentHTML: {
       configurable: true,
       writable: true,
@@ -356,7 +406,7 @@ export function createFragmentBoundary(options: {
           else native.elementAfter.call(this, cleaned);
         } else {
           // also what throws for an unknown position, or outside an element with no parent
-          native.insertAdjacentHTML.call(this, position, text);
+          unstampedMethod(this, 'insertAdjacentHTML', native.insertAdjacentHTML).call(this, position, text);
         }
         stampTree(inside ? this : this.parentNode ?? this);
       },
@@ -365,7 +415,7 @@ export function createFragmentBoundary(options: {
       configurable: true,
       writable: true,
       value: function boundaryCloneNode(this: Node, deep?: boolean) {
-        const clone = native.cloneNode.call(this, deep);
+        const clone = unstampedMethod(this, 'cloneNode', native.cloneNode).call(this, deep);
         inheritProvenance(this, clone, Boolean(deep));
         stampTree(clone);
         return clone;
@@ -405,12 +455,16 @@ export function createFragmentBoundary(options: {
 
   function stampNode(node: Node): void {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
-    if (stampedNodes.has(node)) return;
 
+    // by prototype, not by membership: an upgrade replaces a stamped element's prototype, and the
+    // next stamping pass that reaches it should put the stamp back
     const proto = Object.getPrototypeOf(node);
     if (proto === null || stampedProtoSet.has(proto)) {
       stampedNodes.add(node);
       return;
+    }
+    if (proto === HTMLElement.prototype && (node as Element).localName.includes('-')) {
+      restampWhenDefined(node as Element);
     }
 
     let stampedProto = stampedProtos.get(proto);
@@ -444,15 +498,15 @@ export function createFragmentBoundary(options: {
    * (reporting the main document) — only insertions are intercepted.
    */
   Object.defineProperties(shadowRoot, {
-    appendChild: { configurable: true, writable: true, value: makeSingleNodeInsertion(native.appendChild) },
-    insertBefore: { configurable: true, writable: true, value: makeSingleNodeInsertion(native.insertBefore) },
+    appendChild: { configurable: true, writable: true, value: makeSingleNodeInsertion('appendChild', native.appendChild) },
+    insertBefore: { configurable: true, writable: true, value: makeSingleNodeInsertion('insertBefore', native.insertBefore) },
     replaceChild: { configurable: true, writable: true, value: boundaryReplaceChild },
-    append: { configurable: true, writable: true, value: makeMultiNodeInsertion(native.fragmentAppend) },
-    prepend: { configurable: true, writable: true, value: makeMultiNodeInsertion(native.fragmentPrepend) },
+    append: { configurable: true, writable: true, value: makeMultiNodeInsertion('append', native.fragmentAppend) },
+    prepend: { configurable: true, writable: true, value: makeMultiNodeInsertion('prepend', native.fragmentPrepend) },
     replaceChildren: {
       configurable: true,
       writable: true,
-      value: makeMultiNodeInsertion(native.fragmentReplaceChildren),
+      value: makeMultiNodeInsertion('replaceChildren', native.fragmentReplaceChildren),
     },
     ...makeHtmlParsingOverrides(native.shadowRootInnerHTML),
   });
