@@ -77,6 +77,93 @@ export interface FragmentBoundary {
   disconnect(): void;
 }
 
+/**
+ * Every boundary's stamped prototypes and installed wrappers, page-wide. A node that moves between
+ * fragments carries a stamp from each, and delegation has to see past all of them.
+ */
+const allStampedProtos = new WeakSet<object>();
+const allBoundaryWrappers = new WeakSet<Function>();
+
+/**
+ * The built-in prototypes the intercepted methods are defined on. A method found on one of these is
+ * the platform's — or a host page's later patch of it, which fragment nodes have never run.
+ */
+const PLATFORM_PROTOTYPES = new Set<object>([Node.prototype, Element.prototype, HTMLElement.prototype, DocumentFragment.prototype]);
+
+/**
+ * The method a node would have without any boundary's stamp: whatever its prototype chain defines
+ * below the lowest stamp, read at call time — or the native method, when that is the platform's.
+ *
+ * A custom element may override insertion on its own class — Stencil's scoped components do, to
+ * move light-DOM children into the element's inner slot. The stamp sits above that class, so
+ * calling the native method unconditionally would skip the override: children land on the host
+ * instead of in the slot, and an `insertBefore` whose reference the component had relocated throws
+ * `NotFoundError`.
+ *
+ * Past the *lowest* stamp, of any boundary, so a node stamped by fragment A, then B, then A again
+ * never delegates from one boundary's wrapper to another's and back. Unstamped receivers (a shadow
+ * root's own-property overrides) get the native method.
+ */
+function unstampedMethod(node: Node, name: string, nativeMethod: Function): Function {
+  let belowStamps: object | null | undefined;
+  for (let proto = Object.getPrototypeOf(node); proto !== null; proto = Object.getPrototypeOf(proto)) {
+    if (allStampedProtos.has(proto)) belowStamps = Object.getPrototypeOf(proto);
+  }
+  for (let owner = belowStamps; owner; owner = Object.getPrototypeOf(owner)) {
+    if (!Object.hasOwn(owner, name)) continue;
+    if (PLATFORM_PROTOTYPES.has(owner)) return nativeMethod;
+    const method = Object.getOwnPropertyDescriptor(owner, name)?.value;
+    return typeof method === 'function' && !allBoundaryWrappers.has(method) ? method : nativeMethod;
+  }
+  return nativeMethod;
+}
+
+/**
+ * Custom elements stamped before their definition existed, page-wide by tag name, and what restamps
+ * each one.
+ *
+ * Upgrading an element replaces its prototype with the definition's, which drops the stamp. Most
+ * upgrades happen during an insertion the boundary stamps after anyway; this catches the rest — an
+ * element already in a fragment's DOM when its definition arrives *in the host's registry*, which is
+ * the one that upgrades fragment DOM: a shared component bundle the host loads. A compat fragment's
+ * own `customElements.define` goes to its realm's registry and never resolves here.
+ *
+ * Many dashed names are never defined at all (every Angular component host), so nothing here may
+ * keep a boundary alive: one `whenDefined` per name for the page, closing over only the waiting
+ * set, and each element's restamper held weakly by the element.
+ */
+const awaitingDefinition = new Map<string, { elements: Set<WeakRef<Element>>; pruneAt: number }>();
+const restampers = new WeakMap<Element, (element: Element) => void>();
+
+function restampWhenDefined(element: Element, restamp: (element: Element) => void): void {
+  const alreadyWaiting = restampers.has(element);
+  restampers.set(element, restamp);
+  if (alreadyWaiting) return;
+
+  const name = element.localName;
+  let waiting = awaitingDefinition.get(name);
+  if (!waiting) {
+    const entry = { elements: new Set<WeakRef<Element>>(), pruneAt: 1024 };
+    awaitingDefinition.set(name, (waiting = entry));
+    customElements.whenDefined(name).then(
+      () => {
+        awaitingDefinition.delete(name);
+        for (const ref of entry.elements) {
+          const defined = ref.deref();
+          if (defined) restampers.get(defined)?.(defined);
+        }
+      },
+      () => awaitingDefinition.delete(name),
+    );
+  }
+  // a long-lived list of a never-defined element leaves dead refs behind; sweep them as it grows
+  if (waiting.elements.size >= waiting.pruneAt) {
+    for (const ref of waiting.elements) if (!ref.deref()) waiting.elements.delete(ref);
+    waiting.pruneAt = Math.max(1024, waiting.elements.size * 2);
+  }
+  waiting.elements.add(new WeakRef(element));
+}
+
 export function createFragmentBoundary(options: {
   realmDocument: Document;
   shadowRoot: ShadowRoot;
@@ -92,54 +179,19 @@ export function createFragmentBoundary(options: {
   const stampedProtoSet = new WeakSet<object>();
   let warnedAboutUnstampedEntry = false;
 
-  /**
-   * The method a node would have without this boundary's stamp: whatever its prototype chain
-   * provides above the stamp, read at call time.
-   *
-   * A custom element may override insertion on its own class — Stencil's scoped components do, to
-   * move light-DOM children into the element's inner slot. The stamp sits above that class, so
-   * calling the native method here would silently skip the override: children land on the host
-   * instead of in the slot, and an `insertBefore` whose reference the component had relocated
-   * throws `NotFoundError`. Anything not stamped by this boundary (the shadow root's own-property
-   * overrides) gets the native method.
-   */
-  function unstampedMethod(node: Node, name: string, nativeMethod: Function): Function {
-    let stampedProto = Object.getPrototypeOf(node);
-    while (stampedProto !== null && !stampedProtoSet.has(stampedProto)) stampedProto = Object.getPrototypeOf(stampedProto);
-    if (stampedProto === null) return nativeMethod;
-    const method = Reflect.get(Object.getPrototypeOf(stampedProto) ?? {}, name, node);
-    return typeof method === 'function' ? method : nativeMethod;
+  /** Restamps an upgraded element, unless it has left this fragment or the fragment is gone. */
+  function restampIfStillInFragment(element: Element): void {
+    if (!abortSignal.aborted && isInFragmentDom(element)) stampNode(element);
   }
 
   /**
-   * Custom elements stamped before their definition existed, by tag name.
-   *
-   * Upgrading an element replaces its prototype with the definition's, which drops the stamp. Most
-   * upgrades happen during an insertion the boundary stamps after anyway; this catches the rest —
-   * an element already in the fragment's DOM when its definition arrives.
+   * Stamps what an insertion put in place: anything in the fragment's DOM, or in a detached tree,
+   * which may enter it later. Not a node a component's own insertion override placed in the host's
+   * DOM instead (a portal, an overlay) — that is the host's, and stays on pristine prototypes.
    */
-  const awaitingDefinition = new Map<string, Set<WeakRef<Element>>>();
-
-  function restampWhenDefined(element: Element): void {
-    const name = element.localName;
-    let waiting = awaitingDefinition.get(name);
-    if (!waiting) {
-      const elements = new Set<WeakRef<Element>>();
-      awaitingDefinition.set(name, (waiting = elements));
-      // the host's registry: fragment DOM lives in the host document, so that is what upgrades it
-      customElements.whenDefined(name).then(
-        () => {
-          awaitingDefinition.delete(name);
-          if (abortSignal.aborted) return;
-          for (const ref of elements) {
-            const element = ref.deref();
-            if (element) stampNode(element);
-          }
-        },
-        () => awaitingDefinition.delete(name),
-      );
-    }
-    waiting.add(new WeakRef(element));
+  function stampInserted(node: Node): void {
+    if (node.isConnected && !isInFragmentDom(node)) return;
+    stampTree(node);
   }
 
   /** A node is inside this fragment's DOM iff its plain root is the fragment's shadow root. */
@@ -268,7 +320,7 @@ export function createFragmentBoundary(options: {
       const futureStamps = nodesToStampAfterInsertion(childNode);
       const doInsertTheNode = () => {
         const result = unstampedMethod(this, name, nativeFn).apply(this, args);
-        futureStamps.forEach(stampTree);
+        futureStamps.forEach(stampInserted);
         return result as T;
       };
 
@@ -287,7 +339,7 @@ export function createFragmentBoundary(options: {
     const futureStamps = nodesToStampAfterInsertion(newChild);
     const doInsertTheNode = () => {
       const result = unstampedMethod(this, 'replaceChild', native.replaceChild).apply(this, args as any);
-      futureStamps.forEach(stampTree);
+      futureStamps.forEach(stampInserted);
       return result;
     };
 
@@ -303,7 +355,7 @@ export function createFragmentBoundary(options: {
     const args = arguments;
     const doInsertTheNode = () => {
       const result = unstampedMethod(this, 'insertAdjacentElement', native.insertAdjacentElement).apply(this, args as any);
-      stampTree(element);
+      stampInserted(element);
       return result;
     };
 
@@ -326,7 +378,7 @@ export function createFragmentBoundary(options: {
 
       const doInsertTheNodes = () => {
         unstampedMethod(this, name, nativeFn).apply(this, args);
-        futureStamps.forEach(stampTree);
+        futureStamps.forEach(stampInserted);
       };
 
       if (!isInFragmentDom(this)) {
@@ -442,6 +494,9 @@ export function createFragmentBoundary(options: {
     },
     ...makeHtmlParsingOverrides(native.elementInnerHTML),
   };
+  for (const descriptor of Object.values(elementOverrides)) {
+    if (typeof descriptor.value === 'function') allBoundaryWrappers.add(descriptor.value);
+  }
 
   /**
    * What a URL set from fragment script resolves against, read when it is set: the namespace from
@@ -464,7 +519,7 @@ export function createFragmentBoundary(options: {
       return;
     }
     if (proto === HTMLElement.prototype && (node as Element).localName.includes('-')) {
-      restampWhenDefined(node as Element);
+      restampWhenDefined(node as Element, restampIfStillInFragment);
     }
 
     let stampedProto = stampedProtos.get(proto);
@@ -477,6 +532,7 @@ export function createFragmentBoundary(options: {
       });
       stampedProtos.set(proto, stampedProto!);
       stampedProtoSet.add(stampedProto!);
+      allStampedProtos.add(stampedProto!);
     }
     Object.setPrototypeOf(node, stampedProto!);
     stampedNodes.add(node);

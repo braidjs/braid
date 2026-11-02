@@ -56,6 +56,15 @@ import { resolveHtmlPolicy } from '../compat/html-policy.js';
 /** How long after `ready` a slot waits for its fragment to report settled before saying so itself. */
 const DEFAULT_SETTLE_TIMEOUT_MS = 10_000;
 
+/** The longest delay `setTimeout` honors; anything longer fires at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** The `settle-timeout` attribute as a delay: the default when absent, empty or not a number. */
+export function settleTimeoutMs(attribute: string | null): number {
+  const value = attribute?.trim() ? Number(attribute) : NaN;
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, MAX_TIMER_DELAY_MS) : DEFAULT_SETTLE_TIMEOUT_MS;
+}
+
 export type FragmentSlotState =
   | 'idle'
   | 'loading'
@@ -298,31 +307,31 @@ export class FragmentSlot extends HTMLElement {
    * Angular), and a host keeps its skeleton up until then:
    *
    * ```css
-   * fragment-slot:not([settled]) > [slot="loading"] { display: block; }
+   * fragment-slot:not([settled], [state="error"]) > [slot="loading"] { display: block; }
    * ```
    *
    * A fragment that never reports is settled anyway `settle-timeout` milliseconds after `ready`, with
-   * `timedOut: true` on the event, so a skeleton cannot stick forever.
+   * `timedOut: true` on the event, so a skeleton cannot stick forever. One that fails never settles —
+   * it has nothing to show — so a skeleton keyed on `settled` gives way to `[state="error"]`, as above.
    */
   get settled(): boolean {
     return this.#settled;
   }
 
-  #listenForSettled(channel: BoundaryChannel, fragmentId: string): void {
-    channel.on(SETTLED, () => this.#markSettled(fragmentId, false));
+  #listenForSettled(channel: BoundaryChannel, fragmentId: string, signal: AbortSignal): void {
+    // a boot that has been torn down speaks for nothing: a newer one may already be on screen
+    channel.on(SETTLED, () => {
+      if (!signal.aborted) this.#markSettled(fragmentId, false);
+    });
   }
 
   #armSettleFallback(fragmentId: string, signal: AbortSignal): void {
     if (this.#settled) return;
     this.#cancelSettleFallback();
-    const timeoutMs = Number(this.getAttribute('settle-timeout') ?? DEFAULT_SETTLE_TIMEOUT_MS);
-    this.#settleTimer = setTimeout(
-      () => {
-        this.#settleTimer = undefined;
-        if (!signal.aborted) this.#markSettled(fragmentId, true);
-      },
-      Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : DEFAULT_SETTLE_TIMEOUT_MS,
-    );
+    this.#settleTimer = setTimeout(() => {
+      this.#settleTimer = undefined;
+      if (!signal.aborted) this.#markSettled(fragmentId, true);
+    }, settleTimeoutMs(this.getAttribute('settle-timeout')));
   }
 
   #markSettled(fragmentId: string, timedOut: boolean): void {
@@ -777,7 +786,7 @@ export class FragmentSlot extends HTMLElement {
         const { type, detail } = (payload ?? {}) as FragmentEventPayload;
         this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
       });
-      this.#listenForSettled(hostChannel, fragmentId);
+      this.#listenForSettled(hostChannel, fragmentId, signal);
 
       const { env, opened } = createFragmentEnv({
         contentRoot,
@@ -1012,7 +1021,7 @@ export class FragmentSlot extends HTMLElement {
       const { type, detail } = (payload ?? {}) as FragmentEventPayload;
       this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
     });
-    this.#listenForSettled(hostChannel, fragmentId);
+    this.#listenForSettled(hostChannel, fragmentId, signal);
 
     const { env, opened } = createFragmentEnv({
       contentRoot,
@@ -1162,7 +1171,7 @@ export class FragmentSlot extends HTMLElement {
       const { type, detail } = (payload ?? {}) as FragmentEventPayload;
       this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
     });
-    this.#listenForSettled(hostChannel, fragmentId);
+    this.#listenForSettled(hostChannel, fragmentId, signal);
 
     /**
      * Listening starts *before* the handshake; judging starts at `mounted`.

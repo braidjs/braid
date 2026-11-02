@@ -92,7 +92,6 @@ export interface FragmentEnv {
    * then a host skeleton can stay up even though the slot is `healthy`. Later calls do nothing.
    */
   settled(): void;
-  /** Fires on unmount| null): void;
   /** Fires on unmount, after every `onClosing` handler has settled or the deadline has passed. */
   readonly signal: AbortSignal;
 }

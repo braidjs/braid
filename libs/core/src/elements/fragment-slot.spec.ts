@@ -9,6 +9,7 @@ import {
   FragmentRedirectError,
   FragmentSlot,
   REDIRECT_LOOP_WINDOW_MS,
+  settleTimeoutMs,
   followFragmentRedirect,
   slotStateFor,
   type RedirectDeps,
@@ -431,5 +432,20 @@ describe('<fragment-slot outlet>', () => {
 
     expect(errors).toHaveLength(1);
     host.remove();
+  });
+});
+
+describe('settleTimeoutMs()', () => {
+  it('reads a delay, and falls back to the default for anything that is not one', () => {
+    expect(settleTimeoutMs('250')).toBe(250);
+    expect(settleTimeoutMs('0')).toBe(0);
+    expect(settleTimeoutMs(null)).toBe(10_000);
+    expect(settleTimeoutMs('')).toBe(10_000);
+    expect(settleTimeoutMs('soon')).toBe(10_000);
+    expect(settleTimeoutMs('-5')).toBe(10_000);
+  });
+
+  it('clamps to what a timer can wait, rather than overflowing into firing at once', () => {
+    expect(settleTimeoutMs('9999999999')).toBe(2_147_483_647);
   });
 });

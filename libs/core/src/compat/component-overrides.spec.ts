@@ -30,7 +30,7 @@ class SlotRelocating extends HTMLElement {
 }
 customElements.define('test-relocating', SlotRelocating);
 
-function fragmentContainer(): { container: HTMLElement; realmDocument: Document } {
+function fragmentContainer(): { container: HTMLElement; realmDocument: Document; controller: AbortController } {
   const host = document.createElement('div');
   document.body.append(host);
   const shadowRoot = host.attachShadow({ mode: 'open' });
@@ -40,8 +40,9 @@ function fragmentContainer(): { container: HTMLElement; realmDocument: Document 
   shadowRoot.append(braidDocument);
   const realmDocument = document.implementation.createHTMLDocument();
   setInternalReference(realmDocument, 'body');
-  createFragmentBoundary({ realmDocument, shadowRoot, braidDocumentElement: braidDocument, abortSignal: new AbortController().signal });
-  return { container, realmDocument };
+  const controller = new AbortController();
+  createFragmentBoundary({ realmDocument, shadowRoot, braidDocumentElement: braidDocument, abortSignal: controller.signal });
+  return { container, realmDocument, controller };
 }
 
 /** Where each child ends up, as a string, so the two runs compare as one value. */
@@ -88,4 +89,77 @@ describe('a custom element’s own insertion overrides, inside a compat fragment
     element.appendChild(document.createElement('i'));
     expect(element.outerHTML).toBe('<test-late-relocating><div class="slot"><i></i></div></test-late-relocating>');
   });
+
+  it('leaves a node a component moved into the host’s DOM on pristine prototypes', () => {
+    class Portal extends HTMLElement {
+      override appendChild<T extends Node>(node: T): T {
+        return document.body.appendChild(node);
+      }
+    }
+    customElements.define('test-portal', Portal);
+    const { container } = fragmentContainer();
+    const portal = document.createElement('test-portal');
+    container.appendChild(portal);
+
+    const overlay = portal.appendChild(document.createElement('div'));
+    expect(overlay.parentNode).toBe(document.body);
+    expect(Object.getPrototypeOf(overlay)).toBe(HTMLDivElement.prototype);
+  });
+
+  it('does not recurse when a node carries this boundary’s stamp twice', () => {
+    const { container } = fragmentContainer();
+    const element = document.createElement('div');
+    container.appendChild(element);
+    // code that builds on a stamped prototype, which the boundary then stamps again
+    Object.setPrototypeOf(element, Object.create(Object.getPrototypeOf(element)));
+    element.remove();
+    container.appendChild(element);
+
+    expect(() => element.appendChild(document.createElement('i'))).not.toThrow();
+    expect(element.children).toHaveLength(1);
+  });
+
+  it('does not restamp an element that left the fragment before its definition arrived', async () => {
+    const { container } = fragmentContainer();
+    const element = document.createElement('test-departed');
+    container.appendChild(element);
+    document.body.appendChild(element);
+
+    customElements.define('test-departed', class extends HTMLElement {});
+    await customElements.whenDefined('test-departed');
+    await Promise.resolve();
+    expect(Object.getPrototypeOf(Object.getPrototypeOf(element))).toBe(HTMLElement.prototype);
+  });
+
+  it('delegates past every fragment’s stamp when a node moves between fragments and back', () => {
+    const a = fragmentContainer().container;
+    const b = fragmentContainer().container;
+    const element = document.createElement('test-relocating');
+    a.appendChild(element);
+    b.appendChild(element);
+    a.appendChild(element);
+
+    expect(() => element.appendChild(document.createElement('i'))).not.toThrow();
+    expect(element.outerHTML).toBe('<test-relocating><div class="slot"><i></i></div></test-relocating>');
+  });
+
+  it('does not run a host page’s later patch of a native method for fragment nodes', () => {
+    const { container } = fragmentContainer();
+    const element = document.createElement('div');
+    container.appendChild(element);
+    const original = Node.prototype.appendChild;
+    let patchedCalls = 0;
+    Node.prototype.appendChild = function <T extends Node>(this: Node, node: T): T {
+      patchedCalls++;
+      return original.call(this, node) as T;
+    };
+    try {
+      element.appendChild(document.createElement('i'));
+    } finally {
+      Node.prototype.appendChild = original;
+    }
+    expect(patchedCalls).toBe(0);
+    expect(element.children).toHaveLength(1);
+  });
 });
+
