@@ -1,3 +1,25 @@
+# patch (2026-11-02)
+
+### 🚀 Features
+
+- **angular:** report settled after the first screen has loaded ([b014d37](https://github.com/braidjs/braid/commit/b014d37))
+- **core:** settled signal on fragment-slot, separate from liveness ([b3996cf](https://github.com/braidjs/braid/commit/b3996cf))
+
+### 🩹 Fixes
+
+- **angular:** tolerate a host env without settled; note zone timers ([f042088](https://github.com/braidjs/braid/commit/f042088))
+- **compat:** let custom elements' own insertion overrides run in fragments ([9ab567a](https://github.com/braidjs/braid/commit/9ab567a))
+- **compat:** delegate past every boundary's stamp; bound definition waiters ([7a9e3dc](https://github.com/braidjs/braid/commit/7a9e3dc))
+- **gateway:** promote deferred stylesheets instead of leaving them print-only ([6156d05](https://github.com/braidjs/braid/commit/6156d05))
+- **gateway:** drop wire framing headers from decoded upstream responses ([6cdde57](https://github.com/braidjs/braid/commit/6cdde57))
+- **gateway:** harden upstream framing and the deferred stylesheet match ([3357435](https://github.com/braidjs/braid/commit/3357435))
+- **gateway:** never trust a fetched length under any coding; strict writes ([204a43b](https://github.com/braidjs/braid/commit/204a43b))
+- **gateway:** refuse an upstream coding that was not requested ([1f2ac8f](https://github.com/braidjs/braid/commit/1f2ac8f))
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.7.0 (2026-10-30)
 
 ### 🚀 Features
