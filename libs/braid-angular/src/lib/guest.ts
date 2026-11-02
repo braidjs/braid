@@ -51,8 +51,9 @@ export function defineAngularFragment<T>(options: AngularFragmentOptions<T>): vo
       });
       app.attachView(component.hostView);
       // rendered with nothing pending, HTTP included: what the host's skeleton was waiting for
+      // optional: the env comes from the host's @braidlabs/core, which may predate `settled`
       void whenFirstStable(app).then(() => {
-        if (!env.signal.aborted) env.settled();
+        if (!env.signal.aborted) env.settled?.();
       });
 
       /**

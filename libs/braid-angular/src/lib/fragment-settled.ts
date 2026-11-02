@@ -26,6 +26,11 @@ import { braidFragmentReporter } from '@braidlabs/core';
  * loading, so this one provider is the price. Outside a Braid realm — the app served standalone —
  * there is no reporter and it does nothing. Contract fragments don't need it:
  * `defineAngularFragment` reports on its own.
+ *
+ * In a zone-based app, stability also waits for the zone's timers: an app that polls, or keeps an
+ * `interval` running from the start, never becomes stable, and its slot settles only by the host's
+ * `settle-timeout` fallback. Run such timers outside the zone (`NgZone.runOutsideAngular`), as
+ * Angular already recommends for them.
  */
 export function provideBraidFragment(): EnvironmentProviders {
   return makeEnvironmentProviders([
