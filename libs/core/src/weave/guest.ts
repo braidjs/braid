@@ -12,7 +12,7 @@ import { createClosingCoordinator, ClosingCoordinator } from './closing.js';
 import { FragmentContract } from './contract.js';
 import { OpenPayload, answerHandshake } from './handshake.js';
 import { startFragmentBeats } from './liveness.js';
-import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload } from './messages.js';
+import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload, SETTLED } from './messages.js';
 
 /**
  * The guest half of the untrusted tier: what a cross-origin fragment runs to join a host page.
@@ -43,6 +43,8 @@ export interface GuestSession {
   onPropsChanged(listener: (props: Readonly<Record<string, unknown>>) => void): () => void;
   /** Fragment → host. Surfaced on the slot element as `braid:event`. */
   emit(type: string, detail?: unknown): void;
+  /** Reports the fragment's first content as settled; see `FragmentEnv.settled`. */
+  settled(): void;
   onClosing: ClosingCoordinator['onClosing'];
   setDirty: ClosingCoordinator['setDirty'];
   /** Aborts when the host closes the session. */
@@ -141,6 +143,7 @@ export async function connectToBraidHost(options: ConnectOptions): Promise<Guest
       return () => void propsListeners.delete(listener);
     },
     emit: (type, detail) => channel.send(FRAGMENT_EVENT, { type, detail }),
+    settled: () => channel.send(SETTLED),
     onClosing: closing.onClosing,
     setDirty: closing.setDirty,
     signal: controller.signal,

@@ -27,6 +27,7 @@ export type { BraidOptions, RealmGlobalsHook } from './config.js';
 export type { PrerequisiteOutcome, PrerequisiteResolver } from './elements/prerequisites.js';
 export { NotEntitledError } from './elements/prerequisites.js';
 export type { FragmentEnv, EnvDocument, EnvLocation, EnvHistory, EnvContext, EnvSubscribeOptions } from './env/fragment-env.js';
+export { BRAID_FRAGMENT_REPORTER, braidFragmentReporter, type BraidFragmentReporter } from './weave/messages.js';
 export type { BraidAdapter } from './adapters/adapter.js';
 export { DEFAULT_ADAPTER } from './adapters/adapter.js';
 export { customElementAdapter } from './adapters/custom-element-adapter.js';

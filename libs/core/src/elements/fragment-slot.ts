@@ -18,7 +18,8 @@ import { createSameRealmBackingPair } from '../weave/same-realm-backing.js';
 import { weaveId } from '../weave/envelope.js';
 import { performHostHandshake } from '../weave/handshake.js';
 import { attachContextRouter } from '../weave/context-bridge.js';
-import { FRAGMENT_EVENT, FragmentEventPayload, PROPS_CHANGED } from '../weave/messages.js';
+import { BRAID_FRAGMENT_REPORTER, FRAGMENT_EVENT, FragmentEventPayload, PROPS_CHANGED, SETTLED } from '../weave/messages.js';
+import type { BoundaryChannel } from '../weave/channel.js';
 import { HostLiveness, LivenessState, startFragmentBeats, startHostLiveness } from '../weave/liveness.js';
 import { CloseReason, DIRTY, DirtyPayload, closeAndDispose } from '../weave/closing.js';
 import { negotiateContract } from '../weave/contract.js';
@@ -52,6 +53,9 @@ import { resolveHtmlPolicy } from '../compat/html-policy.js';
  * - `unobservable` — the tab is hidden, so the host has stopped being able to tell. Not a fault.
  * - `suspect` → `gone` — beats stopped while the fragment should have been running.
  */
+/** How long after `ready` a slot waits for its fragment to report settled before saying so itself. */
+const DEFAULT_SETTLE_TIMEOUT_MS = 10_000;
+
 export type FragmentSlotState =
   | 'idle'
   | 'loading'
@@ -173,8 +177,11 @@ export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
  * - `boot` — `eager` (default), `idle`, `visible`, or `interaction`: when to boot. Read when the
  *   slot connects, or when a deferred slot's late markup arrives. See `boot-gate.ts`.
  *
+ * - `settle-timeout` — milliseconds after `ready` before the slot reports `settled` on its own, for a
+ *   fragment that never says it has (default 10000). See {@link FragmentSlot.settled}.
+ *
  * Events: `braid:ready`, `braid:error` (detail includes stage + fix hint), `braid:event`
- * (fragment → host).
+ * (fragment → host), `braid:settled` (detail: `{ fragmentId, timedOut }`).
  *
  * The slot uses only its own shadow root and its own elements — the host page is never patched.
  */
@@ -184,6 +191,8 @@ export class FragmentSlot extends HTMLElement {
   }
 
   #state: FragmentSlotState = 'idle';
+  #settled = false;
+  #settleTimer: ReturnType<typeof setTimeout> | undefined;
   #props: Record<string, unknown> = {};
   /** Host end of this instance's boundary channel; undefined between teardown and the next boot. */
   #channel: ReturnType<typeof createBoundaryChannel> | undefined;
@@ -267,6 +276,9 @@ export class FragmentSlot extends HTMLElement {
     this.#state = next;
     this.setAttribute('state', next);
     if (next !== 'loading') this.#clearBusy();
+    // a new boot, or none, has not settled; a failed or closing one never will
+    if (next === 'loading' || next === 'idle') this.#resetSettled();
+    else if (next === 'error' || next === 'closing') this.#cancelSettleFallback();
     this.dispatchEvent(new CustomEvent('braid:state', { detail: { state: next, previous, fragmentId: this.name } }));
     // not over unsaved work: a fragment that declared some may yet come back with it
     if (next === 'gone' && this.#dirty === null) this.#recovery.onGone();
@@ -274,6 +286,63 @@ export class FragmentSlot extends HTMLElement {
 
   get name(): string {
     return this.getAttribute('name') ?? '';
+  }
+
+  /**
+   * Whether the fragment's first content has settled, reflected as the `settled` attribute.
+   *
+   * Not a slot state, because it answers a different question. `healthy` says the fragment's realm
+   * is running, which is true from its first beat — while the application inside may still be
+   * showing its own spinner. `settled` says the fragment has finished its own initial loading,
+   * which only the fragment can know: it reports it (`env.settled()`, `provideBraidFragment()` in
+   * Angular), and a host keeps its skeleton up until then:
+   *
+   * ```css
+   * fragment-slot:not([settled]) > [slot="loading"] { display: block; }
+   * ```
+   *
+   * A fragment that never reports is settled anyway `settle-timeout` milliseconds after `ready`, with
+   * `timedOut: true` on the event, so a skeleton cannot stick forever.
+   */
+  get settled(): boolean {
+    return this.#settled;
+  }
+
+  #listenForSettled(channel: BoundaryChannel, fragmentId: string): void {
+    channel.on(SETTLED, () => this.#markSettled(fragmentId, false));
+  }
+
+  #armSettleFallback(fragmentId: string, signal: AbortSignal): void {
+    if (this.#settled) return;
+    this.#cancelSettleFallback();
+    const timeoutMs = Number(this.getAttribute('settle-timeout') ?? DEFAULT_SETTLE_TIMEOUT_MS);
+    this.#settleTimer = setTimeout(
+      () => {
+        this.#settleTimer = undefined;
+        if (!signal.aborted) this.#markSettled(fragmentId, true);
+      },
+      Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : DEFAULT_SETTLE_TIMEOUT_MS,
+    );
+  }
+
+  #markSettled(fragmentId: string, timedOut: boolean): void {
+    if (this.#settled) return;
+    this.#cancelSettleFallback();
+    this.#settled = true;
+    this.setAttribute('settled', '');
+    this.dispatchEvent(new CustomEvent('braid:settled', { detail: { fragmentId, timedOut } }));
+  }
+
+  #cancelSettleFallback(): void {
+    if (this.#settleTimer === undefined) return;
+    clearTimeout(this.#settleTimer);
+    this.#settleTimer = undefined;
+  }
+
+  #resetSettled(): void {
+    this.#cancelSettleFallback();
+    this.#settled = false;
+    this.removeAttribute('settled');
   }
 
   /**
@@ -708,6 +777,7 @@ export class FragmentSlot extends HTMLElement {
         const { type, detail } = (payload ?? {}) as FragmentEventPayload;
         this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
       });
+      this.#listenForSettled(hostChannel, fragmentId);
 
       const { env, opened } = createFragmentEnv({
         contentRoot,
@@ -779,6 +849,12 @@ export class FragmentSlot extends HTMLElement {
       await Promise.all([earlyPrerequisites, latePrerequisites]);
       if (signal.aborted) return;
 
+      // before any fragment code: an unmodified app has no env, so it reports through its global
+      Object.defineProperty(realm.window, BRAID_FRAGMENT_REPORTER, {
+        value: Object.freeze({ settled: () => env.settled() }),
+        configurable: true,
+      });
+
       await adapter.boot({
         fragmentId,
         shadowRoot,
@@ -801,6 +877,7 @@ export class FragmentSlot extends HTMLElement {
 
       this.#setState('ready');
       this.dispatchEvent(new CustomEvent('braid:ready', { detail: { fragmentId } }));
+      this.#armSettleFallback(fragmentId, signal);
 
       /**
        * Liveness starts only once the adapter has mounted.
@@ -935,6 +1012,7 @@ export class FragmentSlot extends HTMLElement {
       const { type, detail } = (payload ?? {}) as FragmentEventPayload;
       this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
     });
+    this.#listenForSettled(hostChannel, fragmentId);
 
     const { env, opened } = createFragmentEnv({
       contentRoot,
@@ -994,6 +1072,7 @@ export class FragmentSlot extends HTMLElement {
 
     this.#setState('ready');
     this.dispatchEvent(new CustomEvent('braid:ready', { detail: { fragmentId } }));
+    this.#armSettleFallback(fragmentId, signal);
 
     this.#liveness = startHostLiveness({
       channel: hostChannel,
@@ -1083,6 +1162,7 @@ export class FragmentSlot extends HTMLElement {
       const { type, detail } = (payload ?? {}) as FragmentEventPayload;
       this.dispatchEvent(new CustomEvent('braid:event', { detail: { type, detail }, bubbles: true }));
     });
+    this.#listenForSettled(hostChannel, fragmentId);
 
     /**
      * Listening starts *before* the handshake; judging starts at `mounted`.
@@ -1132,6 +1212,7 @@ export class FragmentSlot extends HTMLElement {
 
     this.#setState('ready');
     this.dispatchEvent(new CustomEvent('braid:ready', { detail: { fragmentId } }));
+    this.#armSettleFallback(fragmentId, signal);
 
     /**
      * No `startFragmentBeats` here. The guest schedules its own, in its own document, on its own

@@ -86,6 +86,13 @@ export interface FragmentEnv {
    * Braid never installs that handler itself; the host opts in via `slot.dirty`.
    */
   setDirty(reason: string | null): void;
+  /**
+   * Reports that the fragment's first content has settled — its own loading is done, not just its
+   * mount. The host sees it as the slot's `settled` attribute and a `braid:settled` event; until
+   * then a host skeleton can stay up even though the slot is `healthy`. Later calls do nothing.
+   */
+  settled(): void;
+  /** Fires on unmount| null): void;
   /** Fires on unmount, after every `onClosing` handler has settled or the deadline has passed. */
   readonly signal: AbortSignal;
 }

@@ -2,7 +2,7 @@ import { EnvLocation, FragmentEnv } from './fragment-env.js';
 import { BoundaryChannel } from '../weave/channel.js';
 import { createContextMirror } from '../weave/context-bridge.js';
 import { OpenPayload, answerHandshake } from '../weave/handshake.js';
-import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload } from '../weave/messages.js';
+import { FRAGMENT_EVENT, PROPS_CHANGED, PropsChangedPayload, SETTLED } from '../weave/messages.js';
 import { createClosingCoordinator } from '../weave/closing.js';
 
 export interface CreateEnvOptions {
@@ -154,6 +154,7 @@ export function createFragmentEnv(options: CreateEnvOptions): {
     emit: (type, detail) => channel.send(FRAGMENT_EVENT, { type, detail }),
     onClosing: closing.onClosing,
     setDirty: closing.setDirty,
+    settled: () => channel.send(SETTLED),
     signal,
   };
 
