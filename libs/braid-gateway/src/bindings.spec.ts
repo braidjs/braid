@@ -198,3 +198,51 @@ describe('h3 / Nitro', () => {
     expect(shellRuns).toBe(2);
   });
 });
+
+describe('Node response framing', () => {
+  /**
+   * `fetch` decodes a compressed upstream body but keeps the upstream's `content-encoding` and
+   * `content-length`. Forwarded unchanged, Node writes the decoded bytes after a header promising
+   * fewer, and the surplus lands at the head of the next response on the same keep-alive socket.
+   */
+  it('forwards a compressed upstream body with headers that describe it, and keeps the socket usable', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const { Agent, get } = await import('node:http');
+
+    const script = `console.log(${JSON.stringify('x'.repeat(4096))});`;
+    const compressed = gzipSync(script);
+    const upstream = await listen(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-encoding': 'gzip', 'content-length': compressed.length });
+        res.end(compressed);
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const origin = await listen(createServer((req, res) => toNodeMiddleware(gateway)(req, res, () => res.writeHead(404).end())));
+
+    // one socket for both requests, so the second can only succeed if the first left it clean
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const fetchOnAgent = (path: string) =>
+      new Promise<{ headers: Record<string, unknown>; body: string; reused: boolean }>((resolve, reject) => {
+        const req = get(`${origin}${path}`, { agent, headers: { 'accept-encoding': 'gzip', 'sec-fetch-dest': 'script' } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(chunks).toString(), reused: req.reusedSocket }));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+      });
+
+    try {
+      const first = await fetchOnAgent('/__braid/frag/billing/main.js');
+      expect(first.headers['content-encoding']).toBeUndefined();
+      expect(first.body).toBe(script);
+
+      const second = await fetchOnAgent('/__braid/frag/billing/other.js');
+      expect(second.reused).toBe(true);
+      expect(second.body).toBe(script);
+    } finally {
+      agent.destroy();
+    }
+  });
+});

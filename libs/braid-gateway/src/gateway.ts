@@ -1293,7 +1293,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         sent = true;
         return runFetch(fetchTelemetry, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }));
       };
-      const response = key ? await singleFlight!.run(key, send) : await send();
+      const sentResponse = key ? await singleFlight!.run(key, send) : await send();
+      // a function endpoint hands over its own bytes; only the platform fetch decodes them
+      const response = fragmentFetch === globalThis.fetch ? framedAsDecoded(sentResponse) : sentResponse;
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
@@ -1848,6 +1850,31 @@ function appendHop(request: Request): string {
 function hopCount(request: Request): number {
   const via = request.headers.get(BRAID_VIA_HEADER);
   return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
+}
+
+/** The content codings every platform `fetch` decodes before handing over the body. */
+const FETCH_DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+
+/**
+ * A fetched response with headers that describe the body it actually carries.
+ *
+ * `fetch` decodes a compressed body but keeps the endpoint's `content-encoding` and
+ * `content-length`, which describe the bytes on the wire, not the decoded body. Forwarded as they
+ * are, the client gets a body it cannot decode and — worse, on Node, which writes whatever bytes
+ * it is given — more bytes than the declared length on a keep-alive connection. The surplus is read
+ * as the start of the *next* response on that socket, so a different request fails: Chrome retries
+ * it on a fresh socket until it gives up with `ERR_TOO_MANY_RETRIES`. The length always goes (the
+ * server frames the body itself); the coding goes when it is one `fetch` decoded.
+ */
+function framedAsDecoded(response: Response): Response {
+  const encoding = response.headers.get('content-encoding');
+  if (encoding === null && !response.headers.has('content-length')) return response;
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  if (encoding?.split(',').every((coding) => FETCH_DECODED_CODINGS.has(coding.trim().toLowerCase()))) {
+    headers.delete('content-encoding');
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 /** Realm stub ETags by stub content, so a hot path does not hash the same few hundred bytes twice. */
