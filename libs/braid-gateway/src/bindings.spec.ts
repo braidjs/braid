@@ -276,7 +276,7 @@ describe('Node response framing', () => {
     expect(received).not.toContain('INJECTED');
   });
 
-  it('drops the length of a response in a coding it did not ask for, which fetch may have decoded', async () => {
+  it('refuses a response in a coding it did not ask for, which fetch may or may not have decoded', async () => {
     const { zstdCompressSync } = await import('node:zlib');
     const script = 'x'.repeat(4096);
     const compressed = zstdCompressSync(script);
@@ -289,7 +289,10 @@ describe('Node response framing', () => {
     const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
     const response = await gateway.handle(new Request('http://localhost/__braid/frag/billing/a.js'), async () => new Response(null, { status: 404 }));
 
-    expect(response!.headers.has('content-length')).toBe(false);
+    // never a body labelled with a coding it is not in, whichever way this runtime's fetch went
+    expect(response!.status).toBe(502);
+    expect(response!.headers.has('content-encoding')).toBe(false);
+    expect(await response!.text()).toContain('"zstd"');
   });
 
   it('answers HEAD for a forwarded asset that declares its length', async () => {

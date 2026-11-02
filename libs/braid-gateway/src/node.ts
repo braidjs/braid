@@ -80,6 +80,8 @@ export function toNodeMiddleware(
         }
         native.end();
       } catch (error) {
+        // the rest of the endpoint's body is not going anywhere
+        void reader?.cancel().catch(() => undefined);
         if ((error as { code?: string }).code !== 'ERR_HTTP_CONTENT_LENGTH_MISMATCH') throw error;
         res.destroy();
       } finally {
