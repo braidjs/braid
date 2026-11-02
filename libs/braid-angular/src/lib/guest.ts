@@ -1,6 +1,7 @@
 import { ApplicationRef, createComponent, type EnvironmentProviders, type Type } from '@angular/core';
 import { createApplication } from '@angular/platform-browser';
 import { defineFragment, type FragmentEnv, type FragmentContract } from '@braidlabs/core';
+import { whenFirstStable } from './fragment-settled';
 
 /**
  * The Angular guest binding: a contract-mode fragment.
@@ -49,6 +50,10 @@ export function defineAngularFragment<T>(options: AngularFragmentOptions<T>): vo
         hostElement: env.root,
       });
       app.attachView(component.hostView);
+      // rendered with nothing pending, HTTP included: what the host's skeleton was waiting for
+      void whenFirstStable(app).then(() => {
+        if (!env.signal.aborted) env.settled();
+      });
 
       /**
        * Destroyed on `signal`, which fires only after every `onClosing` handler has settled — so a
