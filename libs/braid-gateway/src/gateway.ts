@@ -1214,6 +1214,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
     // the endpoint serves an embedded fragment, not a full document
     fragmentRequest.headers.set('sec-fetch-dest', 'empty');
+    // only codings every platform fetch decodes, so the coding of what comes back is known: a
+    // browser's `zstd` would come back decoded by some runtimes and not others (see `forwardable`)
+    if (fragmentFetch === globalThis.fetch) fragmentRequest.headers.set('accept-encoding', [...FETCH_DECODED_CODINGS].join(', '));
     fragmentRequest.headers.set('x-braid-fragment-mode', 'embedded');
 
     /**
@@ -1293,7 +1296,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         sent = true;
         return runFetch(fetchTelemetry, () => fragmentFetch(fragmentRequest, { redirect: 'manual', signal: timeoutSignal }));
       };
-      const response = key ? await singleFlight!.run(key, send) : await send();
+      const sentResponse = key ? await singleFlight!.run(key, send) : await send();
+      // a function endpoint hands over its own bytes; only the platform fetch decodes them
+      const response = forwardable(sentResponse, fragmentFetch === globalThis.fetch);
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
@@ -1848,6 +1853,61 @@ function appendHop(request: Request): string {
 function hopCount(request: Request): number {
   const via = request.headers.get(BRAID_VIA_HEADER);
   return via ? via.split(',').filter((entry) => entry.trim()).length : 0;
+}
+
+/** The content codings every platform `fetch` decodes before handing over the body. */
+const FETCH_DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+
+/**
+ * Headers that describe one connection, not the response (RFC 9110 §7.6.1). The gateway's
+ * connection to the client is its own; forwarding the endpoint's would let the endpoint frame it —
+ * a `transfer-encoding: identity` with the length removed leaves the body unframed on a keep-alive
+ * connection, and a proxy in front may read the rest as its next response.
+ */
+const HOP_BY_HOP_HEADERS = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authenticate', 'proxy-authorization'];
+
+/**
+ * An endpoint's response with headers that describe what the gateway will actually send.
+ *
+ * Hop-by-hop headers always go, with any the endpoint's `connection` names. And when the platform
+ * `fetch` produced the response (`decodedByFetch`), the body was decoded but `content-encoding` and
+ * `content-length` still describe the bytes on the wire. Forwarded as they are, the client gets a
+ * body it cannot decode and — worse, on Node, which writes whatever bytes it is given — more bytes
+ * than the declared length on a keep-alive connection. The surplus is read as the start of the
+ * *next* response on that socket, so a different request fails. So for a coding `fetch` decodes,
+ * both go and the server frames the body itself; any other coding is refused (below). An identity
+ * response keeps its length. (The Node binding also refuses to write past a declared length,
+ * whatever produced it.)
+ *
+ * Only what the platform `fetch` returned: a function endpoint hands over its own bytes and is
+ * trusted to describe them — one that wraps `fetch` must drop these headers itself. On Workers,
+ * which would re-encode a passed-through body, this costs the compression of that one hop.
+ */
+function forwardable(response: Response, decodedByFetch: boolean): Response {
+  const encoding = response.headers.get('content-encoding');
+  const connection = response.headers.get('connection');
+  const reframe = decodedByFetch && encoding !== null;
+  // A coding the gateway did not ask for (it asks for exactly FETCH_DECODED_CODINGS): whether this
+  // runtime's fetch decoded it varies — Node's decodes zstd — so neither the length nor the coding
+  // can be said to describe the body. Refused, the same on every runtime, rather than guessed at.
+  const codings = encoding?.split(',').map((coding) => coding.trim().toLowerCase()).filter(Boolean) ?? [];
+  if (reframe && codings.some((coding) => coding !== 'identity' && !FETCH_DECODED_CODINGS.has(coding))) {
+    void response.body?.cancel();
+    return new Response(`braid-gateway: the endpoint answered in content-encoding "${encoding}", which was not requested`, {
+      status: 502,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  }
+  if (!reframe && !HOP_BY_HOP_HEADERS.some((name) => response.headers.has(name))) return response;
+
+  const headers = new Headers(response.headers);
+  for (const name of connection?.split(',') ?? []) if (name.trim()) headers.delete(name.trim());
+  for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
+  if (reframe) {
+    headers.delete('content-length');
+    headers.delete('content-encoding');
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 /** Realm stub ETags by stub content, so a hot path does not hash the same few hundred bytes twice. */

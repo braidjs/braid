@@ -166,6 +166,8 @@ export function prepareFragmentHtml(
     handlers: {
       '*': {
         element(tag) {
+          // before the handlers go: the onload is what says which media the sheet is really for
+          if (tag.tagName === 'link') applyDeferredStylesheetMedia(tag);
           for (const attributeName of tag.attributeNames) {
             if (INLINE_EVENT_HANDLER.test(attributeName)) {
               tag.removeAttribute(attributeName);
@@ -231,6 +233,43 @@ export function prepareFragmentHtml(
       },
     },
   });
+}
+
+/**
+ * The media an `onload="this.media='…'"` handler switches a stylesheet to.
+ *
+ * Captured only when the value is a plain media query list (range syntax included) — no quote or `&`,
+ * nothing a handler could smuggle out of the attribute — so the result is the same either way the
+ * browser would read it. The `this.onload=null` reset is accepted before or after.
+ */
+const DEFERRED_STYLESHEET_ONLOAD =
+  /^\s*(?:this\.onload\s*=\s*null\s*;\s*)?this\.media\s*=\s*(['"])([\w\s(),:.<>=/-]+)\1\s*(?:;\s*this\.onload\s*=\s*null\s*)?(?:;\s*)?$/;
+
+/**
+ * Longer than any real handler of that shape. The pattern is linear — no two whitespace runs are
+ * separated by only optional tokens, which made an earlier version quadratic on a long run of
+ * spaces — but a fragment's attribute is unbounded input, so it is not trusted to stay that way.
+ */
+const MAX_DEFERRED_STYLESHEET_ONLOAD = 512;
+
+/**
+ * Applies the media a deferred stylesheet's `onload` would have switched it to.
+ *
+ * `<link rel="stylesheet" media="print" onload="this.media='all'">` is how Angular (through its
+ * critical-CSS inliner) and others load a stylesheet without blocking render: the sheet is fetched
+ * as print-only, and the handler promotes it once it arrives. The handler is an inline event
+ * handler, which this transform removes — so without this, the sheet would stay print-only and
+ * the fragment would render unstyled. Writing the promoted media up front costs only the
+ * non-blocking load, which a fragment's shadow root does not get anyway.
+ *
+ * A `media="print"` link with no such handler is a real print stylesheet and is left alone.
+ */
+function applyDeferredStylesheetMedia(tag: StartTag): void {
+  if (!/(?:^|\s)stylesheet(?:\s|$)/i.test(tag.getAttribute('rel') ?? '')) return;
+  const onload = tag.getAttribute('onload') ?? '';
+  if (onload.length > MAX_DEFERRED_STYLESHEET_ONLOAD) return;
+  const media = DEFERRED_STYLESHEET_ONLOAD.exec(onload)?.[2];
+  if (media) tag.setAttribute('media', media.trim());
 }
 
 /**

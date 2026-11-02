@@ -198,3 +198,158 @@ describe('h3 / Nitro', () => {
     expect(shellRuns).toBe(2);
   });
 });
+
+describe('Node response framing', () => {
+  it('drops the endpoint\'s hop-by-hop headers, and any its connection header names', async () => {
+    const gateway = createGateway({
+      registry: [
+        {
+          id: 'billing',
+          endpoint: (async () =>
+            new Response('x', {
+              headers: { 'content-type': 'text/javascript', 'transfer-encoding': 'identity', connection: 'keep-alive, x-hop', 'x-hop': '1', 'keep-alive': 'timeout=5' },
+            })) as unknown as typeof fetch,
+        },
+      ],
+    });
+    const response = await gateway.handle(new Request('http://localhost/__braid/frag/billing/a.js'), async () => new Response(null, { status: 404 }));
+
+    for (const name of ['transfer-encoding', 'connection', 'keep-alive', 'x-hop']) expect(response!.headers.has(name)).toBe(false);
+    expect(response!.headers.get('content-type')).toBe('text/javascript');
+    expect(await response!.text()).toBe('x');
+  });
+
+  /**
+   * `fetch` decodes a compressed upstream body but keeps the upstream's `content-encoding` and
+   * `content-length`. Forwarded unchanged, Node writes the decoded bytes after a header promising
+   * fewer, and the surplus lands at the head of the next response on the same keep-alive socket.
+   */
+  it('asks a URL endpoint only for codings every fetch decodes, whatever the browser accepts', async () => {
+    let asked: string | undefined;
+    const upstream = await listen(
+      createServer((req, res) => {
+        asked = req.headers['accept-encoding'];
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': '2' }).end('ok');
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const response = await gateway.handle(
+      new Request('http://localhost/__braid/frag/billing/a.js', { headers: { 'accept-encoding': 'gzip, deflate, br, zstd' } }),
+      async () => new Response(null, { status: 404 }),
+    );
+
+    expect(asked).toBe('gzip, x-gzip, deflate, br');
+    expect(await response!.text()).toBe('ok');
+    expect(response!.headers.get('content-length')).toBe('2');
+  });
+
+  it('never writes past a declared length, so an endpoint cannot answer the next request on the connection', async () => {
+    const { connect } = await import('node:net');
+    const gateway = createGateway({
+      registry: [
+        {
+          id: 'billing',
+          // what a function endpoint wrapping fetch forwards from a compressed upstream, made hostile
+          endpoint: (async () =>
+            new Response('ok' + 'HTTP/1.1 200 OK\r\ncontent-length: 8\r\n\r\nINJECTED', {
+              headers: { 'content-type': 'text/javascript', 'content-length': '2' },
+            })) as unknown as typeof fetch,
+        },
+      ],
+    });
+    const origin = await listen(
+      createServer((req, res) => toNodeMiddleware(gateway)(req, res, () => res.writeHead(200, { 'content-length': '5' }).end('shell'))),
+    );
+    const { hostname, port } = new URL(origin);
+
+    // two requests pipelined on one connection: whatever follows the first response is read as the second
+    const received = await new Promise<string>((resolve) => {
+      const socket = connect(Number(port), hostname, () => {
+        socket.write(`GET /__braid/frag/billing/a.js HTTP/1.1\r\nhost: x\r\n\r\nGET /other HTTP/1.1\r\nhost: x\r\n\r\n`);
+      });
+      let data = '';
+      socket.on('data', (chunk) => (data += chunk));
+      socket.on('close', () => resolve(data));
+      socket.on('error', () => undefined);
+    });
+
+    expect(received).not.toContain('INJECTED');
+  });
+
+  it('refuses a response in a coding it did not ask for, which fetch may or may not have decoded', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const script = 'x'.repeat(4096);
+    const compressed = zstdCompressSync(script);
+    const upstream = await listen(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-encoding': 'zstd', 'content-length': compressed.length });
+        res.end(compressed);
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const response = await gateway.handle(new Request('http://localhost/__braid/frag/billing/a.js'), async () => new Response(null, { status: 404 }));
+
+    // never a body labelled with a coding it is not in, whichever way this runtime's fetch went
+    expect(response!.status).toBe(502);
+    expect(response!.headers.has('content-encoding')).toBe(false);
+    expect(await response!.text()).toContain('"zstd"');
+  });
+
+  it('answers HEAD for a forwarded asset that declares its length', async () => {
+    const { request } = await import('node:http');
+    const upstream = await listen(createServer((_req, res) => res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': '2' }).end('ok')));
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const origin = await listen(createServer((req, res) => toNodeMiddleware(gateway)(req, res, () => res.writeHead(404).end())));
+
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(`${origin}/__braid/frag/billing/a.js`, { method: 'HEAD' }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(200);
+  });
+
+  it('forwards a compressed upstream body with headers that describe it, and keeps the socket usable', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const { Agent, get } = await import('node:http');
+
+    const script = `console.log(${JSON.stringify('x'.repeat(4096))});`;
+    const compressed = gzipSync(script);
+    const upstream = await listen(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-encoding': 'gzip', 'content-length': compressed.length });
+        res.end(compressed);
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    const origin = await listen(createServer((req, res) => toNodeMiddleware(gateway)(req, res, () => res.writeHead(404).end())));
+
+    // one socket for both requests, so the second can only succeed if the first left it clean
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const fetchOnAgent = (path: string) =>
+      new Promise<{ headers: Record<string, unknown>; body: string; reused: boolean }>((resolve, reject) => {
+        const req = get(`${origin}${path}`, { agent, headers: { 'accept-encoding': 'gzip', 'sec-fetch-dest': 'script' } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(chunks).toString(), reused: req.reusedSocket }));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+      });
+
+    try {
+      const first = await fetchOnAgent('/__braid/frag/billing/main.js');
+      expect(first.headers['content-encoding']).toBeUndefined();
+      expect(first.body).toBe(script);
+
+      const second = await fetchOnAgent('/__braid/frag/billing/other.js');
+      expect(second.reused).toBe(true);
+      expect(second.body).toBe(script);
+    } finally {
+      agent.destroy();
+    }
+  });
+});
