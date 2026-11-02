@@ -63,9 +63,11 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Version, changelog, and tag
-        run: |
-          npx nx release version "${{ inputs.specifier }}" ${{ inputs.dry-run && '--dry-run' || '' }}
-          npx nx release changelog "${{ inputs.specifier }}" ${{ inputs.dry-run && '--dry-run' || '' }}
+        # One command, so the bump resolves once for all three. `nx release changelog` takes a
+        # version, not a bump: given "patch" it wrote "# patch" into CHANGELOG.md, committed
+        # "publish patch" and tagged `vpatch` (the 0.7.1 run), while `version` correctly wrote 0.7.1.
+        # Publishing stays its own step below, after the checks on what versioning produced.
+        run: npx nx release "${{ inputs.specifier }}" --skip-publish ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
