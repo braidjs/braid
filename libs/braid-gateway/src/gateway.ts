@@ -1874,8 +1874,10 @@ const HOP_BY_HOP_HEADERS = ['connection', 'keep-alive', 'proxy-connection', 'tra
  * `content-length` still describe the bytes on the wire. Forwarded as they are, the client gets a
  * body it cannot decode and — worse, on Node, which writes whatever bytes it is given — more bytes
  * than the declared length on a keep-alive connection. The surplus is read as the start of the
- * *next* response on that socket, so a different request fails. So when the coding is one `fetch`
- * decoded, both go and the server frames the body itself; an identity response keeps its length.
+ * *next* response on that socket, so a different request fails. So whenever there is a coding the
+ * length goes and the server frames the body itself; the coding goes too when it is one every
+ * `fetch` decodes. An identity response keeps its length. (The Node binding also refuses to write
+ * past a declared length, whatever produced it.)
  *
  * Only what the platform `fetch` returned: a function endpoint hands over its own bytes and is
  * trusted to describe them — one that wraps `fetch` must drop these headers itself. On Workers,
@@ -1884,8 +1886,9 @@ const HOP_BY_HOP_HEADERS = ['connection', 'keep-alive', 'proxy-connection', 'tra
 function forwardable(response: Response, decodedByFetch: boolean): Response {
   const encoding = response.headers.get('content-encoding');
   const connection = response.headers.get('connection');
-  const reframe =
-    decodedByFetch && encoding !== null && encoding.split(',').every((coding) => FETCH_DECODED_CODINGS.has(coding.trim().toLowerCase()));
+  // any coding, not only the ones asked for: an endpoint may send one regardless, and a runtime may
+  // decode codings beyond the common set (Node's fetch decodes zstd), so its length is never trusted
+  const reframe = decodedByFetch && encoding !== null;
   if (!reframe && !HOP_BY_HOP_HEADERS.some((name) => response.headers.has(name))) return response;
 
   const headers = new Headers(response.headers);
@@ -1893,7 +1896,9 @@ function forwardable(response: Response, decodedByFetch: boolean): Response {
   for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
   if (reframe) {
     headers.delete('content-length');
-    headers.delete('content-encoding');
+    if (encoding?.split(',').every((coding) => FETCH_DECODED_CODINGS.has(coding.trim().toLowerCase()))) {
+      headers.delete('content-encoding');
+    }
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

@@ -64,24 +64,27 @@ export function toNodeMiddleware(
         headers['set-cookie'] = setCookie;
       }
 
+      // A declared length is a promise about the bytes that follow, and Node otherwise writes
+      // whatever it is given: surplus bytes on a keep-alive connection are read as the start of the
+      // next response on it, which an endpoint could fill. Strict, a mismatch throws instead, and the
+      // connection is dropped rather than left out of step.
+      res.strictContentLength = true;
       native.writeHead(response.status, headers);
 
-      if (!response.body) {
-        native.end();
-        return;
-      }
-
-      const reader = response.body.getReader();
+      const reader = response.body?.getReader();
       try {
-        for (;;) {
+        while (reader) {
           const { done, value } = await reader.read();
           if (done) break;
           native.write(value);
         }
+        native.end();
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'ERR_HTTP_CONTENT_LENGTH_MISMATCH') throw error;
+        res.destroy();
       } finally {
-        reader.releaseLock();
+        reader?.releaseLock();
       }
-      native.end();
     })().catch(next);
   };
 }
