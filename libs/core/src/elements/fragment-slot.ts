@@ -221,6 +221,8 @@ export class FragmentSlot extends HTMLElement {
   #dirty: string | null = null;
   #booted = false;
   #bootScheduled = false;
+  /** Which disconnect is current: only the last one decides whether the slot moved or left. */
+  #placementCheck = 0;
   /**
    * A deferred boot's gate and the listeners that replay or release it; undefined for an eager slot
    * and once the slot leaves the DOM. Kept after the trigger fires, for the replay.
@@ -478,7 +480,44 @@ export class FragmentSlot extends HTMLElement {
     this.#bootGate = undefined;
   }
 
+  /**
+   * A move is not an unmount. `insertBefore` or `append` of a connected slot — a keyed list
+   * reordering, a framework reparenting, a layout change — disconnects and reconnects it in one go,
+   * and tearing down there would reboot a fragment that never left the page: its state gone, its
+   * document fetched again. So the decision waits a microtask. Still connected then means moved,
+   * and a move leaves the realm (in the body), the shadow root (on the element) and the boot gate
+   * exactly as they were.
+   */
   disconnectedCallback() {
+    const check = ++this.#placementCheck;
+    queueMicrotask(() => {
+      if (check !== this.#placementCheck) return;
+      if (this.isConnected) this.#moved();
+      else this.#left();
+    });
+  }
+
+  /** `moveBefore()` moves a slot without disconnecting it at all; only its placement needs checking. */
+  connectedMoveCallback() {
+    this.#moved();
+  }
+
+  /**
+   * The one rule that depends on where a slot is: a slot that brings its own code may not sit
+   * inside another fragment's DOM. Booting checks it, and a slot moved there after booting would
+   * otherwise keep running code that fragment's markup could not have asked for. Rebooting runs
+   * the check, which fails the slot the way it would have failed there from the start.
+   */
+  #moved(): void {
+    if (!this.#booted) return;
+    try {
+      this.#assertHostDeclaresCode(this.name);
+    } catch {
+      this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] reload after a move failed`, error));
+    }
+  }
+
+  #left(): void {
     this.#bootScheduled = false;
     this.#scheduleGeneration++;
     this.#recovery.reset();

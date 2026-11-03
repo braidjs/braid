@@ -226,6 +226,14 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Moving a slot
+
+A slot can move without its fragment noticing. If you reorder a keyed list, reparent the slot in a framework, or append it to another container, the fragment keeps running. It keeps the same realm and the same state, and its document isn't fetched again. A slot only closes its fragment when it actually leaves the page.
+
+- **"Moved" means back in the page within the same task.** A slot decides one microtask after it is disconnected. If it is connected again by then, it moved. If it isn't, it left: its fragment is closed and its unsaved work is negotiated, as before. If you remove a slot and add it back later, for example after an `await` or in another render, the fragment boots again.
+- **`moveBefore()` keeps even more.** Where the browser supports it (Chromium today), `parent.moveBefore(slot, ref)` doesn't disconnect the slot at all. Focus inside the fragment, running CSS animations and transitions all carry over.
+- **Moving a slot into another fragment still has to obey that fragment's rules.** A slot that brings its own code (`entry`, or `trust="untrusted"`) is refused when it is moved into another fragment's DOM, just as it would have been refused there from the start.
+
 ### Recovering from transient failures (opt-in)
 
 ```ts
