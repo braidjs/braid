@@ -132,6 +132,8 @@ interface FragmentManifest {
   fallback?: 'placeholder' | 'omit' | 'error-html';
   /** Whether the page stream waits at this fragment's slot ('in-order', default) or streams past it. */
   stream?: 'in-order' | 'out-of-order';
+  /** Let the browser fetch or render this fragment's pierced pages ahead of a click (with the gateway's `speculationRules`). */
+  speculate?: 'prefetch' | 'prerender';
   /** Custom Element module entry (for custom-element adapter). */
   entry?: string;
   /** Custom Element tag name (for custom-element adapter). */
@@ -195,6 +197,27 @@ What it does not change, and what to plan for:
   the slot shows whatever the host put in it.
 - **Hosts that hydrate the whole document** will find `<braid-late>` nodes before `</body>`, and
   may see them as a mismatch. Hydrate an app root instead of `document`.
+
+## Instant navigations with Speculation Rules (opt-in)
+
+The gateway already knows which URLs compose which fragment. With `speculationRules: true` it tells the browser too, so following a link to a fragment's route can show a page the browser has already fetched or rendered:
+
+```ts
+createGateway({
+  speculationRules: true,
+  registry: [
+    { id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing', '/billing/*'], speculate: 'prerender' },
+    { id: 'orders', endpoint: 'https://orders.internal', pierce: ['/orders/:id'], speculate: 'prefetch' },
+  ],
+});
+```
+
+- **Every HTML page carries a pointer to the rules.** Composed pages and the pages the gateway passes through both get `Speculation-Rules: "/__braid/speculation-rules.json"`. The page that *links* to a route is the one the browser speculates from. The header is the same for every visitor, so cached pages stay shareable.
+- **The rules list each opted-in fragment's `pierce` patterns.** `prefetch` fetches the composed document, so the click skips the round trip. `prerender` also renders it: the realm boots and the fragment's code runs, so the page appears at once and the fragment doesn't fetch its document again. Both trigger with `moderate` eagerness, on hover or pointerdown. Trailing-slash variants are included, matching how pierce routes match.
+- **Access rules are respected.** A fragment the visitor may not load is left out. When any fragment has access rules, the rules response is `private, no-store` and varies on `cookie` and `authorization`. Otherwise it's shared for 60 seconds.
+- **Prerendering runs a fragment's code before anyone sees the page.** Analytics, view counts and other side effects fire for pages the visitor may never open. That's why it's opt-in per fragment.
+- **Only Chromium implements it.** Other browsers ignore the header. The endpoint isn't available under a `basePath` yet.
+- **Testing it under automation takes care.** Chromium won't prerender while a DevTools client is attached straight to the page target, which is how Playwright attaches, and reports `PrerenderingDisabledByDevTools`. Braid's own e2e test drives Chromium over CDP through the tab target instead (`e2e/speculation-rules.e2e.ts`).
 
 ## Realm network policy (opt-in)
 

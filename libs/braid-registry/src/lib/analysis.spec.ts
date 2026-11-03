@@ -90,6 +90,20 @@ describe('validateRegistry', () => {
       ).toEqual([]);
     });
   });
+
+  it('refuses a speculate value the gateway would refuse, and flags one with nothing to speculate', () => {
+    const findings = validateRegistry([
+      { id: 'a', endpoint: 'https://a.internal', pierce: ['/a'], speculate: 'soon' as unknown as 'prefetch' },
+      { id: 'b', endpoint: 'https://b.internal', speculate: 'prerender' },
+      { id: 'c', endpoint: 'https://c.internal', pierce: ['/c'], speculate: 'prefetch' },
+    ]);
+
+    expect(findings).toContainEqual(expect.objectContaining({ code: 'invalid-speculate', severity: 'error', fragmentIds: ['a'] }));
+    expect(findings).toContainEqual(
+      expect.objectContaining({ code: 'speculate-without-pierce', severity: 'warning', fragmentIds: ['b'] }),
+    );
+    expect(findings.filter((finding) => finding.fragmentIds.includes('c'))).toEqual([]);
+  });
 });
 
 describe('diffRegistries', () => {

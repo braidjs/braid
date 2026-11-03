@@ -34,6 +34,8 @@ export type FindingCode =
   | 'pierce-overlap'
   | 'custom-element-incomplete'
   | 'empty-access-rule'
+  | 'invalid-speculate'
+  | 'speculate-without-pierce'
   | 'invalid-shell-id'
   | 'duplicate-shell-id'
   | 'invalid-shell-framework'
@@ -94,6 +96,7 @@ export function validateRegistry(
     findings.push(...validatePierce(manifest));
     findings.push(...validateAdapter(manifest));
     findings.push(...validateAccess(manifest));
+    findings.push(...validateSpeculate(manifest));
   }
 
   findings.push(...findPierceOverlaps(manifests));
@@ -217,6 +220,34 @@ function validateAccess(manifest: FragmentManifest): RegistryFinding[] {
   }
 
   return findings;
+}
+
+function validateSpeculate(manifest: FragmentManifest): RegistryFinding[] {
+  const { speculate } = manifest;
+  if (speculate === undefined) return [];
+  if (speculate !== 'prefetch' && speculate !== 'prerender') {
+    return [
+      {
+        severity: 'error',
+        code: 'invalid-speculate',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" declares speculate: "${String(speculate)}"`,
+        hint: 'use "prefetch" or "prerender" — the gateway refuses anything else',
+      },
+    ];
+  }
+  if (!manifest.pierce?.length) {
+    return [
+      {
+        severity: 'warning',
+        code: 'speculate-without-pierce',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" asks to be speculated but pierces no routes`,
+        hint: 'speculation covers the pages a fragment pierces; add pierce patterns, or drop speculate',
+      },
+    ];
+  }
+  return [];
 }
 
 /**

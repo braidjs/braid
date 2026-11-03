@@ -139,6 +139,19 @@ export interface FragmentManifest {
    */
   stream?: 'in-order' | 'out-of-order';
   /**
+   * Let the browser fetch this fragment's pages before the user follows a link to one, when the
+   * gateway's `speculationRules` option is on. The pages are this fragment's `pierce` routes.
+   *
+   * - `'prefetch'` fetches the composed document, so a click skips the round trip.
+   * - `'prerender'` also renders it, the fragment's realm and code included, so the page appears
+   *   at once.
+   *
+   * A prerendered page runs the fragment's code before anyone sees it: analytics, view counts and
+   * anything else with a side effect fire for pages the user may never open. That is why this is
+   * per fragment, and off unless a fragment asks for it. Chromium only; other browsers ignore it.
+   */
+  speculate?: 'prefetch' | 'prerender';
+  /**
    * Opt this fragment out of concurrent-fetch coalescing. Defaults to `true` (coalesced).
    *
    * The gateway only shares a fetch between requests whose `cookie`, `authorization`, `user-agent`,
@@ -353,6 +366,12 @@ export function normalizeManifest(manifest: FragmentManifest): ResolvedFragmentM
     throw new Error(
       `braid-gateway: manifest "${manifest.id}" declares redirect: "${String(manifest.redirect)}" — ` +
         `use "error" or "navigate"`,
+    );
+  }
+  if (manifest.speculate !== undefined && manifest.speculate !== 'prefetch' && manifest.speculate !== 'prerender') {
+    throw new Error(
+      `braid-gateway: manifest "${manifest.id}" declares speculate: "${String(manifest.speculate)}" — ` +
+        `use "prefetch" or "prerender"`,
     );
   }
 
