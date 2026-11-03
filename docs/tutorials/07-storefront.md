@@ -168,7 +168,9 @@ const orders = createDataClient({
   driver,
   partition: tenancy.partition, // read per access, so switching users is a pointer move
   collection: 'orders',
-  outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox' }),
+  // The queue follows the person too. Without `partition`, a guest's queued order would replay
+  // under whoever signs in next on this device, and sign-out would leave it on disk.
+  outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox', partition: tenancy.partition }),
 });
 
 const catalogue = createDataClient({
@@ -469,7 +471,7 @@ async function bootstrap(principal: Principal) {
     driver,
     partition: tenancy.partition,
     collection: 'orders',
-    outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox' }),
+    outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox', partition: tenancy.partition }),
     onFlushError: (message, detail) => telemetry.error(message, detail),
   });
 
@@ -549,8 +551,11 @@ decision per collection, not per origin.
 ### 3. Every fragment gets its own outbox owner
 
 ```ts
-outbox: createOutbox({ driver, owner: 'checkout', collection: 'outbox' });
+outbox: createOutbox({ driver, owner: 'checkout', collection: 'outbox', partition: tenancy.partition });
 ```
+
+`owner` separates fragments, not people. `partition` is what keeps one person's queue from
+replaying under the next person's session on a shared device.
 
 The queue is one store; ownership is what keeps it safe. Each fragment replays only its own entries,
 so checkout cannot send — or drop — an entry the account panel queued, and the flush lock is per

@@ -202,6 +202,46 @@ describe('outbox on a shared device', () => {
     expect(sent).toHaveBeenCalledWith({ qty: 1 }, expect.objectContaining({ mutationId: 'order.place' }));
   });
 
+  it('stops a drain that is still running when the next person signs in', async () => {
+    const { tenancy, outbox } = sharedDevice();
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 1 } });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 2 } });
+
+    // A slow first send: Alice signs out and Bob signs in while it is still in flight.
+    const sent: unknown[] = [];
+    const runner = async (input: unknown) => {
+      sent.push(input);
+      if (sent.length === 1) {
+        await tenancy.signOut();
+        await tenancy.signIn({ userId: 'bob' });
+      }
+    };
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+
+    // The first was already on the wire under Alice; the second must not follow under Bob.
+    expect(sent).toEqual([{ n: 1 }]);
+  });
+
+  it('clears a sent entry from its own partition when the tenant switches mid-send', async () => {
+    const { tenancy, outbox } = sharedDevice();
+    await tenancy.signIn({ userId: 'alice', actingAs: 'org1' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 1 } });
+
+    const sent: unknown[] = [];
+    const runner = async (input: unknown) => {
+      sent.push(input);
+      await tenancy.switchTenant('org2'); // lands while the send is in flight
+    };
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+
+    // Back in org1, the order already sent must be gone, not waiting to be placed a second time.
+    await tenancy.switchTenant('org1');
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+    expect(sent).toEqual([{ n: 1 }]);
+    expect(await outbox.mine()).toEqual([]);
+  });
+
   it('keeps the constant default for a single-user device', async () => {
     const driver = memoryRecordDriver();
     const outbox = createOutbox({ driver, owner: 'orders' });

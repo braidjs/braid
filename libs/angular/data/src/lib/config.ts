@@ -35,6 +35,9 @@ export interface DataOptions {
    * in to, and list the outbox collection in that tenancy's `collections`. Queued work then belongs
    * to the person who queued it, the next person's flush never replays it under their session, and
    * sign-out purges it. Without it the queue is device-wide, which suits a single-user device only.
+   *
+   * Give the tenancy and this the same `driver` (the purge clears the tenancy's driver only), and
+   * call `OutboxService.flush()` after each sign-in so the service reads the new person's queue.
    */
   readonly partition?: string | (() => string);
 }

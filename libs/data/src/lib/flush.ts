@@ -62,7 +62,17 @@ export async function drainOutbox(options: DrainOptions): Promise<FlushResult> {
     let failed = 0;
 
     // Snapshot: entries queued mid-drain wait for the next pass.
-    for (const entry of await options.outbox.mine()) {
+    const snapshot = await options.outbox.mine();
+
+    for (const [index, entry] of snapshot.entries()) {
+      /**
+       * A partitioned queue belongs to whoever was signed in when the drain began. Sending is slow
+       * and sign-out does not wait for it, so before each later entry, check it is still this
+       * session's to send: once someone else signs in, the rest of the snapshot is the previous
+       * person's work, and replaying it would send it under the new person's session.
+       */
+      if (index > 0 && !(await stillQueued(options.outbox, entry.id))) break;
+
       const runner = options.runnerFor(entry.mutationId);
 
       if (!runner) {
@@ -78,24 +88,24 @@ export async function drainOutbox(options: DrainOptions): Promise<FlushResult> {
 
       try {
         await runner(entry.input, entry);
-        await options.outbox.remove(entry.id);
+        await options.outbox.remove(entry.id, entry.partition);
         options.onSent?.(entry);
         sent += 1;
       } catch (error) {
         failed += 1;
         const message = error instanceof Error ? error.message : String(error);
-        const attempts = await options.outbox.recordFailure(entry.id, message);
+        const attempts = await options.outbox.recordFailure(entry.id, message, entry.partition);
 
         if (attempts >= maxAttempts) {
           options.onError?.(`[skew/data] giving up on "${entry.mutationId}" after ${attempts} attempts`, error);
-          await options.outbox.remove(entry.id);
+          await options.outbox.remove(entry.id, entry.partition);
           options.onAbandoned?.(entry);
         }
         break;
       }
     }
 
-    return { sent, failed, remaining: (await options.outbox.mine()).length };
+    return { sent, failed, remaining: (await visible(options.outbox))?.length ?? 0 };
   });
 
   return outcome.acquired
@@ -103,4 +113,17 @@ export async function drainOutbox(options: DrainOptions): Promise<FlushResult> {
     : // Reported rather than folded into `sent: 0`, which also happens when a drain ran and
       // everything failed — conflating them makes a dead server look like a busy tab.
       { sent: 0, failed: 0, remaining: (await options.outbox.mine()).length, skipped: true };
+}
+
+/** The queue as the current session sees it, or null when it sees none (nobody is signed in). */
+async function visible(outbox: Outbox): Promise<QueuedEntry[] | null> {
+  try {
+    return await outbox.mine();
+  } catch {
+    return null;
+  }
+}
+
+async function stillQueued(outbox: Outbox, id: string): Promise<boolean> {
+  return (await visible(outbox))?.some((entry) => entry.id === id) ?? false;
 }

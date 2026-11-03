@@ -3,6 +3,7 @@ import { createTenancy, memoryRecordDriver, type RecordDriver } from '@braidlabs
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DATA_OPTIONS, OUTBOX_COLLECTION, resolveDataOptions } from './config';
 import { OutboxService } from './outbox';
+import { provideSkewData } from './provide';
 
 /**
  * The outbox must survive a reload, so the tests share one driver across TestBed instances: a fresh
@@ -442,5 +443,47 @@ describe('OutboxService on a shared device', () => {
     await next.outbox.flush();
 
     expect(runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('provideSkewData with a partitioned outbox', () => {
+  it('boots signed out without an unhandled rejection, and reads the queue after sign-in', async () => {
+    const driver = memoryRecordDriver();
+    const tenancy = createTenancy({ driver, collections: [OUTBOX_COLLECTION] });
+
+    // Alice queued work in an earlier session, then the page reloaded before anyone signed in.
+    await tenancy.signIn({ userId: 'alice' });
+    await configure({ driver, partition: () => tenancy.partition() }).outbox.enqueue({
+      mutationId: 'publish',
+      input: { id: '1' },
+      schemaVersion: 1,
+    });
+    const signedOut = createTenancy({ driver, collections: [OUTBOX_COLLECTION] });
+
+    const errors: string[] = [];
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideSkewData({
+          driver,
+          owner: 'billing',
+          partition: () => signedOut.partition(),
+          onOutboxError: (message) => errors.push(message),
+        }),
+      ],
+    });
+    const outbox = TestBed.inject(OutboxService);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Reported, not thrown into the void.
+    expect(errors.some((message) => message.includes('could not be read'))).toBe(true);
+
+    const runner = vi.fn(async () => undefined);
+    outbox.register('publish', runner);
+    await signedOut.signIn({ userId: 'alice' });
+    await outbox.flush();
+
+    // The failed boot-time load did not mark the queue as read.
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 });

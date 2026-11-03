@@ -108,3 +108,7 @@ const tenancy = createTenancy({ driver, collections: ['outbox', ...yours] }); //
 
 provideSkewData({ driver, owner: 'funds', partition: () => tenancy.partition() });
 ```
+
+Pass the **same `driver`** to both, since sign-out purges only the tenancy's driver. Call
+`outbox.flush()` after each sign-in, so the service reads the new person's queue; while nobody is
+signed in, the queue can't be read and the failure goes to `onOutboxError`.
