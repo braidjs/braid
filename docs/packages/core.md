@@ -316,6 +316,19 @@ like the gateway's to those writes:
   HTML strings, and `"sanitize"` breaks it. That is what `"report"` is for.
 - **An unknown value is ignored, with a warning.** It never turns the policy on.
 
+### Hosts that enforce Trusted Types
+
+Braid runs on a host page with `Content-Security-Policy: require-trusted-types-for 'script'`. List its policy, `braid`, in your `trusted-types` directive:
+
+```
+Content-Security-Policy: require-trusted-types-for 'script'; trusted-types braid my-app-policy
+```
+
+- **Braid's own writes go through the `braid` policy.** That means parsing the markup the gateway prepared, marking a fragment's script as already started, and, with `capabilities.html: 'sanitize'`, parsing a fragment's write into an inert document to clean it. The policy is never exposed, so nothing outside these call sites can use it.
+- **A fragment's own HTML writes meet your enforcement**, which is the point of turning it on. `el.innerHTML = '<b>…</b>'` in a fragment throws, even through a setter the fragment captured, because the node belongs to your document. A fragment that writes HTML should use `capabilities.html: 'sanitize'`, whose cleaned nodes are inserted directly and never need a trusted string. Or it can use a policy your directive allows.
+- **A contract fragment's realm inherits your policy.** Its `blob:` document takes the host's CSP, and Braid creates its policy there too, to load the fragment's entry module.
+- **Without `braid` in the directive**, Braid's writes are refused and reported, and fetched compat and contract fragments fail to boot. Pierced compat fragments still boot, because their markup arrives in the page itself.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a

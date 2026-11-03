@@ -1,4 +1,5 @@
 import type { FragmentCapabilities } from '../weave/capabilities.js';
+import { trustedHTML } from '../trusted-types.js';
 
 /**
  * What a compat fragment's own HTML writes may put in the page: `capabilities.html`, opt-in.
@@ -109,7 +110,8 @@ export function createHtmlPolicy(mode: HtmlPolicyMode, fragmentId: string, mainD
       if (context.namespaceURI === XHTML && TEXT_ONLY_CONTEXTS.has(context.localName)) return null;
 
       const parsingContext = inert.createElementNS(context.namespaceURI, context.localName);
-      parsingContext.innerHTML = markup as string;
+      // parsed into a document with no browsing context, then cleaned: the policy's own write
+      parsingContext.innerHTML = trustedHTML(markup as string);
       const parsed = parsingContext instanceof HTMLTemplateElement ? parsingContext.content : parsingContext;
       const findings = clean(parsed);
 

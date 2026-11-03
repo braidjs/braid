@@ -4,6 +4,7 @@ import { initializeRealmContext } from '../compat/realm-patches.js';
 import { executeScriptsInFragmentContent } from '../compat/script-execution.js';
 import { installRealmGlobals } from '../compat/shared-globals.js';
 import { isDevMode } from '../config.js';
+import { trustedHTML, trustedScript } from '../trusted-types.js';
 
 /**
  * The compat adapter — the emulation layer, contained.
@@ -111,18 +112,36 @@ export const compatAdapter: InstalledAdapter = {
  * saw a bare markup snippet.
  */
 export function parseFragmentContent(html: string, mainDocument: Document): HTMLElement {
-  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  // markup the gateway prepared, parsed where nothing runs: Braid's own write (see trusted-types.ts)
+  const parsed = new DOMParser().parseFromString(trustedHTML(html), 'text/html');
 
   const braidHtml = parsed.body.querySelector('braid-html');
   if (braidHtml) {
-    return mainDocument.importNode(braidHtml, true) as HTMLElement;
+    return retrustScripts(mainDocument.importNode(braidHtml, true) as HTMLElement);
   }
 
   const wrapper = mainDocument.createElement('braid-html');
   const braidBody = mainDocument.createElement('braid-body');
   braidBody.append(...[...parsed.body.childNodes].map((node) => mainDocument.importNode(node, true)));
   wrapper.append(braidBody);
-  return wrapper;
+  return retrustScripts(wrapper);
+}
+
+/**
+ * Gives the fragment's inline scripts their own text back through Braid's Trusted Types policy.
+ *
+ * Imported from the parser's document, a script no longer counts as parser-written, and a host
+ * that enforces Trusted Types reports it on insertion — though it is inert and only ever runs in
+ * the fragment's realm. Without a policy (no enforcement, or no Trusted Types) nothing changes.
+ */
+function retrustScripts<T extends Element>(root: T): T {
+  for (const script of root.querySelectorAll('script')) {
+    if (script.hasAttribute('src')) continue;
+    const text = script.textContent ?? '';
+    const trusted = trustedScript(text);
+    if (trusted !== text) script.textContent = trusted;
+  }
+  return root;
 }
 
 /**

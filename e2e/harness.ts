@@ -36,6 +36,8 @@ export interface HostOptions {
   braidSource?: string;
   /** Extra `<head>` markup, e.g. styles. */
   head?: string;
+  /** Response headers for the host page, e.g. a content security policy. */
+  pageHeaders?: Record<string, string>;
 }
 
 export interface Host {
@@ -59,7 +61,7 @@ export async function startHost(options: HostOptions): Promise<Host> {
     }
     middleware(req, res, () => {
       if (req.url === '/' || req.url?.startsWith('/?')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page);
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...options.pageHeaders }).end(page);
       } else {
         res.writeHead(404).end();
       }
