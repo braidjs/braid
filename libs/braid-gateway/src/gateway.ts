@@ -1217,6 +1217,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // only codings every platform fetch decodes, so the coding of what comes back is known: a
     // browser's `zstd` would come back decoded by some runtimes and not others (see `forwardable`)
     if (fragmentFetch === globalThis.fetch) fragmentRequest.headers.set('accept-encoding', [...FETCH_DECODED_CODINGS].join(', '));
+    // A browser (the gateway in a service worker) forbids the header and drops it without a word:
+    // the browser then picks the codings itself and decodes every one it picked.
+    const codingsPinned = fragmentRequest.headers.has('accept-encoding');
     fragmentRequest.headers.set('x-braid-fragment-mode', 'embedded');
 
     /**
@@ -1298,7 +1301,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       };
       const sentResponse = key ? await singleFlight!.run(key, send) : await send();
       // a function endpoint hands over its own bytes; only the platform fetch decodes them
-      const response = forwardable(sentResponse, fragmentFetch === globalThis.fetch);
+      const response = forwardable(sentResponse, fragmentFetch === globalThis.fetch, codingsPinned);
 
       // A 5xx is a reachable endpoint, but it is not a working one — a fragment returning 500 on
       // every request would otherwise hold the circuit closed forever and keep paying for it.
@@ -1388,6 +1391,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     }
 
     const shell = await next();
+    if (isOpaque(shell)) return shell;
     const isNullBody =
       shell.status === 204 ||
       shell.status === 205 ||
@@ -1442,6 +1446,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     } catch (error) {
       cancelFragmentBodies();
       throw error;
+    }
+    if (isOpaque(shellResponse)) {
+      cancelFragmentBodies();
+      return shellResponse;
     }
 
     const isShellNullBody =
@@ -1849,6 +1857,15 @@ function appendHop(request: Request): string {
   return [request.headers.get(BRAID_VIA_HEADER), 'braid'].filter(Boolean).join(', ');
 }
 
+/**
+ * A response with nothing to compose or annotate: a browser's opaque redirect (status 0), which is
+ * what a navigation's own `fetch` returns when the shell redirects, or a network error. Neither can
+ * be copied into a new `Response`, and both are for the browser to act on as they are.
+ */
+function isOpaque(response: Response): boolean {
+  return response.status === 0;
+}
+
 /** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */
 function hopCount(request: Request): number {
   const via = request.headers.get(BRAID_VIA_HEADER);
@@ -1882,8 +1899,11 @@ const HOP_BY_HOP_HEADERS = ['connection', 'keep-alive', 'proxy-connection', 'tra
  * Only what the platform `fetch` returned: a function endpoint hands over its own bytes and is
  * trusted to describe them — one that wraps `fetch` must drop these headers itself. On Workers,
  * which would re-encode a passed-through body, this costs the compression of that one hop.
+ *
+ * Where the codings could not be pinned (`codingsPinned` false: a browser, which forbids setting
+ * `accept-encoding`), the browser asked for them and decodes all it asked for, so none is refused.
  */
-function forwardable(response: Response, decodedByFetch: boolean): Response {
+function forwardable(response: Response, decodedByFetch: boolean, codingsPinned = true): Response {
   const encoding = response.headers.get('content-encoding');
   const connection = response.headers.get('connection');
   const reframe = decodedByFetch && encoding !== null;
@@ -1891,7 +1911,7 @@ function forwardable(response: Response, decodedByFetch: boolean): Response {
   // runtime's fetch decoded it varies — Node's decodes zstd — so neither the length nor the coding
   // can be said to describe the body. Refused, the same on every runtime, rather than guessed at.
   const codings = encoding?.split(',').map((coding) => coding.trim().toLowerCase()).filter(Boolean) ?? [];
-  if (reframe && codings.some((coding) => coding !== 'identity' && !FETCH_DECODED_CODINGS.has(coding))) {
+  if (reframe && codingsPinned && codings.some((coding) => coding !== 'identity' && !FETCH_DECODED_CODINGS.has(coding))) {
     void response.body?.cancel();
     return new Response(`braid-gateway: the endpoint answered in content-encoding "${encoding}", which was not requested`, {
       status: 502,
