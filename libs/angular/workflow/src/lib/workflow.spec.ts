@@ -350,4 +350,69 @@ describe('drafts on a shared device', () => {
     await settle();
     expect(bobs.data().templateId).toBe('graduale');
   });
+
+  function oneDevice(scope: () => string, storage: Map<string, string>, onDraftError?: (message: string) => void) {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: WORKFLOW_OPTIONS,
+          useValue: resolveWorkflowOptions({ scope, draftDriver: memoryDriver(storage), ...(onDraftError ? { onDraftError } : {}) }),
+        },
+      ],
+    });
+    const injector = TestBed.inject(Injector);
+    return () => runInInjectionContext(injector, () => injectWorkflow(flow));
+  }
+
+  it('hands the next person a fresh run when they sign in without a reload', async () => {
+    const storage = new Map<string, string>();
+    const user = { current: 'alice' };
+    const open = oneDevice(() => user.current, storage);
+
+    await open().advance({ templateId: 'missale' });
+    await settle();
+
+    // Same page, same injector: Bob signs in where Alice signed out.
+    user.current = 'bob';
+    const bobs = open();
+    await settle();
+    expect(bobs.current()).toBe('template');
+    expect(bobs.data().templateId).toBe('');
+    await bobs.advance({ templateId: 'graduale' });
+    await settle();
+    expect([...storage.values()].filter((value) => value.includes('missale'))).toHaveLength(1);
+
+    user.current = 'alice';
+    const alices = open();
+    await settle();
+    expect(alices.data().templateId).toBe('missale');
+  });
+
+  it('keeps no drafts while nobody is signed in, and still submits', async () => {
+    const storage = new Map<string, string>();
+    const errors: string[] = [];
+    const open = oneDevice(() => { throw new Error('no partition is active'); }, storage, (message) => errors.push(message));
+
+    const wf = open();
+    await settle();
+    await wf.advance({ templateId: 'missale' });
+    await wf.advance({ body: 'text' });
+    await expect(wf.submit()).resolves.toEqual({ ok: true });
+
+    expect(storage.size).toBe(0);
+    expect(errors.some((message) => message.includes('nobody is signed in'))).toBe(true);
+  });
+
+  it('keeps one scope from matching another that it is a prefix of', async () => {
+    const storage = new Map<string, string>();
+    const user = { current: 'a:b' };
+    await signedInAs(user, storage).advance({ templateId: 'missale' });
+    await settle();
+
+    await clearWorkflowDrafts('a', memoryDriver(storage));
+
+    expect(storage.size).toBe(1);
+  });
 });
+

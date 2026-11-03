@@ -15,7 +15,7 @@ npm install @braidlabs/angular-workflow @braidlabs/skew
 ## Key Features
 
 1. **Router & Guard Integration:** Step-to-route synchronization; deep linking to incomplete steps safely redirects to the furthest valid step.
-2. **Versioned Drafts:** Draft state is wrapped in a `@braidlabs/skew` schema and persisted to local storage, surviving app updates and schema changes. On a shared device, pass `scope: () => tenancy.partition()` and call `clearWorkflowDrafts(scope)` at sign-out, so one person never resumes another's draft.
+2. **Versioned Drafts:** Draft state is wrapped in a `@braidlabs/skew` schema and persisted to local storage, surviving app updates and schema changes. On a shared device, pass `scope: () => tenancy.current()?.userId ?? ''` and call `clearWorkflowDrafts(userId)` at sign-out, so one person never resumes another's draft, even when they sign in without a reload.
 3. **Idempotency by Design:** A unique `runId` is generated when the workflow starts and passed to the terminal `submit()`, preventing duplicate submissions.
 4. **Pure Headless Testing:** Transitions and validation rules can be tested without `TestBed` or DOM rendering.
 

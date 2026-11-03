@@ -143,11 +143,17 @@ the whole device shares, so without a scope the next person to open the wizard r
 person's half-filled form. Scope them to the signed-in person and clear them at sign-out:
 
 ```ts
-provideSkewWorkflow({ scope: () => tenancy.partition() });
+provideSkewWorkflow({ scope: () => tenancy.current()?.userId ?? '' });
 
-// at sign-out, before the partition changes
-await clearWorkflowDrafts(tenancy.partition());
+// at sign-out, before the person changes
+await clearWorkflowDrafts(tenancy.current()!.userId);
 ```
+
+Scope by the person rather than the tenant partition: one person working across tenants should leave
+nothing behind at sign-out, and a partition names one tenant only. An empty scope means nobody is
+signed in, so drafts are not kept until someone is. A different person signing in without a reload
+gets a fresh run, not the last person's. If you pass `draftDriver`, give `clearWorkflowDrafts` the
+same driver.
 
 ---
 
