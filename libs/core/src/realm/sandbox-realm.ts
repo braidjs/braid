@@ -61,7 +61,20 @@ export const DEFAULT_SANDBOX_TOKENS = ['allow-scripts', 'allow-forms'] as const;
  * grant if you need it, and it must be granted deliberately rather than inherited from a broad
  * "let this fragment navigate" instinct.
  */
-const REFUSED_SANDBOX_TOKENS = new Set(['allow-top-navigation', 'allow-top-navigation-to-custom-protocols']);
+const TOP_NAVIGATION_HINT =
+  'use "allow-top-navigation-by-user-activation" if the fragment genuinely needs to navigate the page';
+const REFUSED_SANDBOX_TOKENS = new Map([
+  ['allow-top-navigation', TOP_NAVIGATION_HINT],
+  ['allow-top-navigation-to-custom-protocols', TOP_NAVIGATION_HINT],
+  /**
+   * The same navigation by another door: a popup that escapes the sandbox can set
+   * `window.opener.top.location` and swap the host page for a lookalike.
+   */
+  [
+    'allow-popups-to-escape-sandbox',
+    '"allow-popups" alone lets the fragment open windows; they stay sandboxed, which is the point',
+  ],
+]);
 
 /**
  * Every token the HTML standard defines. Anything else is refused rather than passed through: the
@@ -183,11 +196,12 @@ export function resolveSandboxTokens(requested: readonly string[] = [], fragment
         fixHint: 'sandbox tokens are the allow-* keywords the HTML standard defines, e.g. "allow-popups"',
       });
     }
-    if (REFUSED_SANDBOX_TOKENS.has(token)) {
+    const refusal = REFUSED_SANDBOX_TOKENS.get(token);
+    if (refusal !== undefined) {
       throw new BraidError(`the sandbox token "${token}" is never granted to an untrusted fragment`, {
         fragmentId,
         stage: 'slot-config',
-        fixHint: 'use "allow-top-navigation-by-user-activation" if the fragment genuinely needs to navigate the page',
+        fixHint: refusal,
       });
     }
     tokens.add(token);
@@ -213,7 +227,9 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
   const instance = `${fragmentId}:${Date.now().toString(36)}`;
 
   const frame = document.createElement('iframe');
-  frame.src = src;
+  // The absolute URL that was checked, not the string: `src` would resolve against
+  // `document.baseURI`, which a `<base>` element can point somewhere `location.href` does not.
+  frame.src = new URL(src, location.href).href;
   frame.setAttribute('sandbox', tokens.join(' '));
   frame.setAttribute('part', 'frame');
   frame.style.cssText = 'display:block;border:0;width:100%;height:100%';

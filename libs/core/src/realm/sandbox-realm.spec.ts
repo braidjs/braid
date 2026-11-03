@@ -99,6 +99,12 @@ describe('resolveSandboxTokens()', () => {
     expect(() => resolveSandboxTokens(requested, 'analytics')).toThrow(/never granted/);
   });
 
+  it('refuses allow-popups-to-escape-sandbox, which reaches the host page through window.opener', () => {
+    expect(() => resolveSandboxTokens(['allow-popups', 'allow-popups-to-escape-sandbox'], 'analytics')).toThrow(
+      /never granted/,
+    );
+  });
+
   it('refuses a token the standard does not define', () => {
     expect(() => resolveSandboxTokens(['allow-everything'], 'analytics')).toThrow(/not a sandbox token/);
   });
