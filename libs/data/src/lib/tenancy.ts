@@ -282,9 +282,25 @@ export function createTenancy(options: TenancyOptions): Tenancy {
       if (!principal) {
         throw new Error('[skew/data] cannot switch tenant before signing in');
       }
-      // The previous partition is left exactly as it is. Warm on disk is the point: coming back to
-      // it should not re-fetch what was already fetched.
-      return activate({ userId: principal.userId, actingAs });
+      const userId = principal.userId;
+      // Under the purge lock, as signIn is: a switch in a tab that has not yet heard about a sign-out
+      // elsewhere would otherwise register a new partition while that purge is listing them.
+      const outcome = await withLock(
+        `skew:data:purge:${userId}`,
+        async () => {
+          // Checked again inside: the purge this waited for may have been this person's sign-out.
+          await recover();
+          if (!principal || principal.userId !== userId) {
+            throw new Error('[skew/data] cannot switch tenant: the session ended while switching');
+          }
+          // The previous partition is left exactly as it is. Warm on disk is the point: coming
+          // back to it should not re-fetch what was already fetched.
+          return activate({ userId, actingAs });
+        },
+        { ifAvailable: false },
+      );
+      if (!outcome.acquired) throw new Error('[skew/data] switching tenant could not take the purge lock');
+      return outcome.value;
     },
 
     async signOut() {

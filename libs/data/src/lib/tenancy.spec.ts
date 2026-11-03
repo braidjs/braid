@@ -178,6 +178,25 @@ describe('an interrupted purge', () => {
     expect(() => tabA.partition()).toThrow(/sign in before reading/);
   });
 
+  it("refuses a tenant switch in a tab whose session another tab's sign-out ended", async () => {
+    const driver = memoryRecordDriver();
+    const { tenancy: tabA, notes } = setup(driver);
+    const tabB = createTenancy({ driver, collections: COLLECTIONS });
+
+    await tabA.signIn({ userId: 'alice' });
+    await tabB.signIn({ userId: 'alice' });
+    await tabB.signOut();
+
+    // Tab A has not looked yet. Its switch must not register a fresh partition for a signed-out person.
+    await expect(tabA.switchTenant('acme')).rejects.toThrow(/session ended/);
+    expect(tabA.current()).toBeNull();
+
+    // Nothing was left behind for alice: a later sign-in and sign-out finds no orphaned partition.
+    const tabC = createTenancy({ driver, collections: COLLECTIONS });
+    await tabC.signIn({ userId: 'alice', actingAs: 'acme' });
+    expect(await notes.list(tabC.partition())).toEqual([]);
+  });
+
   it('refuses a partition it cannot confirm was cleared', async () => {
     const { driver } = flakyDriver(1);
     const { tenancy: tabA } = setup(driver);
