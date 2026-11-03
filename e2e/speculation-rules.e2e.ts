@@ -56,6 +56,9 @@ async function rawChromium(): Promise<Cdp> {
   const profile = mkdtempSync(join(tmpdir(), 'braid-prerender-'));
   const browser: ChildProcess = spawn(chromium.executablePath(), [
     '--headless=new',
+    // as Playwright's own launches do: a CI runner (GitHub's Ubuntu) has no usable sandbox, and this
+    // browser only ever loads the test's local pages
+    '--no-sandbox',
     '--remote-debugging-port=0',
     `--user-data-dir=${profile}`,
     '--no-first-run',
@@ -63,8 +66,10 @@ async function rawChromium(): Promise<Cdp> {
     'about:blank',
   ]);
   const url = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Chromium did not start')), 15_000);
+    let output = '';
+    const timer = setTimeout(() => reject(new Error(`Chromium did not start:\n${output.slice(-2000)}`)), 15_000);
     browser.stderr?.on('data', (chunk: Buffer) => {
+      output += String(chunk);
       const found = /ws:\/\/\S+/.exec(String(chunk));
       if (found) {
         clearTimeout(timer);
