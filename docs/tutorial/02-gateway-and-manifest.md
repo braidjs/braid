@@ -53,6 +53,9 @@ const port = 3000;
 // Initialize Braid Gateway with the manifest
 const gateway = createGateway({
   registry: [manifest],
+  // Local dev servers refuse cross-origin requests without the Origin rewrite this turns on.
+  // Never on a gateway other people can reach: development also skips every access rule.
+  mode: 'development',
 });
 
 // Mount Gateway middleware first
