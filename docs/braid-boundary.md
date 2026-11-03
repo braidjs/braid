@@ -141,7 +141,7 @@ session.emit('impression', { slot: 'sidebar' });
 | `credentialless` | **the browser**, where supported | ephemeral storage, so a fragment cannot correlate the user across sites |
 | Origin pinning | **Braid**, both directions | the host posts to an exact origin; the guest accepts from one |
 | Contract terms | **Braid** | negotiated before state crosses |
-| Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification |
+| Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification. With no grant declared, an untrusted fragment reads nothing (a trusted one reads everything) |
 
 ### Two refusals worth knowing about
 

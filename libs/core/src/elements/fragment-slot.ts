@@ -1215,6 +1215,7 @@ export class FragmentSlot extends HTMLElement {
           fragmentId,
           contextVersions,
           ...(capabilities === undefined ? {} : { capabilities }),
+          untrusted: true,
           signal,
         }),
         props: structuredClone(this.#props),

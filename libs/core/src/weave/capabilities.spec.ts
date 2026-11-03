@@ -40,6 +40,18 @@ describe('createContextGate()', () => {
     expect(gate('anything')).toBe(true);
   });
 
+  it('grants nothing to an untrusted fragment that declares no grant', () => {
+    // The trusted default would hand a third party every key the host publishes.
+    const gate = createContextGate(undefined, 'vendor', { untrusted: true });
+    expect(gate('user')).toBe(false);
+  });
+
+  it('grants an untrusted fragment only the listed keys', () => {
+    const gate = createContextGate({ context: { read: ['theme'] } }, 'vendor', { untrusted: true });
+    expect(gate('theme')).toBe(true);
+    expect(gate('user')).toBe(false);
+  });
+
   it('grants only the listed keys', () => {
     const gate = createContextGate({ context: { read: ['user', 'cart'] } }, 'checkout');
     expect(gate('user')).toBe(true);
