@@ -30,6 +30,7 @@ import {
   readCapabilities,
   resolveCapabilities,
   resolveSharedGlobals,
+  resolveDatabasePartition,
   resolveStoragePartition,
 } from '../weave/capabilities.js';
 import { awaitPrerequisites, NotEntitledError, parseRequires } from './prerequisites.js';
@@ -38,6 +39,7 @@ import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
 import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
 import { createRecovery } from './recovery.js';
 import { resolveHtmlPolicy } from '../compat/html-policy.js';
+import { installDatabasePartition } from '../compat/database-partition.js';
 
 /**
  * What the slot reports about its fragment.
@@ -857,6 +859,12 @@ export class FragmentSlot extends HTMLElement {
       if (signal.aborted) return;
       const storagePartition = resolveStoragePartition(capabilities, fragmentId);
       const htmlPolicy = resolveHtmlPolicy(capabilities, fragmentId);
+      // before any fragment code, like the Web Storage views: compat fragments only, as those are
+      const databasePartition = adapter.name === 'compat' ? resolveDatabasePartition(capabilities, fragmentId) : null;
+      if (databasePartition !== null) {
+        await installDatabasePartition(realm.window, databasePartition);
+        if (signal.aborted) return;
+      }
 
       // nothing of the fragment's has run yet; its content may already be painted, inert
       await Promise.all([earlyPrerequisites, latePrerequisites]);

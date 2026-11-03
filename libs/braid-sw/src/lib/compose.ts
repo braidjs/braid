@@ -5,6 +5,7 @@ import {
   type FragmentManifest,
   type PierceTarget,
 } from '@braidlabs/gateway';
+import { DEFAULT_CACHE_PREFIX, deleteFragmentBuckets, openFragmentCache, type FragmentCacheOptions } from './fragment-caches.js';
 
 /**
  * Offline composition: the gateway's own piercing, run inside the worker.
@@ -38,12 +39,13 @@ export interface OfflineCompositionOptions {
   snapshotUrl: string;
   cachePrefix?: string;
   caches?: CacheStorage;
+  /** Keep fragment documents in per-fragment Storage Buckets, as the asset handler does with `buckets`. */
+  buckets?: boolean;
   fetch?: typeof fetch;
   /** Called when a page is composed offline, so a shell can say so rather than look merely slow. */
   onCompose?: (event: { pathname: string; fragmentIds: string[] }) => void;
 }
 
-const DEFAULT_CACHE_PREFIX = 'braid-frag';
 
 /**
  * Bumped by every clear. A refresh started before a clear must not write after it: it was fetched
@@ -135,7 +137,8 @@ export function braidNavigationHandler(
       if (!response.ok) continue;
 
       // In the fragment's own partition, so pruning a retired fragment takes its documents too.
-      const cache = await cacheStorage.open(`${cachePrefix}:${manifest.id}`);
+      const cache = await openFragmentCache(manifest.id, options);
+      if (!cache) continue;
       if (mayKeep(response)) await cache.put(documentUrl, response.clone());
       else await cache.delete(documentUrl);
     }
@@ -159,12 +162,12 @@ export function braidNavigationHandler(
 
     const fragments: PierceTarget[] = [];
     for (const manifest of matches) {
-      const cache = await cacheStorage.open(`${cachePrefix}:${manifest.id}`);
+      const cache = await openFragmentCache(manifest.id, options);
       const documentUrl = `${url.origin}${BRAID_DOCUMENT_PREFIX}${encodeURIComponent(manifest.id)}${documentPath(
         manifest,
         url,
       )}`;
-      const cached = await cache.match(documentUrl);
+      const cached = await cache?.match(documentUrl);
 
       // A fragment with nothing cached pierces nothing and is marked, exactly as a failed fetch is
       // server-side: the slot degrades to a placeholder rather than the page failing.
@@ -233,9 +236,7 @@ function mayKeep(response: Response): boolean {
  * assets with them. Call it at sign-out: what was composed for one person must not be composed for
  * the next. A page can ask its worker to do it with `postMessage({ type: 'braid-sw:clear' })`.
  */
-export async function clearBraidCaches(
-  options: { cachePrefix?: string; caches?: CacheStorage } = {},
-): Promise<void> {
+export async function clearBraidCaches(options: FragmentCacheOptions = {}): Promise<void> {
   // Before anything else, so a refresh already running does not write after this clear.
   generation += 1;
   const cacheStorage = options.caches ?? (globalThis as { caches?: CacheStorage }).caches;
@@ -245,6 +246,7 @@ export async function clearBraidCaches(
   await Promise.all(
     names.filter((name) => name === SHELL_CACHE || name.startsWith(prefix)).map((name) => cacheStorage.delete(name)),
   );
+  await deleteFragmentBuckets(null, options);
 }
 
 /** Unbound fragments are fetched at their own path, bound ones at the page's — as on the server. */

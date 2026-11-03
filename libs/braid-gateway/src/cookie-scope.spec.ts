@@ -83,6 +83,9 @@ describe('storagePartitionOf()', () => {
     // compat only: other adapters run in the host window, with no scoped document.cookie
     expect(storagePartitionOf({ id: 'orders', adapter: 'custom-element', capabilities: { storage: 'partitioned' } })).toBeNull();
     expect(storagePartitionOf({ id: 'orders', adapter: 'compat', capabilities: { storage: 'partitioned' } })).toBe('orders');
+    // databases of its own imply a partition named for the fragment, unless one is named
+    expect(storagePartitionOf({ id: 'orders', capabilities: { storage: { databases: true } } })).toBe('orders');
+    expect(storagePartitionOf({ id: 'orders', capabilities: { storage: { partition: 'kcd', databases: true } } })).toBe('kcd');
   });
 });
 

@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setBraidConfig } from '../config.js';
-import { createContextGate, readCapabilities, resolveCapabilities, resolveSharedGlobals } from './capabilities.js';
+import {
+  createContextGate,
+  readCapabilities,
+  resolveCapabilities,
+  resolveDatabasePartition,
+  resolveSharedGlobals,
+  resolveStoragePartition,
+} from './capabilities.js';
 
 afterEach(() => setBraidConfig({ dev: false, sharedGlobals: [] }));
 
@@ -128,5 +135,20 @@ describe('readCapabilities()', () => {
     expect(readCapabilities({ entry: '/main.js' })).toBeUndefined();
     expect(readCapabilities(undefined)).toBeUndefined();
     expect(readCapabilities('nonsense')).toBeUndefined();
+  });
+});
+
+describe('database partitions', () => {
+  it('are granted with databases: true, named for the fragment unless a partition is named', () => {
+    expect(resolveDatabasePartition({ storage: { databases: true } }, 'orders')).toBe('orders');
+    expect(resolveDatabasePartition({ storage: { partition: 'kcd', databases: true } }, 'orders')).toBe('kcd');
+    expect(resolveStoragePartition({ storage: { databases: true } }, 'orders')).toBe('orders');
+  });
+
+  it('are not granted by the existing forms, which keep their meaning', () => {
+    expect(resolveDatabasePartition({ storage: 'partitioned' }, 'orders')).toBeNull();
+    expect(resolveDatabasePartition({ storage: { partition: 'kcd' } }, 'orders')).toBeNull();
+    expect(resolveDatabasePartition({ storage: 'shared' }, 'orders')).toBeNull();
+    expect(resolveDatabasePartition(undefined, 'orders')).toBeNull();
   });
 });

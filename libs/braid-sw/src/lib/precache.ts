@@ -1,4 +1,5 @@
 import { BRAID_REALM_PREFIX } from '@braidlabs/gateway';
+import { openFragmentCache, type FragmentCacheOptions } from './fragment-caches.js';
 
 /**
  * Realm stub precaching: a fragment boot with no round trip in it.
@@ -12,9 +13,7 @@ import { BRAID_REALM_PREFIX } from '@braidlabs/gateway';
  * composes them, which trades a round trip the user might make for bandwidth they certainly spend.
  */
 
-export interface PrecacheOptions {
-  cachePrefix?: string;
-  caches?: CacheStorage;
+export interface PrecacheOptions extends FragmentCacheOptions {
   fetch?: typeof fetch;
   /** Where the stubs live. Defaults to the current origin. */
   origin?: string;
@@ -55,7 +54,8 @@ export async function precacheRealmStubs(
         result.failed.push({ url, reason: `HTTP ${response.status}` });
         continue;
       }
-      const cache = await cacheStorage.open(`${cachePrefix}:${fragmentId}`);
+      const cache = await openFragmentCache(fragmentId, options);
+      if (!cache) continue;
       await cache.put(url, response);
       result.cached.push(url);
     } catch (error) {

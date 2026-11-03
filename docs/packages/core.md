@@ -432,9 +432,14 @@ and copy the wrong value back. `capabilities.storage` gives a fragment a store o
   backend sets and sends it only its own (see `@braidlabs/gateway`, "Per-fragment cookies"). The
   fragment's `document.cookie` shows its own cookies under their own names, plus the host's;
   cookies it writes from script go into its scope.
+- **IndexedDB and Cache Storage, too, with `{ databases: true }`.** `capabilities.storage: { databases: true }` (with or without `partition`) gives the partition its own `indexedDB` and `caches` in the realm, installed before any fragment code runs:
+  - **Where the browser has Storage Buckets** (Chromium), the realm gets a bucket of its own. The browser keeps the data apart, and evicts, quotas and deletes it per bucket, so one fragment filling its store doesn't cost another its data.
+  - **Elsewhere**, database and cache names are prefixed with the partition, and only the partition's own are listed. `IDBDatabase.name` still shows the prefix.
+
+  It's opt-in, so a fragment's existing databases stay where they are until it asks. Without a `partition`, the grant also partitions Web Storage and cookies under the fragment's id, as `'partitioned'` does.
 - **An accident barrier, not a security boundary.** Same-origin code can still reach
-  `top.localStorage` and the raw cookie jar. IndexedDB, Cache Storage and BroadcastChannel are not
-  partitioned.
+  `top.localStorage`, the raw cookie jar and, without a database grant, the origin's IndexedDB and
+  Cache Storage. BroadcastChannel is not partitioned.
 
 Mounting in HTML:
 

@@ -1,4 +1,5 @@
 import { parseBraidPathname } from '@braidlabs/gateway';
+import { DEFAULT_CACHE_PREFIX, deleteFragmentBuckets, openFragmentCache, type FragmentCacheOptions } from './fragment-caches.js';
 
 /**
  * Skew-aware asset serving: the one layer that can keep an open page working after a deploy.
@@ -36,7 +37,7 @@ export interface AssetReport {
   partition: string;
 }
 
-export interface BraidFetchHandlerOptions {
+export interface BraidFetchHandlerOptions extends FragmentCacheOptions {
   /**
    * The build this worker was shipped as.
    *
@@ -55,7 +56,6 @@ export interface BraidFetchHandlerOptions {
   fetch?: typeof fetch;
 }
 
-const DEFAULT_CACHE_PREFIX = 'braid-frag';
 
 /**
  * Builds a fetch handler for the Braid namespace.
@@ -72,7 +72,6 @@ export function braidFetchHandler(
   options: BraidFetchHandlerOptions = {},
 ): (request: Request) => Promise<Response> | null {
   const cachePrefix = options.cachePrefix ?? DEFAULT_CACHE_PREFIX;
-  const cacheStorage = options.caches ?? (globalThis as { caches?: CacheStorage }).caches;
   const networkFetch = options.fetch ?? globalThis.fetch;
 
   return (request: Request) => {
@@ -96,7 +95,7 @@ export function braidFetchHandler(
     const report = (outcome: AssetOutcome) =>
       options.onReport?.({ fragmentId, url: url.href, outcome, partition });
 
-    const cache = await cacheStorage?.open(partition);
+    const cache = await openFragmentCache(fragmentId, options);
 
     try {
       const response = await networkFetch(request);
@@ -144,20 +143,21 @@ export function braidFetchHandler(
  */
 export async function pruneFragmentCaches(
   keep: readonly string[],
-  options: { cachePrefix?: string; caches?: CacheStorage } = {},
+  options: FragmentCacheOptions = {},
 ): Promise<string[]> {
   const cachePrefix = options.cachePrefix ?? DEFAULT_CACHE_PREFIX;
   const cacheStorage = options.caches ?? (globalThis as { caches?: CacheStorage }).caches;
-  if (!cacheStorage) return [];
-
   const kept = new Set(keep.map((id) => `${cachePrefix}:${id}`));
   const removed: string[] = [];
 
-  for (const name of await cacheStorage.keys()) {
+  // the shared cache storage first: with buckets on, this is also where a worker that just
+  // switched left its old per-fragment caches
+  for (const name of (await cacheStorage?.keys()) ?? []) {
     if (!name.startsWith(`${cachePrefix}:`) || kept.has(name)) continue;
-    await cacheStorage.delete(name);
+    await cacheStorage!.delete(name);
     removed.push(name);
   }
+  removed.push(...(await deleteFragmentBuckets(keep, options)));
 
   return removed;
 }

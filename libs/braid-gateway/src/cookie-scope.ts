@@ -36,8 +36,10 @@ export function storagePartitionOf(fragment: Pick<FragmentManifest, 'id' | 'capa
   const grant: unknown = fragment.capabilities?.storage;
   if (grant === 'partitioned') return fragment.id;
   if (grant && typeof grant === 'object') {
-    const partition = (grant as { partition?: unknown }).partition;
+    const { partition, databases } = grant as { partition?: unknown; databases?: unknown };
     if (typeof partition === 'string' && partition !== '') return partition;
+    // as on the client: databases of its own imply a partition named for the fragment
+    if (databases === true && partition === undefined) return fragment.id;
   }
   return null;
 }
