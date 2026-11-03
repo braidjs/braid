@@ -34,6 +34,26 @@ describe('assertCrossOrigin()', () => {
   it('refuses an unparseable url', () => {
     expect(() => assertCrossOrigin('http://[not a url', 'analytics')).toThrow(BraidError);
   });
+
+  it.each([
+    'javascript:parent.document.cookie',
+    'JavaScript:alert(1)',
+    'data:text/html,<script>parent.x=1</script>',
+    'blob:https://vendor.example.com/0b9c',
+    'about:blank',
+  ])('refuses %s, whose opaque origin would otherwise pass as cross-origin', (src) => {
+    // An opaque origin is "null", never the host's, so only the scheme check stops these. With
+    // `allow-same-origin` a javascript: src runs in the host's own origin.
+    expect(() => assertCrossOrigin(src, 'analytics')).toThrow(/not an https url/);
+  });
+
+  it('refuses plain http off loopback', () => {
+    expect(() => assertCrossOrigin('http://vendor.example.com/widget', 'analytics')).toThrow(/not an https url/);
+  });
+
+  it('accepts plain http on a loopback host, for local development', () => {
+    expect(assertCrossOrigin('http://127.0.0.1:4300/widget', 'analytics')).toBe('http://127.0.0.1:4300');
+  });
 });
 
 describe('resolveSandboxTokens()', () => {
@@ -68,6 +88,28 @@ describe('resolveSandboxTokens()', () => {
 
     expect(error).toBeInstanceOf(BraidError);
     expect((error as BraidError).fixHint).toContain('allow-top-navigation-by-user-activation');
+  });
+
+  it.each([
+    ['in another case', ['ALLOW-TOP-NAVIGATION']],
+    ['inside a whitespace-separated entry', ['allow-popups allow-top-navigation']],
+    ['as the custom-protocols variant', ['allow-top-navigation-to-custom-protocols']],
+  ])('refuses allow-top-navigation %s', (_label, requested) => {
+    // The browser lowercases and splits the attribute, so the check must see what it will see.
+    expect(() => resolveSandboxTokens(requested, 'analytics')).toThrow(/never granted/);
+  });
+
+  it('refuses a token the standard does not define', () => {
+    expect(() => resolveSandboxTokens(['allow-everything'], 'analytics')).toThrow(/not a sandbox token/);
+  });
+
+  it('normalizes case and splits entries, as the browser will', () => {
+    expect(resolveSandboxTokens(['ALLOW-Popups allow-modals'], 'analytics')).toEqual([
+      'allow-scripts',
+      'allow-forms',
+      'allow-popups',
+      'allow-modals',
+    ]);
   });
 
   it('permits the user-activation variant', () => {

@@ -61,7 +61,32 @@ export const DEFAULT_SANDBOX_TOKENS = ['allow-scripts', 'allow-forms'] as const;
  * grant if you need it, and it must be granted deliberately rather than inherited from a broad
  * "let this fragment navigate" instinct.
  */
-const REFUSED_SANDBOX_TOKENS = new Set(['allow-top-navigation']);
+const REFUSED_SANDBOX_TOKENS = new Set(['allow-top-navigation', 'allow-top-navigation-to-custom-protocols']);
+
+/**
+ * Every token the HTML standard defines. Anything else is refused rather than passed through: the
+ * browser ignores a token it does not know, so a typo would silently grant less than intended — or,
+ * as browsers add tokens, silently grant something nobody reviewed.
+ */
+const KNOWN_SANDBOX_TOKENS = new Set([
+  'allow-downloads',
+  'allow-forms',
+  'allow-modals',
+  'allow-orientation-lock',
+  'allow-pointer-lock',
+  'allow-popups',
+  'allow-popups-to-escape-sandbox',
+  'allow-presentation',
+  'allow-same-origin',
+  'allow-scripts',
+  'allow-storage-access-by-user-activation',
+  'allow-top-navigation',
+  'allow-top-navigation-by-user-activation',
+  'allow-top-navigation-to-custom-protocols',
+]);
+
+/** Loopback hosts, where plain `http:` is how local development serves a second origin. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 export interface SandboxRealmInit {
   fragmentId: string;
@@ -114,6 +139,21 @@ export function assertCrossOrigin(src: string, fragmentId: string): string {
     });
   }
 
+  /**
+   * Only a network scheme can name another origin. `javascript:`, `data:` and `blob:` have an
+   * opaque origin, which never equals the host's, so the comparison below would wave them through
+   * — and a `javascript:` src in a frame granted `allow-same-origin` runs in the host's origin.
+   */
+  const secure = url.protocol === 'https:';
+  const loopback = url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+  if (!secure && !loopback) {
+    throw new BraidError(`the untrusted tier loads fragments over https, and "${src}" is not an https url`, {
+      fragmentId,
+      stage: 'slot-config',
+      fixHint: 'serve the fragment from its own https origin; plain http is accepted only on localhost',
+    });
+  }
+
   if (url.origin === location.origin) {
     throw new BraidError(`the untrusted tier requires a cross-origin url, and "${url.origin}" is this host's origin`, {
       fragmentId,
@@ -131,12 +171,23 @@ export function assertCrossOrigin(src: string, fragmentId: string): string {
 export function resolveSandboxTokens(requested: readonly string[] = [], fragmentId: string): string[] {
   const tokens = new Set<string>(DEFAULT_SANDBOX_TOKENS);
 
-  for (const token of requested) {
+  // The browser splits the attribute on whitespace and matches tokens case-insensitively, so this
+  // must too — or "ALLOW-TOP-NAVIGATION" and "allow-popups allow-top-navigation" slip past.
+  const normalized = requested.flatMap((entry) => String(entry).toLowerCase().split(/\s+/).filter(Boolean));
+
+  for (const token of normalized) {
+    if (!KNOWN_SANDBOX_TOKENS.has(token)) {
+      throw new BraidError(`"${token}" is not a sandbox token`, {
+        fragmentId,
+        stage: 'slot-config',
+        fixHint: 'sandbox tokens are the allow-* keywords the HTML standard defines, e.g. "allow-popups"',
+      });
+    }
     if (REFUSED_SANDBOX_TOKENS.has(token)) {
       throw new BraidError(`the sandbox token "${token}" is never granted to an untrusted fragment`, {
         fragmentId,
         stage: 'slot-config',
-        fixHint: `use "${token}-by-user-activation" if the fragment genuinely needs to navigate the page`,
+        fixHint: 'use "allow-top-navigation-by-user-activation" if the fragment genuinely needs to navigate the page',
       });
     }
     tokens.add(token);
