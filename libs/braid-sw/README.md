@@ -109,63 +109,140 @@ and cache a composed response (a page pierced against a registry that has since 
 the stale artifact this package exists to avoid). Composed pages carry
 `x-braid-composed: offline` so a shell can say so rather than look merely slow.
 
-## The gateway in the worker, for static hosting (requirements, not built)
+## The gateway in the worker, for static hosting (`@braidlabs/sw/gateway`, proof of concept)
 
-Offline composition already runs the gateway's piercing in the worker. The open question is whether
-the worker can be the gateway **while online**, for a shell on purely static hosting (a bucket, a
-CDN, GitHub Pages) with no server in front of it. Nothing below is built. It records what an
-implementation must satisfy, so the design starts from the constraints rather than discovering them.
+Offline composition runs the gateway's piercing in the worker against the cache. The
+`@braidlabs/sw/gateway` entry runs the **whole gateway** in the worker against the network. That's
+for a shell on purely static hosting (a bucket, a CDN, GitHub Pages) with no server to put a gateway
+on. It's the same `createGateway` the server runs, with the network as its shell.
 
-**What it would do.** It would serve `/__braid/realm/:id/*` stubs, proxy `/__braid/frag/:id/*` and
-`/__braid/doc/:id/*` to each fragment's origin, and pierce document navigations, all with the
-gateway's own code. That is exactly what offline composition does now, but against the network.
+```js
+// sw.js — bundled, and served from the root so its scope covers the shell
+import { setupBraidGateway } from '@braidlabs/sw/gateway';
 
-### Requirements
+setupBraidGateway({
+  registry: [{ id: 'billing', endpoint: new URL('/billing-app/', self.location.origin).href, pierce: ['/billing/*'] }],
+  claimClients: true, // the installing page composes without a reload
+  assets: {}, // optional: the skew cache, in front of the in-worker gateway
+});
+```
 
-1. **The first visit must work without a reload.** No worker is installed on a first visit, so the
-   design is:
-   - The static host serves the shell and realm stubs generated at build time. Stubs are
-     byte-stable per registry snapshot, so they can be plain files.
-   - The page registers the worker, and the worker calls `clients.claim()` for this mode. This is
-     a deliberate exception to the `claimClients: false` default above: there is no earlier worker
-     to swap out from under the page.
-   - Slots wait for `navigator.serviceWorker.ready`, with a timeout, before booting. From then on
-     the realm iframes' navigations and the namespace fetches are the worker's to answer.
-   - The first visit's first paint is not composed. Fragments boot client-side, which already works
-     without piercing. Every later navigation is composed by the worker.
-2. **Fragment origins must send CORS headers.** The worker fetches them cross-origin. Documents and
-   assets need `Access-Control-Allow-Origin` naming the shell's origin, and module scripts need it
-   regardless.
-3. **Authenticated fragments must be same-site with the shell** (subdomains of one registrable
-   domain). With credentials, the worker's cross-origin requests also need
-   `Access-Control-Allow-Credentials`. Across sites, third-party cookie blocking (Safari, Firefox,
-   and Chrome where enabled) drops the session. A fragment that needs login cookies from another
-   site cannot be composed this way, and the build should refuse its manifest rather than let it
-   fail at runtime.
-4. **There must be a fallback where no worker can run.** Some private-browsing modes and enterprise
-   policies disable service workers. Without a worker, compat fragments have no namespace, so the
-   page must boot those slots as contract or untrusted fragments, or show their fallback content.
-   It must never leave them half-booted.
-5. **What the server gateway enforces must stay enforced.** Today's server gateway strips
-   credentials (`forwardCredentials`), checks `access`, and decides redirects (`redirectOrigins`).
-   In the worker, all of that runs on the user's device, which makes it advisory: a user can
-   change it. Anything that must hold against the user stays on the fragment's own origin. The
-   docs must say so plainly, as the boundary docs do for trusted fragments.
-6. **The registry must be pinned.** The worker loads one snapshot (`snapshotUrl`), verifies it as
-   the registry does, and composes only from it. Updating the snapshot follows the worker's
-   version discipline (see below), so configuration churn never becomes an unannounced change of
-   composition mid-session.
-7. **The gateway core stays runtime-neutral.** No `node:` imports in the gateway, registry or
-   rewriter, which offline composition already depends on. A new dependency of the core that
-   breaks this breaks both.
+Its own entry, rather than part of `@braidlabs/sw`, because it is a different decision. The main
+entry keeps a *server* gateway's assets alive and stays small enough to compose into any worker. It
+bundles none of the gateway's router. This entry *is* the router, rewriter and piercing.
+
+To compose it into a worker you already own, use `braidGatewayHandler(options)`. It returns a handler
+that decides synchronously, as `respondWith` requires:
+- It claims same-origin requests under `/__braid/` (or under `basePath`) and the browser's own GET
+  navigations.
+- Everything else, including a page's own `fetch` for HTML, returns `null`.
+
+Its `.fetch` routes any request through the gateway. Hand it to the asset handler, and the skew
+cache sits in front of the in-worker gateway as it would in front of a server one. Without it, the
+asset handler's misses go to the network, and on a static host that's a 404:
+
+```js
+const braid = braidGatewayHandler({ registry });
+const assets = braidFetchHandler({ fetch: braid.fetch });
+self.addEventListener('fetch', (event) => {
+  if (!braid.claims(event.request)) return; // the asset handler matches by path alone, on any origin
+  const handled = assets(event.request) ?? braid(event.request);
+  if (handled) event.respondWith(handled);
+});
+```
+
+The page starts Braid once the worker controls it. Until then `/__braid/` is a 404 on a static host.
+A hard reload loads the page past a worker that is already active, and an active worker doesn't
+claim a page unasked, so the page asks:
+
+```js
+if (!navigator.serviceWorker.controller) {
+  const changed = new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+  const registration = await navigator.serviceWorker.register('/sw.js', { type: 'module', scope: '/' });
+  registration.active?.postMessage({ type: 'braid-sw:claim' }); // BRAID_CLAIM_MESSAGE, honoured with claimClients
+  await changed;
+}
+initBraid();
+```
+
+[`examples/sw-gateway`](../../examples/sw-gateway) is the proof of concept. It's a static server with
+no gateway, serving the fragment zstd-compressed as a CDN would. The fragment composes, boots in its
+realm, pierces, and comes back after a hard reload. The repository's e2e runs that example in
+Chromium and asserts no `/__braid/` request ever reaches the server.
+
+### What running in a browser changed
+
+The server never meets any of these. The e2e found each one, and fails without its fix:
+
+- **Navigation requests can't be copied.** The gateway derives fragment requests with
+  `new Request(url, request)`, which a browser refuses for a `navigate`-mode request. The gateway
+  caught the error and pierced a placeholder.
+  - The handler now hands the gateway a non-navigation copy, and the shell still loads through the
+    browser's own navigation.
+  - The copy sends credentials as a page's own `fetch` would (same-origin), not as the navigation's
+    `include`.
+  - It keeps a POST's body.
+- **`accept-encoding` is a forbidden header.** The gateway pins it on a server so it knows which
+  codings `fetch` decoded, and a browser silently drops the pin. The gateway now notices the header
+  didn't take and trusts the browser to have decoded whatever it asked for, instead of refusing
+  `zstd` with a 502.
+- **Navigation preload is off.** The browser preloads *every* navigation in scope, including the
+  realm frames' navigations, which the worker answers itself. Each would also go to a server with no
+  answer for it. `setupBraidGateway` turns preload off. A worker of your own that enables it should
+  expect those requests.
+
+Two came from review rather than the e2e, and have specs:
+- **A redirecting shell is handed back to the browser.** A navigation's own `fetch` returns an
+  opaque redirect, for example when the host answers `/billing` with `/billing/`. It can't be copied
+  into a new response, so the gateway passes any status-0 shell through untouched.
+- **A page's `fetch` for HTML isn't a navigation.** The gateway can't see `Sec-Fetch-Dest` from a
+  worker. Claiming an htmx or Turbo request by its `Accept` header would pierce it as a document.
+
+### Requirements, and where each stands
+
+1. **The first visit must work without a reload.** *Met in the POC, partly.*
+   - The page registers the worker and starts the runtime once a controller exists, and
+     `claimClients` hands it the page. A hard reload asks the active worker to claim it.
+   - The first paint isn't composed. Fragments boot client-side, and every later navigation is
+     pierced by the worker.
+   - Still open: build-time realm stubs, and a timeout on the wait.
+2. **Fragment origins must send CORS headers.** *Documented, not exercised.* The worker reads what
+   it pierces, so a cross-origin endpoint needs `Access-Control-Allow-Origin` naming the shell's
+   origin. The POC's endpoint is same-origin. The endpoint also has to be public: on a server it can
+   sit behind the gateway, but here the browser fetches it.
+3. **Authenticated fragments must be same-origin with the shell.** *Documented.* The worker can't set
+   `Cookie` by name, and its fragment requests send credentials same-origin only, as the page's own
+   do. So a same-origin endpoint gets the browser's cookies and a cross-origin one gets none.
+   `forwardCredentials` and per-fragment cookie scoping can't take effect: the browser's cookie rules
+   replace them.
+4. **There must be a fallback where no worker can run.** *Open.* Without a worker, the namespace is
+   a 404 on a static host. The POC page waits for a controller indefinitely.
+5. **What the server gateway enforces is advisory here.**
+   - `access` and `redirectOrigins` run on the user's device, where the user can change them.
+     Anything that must hold against the user stays on the fragment's own origin.
+   - Everything in the options ships in the public `sw.js`, `additionalHeaders` included, so they
+     must hold no secrets.
+   - A fragment's redirect comes back to the worker opaque, so `redirect: 'navigate'` can't be
+     honoured. It fails closed: a pierced slot falls back to its placeholder.
+   - On `SameSite`, by reasoning rather than a browser test: a worker pierce sends a same-origin
+     fragment the cookies the page's own client-side compose would send a moment later. That
+     includes `Strict` ones after a cross-site link, which a server pierce wouldn't see. The shell
+     should refuse cross-site framing, and the example sends `X-Frame-Options: SAMEORIGIN`.
+6. **The registry must be pinned.** *Open.* The POC bakes its registry into the worker, so a
+   registry change is a worker update. That's version discipline of a kind, but it isn't
+   `snapshotUrl` loading and verification.
+7. **The gateway core stays runtime-neutral.** *Holds.* The worker bundles the gateway apart from two
+   fixes that apply on any runtime: the coding fix above, and passing an opaque shell through. A
+   worker that imports only the main entry carries none of it.
 
 ### Open questions
 
-- **Worker startup on every navigation.** A cold start can add tens of milliseconds on mobile.
-  Navigation preload can fetch the shell while the worker boots, but there is no server to ask for
-  the fragments early.
+- **Worker startup on every navigation.** With preload off, a navigation's shell request waits for
+  the worker to boot, which can be tens of milliseconds on mobile.
 - **Which `x-braid-composed` value** a worker-composed online page should carry, so it can be told
   apart from a server-composed one in telemetry.
+- **`assets` together with `basePath`.** The asset handler only recognises the namespace at the
+  root, so `setupBraidGateway` refuses the combination for now.
 
 ## The worker is itself a skew vector
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { createGateway, toFetchHandler } from './gateway.js';
@@ -293,6 +293,34 @@ describe('Node response framing', () => {
     expect(response!.status).toBe(502);
     expect(response!.headers.has('content-encoding')).toBe(false);
     expect(await response!.text()).toContain('"zstd"');
+  });
+
+  it('reframes any coding where the runtime forbids pinning accept-encoding, as a browser does', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const script = 'x'.repeat(4096);
+    const compressed = zstdCompressSync(script);
+    const upstream = await listen(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript', 'content-encoding': 'zstd', 'content-length': compressed.length });
+        res.end(compressed);
+      }),
+    );
+    const gateway = createGateway({ registry: [{ id: 'billing', endpoint: upstream }] });
+    // a service worker's request headers drop a forbidden name without throwing
+    const set = Headers.prototype.set;
+    const spy = vi.spyOn(Headers.prototype, 'set').mockImplementation(function (this: Headers, name: string, value: string) {
+      if (name.toLowerCase() !== 'accept-encoding') set.call(this, name, value);
+    });
+    try {
+      const response = await gateway.handle(new Request('http://localhost/__braid/frag/billing/a.js'), async () => new Response(null, { status: 404 }));
+
+      expect(response!.status).toBe(200);
+      expect(response!.headers.has('content-encoding')).toBe(false);
+      expect(response!.headers.has('content-length')).toBe(false);
+      expect(await response!.text()).toBe(script);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('answers HEAD for a forwarded asset that declares its length', async () => {

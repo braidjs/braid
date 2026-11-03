@@ -1,0 +1,18 @@
+{
+  "name": "sw-gateway-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Braid with no server gateway: the gateway runs in a service worker in front of a plain static server.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@braidlabs/core": "^0.8.0",
+    "@braidlabs/gateway": "^0.8.0",
+    "@braidlabs/sw": "^0.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

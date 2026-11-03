@@ -623,6 +623,15 @@ describe('gateway piercing', () => {
     expect(body).not.toContain('onload');
   });
 
+  it('hands back an opaque shell as it is, on a route it would pierce', async () => {
+    // what a navigation's own fetch returns in a worker when the shell redirects (`/billing` → `/billing/`)
+    const gateway = pierceGateway();
+    const opaque = Response.error();
+
+    expect(await gateway.handle(documentRequest('/billing/invoices'), async () => opaque)).toBe(opaque);
+    expect(await gateway.handle(new Request('https://example.com/billing/invoices'), async () => opaque)).toBe(opaque);
+  });
+
   it('passes through document requests that match no pierce pattern', async () => {
     const gateway = pierceGateway();
     const shell = vi.fn(async () => htmlResponse('<html><body>shell</body></html>'));
