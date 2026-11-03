@@ -66,6 +66,16 @@ describe('shellCode', () => {
     expect(all('angular-ssr')).toContain('app.use(toNodeMiddleware(gateway));');
   });
 
+  it('emits a production gateway unless NODE_ENV says development', () => {
+    // Development skips every access rule, so it is never what a deployment gets by default.
+    expect(all('angular-ssr')).toContain(
+      "mode: process.env['NODE_ENV'] === 'development' ? 'development' : 'production',",
+    );
+    const server = shellCode(shell, fragments, 'angular-ssr').find((file) => file.name === 'server.ts')!;
+    const output = ts.transpileModule(server.code, { reportDiagnostics: true, fileName: 'server.ts' });
+    expect(output.diagnostics).toEqual([]);
+  });
+
   it('emits one page per route for plain JS', () => {
     expect(shellCode(shell, fragments, 'vanilla').map((f) => f.name)).toEqual(['partner-portal-orders.html', 'partner-portal-root.html']);
   });
