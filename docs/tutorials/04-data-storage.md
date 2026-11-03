@@ -386,7 +386,13 @@ const tenancy = createTenancy({
 });
 
 await tenancy.signIn({ userId: 'u-1', actingAs: 'household-a' });
-const client = createDataClient({ driver, partition: tenancy.partition });
+const client = createDataClient({
+  driver,
+  partition: tenancy.partition,
+  // The outbox takes the partition separately. Without it the queue stays in one device-wide
+  // partition the purge never visits, so listing 'outbox' above would clear nothing.
+  outbox: createOutbox({ driver, owner: 'notes-app', partition: tenancy.partition }),
+});
 
 await tenancy.switchTenant('household-b');  // a pointer move; household-a stays warm on disk
 await tenancy.signOut();                    // every partition for u-1 is destroyed

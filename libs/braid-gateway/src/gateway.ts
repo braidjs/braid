@@ -99,7 +99,13 @@ export interface GatewayOptions {
    * for document requests (GET, `Sec-Fetch-Dest: document` or an HTML `Accept`).
    */
   documents?: (request: Request, context: DocumentsContext) => Response | null | Promise<Response | null>;
-  /** 'development' enables verbose error bodies; defaults to 'development'. */
+  /**
+   * Defaults to 'production'.
+   *
+   * 'development' is for a gateway on your own machine: it **skips every `access` rule**, lists
+   * every fragment with its endpoint in discovery, sends verbose error bodies, and rewrites
+   * `Origin` to the endpoint's own. Never set it on a gateway other people can reach.
+   */
   mode?: 'production' | 'development';
   /**
    * Additional headers set on every request forwarded to a fragment endpoint.
@@ -445,7 +451,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       throw new Error(`braid-gateway: registryRefreshMs must be a positive number of milliseconds, got ${options.registryRefreshMs}`);
     }
   }
-  const mode = options.mode ?? 'development';
+  // Production unless asked: development skips access rules, so it must never be what a
+  // deployment gets for forgetting an option.
+  const mode = options.mode ?? 'production';
   const pierceCacheControl = options.pierceCacheControl ?? 'private';
   const realmPolicy = options.realmPolicy;
   if (realmPolicy !== undefined && realmPolicy !== 'report' && realmPolicy !== 'enforce') {

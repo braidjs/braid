@@ -113,14 +113,23 @@ export interface QueuedEntry extends OutboxEntry {
   id: string;
   owner: string;
   seq: number;
+  /** Whose queue it was written to. Removing or failing it acts there, whoever is signed in now. */
+  partition: string;
 }
 
 export interface OutboxOptions {
   driver: RecordDriver;
   /** Which fragment or app this instance speaks for. Only its own entries are replayable by it. */
   owner: string;
-  /** Tenant partition. The outbox is page-scoped, so this is usually a constant. */
-  partition?: string;
+  /**
+   * Which person's queue this is. Read on every call when it is a function.
+   *
+   * Pass `() => tenancy.partition()` and add the outbox collection to the tenancy's `collections`
+   * on any device more than one person signs in to. Entries then belong to the person who queued
+   * them: the next person's flush never replays them under their own session, and sign-out purges
+   * them. The constant default suits a single-user device only: `owner` separates apps, not people.
+   */
+  partition?: string | (() => string);
   buildId?: string;
   collection?: string;
 }
@@ -156,16 +165,26 @@ export interface Outbox {
   all(): Promise<QueuedEntry[]>;
   /** Entries owned by someone else. They are waiting, not stuck, and must not be replayed here. */
   foreign(): Promise<QueuedEntry[]>;
-  remove(id: string): Promise<void>;
-  /** Records a failed attempt, keeping the entry queued. */
-  recordFailure(id: string, error: string): Promise<number>;
+  /**
+   * Removes an entry from the partition it was written to (or `partition`, when given), not
+   * whichever is current: a send that finishes after a tenant switch must still clear the entry it
+   * sent, or switching back replays it.
+   */
+  remove(id: string, partition?: string): Promise<void>;
+  /** Records a failed attempt, keeping the entry queued. Acts where `remove` would. */
+  recordFailure(id: string, error: string, partition?: string): Promise<number>;
 }
 
 const DEFAULT_COLLECTION = 'outbox';
 const DEFAULT_PARTITION = 'session';
 
 export function createOutbox(options: OutboxOptions): Outbox {
-  const partition = options.partition ?? DEFAULT_PARTITION;
+  const configured = options.partition ?? DEFAULT_PARTITION;
+  const partition = typeof configured === 'function' ? configured : () => configured;
+  // Where each entry this instance has written or listed lives, so remove and recordFailure act
+  // there even after the current partition has moved on.
+  const placed = new Map<string, string>();
+  const partitionOf = (id: string, given?: string) => given ?? placed.get(id) ?? partition();
   const store = createRecordStore<OutboxEntryV2>({
     driver: options.driver,
     collection: options.collection ?? DEFAULT_COLLECTION,
@@ -175,21 +194,25 @@ export function createOutbox(options: OutboxOptions): Outbox {
 
   const toQueued = (record: ProjectedRecord<OutboxEntryV2>): QueuedEntry => ({
     id: record.id,
+    partition: record.partition,
     owner: record.owner ?? '',
     seq: record.seq,
     ...record.value,
   });
 
   async function entries(): Promise<QueuedEntry[]> {
-    return (await store.list(partition)).map(toQueued);
+    const listed = (await store.list(partition())).map(toQueued);
+    for (const entry of listed) placed.set(entry.id, entry.partition);
+    return listed;
   }
 
   return {
     async enqueue({ mutationId, input, id, schemaVersion, optimistic }) {
       const entryId = id ?? crypto.randomUUID();
+      const at = partition();
       await store.put({
         id: entryId,
-        partition,
+        partition: at,
         owner: options.owner,
         value: {
           mutationId,
@@ -200,6 +223,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
           ...(optimistic === undefined ? {} : { optimistic }),
         },
       });
+      placed.set(entryId, at);
       return entryId;
     },
 
@@ -224,10 +248,13 @@ export function createOutbox(options: OutboxOptions): Outbox {
       return (await entries()).filter((entry) => entry.owner !== options.owner);
     },
 
-    remove: (id) => store.delete(id, partition),
+    async remove(id, at) {
+      await store.delete(id, partitionOf(id, at));
+      placed.delete(id);
+    },
 
-    async recordFailure(id, error) {
-      const record = await store.get(id, partition);
+    async recordFailure(id, error, at) {
+      const record = await store.get(id, partitionOf(id, at));
       // Already gone — a concurrent flush removed it. Not an error worth raising: the entry is in
       // the state the caller wanted it in.
       if (!record) return 0;

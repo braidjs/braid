@@ -83,8 +83,15 @@ export interface FragmentCapabilities {
 export function createContextGate(
   capabilities: FragmentCapabilities | undefined,
   fragmentId: string,
+  options: { untrusted?: boolean } = {},
 ): (key: string) => boolean {
-  const read = capabilities?.context?.read;
+  /**
+   * No grant means everything for a trusted fragment, which already holds the user's session, so
+   * that adding capabilities to one fragment does not starve the rest. An untrusted fragment is the
+   * opposite case: forgetting its grant must not hand a third party the user, the tenant and every
+   * token the host publishes, so it gets nothing until a grant names what it may read.
+   */
+  const read = capabilities?.context?.read ?? (options.untrusted ? [] : undefined);
   if (!read) return () => true;
 
   const granted = new Set(read);

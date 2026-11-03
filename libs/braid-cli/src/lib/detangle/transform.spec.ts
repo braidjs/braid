@@ -171,6 +171,13 @@ describe('scaffoldGatewayApp()', () => {
     ]);
   });
 
+  it('generates a production gateway unless NODE_ENV says development', () => {
+    // Development skips every access rule, so it is never what a deployment gets by default.
+    const main = scaffoldGatewayApp(plan()).files['apps/shell-gateway/src/main.ts']!;
+    expect(main).toContain("process.env.NODE_ENV === 'development' ? 'development' : 'production'");
+    expect(main).toContain('createGateway({ mode, registry })');
+  });
+
   it('carries every fragment into the generated registry', () => {
     const scaffold = scaffoldGatewayApp(plan());
     const registry = JSON.parse(scaffold.files['apps/shell-gateway/src/registry.json']!);

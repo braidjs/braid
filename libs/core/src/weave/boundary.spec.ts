@@ -34,6 +34,8 @@ interface MountOptions {
   contextVersions?: Record<string, number>;
   props?: Record<string, unknown>;
   capabilities?: import('./capabilities.js').FragmentCapabilities;
+  /** Routes context the way `#bootUntrusted` does. */
+  untrusted?: boolean;
 }
 
 async function mount(options: MountOptions = {}): Promise<Mounted> {
@@ -86,6 +88,7 @@ async function mount(options: MountOptions = {}): Promise<Mounted> {
         fragmentId,
         contextVersions,
         ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
+        ...(options.untrusted ? { untrusted: true } : {}),
         signal,
       }),
       props: structuredClone(props),
@@ -369,6 +372,39 @@ describe('closing across the boundary', () => {
 });
 
 describe('context grants', () => {
+  it('gives an untrusted fragment with no grant nothing: no snapshot, no changes', async () => {
+    braidContext.set('user', { id: 'u1' });
+    const mounted = await mount({ untrusted: true });
+    const seen = vi.fn();
+    mounted.env.context.subscribe('user', seen);
+
+    braidContext.set('user', { id: 'u2' });
+    await flush();
+
+    // A forgotten grant must not hand a third party the user's context.
+    expect(mounted.env.context.get('user')).toBeUndefined();
+    expect(seen).not.toHaveBeenCalled();
+    mounted.dispose();
+  });
+
+  it('still gives a trusted fragment with no grant everything', async () => {
+    braidContext.set('user', { id: 'u1' });
+    const mounted = await mount();
+
+    expect(mounted.env.context.get('user')).toEqual({ id: 'u1' });
+    mounted.dispose();
+  });
+
+  it('gives an untrusted fragment exactly what its grant names', async () => {
+    braidContext.set('user', { id: 'u1' });
+    braidContext.set('pricing', { margin: 0.4 });
+    const mounted = await mount({ untrusted: true, capabilities: { context: { read: ['user'] } } });
+
+    expect(mounted.env.context.get('user')).toEqual({ id: 'u1' });
+    expect(mounted.env.context.get('pricing')).toBeUndefined();
+    mounted.dispose();
+  });
+
   it('keeps an ungranted key out of the fragment’s mirror entirely', async () => {
     braidContext.set('user', { id: 'u1' });
     braidContext.set('pricing', { margin: 0.4 });

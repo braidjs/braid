@@ -97,3 +97,18 @@ export class FundEditorComponent {
   }
 }
 ```
+
+**On a device more than one person signs in to**, give the outbox the tenancy's partition and list
+its collection in that tenancy. Queued work then belongs to the person who queued it: sign-out
+purges it, and the next person's flush never replays it under their session. Without this the
+queue is device-wide, which suits a single-user device only.
+
+```ts
+const tenancy = createTenancy({ driver, collections: ['outbox', ...yours] }); // 'outbox' is the queue's collection
+
+provideSkewData({ driver, owner: 'funds', partition: () => tenancy.partition() });
+```
+
+Pass the **same `driver`** to both, since sign-out purges only the tenancy's driver. Call
+`outbox.flush()` after each sign-in, so the service reads the new person's queue; while nobody is
+signed in, the queue can't be read and the failure goes to `onOutboxError`.
