@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
-import { memoryRecordDriver, type RecordDriver } from '@braidlabs/data';
+import { createTenancy, memoryRecordDriver, type RecordDriver } from '@braidlabs/data';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DATA_OPTIONS, resolveDataOptions } from './config';
+import { DATA_OPTIONS, OUTBOX_COLLECTION, resolveDataOptions } from './config';
 import { OutboxService } from './outbox';
 
 /**
@@ -17,6 +17,7 @@ function configure(options: {
   owner?: string;
   maxAttempts?: number;
   onError?: (message: string, detail?: unknown) => void;
+  partition?: () => string;
 } = {}) {
   const driver = options.driver ?? memoryRecordDriver();
 
@@ -30,6 +31,7 @@ function configure(options: {
           owner: options.owner ?? 'billing',
           maxOutboxAttempts: options.maxAttempts ?? 5,
           ...(options.onError ? { onOutboxError: options.onError } : {}),
+          ...(options.partition ? { partition: options.partition } : {}),
         }),
       },
     ],
@@ -419,5 +421,26 @@ describe('OutboxService', () => {
     it('allows an in-memory outbox without one, since nothing is shared', () => {
       expect(() => resolveDataOptions({})).not.toThrow();
     });
+  });
+});
+
+describe('OutboxService on a shared device', () => {
+  it("does not flush one person's queued work under the next person's session", async () => {
+    const driver = memoryRecordDriver();
+    const tenancy = createTenancy({ driver, collections: [OUTBOX_COLLECTION] });
+    const runner = vi.fn(async () => undefined);
+
+    await tenancy.signIn({ userId: 'alice' });
+    const first = configure({ driver, partition: () => tenancy.partition() });
+    first.outbox.register('publish', runner);
+    await first.outbox.enqueue({ mutationId: 'publish', input: { id: '1' }, schemaVersion: 1 });
+    await tenancy.signOut();
+
+    await tenancy.signIn({ userId: 'bob' });
+    const next = configure({ driver, partition: () => tenancy.partition() });
+    next.outbox.register('publish', runner);
+    await next.outbox.flush();
+
+    expect(runner).not.toHaveBeenCalled();
   });
 });

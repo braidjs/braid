@@ -30,6 +30,13 @@ export interface DataOptions {
   /** Flush the outbox when the browser reports it is back online. Default true. */
   readonly flushOnReconnect: boolean;
   readonly buildId?: string;
+  /**
+   * Whose queue this is: pass `() => tenancy.partition()` on any device more than one person signs
+   * in to, and list the outbox collection in that tenancy's `collections`. Queued work then belongs
+   * to the person who queued it, the next person's flush never replays it under their session, and
+   * sign-out purges it. Without it the queue is device-wide, which suits a single-user device only.
+   */
+  readonly partition?: string | (() => string);
 }
 
 export const DATA_OPTIONS = new InjectionToken<DataOptions>('SKEW_DATA_OPTIONS');
@@ -57,6 +64,8 @@ export interface DataOptionsInput {
   readonly persistOutbox?: boolean;
   /** Stamped onto persisted envelopes for attribution. */
   readonly buildId?: string;
+  /** Whose queue this is. See {@link DataOptions.partition}; set it on any shared device. */
+  readonly partition?: string | (() => string);
   /** Database name when persisting. Defaults to `skew-data`. */
   readonly database?: string;
   /**
@@ -107,5 +116,6 @@ export function resolveDataOptions(input: DataOptionsInput = {}): DataOptions {
     ...(input.onOutboxError === undefined ? {} : { onOutboxError: input.onOutboxError }),
     flushOnReconnect: input.flushOnReconnect ?? true,
     ...(input.buildId === undefined ? {} : { buildId: input.buildId }),
+    ...(input.partition === undefined ? {} : { partition: input.partition }),
   };
 }

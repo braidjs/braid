@@ -119,8 +119,15 @@ export interface OutboxOptions {
   driver: RecordDriver;
   /** Which fragment or app this instance speaks for. Only its own entries are replayable by it. */
   owner: string;
-  /** Tenant partition. The outbox is page-scoped, so this is usually a constant. */
-  partition?: string;
+  /**
+   * Which person's queue this is. Read on every call when it is a function.
+   *
+   * Pass `() => tenancy.partition()` and add the outbox collection to the tenancy's `collections`
+   * on any device more than one person signs in to. Entries then belong to the person who queued
+   * them: the next person's flush never replays them under their own session, and sign-out purges
+   * them. The constant default suits a single-user device only: `owner` separates apps, not people.
+   */
+  partition?: string | (() => string);
   buildId?: string;
   collection?: string;
 }
@@ -165,7 +172,8 @@ const DEFAULT_COLLECTION = 'outbox';
 const DEFAULT_PARTITION = 'session';
 
 export function createOutbox(options: OutboxOptions): Outbox {
-  const partition = options.partition ?? DEFAULT_PARTITION;
+  const configured = options.partition ?? DEFAULT_PARTITION;
+  const partition = typeof configured === 'function' ? configured : () => configured;
   const store = createRecordStore<OutboxEntryV2>({
     driver: options.driver,
     collection: options.collection ?? DEFAULT_COLLECTION,
@@ -181,7 +189,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
   });
 
   async function entries(): Promise<QueuedEntry[]> {
-    return (await store.list(partition)).map(toQueued);
+    return (await store.list(partition())).map(toQueued);
   }
 
   return {
@@ -189,7 +197,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
       const entryId = id ?? crypto.randomUUID();
       await store.put({
         id: entryId,
-        partition,
+        partition: partition(),
         owner: options.owner,
         value: {
           mutationId,
@@ -224,10 +232,10 @@ export function createOutbox(options: OutboxOptions): Outbox {
       return (await entries()).filter((entry) => entry.owner !== options.owner);
     },
 
-    remove: (id) => store.delete(id, partition),
+    remove: (id) => store.delete(id, partition()),
 
     async recordFailure(id, error) {
-      const record = await store.get(id, partition);
+      const record = await store.get(id, partition());
       // Already gone — a concurrent flush removed it. Not an error worth raising: the entry is in
       // the state the caller wanted it in.
       if (!record) return 0;

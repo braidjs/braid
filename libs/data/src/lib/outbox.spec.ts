@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { drainOutbox } from './flush.js';
 import { memoryRecordDriver } from './memory-driver.js';
 import { createOutbox } from './outbox.js';
+import { createTenancy } from './tenancy.js';
 
 /** Two applications on one origin, sharing storage — the case that used to lose data. */
 function twoApps() {
@@ -146,5 +148,64 @@ describe('outbox', () => {
     const seqs = (await reloaded.mine()).map((entry) => entry.seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
     expect(new Set(seqs).size).toBe(2);
+  });
+});
+
+/**
+ * One browser, two people. `owner` separates applications, not users, so a queue keyed only by
+ * owner replays whatever the last person left under whoever signs in next.
+ */
+describe('outbox on a shared device', () => {
+  function sharedDevice() {
+    const driver = memoryRecordDriver();
+    const tenancy = createTenancy({ driver, collections: ['outbox'] });
+    const outbox = createOutbox({ driver, owner: 'orders', partition: () => tenancy.partition() });
+    const sent = vi.fn(async () => undefined);
+    const drain = () => drainOutbox({ outbox, owner: 'orders', runnerFor: () => sent });
+    return { tenancy, outbox, sent, drain };
+  }
+
+  it("never replays one person's queued mutation under the next person's session", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 100 } });
+    await tenancy.signOut();
+
+    await tenancy.signIn({ userId: 'bob' });
+    await drain();
+
+    expect(sent).not.toHaveBeenCalled();
+    expect(await outbox.mine()).toEqual([]);
+  });
+
+  it("purges a person's queue when they sign out", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 100 } });
+    await tenancy.signOut();
+
+    // Not held for later: what Alice queued on a shared device leaves with her.
+    await tenancy.signIn({ userId: 'alice' });
+    await drain();
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it("replays a person's queue for that person", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 1 } });
+    await drain();
+
+    expect(sent).toHaveBeenCalledWith({ qty: 1 }, expect.objectContaining({ mutationId: 'order.place' }));
+  });
+
+  it('keeps the constant default for a single-user device', async () => {
+    const driver = memoryRecordDriver();
+    const outbox = createOutbox({ driver, owner: 'orders' });
+    await outbox.enqueue({ mutationId: 'order.place', input: {} });
+    expect(await createOutbox({ driver, owner: 'orders' }).mine()).toHaveLength(1);
   });
 });

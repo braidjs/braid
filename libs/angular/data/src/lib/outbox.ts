@@ -79,6 +79,7 @@ export class OutboxService {
       owner: this.options.owner,
       collection: OUTBOX_COLLECTION,
       ...(this.options.buildId === undefined ? {} : { buildId: this.options.buildId }),
+      ...(this.options.partition === undefined ? {} : { partition: this.options.partition }),
     });
     return this.outbox;
   }
