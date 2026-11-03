@@ -2,7 +2,7 @@ import { Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { createVersionedStore, memoryDriver, versioned } from '@braidlabs/skew';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { WORKFLOW_OPTIONS, resolveWorkflowOptions } from './config';
+import { WORKFLOW_OPTIONS, clearWorkflowDrafts, resolveWorkflowOptions } from './config';
 import { defineWorkflow } from './definition';
 import { injectWorkflow } from './workflow';
 
@@ -292,5 +292,62 @@ describe('injectWorkflow', () => {
     await wf.advance({ templateId: 't' });
 
     expect(wf.current()).toBe('content');
+  });
+});
+
+/** One device, two people. A draft holds what someone typed into a form; it is theirs alone. */
+describe('drafts on a shared device', () => {
+  function signedInAs(user: { current: string }, storage: Map<string, string>) {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: WORKFLOW_OPTIONS,
+          useValue: resolveWorkflowOptions({ scope: () => user.current, draftDriver: memoryDriver(storage) }),
+        },
+      ],
+    });
+    return runInInjectionContext(TestBed.inject(Injector), () => injectWorkflow(flow));
+  }
+
+  it("never resumes one person's draft for another, and resumes it for its owner", async () => {
+    const storage = new Map<string, string>();
+    const user = { current: 'alice' };
+
+    await signedInAs(user, storage).advance({ templateId: 'missale' });
+    await settle();
+
+    user.current = 'bob';
+    const bobs = signedInAs(user, storage);
+    await settle();
+    expect(bobs.current()).toBe('template');
+    expect(bobs.data().templateId).toBe('');
+
+    user.current = 'alice';
+    const alices = signedInAs(user, storage);
+    await settle();
+    expect(alices.current()).toBe('content');
+    expect(alices.data().templateId).toBe('missale');
+  });
+
+  it("clears a person's drafts at sign-out, and only theirs", async () => {
+    const storage = new Map<string, string>();
+    const user = { current: 'alice' };
+    await signedInAs(user, storage).advance({ templateId: 'missale' });
+    user.current = 'bob';
+    await signedInAs(user, storage).advance({ templateId: 'graduale' });
+    await settle();
+
+    await clearWorkflowDrafts('alice', memoryDriver(storage));
+
+    user.current = 'alice';
+    const alices = signedInAs(user, storage);
+    await settle();
+    expect(alices.data().templateId).toBe('');
+
+    user.current = 'bob';
+    const bobs = signedInAs(user, storage);
+    await settle();
+    expect(bobs.data().templateId).toBe('graduale');
   });
 });

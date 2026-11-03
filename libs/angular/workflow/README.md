@@ -138,6 +138,17 @@ provideSkewWorkflow({
 
 `onDraftError` is worth wiring: a draft that silently fails to save looks identical to one that saved, right up until the user comes back.
 
+**On a device more than one person signs in to, scope the drafts.** They live in localStorage, which
+the whole device shares, so without a scope the next person to open the wizard resumes the last
+person's half-filled form. Scope them to the signed-in person and clear them at sign-out:
+
+```ts
+provideSkewWorkflow({ scope: () => tenancy.partition() });
+
+// at sign-out, before the partition changes
+await clearWorkflowDrafts(tenancy.partition());
+```
+
 ---
 
 ## API
@@ -151,6 +162,7 @@ provideSkewWorkflow({
 | `testWorkflow(flow, initial?)` | Headless harness |
 | `pathTo` · `resolveNext` · `progress` · `isComplete` | Pure engine functions |
 | `provideSkewWorkflow(options)` | Wire it up |
+| `clearWorkflowDrafts(scope)` | Delete one person's drafts, at sign-out |
 
 ---
 
