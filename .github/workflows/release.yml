@@ -20,6 +20,10 @@ on:
         required: true
         default: 'latest'
 
+# Read-only by default, so the verify call to ci.yml gets nothing more; publish asks for its own.
+permissions:
+  contents: read
+
 concurrency:
   # Never two releases at once: they would race for the same version number.
   group: release
@@ -32,23 +36,34 @@ jobs:
 
   publish:
     needs: verify
+    # A dispatch can name any ref, and publish runs before the push to main that would fail for a
+    # branch that is not main. Without this, an unreviewed branch ships to npm with provenance.
+    if: github.ref == 'refs/heads/main'
+    # Required reviewers and the main-only deployment rule live on this environment, in the repo
+    # settings. npm's trusted publisher for each package names this workflow and environment.
+    environment: release
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the version commit and its tags
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing (OIDC) and provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           # Same toolchain as CI and local development; see the note in ci.yml.
           node-version-file: .nvmrc
           cache: npm
-          registry-url: https://registry.npmjs.org
+          # No `registry-url`: it writes an .npmrc whose token falls back to a placeholder when no
+          # NODE_AUTH_TOKEN is set, and npm would send that instead of using OIDC. The default
+          # registry is already registry.npmjs.org. Trusted publishing needs npm 11.5.1 or later,
+          # which the .nvmrc Node ships.
 
-      - run: npm ci
+      # No lifecycle scripts: this job holds a write token and the OIDC identity npm publishes
+      # under, and nothing the build needs runs at install time.
+      - run: npm ci --ignore-scripts
 
       - name: Configure git identity
         run: |
@@ -58,25 +73,25 @@ jobs:
       - name: Refuse a version npm already has
         # Run #11 asked for "0.1.1", already on npm: publish skipped every package and still
         # reported success. An exact version is checked here, before anything is built.
-        run: node tools/release/check-version-unspent.mjs "${{ inputs.specifier }}"
+        # Inputs reach the shell through env, never by template expansion into the script.
+        run: node tools/release/check-version-unspent.mjs "$SPECIFIER"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          SPECIFIER: ${{ inputs.specifier }}
 
       - name: Version, changelog, and tag
         # One command, so the bump resolves once for all three. `nx release changelog` takes a
         # version, not a bump: given "patch" it wrote "# patch" into CHANGELOG.md, committed
         # "publish patch" and tagged `vpatch` (the 0.7.1 run), while `version` correctly wrote 0.7.1.
         # Publishing stays its own step below, after the checks on what versioning produced.
-        run: npx nx release "${{ inputs.specifier }}" --skip-publish ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: npx nx release "$SPECIFIER" --skip-publish ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
+          SPECIFIER: ${{ inputs.specifier }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Refuse a resolved version npm already has
         # A bump keyword resolves from the latest v{version} tag; a missing tag would resolve to a
         # spent version. Checks what the version step actually wrote into dist/.
         run: node tools/release/check-version-unspent.mjs
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Refuse unpublishable output
         # npm pack never runs prepublishOnly; only publish does. This is the check that would
@@ -84,11 +99,13 @@ jobs:
         run: node tools/release/check-publishable.mjs
 
       - name: Publish to npm
-        run: npx nx release publish --tag "${{ inputs.tag }}" ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: npx nx release publish --tag "$DIST_TAG" ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
-          # Classic automation token, or a granular token scoped to the @braidlabs
-          # org with read+write. Repo → Settings → Secrets → Actions.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ inputs.tag }}
+          # No token: npm trusted publishing exchanges this job's OIDC identity for a short-lived
+          # publish credential. Each @braidlabs package needs a trusted publisher on npmjs.com
+          # naming braidjs/braid, release.yml and the `release` environment. A long-lived token
+          # in repo secrets is readable by any workflow a collaborator pushes on any branch.
           NPM_CONFIG_PROVENANCE: true
 
       - name: Push the release record
