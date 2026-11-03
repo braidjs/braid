@@ -104,6 +104,17 @@ describe('validateRegistry', () => {
     );
     expect(findings.filter((finding) => finding.fragmentIds.includes('c'))).toEqual([]);
   });
+
+  it('says when speculation will skip a fragment: chrome, or a pattern that matches any path', () => {
+    const findings = validateRegistry([
+      { id: 'header', endpoint: 'https://h.internal', pierce: ['/billing/*'], bound: false, speculate: 'prerender' },
+      { id: 'everything', endpoint: 'https://e.internal', pierce: ['/*'], speculate: 'prefetch' },
+      { id: 'home', endpoint: 'https://o.internal', pierce: ['/'], speculate: 'prefetch' },
+    ]);
+    const ignored = findings.filter((finding) => finding.code === 'speculate-ignored').map((finding) => finding.fragmentIds[0]);
+
+    expect(ignored).toEqual(['header', 'everything']);
+  });
 });
 
 describe('diffRegistries', () => {

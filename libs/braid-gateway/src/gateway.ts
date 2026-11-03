@@ -424,6 +424,14 @@ export interface BraidGateway {
   handle(request: Request, next?: () => Promise<Response>): Promise<Response | null>;
 
   /**
+   * Headers a binding adds to a page it passes to the app when `handle` returned null — the
+   * pointer to the speculation rules, when `speculationRules` is on — or null for none. Set on the
+   * way out rather than by reading the app's response, so a passed-through page streams exactly as
+   * it would without the gateway. Browsers ignore them on anything but HTML.
+   */
+  pageHeaders(request: Request): Record<string, string> | null;
+
+  /**
    * Resolves a websocket upgrade addressed to a fragment.
    *
    * Dev servers push reloads over websockets, and live apps use them for real work. Both are
@@ -691,6 +699,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
   return {
     refreshRegistry,
+    pageHeaders,
 
     close() {
       closed = true;
@@ -740,8 +749,9 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
-        const page = await pageResponse(request, requestUrl, next);
-        return options.speculationRules ? advertiseSpeculationRules(request, page, next) : page;
+        // A page the gateway leaves to the app comes back null, untouched: the binding adds the
+        // page headers on its way through, without the gateway reading the app's response.
+        return withPageHeaders(request, await pageResponse(request, requestUrl, next));
       }
 
       /**
@@ -1378,48 +1388,51 @@ export function createGateway(options: GatewayOptions): BraidGateway {
   }
 
   /**
-   * Points an HTML document at the speculation rules.
+   * The headers a page carries because of this gateway, for a browser navigation: today, the
+   * pointer to the speculation rules.
    *
    * Every page, not only composed ones: the page that *links* to a fragment's route is the one the
-   * browser speculates from, and it is usually not that route. A page the gateway would have left
-   * to the app is fetched here so it can carry the header; nothing else about it changes. The
-   * header's value is the same for every caller, so it never makes a page private.
+   * browser speculates from, and it is usually not that route. The value is the same for every
+   * caller, so it never makes a page private, and a browser ignores it on anything but HTML.
    */
-  async function advertiseSpeculationRules(
-    request: Request,
-    page: Response | null,
-    next: (() => Promise<Response>) | undefined,
-  ): Promise<Response | null> {
-    const isPage = request.method === 'HEAD' || isDocumentRequest(request);
-    if (!isPage) return page;
-    const response = page ?? (next ? await next() : null);
-    if (!response || isOpaque(response)) return response;
-    if (!response.headers.get('content-type')?.toLowerCase().includes('text/html')) return response;
-    const advertised = new Response(response.body, response);
-    advertised.headers.append('speculation-rules', `"${BRAID_SPECULATION_RULES_PATH}"`);
-    return advertised;
+  function pageHeaders(request: Request): Record<string, string> | null {
+    if (!options.speculationRules || !isNavigation(request)) return null;
+    return { 'speculation-rules': `"${BRAID_SPECULATION_RULES_PATH}"` };
+  }
+
+  /** A page the gateway produced, with {@link pageHeaders} on it. */
+  function withPageHeaders(request: Request, page: Response | null): Response | null {
+    const headers = page && !isOpaque(page) ? pageHeaders(request) : null;
+    return headers ? withHeaders(page!, headers) : page;
   }
 
   /**
    * The rules themselves: the pierce patterns of every fragment that asks for speculation, less
-   * those the caller may not fetch. With any access rules in the registry the answer depends on
-   * who asked, so it is private to them; otherwise it is the same for everyone and may be shared.
+   * those the caller may not list or fetch — as discovery and the namespace keep them out of sight.
+   *
+   * Private whenever the gateway can tell callers apart (a `principal` resolver) or any fragment
+   * has access rules: decided from configuration, so a shared cache never holds a list that a
+   * registry refresh has since made personal. Never stored in development, where nothing is filtered.
    */
   async function speculationRulesResponse(request: Request): Promise<Response> {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
     }
     const manifests = await registry.listFragments();
-    const personal = !isDevelopment && manifests.some(hasAccessRules);
+    const personal = !isDevelopment && (options.principal !== undefined || manifests.some(hasAccessRules));
     const principal = personal ? await resolvePrincipal(request) : undefined;
-    const visible = manifests.filter((manifest) => !personal || !hasAccessRules(manifest) || canFetch(manifest, principal));
+    const visible = manifests.filter(
+      (manifest) => isDevelopment || !hasAccessRules(manifest) || (canList(manifest, principal) && canFetch(manifest, principal)),
+    );
     return new Response(request.method === 'HEAD' ? null : JSON.stringify(speculationRulesFor(visible)), {
       headers: {
         'content-type': 'application/speculationrules+json',
-        ...(personal
-          ? { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
-          : // short: the registry it comes from refreshes on its own schedule
-            { 'cache-control': 'public, max-age=60' }),
+        ...(isDevelopment
+          ? { 'cache-control': 'no-store' }
+          : personal
+            ? { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
+            : // short: the registry it comes from refreshes on its own schedule
+              { 'cache-control': 'public, max-age=60' }),
       },
     });
   }
@@ -1767,7 +1780,7 @@ export function toWebMiddleware(
 ): (request: Request, next: () => Promise<Response>) => Promise<Response> {
   return async (request, next) => {
     const shellOnce = once(next);
-    return (await gateway.handle(request, shellOnce)) ?? shellOnce();
+    return (await gateway.handle(request, shellOnce)) ?? passThrough(gateway, request, await shellOnce());
   };
 }
 
@@ -1791,8 +1804,14 @@ export function toFetchHandler(
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     const shellOnce = once(() => Promise.resolve(appHandler(request)));
-    return (await gateway.handle(request, shellOnce)) ?? shellOnce();
+    return (await gateway.handle(request, shellOnce)) ?? passThrough(gateway, request, await shellOnce());
   };
+}
+
+/** The app's own response to a request the gateway passed to it, with the gateway's page headers. */
+function passThrough(gateway: BraidGateway, request: Request, response: Response): Response {
+  const headers = isOpaque(response) ? null : gateway.pageHeaders(request);
+  return headers ? withHeaders(response, headers) : response;
 }
 
 /** Memoizes an async thunk so the wrapped work happens at most once. */
@@ -1947,6 +1966,26 @@ function appendHop(request: Request): string {
  */
 function isOpaque(response: Response): boolean {
   return response.status === 0;
+}
+
+/** A top-level browser navigation: the request a page's own headers are for. */
+function isNavigation(request: Request): boolean {
+  return request.method === 'GET' && request.headers.get('sec-fetch-dest') === 'document';
+}
+
+/**
+ * The response with these headers set. A response's headers are often immutable (one `fetch`
+ * returned), so it is copied then — the body streams through the copy untouched.
+ */
+function withHeaders(response: Response, headers: Record<string, string>): Response {
+  try {
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  } catch {
+    const copy = new Response(response.body, response);
+    for (const [name, value] of Object.entries(headers)) copy.headers.set(name, value);
+    return copy;
+  }
 }
 
 /** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */

@@ -1,4 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
+import { canonicalRoute, claimsWholeSite } from './route-scope.js';
 import { validateShells, type ShellManifest } from './shell.js';
 
 /**
@@ -36,6 +37,7 @@ export type FindingCode =
   | 'empty-access-rule'
   | 'invalid-speculate'
   | 'speculate-without-pierce'
+  | 'speculate-ignored'
   | 'invalid-shell-id'
   | 'duplicate-shell-id'
   | 'invalid-shell-framework'
@@ -244,6 +246,29 @@ function validateSpeculate(manifest: FragmentManifest): RegistryFinding[] {
         fragmentIds: [manifest.id],
         message: `fragment "${manifest.id}" asks to be speculated but pierces no routes`,
         hint: 'speculation covers the pages a fragment pierces; add pierce patterns, or drop speculate',
+      },
+    ];
+  }
+  if (manifest.bound === false) {
+    return [
+      {
+        severity: 'warning',
+        code: 'speculate-ignored',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" is unbound, so its speculate is ignored`,
+        hint: 'an unbound fragment is pierced into pages it does not own; speculate those pages from the fragment that does',
+      },
+    ];
+  }
+  const catchAll = manifest.pierce.filter((pattern) => canonicalRoute(pattern) !== '/' && claimsWholeSite(pattern));
+  if (catchAll.length) {
+    return [
+      {
+        severity: 'warning',
+        code: 'speculate-ignored',
+        fragmentIds: [manifest.id],
+        message: `fragment "${manifest.id}" pierces ${catchAll.map((pattern) => `"${pattern}"`).join(', ')}, which matches any path, so speculation skips it`,
+        hint: 'speculating a catch-all would fetch every same-origin link, /logout included; give the fragment narrower patterns',
       },
     ];
   }

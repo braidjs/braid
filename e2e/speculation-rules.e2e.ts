@@ -163,8 +163,28 @@ describe('speculation rules', () => {
         `(() => { const r = document.getElementById('go').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
       );
       const prerendered = cdp.waitFor('Preload.prerenderStatusUpdated', (params) => params['status'] === 'Ready');
+      const prerenderTarget = cdp.waitFor(
+        'Target.attachedToTarget',
+        (params) => (params['targetInfo'] as { subtype?: string }).subtype === 'prerender',
+      );
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y }, home);
       await prerendered;
+
+      // `Ready` means the document committed, not that the fragment booted: wait for the slot,
+      // inside the page that is still being prerendered
+      const hidden = (await prerenderTarget)['sessionId'] as string;
+      let booted: { prerendering: boolean; state: string | null } | undefined;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        booted = await evaluate<{ prerendering: boolean; state: string | null }>(
+          cdp,
+          hidden,
+          `({ prerendering: document.prerendering, state: document.querySelector('fragment-slot[name="billing"]')?.getAttribute('state') ?? null })`,
+        );
+        if (booted.state === 'ready' || booted.state === 'healthy' || booted.state === 'unobservable') break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      // a prerendered page is hidden, so a booted fragment's liveness reads `unobservable`
+      expect(booted).toMatchObject({ prerendering: true, state: expect.stringMatching(/^(ready|healthy|unobservable)$/) });
       const fetchesWhenPrerendered = documentFetches;
       expect(fetchesWhenPrerendered).toBeGreaterThan(0);
 
