@@ -139,11 +139,11 @@ session.emit('impression', { slot: 'sidebar' });
 | `sandbox` tokens | **the browser** | `allow-scripts allow-forms` by default; additions are host-declared |
 | `allow=` features | **the browser** (Permissions-Policy) | a deny list: unlisted features are unavailable in the frame |
 | `credentialless` | **the browser**, where supported | ephemeral storage, so a fragment cannot correlate the user across sites |
-| Origin pinning | **Braid**, both directions | the host posts to an exact origin; the guest accepts from one |
+| Window pinning | **Braid**, both directions | the frame runs in an opaque origin, so the host answers only its own frame's window; the guest accepts a port only from the window that framed it, on the pinned host origin |
 | Contract terms | **Braid** | negotiated before state crosses |
 | Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification. With no grant declared, an untrusted fragment reads nothing (a trusted one reads everything) |
 
-### Two refusals worth knowing about
+### Refusals worth knowing about
 
 **A same-origin `src` is refused.** `sandbox="allow-scripts allow-same-origin"` on a same-origin
 frame is a sandbox that is not one: the framed document can reach into the host and remove its own
@@ -156,6 +156,11 @@ the host's, and with `allow-same-origin` a `javascript:` src runs in the host's 
 case or spacing. It is the standard route from "embedded widget" to "phishing redirect". Use
 `allow-top-navigation-by-user-activation` if the fragment genuinely needs to navigate the page. A
 token the HTML standard does not define is refused too, rather than silently ignored.
+
+**`allow-same-origin` is never granted**, and neither is `allow-popups-to-escape-sandbox`. Without
+`allow-same-origin` the frame runs in an opaque origin, so nothing it loads, and nowhere it
+navigates, has the host's authority. The handshake is built for that: the guest announces itself
+to the page that framed it, and the host hands the port to that window and no other.
 
 ## What is still missing
 

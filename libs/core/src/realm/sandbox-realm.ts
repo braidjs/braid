@@ -74,6 +74,15 @@ const REFUSED_SANDBOX_TOKENS = new Map([
     'allow-popups-to-escape-sandbox',
     '"allow-popups" alone lets the fragment open windows; they stay sandboxed, which is the point',
   ],
+  /**
+   * The token that turns the sandbox off. With it the frame keeps a real origin: a `javascript:`
+   * src, or a navigation to a URL on the host's origin, then runs with the host's own authority.
+   * The handshake works without it, so nothing on this tier needs it.
+   */
+  [
+    'allow-same-origin',
+    'leave it out: the untrusted tier connects from an opaque origin, which is what keeps it isolated',
+  ],
 ]);
 
 /**
@@ -121,7 +130,7 @@ export interface SandboxRealm {
   readonly fragmentId: string;
   /** The frame element, so a host can size it. Its contents are not reachable from here. */
   readonly frame: HTMLIFrameElement;
-  /** The fragment's origin, for pinning every message that crosses. */
+  /** The origin the fragment's src names. The frame itself runs in an opaque origin, never this one. */
   readonly origin: string;
   /** The host end of the message channel. */
   readonly port: MessagePort;
@@ -213,11 +222,9 @@ export function resolveSandboxTokens(requested: readonly string[] = [], fragment
 /**
  * Creates the frame, waits for it to load, and establishes the message channel.
  *
- * The connect handshake is deliberately tolerant of ordering. The frame's `load` event and the
- * guest's own script registering its listener race, and which wins depends on cache state — so the
- * host posts on load *and* answers a guest that announces itself, and the guest announces itself
- * whether or not it has already been posted to. Either order converges; neither has to be the fast
- * one.
+ * The guest announces itself and the host answers that window with the port. The host listens
+ * before the frame is attached, so there is no ordering to race: however fast the guest's script
+ * runs, its announcement finds a listener.
  */
 export async function createSandboxRealm(init: SandboxRealmInit): Promise<SandboxRealm> {
   const { fragmentId, src, container, signal } = init;
@@ -248,8 +255,6 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
     frame.setAttribute('credentialless', '');
   }
 
-  container.append(frame);
-
   const channel = new MessageChannel();
 
   const dispose = () => {
@@ -258,41 +263,33 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
   };
   signal.addEventListener('abort', dispose, { once: true });
 
-  const post = () => {
-    const message: SandboxConnectMessage = { braid: SANDBOX_CONNECT, v: 1, fragmentId, instance };
-    /**
-     * The target origin is the fragment's exact origin, never `'*'`.
-     *
-     * With `'*'` the port would be delivered to whatever document happens to occupy the frame — and
-     * an untrusted fragment that navigated itself elsewhere between load and this call would hand a
-     * live channel into the host to a document nobody vetted.
-     */
-    frame.contentWindow?.postMessage(message, origin, [channel.port2]);
-  };
-
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   let connected = false;
 
+  /**
+   * The guest speaks first, and the host answers that window and no other.
+   *
+   * A sandboxed frame without `allow-same-origin` has an opaque origin. A message targeted at the
+   * fragment's origin is never delivered to it, and its own messages arrive with origin `"null"`.
+   * The origin cannot identify it, so the window does: `event.source` is set by the browser, and
+   * only this frame's window can be `frame.contentWindow`. The reply goes to that window with `'*'`,
+   * the only target an opaque origin accepts, in the same task the guest's message arrived in, so it
+   * reaches the document that asked.
+   */
   const onWindowMessage = (event: MessageEvent) => {
-    // Origin-pinned inbound as well as outbound: a `braid:ready` from any other origin is some
-    // other page on the tab talking, and must not cause the host to hand out a port.
-    if (event.origin !== origin) return;
+    if (event.source === null || event.source !== frame.contentWindow) return;
+    if (event.origin !== 'null') return;
     if ((event.data as SandboxReadyMessage | undefined)?.braid !== SANDBOX_READY) return;
     if (connected) return;
     connected = true;
-    post();
+    const message: SandboxConnectMessage = { braid: SANDBOX_CONNECT, v: 1, fragmentId, instance };
+    (event.source as Window).postMessage(message, '*', [channel.port2]);
     resolve();
   };
 
+  // Listening before the frame exists, so a guest that announces itself at once is not missed.
   window.addEventListener('message', onWindowMessage);
-
-  const onLoad = () => {
-    if (connected) return;
-    connected = true;
-    post();
-    resolve();
-  };
-  frame.addEventListener('load', onLoad, { once: true });
+  container.append(frame);
 
   const timeout = setTimeout(() => {
     reject(
@@ -309,7 +306,6 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
   } finally {
     clearTimeout(timeout);
     window.removeEventListener('message', onWindowMessage);
-    frame.removeEventListener('load', onLoad);
   }
 
   return {

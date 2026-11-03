@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BraidError } from '../errors.js';
-import { DEFAULT_SANDBOX_TOKENS, assertCrossOrigin, resolveSandboxTokens } from './sandbox-realm.js';
+import { DEFAULT_SANDBOX_TOKENS, SANDBOX_CONNECT, SANDBOX_READY, assertCrossOrigin, createSandboxRealm, resolveSandboxTokens } from './sandbox-realm.js';
 
 describe('assertCrossOrigin()', () => {
   it('accepts a cross-origin url and returns its origin', () => {
@@ -105,6 +105,10 @@ describe('resolveSandboxTokens()', () => {
     );
   });
 
+  it('refuses allow-same-origin, which would give the frame a real origin', () => {
+    expect(() => resolveSandboxTokens(['allow-same-origin'], 'analytics')).toThrow(/never granted/);
+  });
+
   it('refuses a token the standard does not define', () => {
     expect(() => resolveSandboxTokens(['allow-everything'], 'analytics')).toThrow(/not a sandbox token/);
   });
@@ -122,5 +126,70 @@ describe('resolveSandboxTokens()', () => {
     expect(resolveSandboxTokens(['allow-top-navigation-by-user-activation'], 'analytics')).toContain(
       'allow-top-navigation-by-user-activation',
     );
+  });
+});
+
+describe('createSandboxRealm() handshake', () => {
+  function start(loadTimeoutMs = 200) {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const controller = new AbortController();
+    const realm = createSandboxRealm({
+      fragmentId: 'analytics',
+      src: 'https://vendor.example.com/widget',
+      container,
+      signal: controller.signal,
+      loadTimeoutMs,
+    });
+    const frame = container.querySelector('iframe')!;
+    return { realm, frame, container, done: () => { controller.abort(); container.remove(); } };
+  }
+
+  const announce = (source: MessageEventSource | null, origin = 'null') =>
+    window.dispatchEvent(new MessageEvent('message', { data: { braid: SANDBOX_READY, v: 1 }, origin, source }));
+
+  it('answers its own frame, which speaks from an opaque origin, with the port', async () => {
+    const { realm, frame, done } = start();
+    const reply = vi.spyOn(frame.contentWindow!, 'postMessage');
+
+    announce(frame.contentWindow);
+
+    const connected = await realm;
+    // '*' because an opaque origin can be addressed no other way; it goes to this window only.
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ braid: SANDBOX_CONNECT }), '*', [expect.anything()]);
+    expect(connected.port).toBeInstanceOf(MessagePort);
+    // The default tokens leave the frame opaque: no allow-same-origin.
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
+    done();
+  });
+
+  it('ignores an announcement from any other window', async () => {
+    const { realm, done } = start();
+    const other = document.createElement('iframe');
+    document.body.append(other);
+
+    // Another frame on the page, even one claiming the opaque origin, is not this fragment.
+    announce(other.contentWindow);
+    announce(window);
+
+    await expect(realm).rejects.toThrow(BraidError);
+    other.remove();
+    done();
+  });
+
+  it('ignores its own frame speaking from a real origin', async () => {
+    // Only possible if the frame escaped its sandbox; the opaque origin is part of what is checked.
+    const { realm, frame, done } = start();
+    announce(frame.contentWindow, 'https://vendor.example.com');
+    await expect(realm).rejects.toThrow(BraidError);
+    done();
+  });
+
+  it('does not treat the frame loading as connected', async () => {
+    const { realm, frame, done } = start();
+    frame.dispatchEvent(new Event('load'));
+    // No port has crossed, so there is no connection to report.
+    await expect(realm).rejects.toThrow(/did not load/);
+    done();
   });
 });

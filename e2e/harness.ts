@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 let coreBundle: Promise<string> | undefined;
 
 /** `@braidlabs/core` from source, as one ES module the page imports from `/core.js`. */
-function bundleCore(): Promise<string> {
+export function bundleCore(): Promise<string> {
   coreBundle ??= build({
     entryPoints: [`${root}libs/core/src/index.ts`],
     bundle: true,

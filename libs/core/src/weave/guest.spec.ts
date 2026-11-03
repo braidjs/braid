@@ -73,6 +73,8 @@ async function connect(options: { props?: Record<string, unknown>; watchLiveness
     new MessageEvent('message', {
       data: { braid: SANDBOX_CONNECT, v: 1, fragmentId, instance },
       origin: HOST_ORIGIN,
+      // the framing page; in a test the window is its own parent
+      source: window.parent,
       ports: [transport.port2],
     }),
   );
@@ -177,6 +179,27 @@ describe('origin pinning', () => {
     expect((error as BraidError).stage).toBe('handshake');
   });
 
+  it('ignores a connect offer from another window on the host origin', async () => {
+    const transport = new MessageChannel();
+    const other = document.createElement('iframe');
+    document.body.append(other);
+    const connecting = connectToBraidHost({ hostOrigin: HOST_ORIGIN, timeoutMs: 60 });
+
+    // A trusted fragment's realm, or a popup, shares the host's origin but is not the page that
+    // framed this one, and must not be able to hand this fragment a channel.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { braid: SANDBOX_CONNECT, v: 1, fragmentId: 'analytics', instance: 'i' },
+        origin: HOST_ORIGIN,
+        source: other.contentWindow,
+        ports: [transport.port2],
+      }),
+    );
+
+    await expect(connecting).rejects.toThrow(BraidError);
+    other.remove();
+  });
+
   it('ignores a message from the right origin that is not a connect offer', async () => {
     const connecting = connectToBraidHost({ hostOrigin: HOST_ORIGIN, timeoutMs: 60 });
 
@@ -184,7 +207,7 @@ describe('origin pinning', () => {
       new MessageEvent('message', { data: { hello: 'there' }, origin: HOST_ORIGIN }),
     );
     window.dispatchEvent(
-      new MessageEvent('message', { data: { braid: SANDBOX_CONNECT, v: 1 }, origin: HOST_ORIGIN }),
+      new MessageEvent('message', { data: { braid: SANDBOX_CONNECT, v: 1 }, origin: HOST_ORIGIN, source: window.parent }),
     );
 
     // The second carries no port: `event.data` is sender-controlled and worth distrusting even
