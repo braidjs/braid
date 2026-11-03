@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { braidNavigationHandler } from './compose.js';
+import { braidNavigationHandler, clearBraidCaches } from './compose.js';
 
 /**
  * Offline composition, which is the claim worth being careful about: a page that composed on the
@@ -28,6 +28,10 @@ function memoryCaches(): CacheStorage & { partitions: Map<string, Map<string, En
       async put(request: RequestInfo, response: Response) {
         const key = typeof request === 'string' ? request : (request as Request).url;
         store.set(key, { response });
+      },
+      async delete(request: RequestInfo) {
+        const key = typeof request === 'string' ? request : (request as Request).url;
+        return store.delete(key);
       },
     } as unknown as Cache;
   };
@@ -258,5 +262,125 @@ describe('streaming', () => {
       rest += new TextDecoder().decode(value);
     }
     expect(rest).toContain('<footer>end</footer>');
+  });
+});
+
+/**
+ * What offline composition may keep. A cache that outlives a session is a cache the next person on
+ * the device reads, so the origin's own word that a response is private wins.
+ */
+describe('what is kept for offline composition', () => {
+  function serving(headers: { shell?: string; billing?: string }, manifests = SNAPSHOT.manifests) {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(String(input), init);
+      const url = new URL(request.url);
+      const cc = (value?: string) => (value ? { 'cache-control': value } : {});
+      if (url.pathname === '/registry.json') return new Response(JSON.stringify({ ...SNAPSHOT, manifests }));
+      if (url.pathname.startsWith('/__braid/doc/')) {
+        return new Response('<braid-html><braid-body>doc</braid-body></braid-html>', {
+          headers: { 'content-type': 'text/html', ...cc(headers.billing) },
+        });
+      }
+      return new Response('<html><body><fragment-slot name="billing"></fragment-slot></body></html>', {
+        headers: { 'content-type': 'text/html', ...cc(headers.shell) },
+      });
+    }) as unknown as typeof fetch;
+  }
+
+  async function visit(fetchImpl: typeof fetch, path = '/billing/invoices') {
+    const caches = memoryCaches();
+    await braidNavigationHandler({ snapshotUrl: '/registry.json', caches, fetch: fetchImpl })(navigation(path))!;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return caches.partitions;
+  }
+
+  it('keeps neither a shell nor a document the origin marked no-store, in any case', async () => {
+    const kept = await visit(serving({ shell: 'max-age=0, No-Store', billing: 'NO-STORE' }));
+    expect(kept.get('braid-shell')?.size ?? 0).toBe(0);
+    expect(kept.get('braid-frag:billing')?.size ?? 0).toBe(0);
+  });
+
+  it('keeps a private page, which is what the gateway marks every pierced page by default', async () => {
+    // `private` keeps a page out of shared caches; this one is the browser's own. Sign-out clears it.
+    const kept = await visit(serving({ shell: 'private', billing: 'private, max-age=60' }));
+    expect(kept.get('braid-shell')?.size).toBe(1);
+    expect(kept.get('braid-frag:billing')?.size).toBe(1);
+  });
+
+  it('drops a kept copy once the origin marks the page no-store', async () => {
+    const caches = memoryCaches();
+    let header = 'private';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await serving({ shell: header, billing: header })(input, init);
+      return response;
+    }) as unknown as typeof fetch;
+    const handler = braidNavigationHandler({ snapshotUrl: '/registry.json', caches, fetch: fetchImpl });
+
+    await handler(navigation('/billing/invoices'))!;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(caches.partitions.get('braid-shell')?.size).toBe(1);
+
+    header = 'no-store';
+    await handler(navigation('/billing/invoices'))!;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(caches.partitions.get('braid-shell')?.size).toBe(0);
+    expect(caches.partitions.get('braid-frag:billing')?.size).toBe(0);
+  });
+
+  it('does not let a refresh that was already running write after a clear', async () => {
+    const caches = memoryCaches();
+    let releaseDocument!: () => void;
+    const documentHeld = new Promise<void>((resolve) => (releaseDocument = resolve));
+    const base = serving({});
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('/__braid/doc/')) await documentHeld; // a slow fragment
+      return base(input, init);
+    }) as unknown as typeof fetch;
+
+    await braidNavigationHandler({ snapshotUrl: '/registry.json', caches, fetch: fetchImpl })(navigation('/billing/invoices'))!;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Sign-out lands while that fragment is still on its way, fetched with the old cookies.
+    await clearBraidCaches({ caches });
+    releaseDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(caches.partitions.get('braid-frag:billing')?.size ?? 0).toBe(0);
+  });
+
+  it('does not compose a route no fragment pierces, even from a shell an older build kept', async () => {
+    const billingOnly = [{ id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'] }];
+    const caches = memoryCaches();
+    const shells = await caches.open('braid-shell');
+    await shells.put('https://shop.example/account/statements', html('<html><body>last person</body></html>'));
+    let down = false;
+    const live = serving({}, billingOnly);
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (down && !url.endsWith('/registry.json')) throw new TypeError('Failed to fetch');
+      return live(input, init);
+    }) as unknown as typeof fetch;
+    const handler = braidNavigationHandler({ snapshotUrl: '/registry.json', caches, fetch: fetchImpl });
+    await handler(navigation('/billing/x'))!; // stocks the snapshot
+    down = true;
+
+    await expect(handler(navigation('/account/statements'))!).rejects.toThrow();
+  });
+
+  it('keeps nothing for a route no fragment pierces', async () => {
+    const billingOnly = [{ id: 'billing', endpoint: 'https://billing.internal', pierce: ['/billing/*'] }];
+    const kept = await visit(serving({}, billingOnly), '/account/statements');
+    expect(kept.get('braid-shell')?.size ?? 0).toBe(0);
+  });
+});
+
+describe('clearBraidCaches', () => {
+  it("deletes the shell and every fragment's cache, and nothing else", async () => {
+    const caches = memoryCaches();
+    for (const name of ['braid-shell', 'braid-frag:billing', 'braid-frag:notifications', 'app-assets']) await caches.open(name);
+
+    await clearBraidCaches({ caches });
+
+    expect([...caches.partitions.keys()]).toEqual(['app-assets']);
   });
 });

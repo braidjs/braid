@@ -17,7 +17,7 @@ export type { BraidFetchHandlerOptions, AssetOutcome, AssetReport } from './lib/
 export { setupBraidWorker } from './lib/worker.js';
 export type { BraidWorkerOptions } from './lib/worker.js';
 
-export { braidNavigationHandler } from './lib/compose.js';
+export { braidNavigationHandler, clearBraidCaches } from './lib/compose.js';
 export type { OfflineCompositionOptions } from './lib/compose.js';
 
 export { precacheRealmStubs } from './lib/precache.js';

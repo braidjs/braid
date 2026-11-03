@@ -109,6 +109,23 @@ and cache a composed response (a page pierced against a registry that has since 
 the stale artifact this package exists to avoid). Composed pages carry
 `x-braid-composed: offline` so a shell can say so rather than look merely slow.
 
+**What it keeps is one person's.** The parts are fetched with the user's cookies, and the cache
+outlives the session. It keeps nothing the origin marked `Cache-Control: no-store` (and drops a copy
+it kept before the origin said so), and nothing for a route no fragment pierces. `private` pages are
+kept: that directive is about shared caches, this one is the browser's own, and the gateway marks
+every pierced page `private` by default. So clear it at sign-out, or the next person on the device
+is served the last one's pages whenever the network drops. A refresh still running when the clear
+lands does not write afterwards:
+
+```ts
+// in the page, at sign-out
+navigator.serviceWorker.controller?.postMessage({ type: 'braid-sw:clear' }); // replies { type: 'braid-sw:cleared', ok }
+
+// or in your own worker
+import { clearBraidCaches } from '@braidlabs/sw';
+await clearBraidCaches();
+```
+
 ## The gateway in the worker, for static hosting (`@braidlabs/sw/gateway`, proof of concept)
 
 Offline composition runs the gateway's piercing in the worker against the cache. The
