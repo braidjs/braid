@@ -37,6 +37,9 @@ beforeAll(async () => {
         // pierced, so its button is on screen before it boots: the case an interaction gate holds for
         { ...counter('held'), pierce: ['/'], bound: false, src: '/' },
         counter('nested'),
+        counter('readded'),
+        counter('renamed'),
+        counter('renamed-b'),
         { id: 'parent', endpoint: endpoint(() => html('<div id="inner"></div>')) },
       ],
     },
@@ -46,6 +49,8 @@ beforeAll(async () => {
       '<fragment-slot name="removed"></fragment-slot>' +
       '<div id="c"><fragment-slot name="held" boot="interaction" requires="hold"></fragment-slot></div><div id="d"></div>' +
       '<fragment-slot name="parent"></fragment-slot><fragment-slot name="nested"></fragment-slot>' +
+      '<fragment-slot name="readded"></fragment-slot><fragment-slot name="renamed"></fragment-slot>' +
+      '<fragment-slot name="missing"></fragment-slot><div id="e"></div>' +
       `<script>
         window.hold = new Promise((resolve) => { window.release = resolve; });
         window.states = {};
@@ -180,11 +185,66 @@ describe('removing a slot', () => {
       const slot = document.querySelector('fragment-slot[name="nested"]')!;
       // an entry is code the host names; inside another fragment's DOM, that fragment named it
       slot.setAttribute('entry', '/nowhere.js');
-      const inner = document.querySelector('fragment-slot[name="parent"]')!.shadowRoot!.querySelector('#inner')!;
-      inner.append(slot);
+      const inner = document.querySelector('fragment-slot[name="parent"]')!.shadowRoot!.querySelector('#inner')! as Element & {
+        moveBefore(node: Node, child: Node | null): void;
+      };
+      // moveBefore: the slot never disconnects, so only the move's own check can catch it
+      inner.moveBefore(slot, null);
     });
     await page.waitForFunction(
       () => document.querySelector('fragment-slot[name="parent"]')!.shadowRoot!.querySelector('fragment-slot[name="nested"][state="error"]'),
+      undefined,
+      { timeout: 5_000 },
+    );
+    await page.close();
+  });
+
+  it('boots again when the slot comes back only after an await', async () => {
+    const page = await browser.newPage();
+    await page.goto(host.url);
+    await readySlots(page, 'readded');
+    const fetchesBefore = documentFetches.get('readded') ?? 0;
+    await page.evaluate(async () => {
+      const slot = document.querySelector('fragment-slot[name="readded"]')!;
+      slot.remove();
+      await Promise.resolve();
+      document.getElementById('e')!.append(slot);
+    });
+    await page.waitForFunction(
+      () => ((window as unknown as { states: Record<string, string[]> }).states.readded ?? []).includes('closing'),
+      undefined,
+      { timeout: 5_000 },
+    );
+    await readySlots(page, 'readded');
+    await page.waitForFunction(() => document.querySelector('fragment-slot[name="readded"]')!.shadowRoot!.querySelector('#count'));
+    expect(documentFetches.get('readded')).toBe(fetchesBefore + 1);
+    await page.close();
+  });
+
+  it('boots the fragment a slot was renamed to while it was out of the page', async () => {
+    const page = await browser.newPage();
+    await page.goto(host.url);
+    await readySlots(page, 'renamed');
+    await page.evaluate(() => {
+      const slot = document.querySelector('fragment-slot[name="renamed"]')!;
+      slot.remove();
+      slot.setAttribute('name', 'renamed-b');
+      document.getElementById('e')!.append(slot);
+    });
+    await readySlots(page, 'renamed-b');
+    await page.waitForFunction(() => document.querySelector('iframe[name="braid:renamed"]') === null, undefined, { timeout: 5_000 });
+    expect(await page.evaluate(() => document.querySelector('iframe[name="braid:renamed-b"]') !== null)).toBe(true);
+    await page.close();
+  });
+
+  it('retries a slot that had failed, as a remount always did', async () => {
+    const page = await browser.newPage();
+    await page.goto(host.url);
+    // nothing is registered under this name, so it fails
+    await page.waitForSelector('fragment-slot[name="missing"][state="error"]', { state: 'attached', timeout: 15_000 });
+    await page.evaluate(() => document.getElementById('e')!.append(document.querySelector('fragment-slot[name="missing"]')!));
+    await page.waitForFunction(
+      () => ((window as unknown as { states: Record<string, string[]> }).states.missing ?? []).filter((state) => state === 'loading').length === 2,
       undefined,
       { timeout: 5_000 },
     );
