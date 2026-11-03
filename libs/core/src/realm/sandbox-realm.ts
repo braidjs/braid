@@ -17,7 +17,7 @@ import { BraidError } from '../errors.js';
  * | --- | --- | --- |
  * | isolation | namespace, not security | browser-enforced |
  * | DOM | projected into the host document | stays in its own document |
- * | cookies/storage | the host's | its own, partitioned |
+ * | cookies/storage | the host's | none: an opaque origin has no cookies, Web Storage or IndexedDB |
  * | composition | gateway namespaces, piercing, compat facade | none of it applies |
  *
  * **Why this is not a `RealmHandle`.** That interface exposes `window`, `document`, `evaluate()`
@@ -273,8 +273,10 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
    * fragment's origin is never delivered to it, and its own messages arrive with origin `"null"`.
    * The origin cannot identify it, so the window does: `event.source` is set by the browser, and
    * only this frame's window can be `frame.contentWindow`. The reply goes to that window with `'*'`,
-   * the only target an opaque origin accepts, in the same task the guest's message arrived in, so it
-   * reaches the document that asked.
+   * the only target an opaque origin accepts. It reaches whichever document the frame holds when it
+   * arrives, which is the one that asked unless the frame navigated in between. Only the frame
+   * itself can navigate it, so any document it lands on is the vendor's choice and as trusted as the
+   * vendor.
    */
   const onWindowMessage = (event: MessageEvent) => {
     if (event.source === null || event.source !== frame.contentWindow) return;
@@ -293,10 +295,13 @@ export async function createSandboxRealm(init: SandboxRealmInit): Promise<Sandbo
 
   const timeout = setTimeout(() => {
     reject(
-      new BraidError(`the untrusted fragment at "${src}" did not load within ${init.loadTimeoutMs ?? LOAD_TIMEOUT_MS}ms`, {
+      new BraidError(`the untrusted fragment at "${src}" did not connect within ${init.loadTimeoutMs ?? LOAD_TIMEOUT_MS}ms`, {
         fragmentId,
-        stage: 'realm-boot',
-        fixHint: 'check the url, and that the fragment origin does not refuse framing via X-Frame-Options or CSP frame-ancestors',
+        stage: 'handshake',
+        fixHint:
+          `the fragment must call connectToBraidHost({ hostOrigin: '${location.origin}' }). Its frame runs in an opaque ` +
+          'origin, so its module scripts need Access-Control-Allow-Origin. Also check that its origin does not refuse ' +
+          'framing via X-Frame-Options or CSP frame-ancestors',
       }),
     );
   }, init.loadTimeoutMs ?? LOAD_TIMEOUT_MS);

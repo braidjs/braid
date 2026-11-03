@@ -189,7 +189,7 @@ describe('createSandboxRealm() handshake', () => {
     const { realm, frame, done } = start();
     frame.dispatchEvent(new Event('load'));
     // No port has crossed, so there is no connection to report.
-    await expect(realm).rejects.toThrow(/did not load/);
+    await expect(realm).rejects.toThrow(/did not connect/);
     done();
   });
 });

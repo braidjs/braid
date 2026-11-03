@@ -21,7 +21,7 @@ in language that implies more than it delivers. The correction, stated plainly:
 | Realm | hidden same-origin iframe | visible cross-origin iframe |
 | Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
 | Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
-| Cookies & storage | **the host's**; Web Storage can be per fragment (`capabilities.storage`) | its own, partitioned |
+| Cookies & storage | **the host's**; Web Storage can be per fragment (`capabilities.storage`) | none: the frame's opaque origin has no cookies, Web Storage or IndexedDB |
 | Host globals | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own |
 | Layout | participates in host layout | a rectangle the host sizes |
 | Accessibility | one tree | nested documents |
@@ -161,6 +161,17 @@ token the HTML standard does not define is refused too, rather than silently ign
 `allow-same-origin` the frame runs in an opaque origin, so nothing it loads, and nowhere it
 navigates, has the host's authority. The handshake is built for that: the guest announces itself
 to the page that framed it, and the host hands the port to that window and no other.
+
+What the opaque origin means for a vendor's page:
+
+- `document.cookie`, `localStorage`, `sessionStorage` and IndexedDB are unavailable. Keep state on
+  the vendor's server, keyed by what the host passes in props or context.
+- Its module scripts, fonts and other CORS-mode subresources need `Access-Control-Allow-Origin`
+  (`*` or `null`), because the frame's requests come from origin `null`.
+- Its own API calls go out with `Origin: null` and no cookies, so authenticate them with a token
+  the host grants through context rather than with a session cookie.
+- An untrusted fragment cannot mount another untrusted fragment: from inside an opaque origin there
+  is no host origin to pin.
 
 ## What is still missing
 
