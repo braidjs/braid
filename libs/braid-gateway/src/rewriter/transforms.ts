@@ -166,7 +166,7 @@ export function prepareFragmentHtml(
     handlers: {
       '*': {
         element(tag) {
-          // before the handlers go: the onload is what says which media the sheet is really for
+          // before the handlers go: the onload (or Angular's ngCspMedia) says which media the sheet is really for
           if (tag.tagName === 'link') applyDeferredStylesheetMedia(tag);
           for (const attributeName of tag.attributeNames) {
             if (INLINE_EVENT_HANDLER.test(attributeName)) {
@@ -235,25 +235,30 @@ export function prepareFragmentHtml(
   });
 }
 
+/** A plain media query list (range syntax included): no quote or `&`, nothing to smuggle out of an attribute. */
+const PLAIN_MEDIA = /[\w\s(),:.<>=/-]+/;
+const PLAIN_MEDIA_ONLY = new RegExp(`^${PLAIN_MEDIA.source}$`);
+
 /**
  * The media an `onload="this.media='…'"` handler switches a stylesheet to.
  *
- * Captured only when the value is a plain media query list (range syntax included) — no quote or `&`,
- * nothing a handler could smuggle out of the attribute — so the result is the same either way the
- * browser would read it. The `this.onload=null` reset is accepted before or after.
+ * Captured only when the value is a {@link PLAIN_MEDIA plain media query list}, so the result is
+ * the same either way the browser would read it. The `this.onload=null` reset is accepted before
+ * or after.
  */
-const DEFERRED_STYLESHEET_ONLOAD =
-  /^\s*(?:this\.onload\s*=\s*null\s*;\s*)?this\.media\s*=\s*(['"])([\w\s(),:.<>=/-]+)\1\s*(?:;\s*this\.onload\s*=\s*null\s*)?(?:;\s*)?$/;
+const DEFERRED_STYLESHEET_ONLOAD = new RegExp(
+  `^\\s*(?:this\\.onload\\s*=\\s*null\\s*;\\s*)?this\\.media\\s*=\\s*(['"])(${PLAIN_MEDIA.source})\\1\\s*(?:;\\s*this\\.onload\\s*=\\s*null\\s*)?(?:;\\s*)?$`,
+);
 
 /**
- * Longer than any real handler of that shape. The pattern is linear — no two whitespace runs are
- * separated by only optional tokens, which made an earlier version quadratic on a long run of
- * spaces — but a fragment's attribute is unbounded input, so it is not trusted to stay that way.
+ * Longer than any real deferred-media attribute. The onload pattern is linear — no two whitespace
+ * runs are separated by only optional tokens, which made an earlier version quadratic on a long
+ * run of spaces — but a fragment's attribute is unbounded input, so it is not trusted to stay that way.
  */
-const MAX_DEFERRED_STYLESHEET_ONLOAD = 512;
+const MAX_DEFERRED_MEDIA_ATTRIBUTE = 512;
 
 /**
- * Applies the media a deferred stylesheet's `onload` would have switched it to.
+ * Applies the media a deferred stylesheet would have switched itself to once loaded.
  *
  * `<link rel="stylesheet" media="print" onload="this.media='all'">` is how Angular (through its
  * critical-CSS inliner) and others load a stylesheet without blocking render: the sheet is fetched
@@ -262,12 +267,25 @@ const MAX_DEFERRED_STYLESHEET_ONLOAD = 512;
  * the fragment would render unstyled. Writing the promoted media up front costs only the
  * non-blocking load, which a fragment's shadow root does not get anyway.
  *
- * A `media="print"` link with no such handler is a real print stylesheet and is left alone.
+ * Angular before 22.2 with a CSP nonce writes `ngCspMedia="all"` instead of the handler, and a
+ * nonce'd script copies it into `media` from a capture-phase `load` listener on the document. In a
+ * fragment that script runs only once the realm boots, while the link starts loading as soon as it
+ * is in the host's shadow root: a sheet that arrives first — a cache hit, say — loads before
+ * anything is listening, and stays print-only. The attribute is applied here instead, and removed
+ * so nothing applies it twice. A value that is not plain media falls back to the onload, if any.
+ *
+ * A `media="print"` link with neither is a real print stylesheet and is left alone.
  */
 function applyDeferredStylesheetMedia(tag: StartTag): void {
   if (!/(?:^|\s)stylesheet(?:\s|$)/i.test(tag.getAttribute('rel') ?? '')) return;
+  const cspMedia = tag.getAttribute('ngcspmedia')?.trim();
+  if (cspMedia && cspMedia.length <= MAX_DEFERRED_MEDIA_ATTRIBUTE && PLAIN_MEDIA_ONLY.test(cspMedia)) {
+    tag.setAttribute('media', cspMedia);
+    tag.removeAttribute('ngcspmedia');
+    return;
+  }
   const onload = tag.getAttribute('onload') ?? '';
-  if (onload.length > MAX_DEFERRED_STYLESHEET_ONLOAD) return;
+  if (onload.length > MAX_DEFERRED_MEDIA_ATTRIBUTE) return;
   const media = DEFERRED_STYLESHEET_ONLOAD.exec(onload)?.[2];
   if (media) tag.setAttribute('media', media.trim());
 }

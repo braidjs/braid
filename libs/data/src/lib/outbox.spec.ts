@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { drainOutbox } from './flush.js';
 import { memoryRecordDriver } from './memory-driver.js';
 import { createOutbox } from './outbox.js';
+import { createTenancy } from './tenancy.js';
 
 /** Two applications on one origin, sharing storage — the case that used to lose data. */
 function twoApps() {
@@ -146,5 +148,104 @@ describe('outbox', () => {
     const seqs = (await reloaded.mine()).map((entry) => entry.seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
     expect(new Set(seqs).size).toBe(2);
+  });
+});
+
+/**
+ * One browser, two people. `owner` separates applications, not users, so a queue keyed only by
+ * owner replays whatever the last person left under whoever signs in next.
+ */
+describe('outbox on a shared device', () => {
+  function sharedDevice() {
+    const driver = memoryRecordDriver();
+    const tenancy = createTenancy({ driver, collections: ['outbox'] });
+    const outbox = createOutbox({ driver, owner: 'orders', partition: () => tenancy.partition() });
+    const sent = vi.fn(async () => undefined);
+    const drain = () => drainOutbox({ outbox, owner: 'orders', runnerFor: () => sent });
+    return { tenancy, outbox, sent, drain };
+  }
+
+  it("never replays one person's queued mutation under the next person's session", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 100 } });
+    await tenancy.signOut();
+
+    await tenancy.signIn({ userId: 'bob' });
+    await drain();
+
+    expect(sent).not.toHaveBeenCalled();
+    expect(await outbox.mine()).toEqual([]);
+  });
+
+  it("purges a person's queue when they sign out", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 100 } });
+    await tenancy.signOut();
+
+    // Not held for later: what Alice queued on a shared device leaves with her.
+    await tenancy.signIn({ userId: 'alice' });
+    await drain();
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it("replays a person's queue for that person", async () => {
+    const { tenancy, outbox, sent, drain } = sharedDevice();
+
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { qty: 1 } });
+    await drain();
+
+    expect(sent).toHaveBeenCalledWith({ qty: 1 }, expect.objectContaining({ mutationId: 'order.place' }));
+  });
+
+  it('stops a drain that is still running when the next person signs in', async () => {
+    const { tenancy, outbox } = sharedDevice();
+    await tenancy.signIn({ userId: 'alice' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 1 } });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 2 } });
+
+    // A slow first send: Alice signs out and Bob signs in while it is still in flight.
+    const sent: unknown[] = [];
+    const runner = async (input: unknown) => {
+      sent.push(input);
+      if (sent.length === 1) {
+        await tenancy.signOut();
+        await tenancy.signIn({ userId: 'bob' });
+      }
+    };
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+
+    // The first was already on the wire under Alice; the second must not follow under Bob.
+    expect(sent).toEqual([{ n: 1 }]);
+  });
+
+  it('clears a sent entry from its own partition when the tenant switches mid-send', async () => {
+    const { tenancy, outbox } = sharedDevice();
+    await tenancy.signIn({ userId: 'alice', actingAs: 'org1' });
+    await outbox.enqueue({ mutationId: 'order.place', input: { n: 1 } });
+
+    const sent: unknown[] = [];
+    const runner = async (input: unknown) => {
+      sent.push(input);
+      await tenancy.switchTenant('org2'); // lands while the send is in flight
+    };
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+
+    // Back in org1, the order already sent must be gone, not waiting to be placed a second time.
+    await tenancy.switchTenant('org1');
+    await drainOutbox({ outbox, owner: 'orders', runnerFor: () => runner });
+    expect(sent).toEqual([{ n: 1 }]);
+    expect(await outbox.mine()).toEqual([]);
+  });
+
+  it('keeps the constant default for a single-user device', async () => {
+    const driver = memoryRecordDriver();
+    const outbox = createOutbox({ driver, owner: 'orders' });
+    await outbox.enqueue({ mutationId: 'order.place', input: {} });
+    expect(await createOutbox({ driver, owner: 'orders' }).mine()).toHaveLength(1);
   });
 });

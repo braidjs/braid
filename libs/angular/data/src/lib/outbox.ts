@@ -79,6 +79,7 @@ export class OutboxService {
       owner: this.options.owner,
       collection: OUTBOX_COLLECTION,
       ...(this.options.buildId === undefined ? {} : { buildId: this.options.buildId }),
+      ...(this.options.partition === undefined ? {} : { partition: this.options.partition }),
     });
     return this.outbox;
   }
@@ -95,8 +96,10 @@ export class OutboxService {
   /** Rehydrates from storage. Safe to call repeatedly. */
   async load(): Promise<void> {
     if (this.loaded) return;
-    this.loaded = true;
+    // Marked only once the read succeeds: a partitioned queue cannot be read while nobody is signed
+    // in, and a load that failed then must be retried after sign-in, not skipped forever.
     await this.refresh();
+    this.loaded = true;
   }
 
   async enqueue(entry: {

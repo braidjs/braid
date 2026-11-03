@@ -52,7 +52,7 @@ function connect(driver: ReturnType<typeof memoryRecordDriver>, tenancy: ReturnT
     driver,
     partition: tenancy.partition,
     collection: 'orders',
-    outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox' }),
+    outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox', partition: tenancy.partition }),
     onFlushError: (message) => errors.push(message),
     autoFlush: false,
   });
@@ -367,7 +367,7 @@ describe('the recommended bootstrap', () => {
         driver,
         partition: tenancy.partition,
         collection: 'orders',
-        outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox' }),
+        outbox: createOutbox({ driver, owner: 'storefront', collection: 'outbox', partition: tenancy.partition }),
         autoFlush: false,
       });
 

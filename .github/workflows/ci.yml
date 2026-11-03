@@ -7,6 +7,11 @@ on:
   # Lets a release be gated on a green run of this exact workflow.
   workflow_call:
 
+# Read-only unless a job says otherwise. release.yml calls this workflow, and a called workflow
+# inherits nothing it does not ask for.
+permissions:
+  contents: read
+
 concurrency:
   # One run per ref. A push that lands while an older run is still going
   # cancels it — the older result is about code nobody is looking at any more.
@@ -18,13 +23,13 @@ jobs:
     name: lint · test · build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Nx compares against the base commit to decide what is affected;
           # a shallow clone leaves it with nothing to compare to.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           # Read from .nvmrc so CI and local development cannot drift apart. They must agree on
           # the *major*: Node 22 ships npm 10 and Node 24 ships npm 11, and the two write
@@ -33,7 +38,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - run: npm ci
+      # The same install the release job does, so a build that needs a lifecycle script fails
+      # here, on a pull request, and not in the job that holds the publish identity.
+      - run: npm ci --ignore-scripts
 
       - name: Verify every project
         # The same command the workspace README documents, so a green CI and a
@@ -80,9 +87,9 @@ jobs:
     # Move this together with the `playwright` devDependency.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm

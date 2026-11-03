@@ -56,7 +56,9 @@ import registry from './registry.json' with { type: 'json' };
 const app = express();
 const port = Number(process.env.PORT ?? ${port});
 
-app.use(toNodeMiddleware(createGateway({ mode: 'production', registry })));
+// Production unless NODE_ENV says development: development skips every access rule.
+const mode = process.env.NODE_ENV === 'development' ? 'development' : 'production';
+app.use(toNodeMiddleware(createGateway({ mode, registry })));
 
 /**
  * The shell, behind the gateway.
@@ -156,7 +158,8 @@ export async function findMiddlewareInsertion(
         `import { toNodeMiddleware } from '@braidlabs/gateway/node';`,
         `import registry from './registry.json' with { type: 'json' };`,
         ``,
-        `app.use(toNodeMiddleware(createGateway({ mode: 'production', registry })));`,
+        `const mode = process.env.NODE_ENV === 'development' ? 'development' : 'production';`,
+        `app.use(toNodeMiddleware(createGateway({ mode, registry })));`,
       ].join('\n'),
       note:
         index >= 0

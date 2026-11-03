@@ -29,6 +29,8 @@ function pierceGateway(fragment: Promise<Response>, fallback: 'placeholder' | 'e
         endpoint: (async () => fragment) as unknown as typeof fetch,
       },
     ],
+    // the error-html case asserts the verbose body, which only development sends
+    mode: 'development',
   });
 }
 

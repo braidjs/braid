@@ -63,6 +63,8 @@ export interface AttachContextRouterOptions {
    * subscription that never fires.
    */
   capabilities?: FragmentCapabilities;
+  /** An untrusted fragment with no `context.read` grant reads nothing, not everything. */
+  untrusted?: boolean;
   signal: AbortSignal;
 }
 
@@ -75,7 +77,7 @@ export interface AttachContextRouterOptions {
  */
 export function attachContextRouter(options: AttachContextRouterOptions): Record<string, unknown> {
   const { bus, channel, fragmentId, contextVersions, signal } = options;
-  const mayRead = createContextGate(options.capabilities, fragmentId);
+  const mayRead = createContextGate(options.capabilities, fragmentId, { untrusted: options.untrusted === true });
 
   const readFor = (key: string): { ok: true; value: unknown } | { ok: false } => {
     const as = contextVersions[key];

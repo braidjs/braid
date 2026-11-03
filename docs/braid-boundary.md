@@ -141,18 +141,21 @@ session.emit('impression', { slot: 'sidebar' });
 | `credentialless` | **the browser**, where supported | ephemeral storage, so a fragment cannot correlate the user across sites |
 | Origin pinning | **Braid**, both directions | the host posts to an exact origin; the guest accepts from one |
 | Contract terms | **Braid** | negotiated before state crosses |
-| Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification |
+| Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification. With no grant declared, an untrusted fragment reads nothing (a trusted one reads everything) |
 
 ### Two refusals worth knowing about
 
 **A same-origin `src` is refused.** `sandbox="allow-scripts allow-same-origin"` on a same-origin
 frame is a sandbox that is not one: the framed document can reach into the host and remove its own
 sandbox attribute. The markup looks locked down while it happens, so Braid refuses at the source
-rather than trusting the token list.
+rather than trusting the token list. For the same reason the `src` must be `https:` (plain `http:`
+only on localhost): a `javascript:`, `data:` or `blob:` URL has an opaque origin that never matches
+the host's, and with `allow-same-origin` a `javascript:` src runs in the host's own origin.
 
-**`allow-top-navigation` is never granted.** It is the standard route from "embedded widget" to
-"phishing redirect". Use `allow-top-navigation-by-user-activation` if the fragment genuinely needs
-to navigate the page.
+**`allow-top-navigation` is never granted**, nor its `-to-custom-protocols` variant, whatever the
+case or spacing. It is the standard route from "embedded widget" to "phishing redirect". Use
+`allow-top-navigation-by-user-activation` if the fragment genuinely needs to navigate the page. A
+token the HTML standard does not define is refused too, rather than silently ignored.
 
 ## What is still missing
 

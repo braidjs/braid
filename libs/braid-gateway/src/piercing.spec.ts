@@ -107,6 +107,43 @@ describe('prepareFragmentHtml()', () => {
       expect(output).not.toMatch(/\sonload\s*=/i);
     });
 
+    it('promotes a deferred stylesheet to the media its ngCspMedia names', async () => {
+      // Angular before 22.2 with a CSP nonce: a nonce'd script copies the attribute into `media` on
+      // load, but in a fragment it runs only once the realm boots — a sheet that loads first is missed
+      const output = await collect(
+        prepareFragmentHtml(
+          streamOf(
+            `<link rel="stylesheet" href="styles.css" media="print" ngCspMedia="all">` +
+              `<link rel="stylesheet" href="b.css" media="print" ngcspmedia="screen and (min-width: 40em)">` +
+              `<link rel="stylesheet" href="c.css" media="print" ngCspMedia="all&quot; onload=&quot;x">` +
+              `<link rel="stylesheet" href="d.css" media="print" ngCspMedia="${'a'.repeat(513)}">` +
+              `<link rel="preload" href="e.css" media="print" ngCspMedia="all">` +
+              `<link rel="stylesheet" href="f.css" media="print" ngCspMedia="  ">` +
+              `<link rel="stylesheet" href="g.css" media="print" ngCspMedia=" all ">` +
+              `<link rel="stylesheet" href="h.css" media="print" ngCspMedia="screen" onload="this.media='all'">` +
+              `<link rel="stylesheet" href="i.css" media="print" ngCspMedia="x&quot;" onload="this.media='all'">` +
+              `<link rel="stylesheet" href="print.css" media="print">`,
+          ),
+          { fragmentId: 'billing' },
+        ),
+      );
+
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/styles.css" media="all">');
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/b.css" media="screen and (min-width: 40em)">');
+      // a value that is not a plain media query list, an oversized or blank one, and a non-stylesheet keep their media
+      expect(output).toMatch(/href="\/__braid\/frag\/billing\/c\.css" media="print"/);
+      expect(output).toMatch(/href="\/__braid\/frag\/billing\/d\.css" media="print"/);
+      expect(output).toMatch(/href="\/__braid\/frag\/billing\/e\.css" media="print"/);
+      expect(output).toMatch(/href="\/__braid\/frag\/billing\/f\.css" media="print"/);
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/g.css" media="all">');
+      // with both, ngCspMedia wins; when it is not plain media, the onload still promotes the sheet
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/h.css" media="screen">');
+      expect(output).toMatch(/href="\/__braid\/frag\/billing\/i\.css" media="all"/);
+      expect(output).toContain('<link rel="stylesheet" href="/__braid/frag/billing/print.css" media="print">');
+      // only the promoted links lose the attribute: c, d, e, f and i keep theirs
+      expect(output.match(/ngcspmedia/gi)).toHaveLength(5);
+    });
+
     it('reads a fragment-supplied onload in linear time, whatever its length', async () => {
       const spaces = ' '.repeat(200_000);
       const started = performance.now();
@@ -726,6 +763,7 @@ describe('gateway piercing', () => {
           endpoint: (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
         },
       ],
+      mode: 'development',
     });
     const shell = async () => htmlResponse(`<html><body><fragment-slot name="billing"></fragment-slot></body></html>`);
 

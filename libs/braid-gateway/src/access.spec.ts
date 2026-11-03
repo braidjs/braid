@@ -178,3 +178,52 @@ describe('gateway enforcement of access.fetch', () => {
     expect((await dev.handle(fragmentRequest()))!.status).toBe(200);
   });
 });
+
+/**
+ * Development skips every access rule, so a gateway created without `mode` must not be one: a
+ * deployment that forgot the option would otherwise serve gated fragments to anyone.
+ */
+describe('a gateway created without mode', () => {
+  const gated = {
+    id: 'reports',
+    endpoint: 'https://reports.internal',
+    pierce: ['/dashboard'],
+    access: { fetch: { roles: ['analyst'] }, list: { roles: ['analyst'] } },
+  } satisfies FragmentManifest;
+  const anonymous = () =>
+    createGateway({ registry: [gated], principal: () => ({ roles: [] }), discovery: {} });
+
+  it('refuses a gated fragment on the namespace', async () => {
+    const response = await anonymous().handle(fragmentRequest());
+    expect(response!.status).toBe(404);
+  });
+
+  it('does not pierce a gated fragment', async () => {
+    const shell = async () =>
+      new Response('<html><body><fragment-slot name="reports"></fragment-slot></body></html>', {
+        headers: { 'content-type': 'text/html' },
+      });
+    // an endpoint that answers, so only the access rule can keep the slot empty
+    const live = createGateway({ registry: [{ ...gated, endpoint }], principal: () => ({ roles: [] }) });
+    const response = await live.handle(
+      new Request('https://example.com/dashboard', { headers: { 'sec-fetch-dest': 'document' } }),
+      shell,
+    );
+    expect(await response!.text()).not.toContain('shadowrootmode');
+  });
+
+  it('refuses a gated fragment websocket upgrade', async () => {
+    const upgrade = new Request('https://example.com/__braid/frag/reports/socket', {
+      headers: { upgrade: 'websocket', connection: 'upgrade' },
+    });
+    expect(await anonymous().resolveUpgrade(upgrade)).toBeNull();
+  });
+
+  it('filters discovery by principal and leaves endpoints out', async () => {
+    const response = await anonymous().handle(new Request('https://example.com/__braid/registry'));
+    const body = await response!.text();
+    expect(body).not.toContain('reports');
+    expect(body).not.toContain('reports.internal');
+    expect(body).not.toContain('unfiltered');
+  });
+});

@@ -10,6 +10,8 @@ const port = 3000;
 
 // 1. Configure the Braid Gateway with the fragment manifest
 const gateway = createGateway({
+  // A local example: verbose errors and the Origin rewrite. Development also skips access rules.
+  mode: 'development',
   registry: [
     {
       id: 'billing',
