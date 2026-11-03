@@ -38,6 +38,7 @@ import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
 import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
 import { createRecovery } from './recovery.js';
 import { resolveHtmlPolicy } from '../compat/html-policy.js';
+import { liftPortals, OVERLAY_STYLES } from './overlay-layer.js';
 
 /**
  * What the slot reports about its fragment.
@@ -123,6 +124,7 @@ export function findPiercedContentRoot(shadowRoot: ShadowRoot | null): HTMLEleme
  */
 export const SLOT_STYLES =
   ':host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }' +
+  OVERLAY_STYLES +
   'slot[name="fallback"] { display: none; }' +
   ':host([state="gone"]) braid-document, :host([state="error"]) braid-document { display: none; }' +
   ':host([state="gone"]) slot[name="fallback"], :host([state="error"]) slot[name="fallback"] { display: block; }' +
@@ -887,6 +889,10 @@ export class FragmentSlot extends HTMLElement {
       });
 
       if (signal.aborted) return;
+
+      // after mount: the fragment's own app is in its body by now, and what it appends later is
+      // what a portal appends
+      if (this.getAttribute('overlays') === 'top-layer') liftPortals(contentRoot, signal);
 
       this.#setState('ready');
       this.dispatchEvent(new CustomEvent('braid:ready', { detail: { fragmentId } }));

@@ -226,6 +226,20 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Modals and menus that escape the slot (opt-in)
+
+UI libraries render modals, menus and tooltips by appending to `document.body`, which normally escapes whatever clips the component that opened them. In a compat fragment, `document.body` is the fragment's own body inside the slot. So a host container with `overflow: hidden` clips the fragment's modal, and a transformed container becomes its fixed-position frame.
+
+```html
+<fragment-slot name="billing" overlays="top-layer"></fragment-slot>
+```
+
+- **What the fragment appends to its body after it mounts is lifted into the browser's top layer**, as a manual popover. It renders above and outside every ancestor's clipping. It stays where it was in the DOM: inside the fragment's shadow tree, styled by the fragment's stylesheets, its events handled by the fragment's own listeners. Removing it closes it.
+- **It is laid out against the page, not the slot**, as a body child would be. The browser's popover look (centred, bordered, padded) is undone with zero-specificity rules, so the library's own styles and inline styles win.
+- **Left alone:** elements the fragment marks `popover` itself, which are the fragment's to show; scripts, styles and other non-rendering elements; and everything in the body before mount, which is the fragment's own app.
+- **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
+- **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
+
 ### Recovering from transient failures (opt-in)
 
 ```ts
