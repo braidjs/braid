@@ -209,6 +209,7 @@ describe('gateway namespace routing', () => {
             })) as unknown as typeof fetch,
         },
       ],
+      mode: 'development',
     });
 
     const response = await gateway.handle(new Request('https://example.com/__braid/frag/slow/'));

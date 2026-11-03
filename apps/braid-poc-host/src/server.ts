@@ -156,6 +156,8 @@ const telemetryLog: TelemetryEvent[] = [];
 
 const gateway = createGateway({
   registry: REGISTRY,
+  // a local POC: verbose errors and the Origin rewrite are what make it debuggable
+  mode: 'development',
   // synchronous and cheap: it updates one Map entry and returns
   observe: (event) => observations.record(event),
   /**

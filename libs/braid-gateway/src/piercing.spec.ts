@@ -717,6 +717,7 @@ describe('gateway piercing', () => {
           endpoint: (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
         },
       ],
+      mode: 'development',
     });
     const shell = async () => htmlResponse(`<html><body><fragment-slot name="billing"></fragment-slot></body></html>`);
 
