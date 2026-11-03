@@ -83,9 +83,10 @@ jobs:
         # version, not a bump: given "patch" it wrote "# patch" into CHANGELOG.md, committed
         # "publish patch" and tagged `vpatch` (the 0.7.1 run), while `version` correctly wrote 0.7.1.
         # Publishing stays its own step below, after the checks on what versioning produced.
-        run: npx nx release "$SPECIFIER" --skip-publish ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: npx nx release "$SPECIFIER" --skip-publish $DRY_RUN
         env:
           SPECIFIER: ${{ inputs.specifier }}
+          DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Refuse a resolved version npm already has
@@ -99,9 +100,10 @@ jobs:
         run: node tools/release/check-publishable.mjs
 
       - name: Publish to npm
-        run: npx nx release publish --tag "$DIST_TAG" ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: npx nx release publish --tag "$DIST_TAG" $DRY_RUN
         env:
           DIST_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
           # No token: npm trusted publishing exchanges this job's OIDC identity for a short-lived
           # publish credential. Each @braidlabs package needs a trusted publisher on npmjs.com
           # naming braidjs/braid, release.yml and the `release` environment. A long-lived token
