@@ -1,5 +1,5 @@
 import { braidFetchHandler, pruneFragmentCaches, type BraidFetchHandlerOptions } from './asset-handler.js';
-import { braidNavigationHandler, type OfflineCompositionOptions } from './compose.js';
+import { braidNavigationHandler, clearBraidCaches, type OfflineCompositionOptions } from './compose.js';
 import { precacheRealmStubs } from './precache.js';
 import { diagnoseSkew, type PageVersion, type WorkerVersion } from './skew-report.js';
 import { BRAID_REPORT_SYNC_TAG, createReportQueue, type ReportQueue, type ReportQueueOptions } from './reports.js';
@@ -148,6 +148,23 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
    */
   scope.addEventListener('message', (event) => {
     const data = event.data as { type?: string; page?: PageVersion } | undefined;
+
+    // Sign-out: drop what offline composition kept, then say so, so the page can wait for it.
+    if (data?.type === 'braid-sw:clear') {
+      // The options composition itself writes with: `offline` overrides the top-level ones.
+      const composing = { ...options, ...options.offline };
+      const cleared = clearBraidCaches({
+        ...(composing.caches === undefined ? {} : { caches: composing.caches }),
+        ...(composing.cachePrefix === undefined ? {} : { cachePrefix: composing.cachePrefix }),
+      }).then(
+        () => event.source?.postMessage?.({ type: 'braid-sw:cleared', ok: true }),
+        // Answered either way, so a page waiting on the reply at sign-out is never left hanging.
+        () => event.source?.postMessage?.({ type: 'braid-sw:cleared', ok: false }),
+      );
+      event.waitUntil?.(cleared);
+      return;
+    }
+
     if (data?.type !== 'braid-sw:hello') return;
 
     const diagnosis = diagnoseSkew(version, data.page ?? {});

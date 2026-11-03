@@ -162,6 +162,9 @@ function acceptConnection(
     // Origin pinning, the whole point. `event.origin` is set by the browser and cannot be forged by
     // the sender, which is what makes it worth checking and `event.data` worth distrusting.
     if (event.origin !== hostOrigin) return;
+    // And from the page that framed this one: another window on the host's origin, such as a
+    // trusted fragment's realm or a popup, must not be able to hand this fragment a channel.
+    if (event.source !== window.parent) return;
 
     const data = event.data as SandboxConnectMessage | undefined;
     if (data?.braid !== SANDBOX_CONNECT) return;
@@ -192,11 +195,11 @@ function acceptConnection(
   window.addEventListener('message', onMessage);
 
   /**
-   * Announced *after* the listener is attached, so the two orderings converge.
+   * Announced *after* the listener is attached, because the host answers at once.
    *
-   * The host posts on the frame's `load` event, which may fire before this module has even been
-   * evaluated. Announcing tells a host that already gave up waiting to post again; attaching first
-   * means a host that posted immediately is not missed either.
+   * The announcement is what connects: this frame runs in an opaque origin, which the host cannot
+   * address by name, so it replies to the window that announced itself. The target origin still
+   * pins the host — a page that framed this one from any other origin never receives it.
    */
   const ready: SandboxReadyMessage = { braid: SANDBOX_READY, v: 1 };
   window.parent?.postMessage(ready, hostOrigin);

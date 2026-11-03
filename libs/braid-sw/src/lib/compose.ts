@@ -44,6 +44,12 @@ export interface OfflineCompositionOptions {
 }
 
 const DEFAULT_CACHE_PREFIX = 'braid-frag';
+
+/**
+ * Bumped by every clear. A refresh started before a clear must not write after it: it was fetched
+ * with the previous person's cookies, and putting it back would undo the sign-out it raced.
+ */
+let generation = 0;
 const SHELL_CACHE = 'braid-shell';
 const SNAPSHOT_CACHE = 'braid-snapshot';
 
@@ -100,6 +106,8 @@ export function braidNavigationHandler(
    */
   async function refresh(request: Request): Promise<void> {
     if (!cacheStorage) return;
+    const startedIn = generation;
+    const current = () => generation === startedIn;
 
     const url = new URL(request.url);
     const manifests = await loadSnapshot(url.origin);
@@ -107,12 +115,15 @@ export function braidNavigationHandler(
 
     const registry = new Registry([...manifests]);
     const matches = await registry.matchPierceRoutes(url.pathname);
+    // A route no fragment pierces has nothing to compose, and its page is not worth keeping.
+    if (matches.length === 0) return;
 
     const shell = await networkFetch(new Request(request.url, { headers: { 'sec-fetch-dest': 'empty' } }));
-    if (shell.ok) {
-      const shellCache = await cacheStorage.open(SHELL_CACHE);
-      await shellCache.put(shellKey(url), shell.clone());
-    }
+    if (!current()) return;
+    const shellCache = await cacheStorage.open(SHELL_CACHE);
+    if (shell.ok && mayKeep(shell)) await shellCache.put(shellKey(url), shell.clone());
+    // A page the origin now says must not be stored loses the copy kept before it said so.
+    else if (shell.ok) await shellCache.delete(shellKey(url));
 
     for (const manifest of matches) {
       const documentUrl = `${url.origin}${BRAID_DOCUMENT_PREFIX}${encodeURIComponent(manifest.id)}${documentPath(
@@ -120,11 +131,13 @@ export function braidNavigationHandler(
         url,
       )}`;
       const response = await networkFetch(documentUrl);
+      if (!current()) return;
       if (!response.ok) continue;
 
       // In the fragment's own partition, so pruning a retired fragment takes its documents too.
       const cache = await cacheStorage.open(`${cachePrefix}:${manifest.id}`);
-      await cache.put(documentUrl, response.clone());
+      if (mayKeep(response)) await cache.put(documentUrl, response.clone());
+      else await cache.delete(documentUrl);
     }
   }
 
@@ -141,6 +154,8 @@ export function braidNavigationHandler(
 
     const registry = new Registry([...manifests]);
     const matches = await registry.matchPierceRoutes(url.pathname);
+    // Nothing to compose: a shell kept for this route by an older build is not served alone.
+    if (matches.length === 0) return null;
 
     const fragments: PierceTarget[] = [];
     for (const manifest of matches) {
@@ -198,6 +213,38 @@ export function braidNavigationHandler(
       return null;
     }
   }
+}
+
+/**
+ * Whether a response may be kept for an offline compose: anything but `no-store`.
+ *
+ * `private` is no reason to refuse. It keeps a response out of *shared* caches, and this cache is the
+ * browser's own — and the gateway adds `private` to every pierced page by default, so refusing it
+ * would turn offline composition off. What a private page needs is to leave with its person, which
+ * is `clearBraidCaches` at sign-out.
+ */
+function mayKeep(response: Response): boolean {
+  const directives = (response.headers.get('cache-control') ?? '').toLowerCase().split(',').map((part) => part.trim());
+  return !directives.includes('no-store');
+}
+
+/**
+ * Deletes every page and fragment document kept for offline composition, and the fragments' cached
+ * assets with them. Call it at sign-out: what was composed for one person must not be composed for
+ * the next. A page can ask its worker to do it with `postMessage({ type: 'braid-sw:clear' })`.
+ */
+export async function clearBraidCaches(
+  options: { cachePrefix?: string; caches?: CacheStorage } = {},
+): Promise<void> {
+  // Before anything else, so a refresh already running does not write after this clear.
+  generation += 1;
+  const cacheStorage = options.caches ?? (globalThis as { caches?: CacheStorage }).caches;
+  if (!cacheStorage) return;
+  const prefix = `${options.cachePrefix ?? DEFAULT_CACHE_PREFIX}:`;
+  const names = await cacheStorage.keys();
+  await Promise.all(
+    names.filter((name) => name === SHELL_CACHE || name.startsWith(prefix)).map((name) => cacheStorage.delete(name)),
+  );
 }
 
 /** Unbound fragments are fetched at their own path, bound ones at the page's — as on the server. */

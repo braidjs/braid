@@ -10,7 +10,7 @@ import { Router } from '@angular/router';
 import { type VersionedStore, isOk } from '@braidlabs/skew';
 import { type StepId, type Workflow } from './definition';
 import * as engine from './engine';
-import { WORKFLOW_OPTIONS } from './config';
+import { WORKFLOW_OPTIONS, currentDraftScope } from './config';
 import { type WorkflowRun, createRun, runSchema } from './run';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -65,8 +65,23 @@ export class WorkflowRuntime {
   private readonly router = inject(Router, { optional: true });
   private readonly destroyRef = inject(DestroyRef);
   private readonly attached = new Map<string, WorkflowRef<unknown>>();
+  /** Whose runs `attached` holds. Undefined until the first attach. */
+  private attachedScope: string | null | undefined;
 
   attach<TData>(workflow: Workflow<TData>): WorkflowRef<TData> {
+    /**
+     * A live run holds one person's form data in memory. When someone else signs in without a
+     * reload, the next attach must not hand them that run: every run is dropped, and theirs is
+     * built from their own drafts.
+     */
+    if (this.options.scope) {
+      const scope = currentDraftScope(this.options.scope);
+      if (scope !== this.attachedScope) {
+        this.attached.clear();
+        this.attachedScope = scope;
+      }
+    }
+
     const existing = this.attached.get(workflow.id);
     if (existing) return existing as WorkflowRef<TData>;
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryRecordDriver } from './memory-driver.js';
+import { withLock } from './locks.js';
 import { createRecordStore, type RecordDriver } from './record-store.js';
 import { createTenancy, partitionKey, TenancyRecordSchema } from './tenancy.js';
 import { versioned } from '@braidlabs/skew';
@@ -177,6 +178,25 @@ describe('an interrupted purge', () => {
     expect(() => tabA.partition()).toThrow(/sign in before reading/);
   });
 
+  it("refuses a tenant switch in a tab whose session another tab's sign-out ended", async () => {
+    const driver = memoryRecordDriver();
+    const { tenancy: tabA, notes } = setup(driver);
+    const tabB = createTenancy({ driver, collections: COLLECTIONS });
+
+    await tabA.signIn({ userId: 'alice' });
+    await tabB.signIn({ userId: 'alice' });
+    await tabB.signOut();
+
+    // Tab A has not looked yet. Its switch must not register a fresh partition for a signed-out person.
+    await expect(tabA.switchTenant('acme')).rejects.toThrow(/session ended/);
+    expect(tabA.current()).toBeNull();
+
+    // Nothing was left behind for alice: a later sign-in and sign-out finds no orphaned partition.
+    const tabC = createTenancy({ driver, collections: COLLECTIONS });
+    await tabC.signIn({ userId: 'alice', actingAs: 'acme' });
+    expect(await notes.list(tabC.partition())).toEqual([]);
+  });
+
   it('refuses a partition it cannot confirm was cleared', async () => {
     const { driver } = flakyDriver(1);
     const { tenancy: tabA } = setup(driver);
@@ -190,5 +210,26 @@ describe('an interrupted purge', () => {
     // the half-emptied partition it still has a pointer to.
     await expect(tabA.recover()).rejects.toThrow();
     expect(() => tabA.partition()).toThrow(/half-purged/);
+  });
+});
+
+describe('signIn during another tab\'s sign-out', () => {
+  it('waits for the purge to finish before activating the partition', async () => {
+    const { tenancy } = setup();
+    let release!: () => void;
+    const purging = new Promise<void>((resolve) => (release = resolve));
+    // Another tab holds the purge lock for this user while it destroys their data.
+    const held = withLock('skew:data:purge:alice', () => purging, { ifAvailable: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    let signedIn = false;
+    const signingIn = tenancy.signIn({ userId: 'alice' }).then(() => void (signedIn = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signedIn).toBe(false);
+
+    release();
+    await held;
+    await signingIn;
+    expect(signedIn).toBe(true);
   });
 });

@@ -81,6 +81,50 @@ describe('setupBraidWorker', () => {
     worker.restore();
   });
 
+  it('clears offline composition caches when the page asks, then says so', async () => {
+    const worker = scope();
+    const deleted: string[] = [];
+    const caches = {
+      keys: async () => ['braid-shell', 'braid-frag:billing', 'app-assets'],
+      delete: async (name: string) => void deleted.push(name),
+    } as unknown as CacheStorage;
+    setupBraidWorker({ fetch: vi.fn(), caches });
+
+    const replies: unknown[] = [];
+    let done: Promise<unknown> = Promise.resolve();
+    worker.dispatch('message', {
+      data: { type: 'braid-sw:clear' },
+      source: { postMessage: (message: unknown) => replies.push(message) },
+      waitUntil: (promise: Promise<unknown>) => void (done = promise),
+    });
+    await done;
+
+    expect(deleted.sort()).toEqual(['braid-frag:billing', 'braid-shell']);
+    expect(replies).toEqual([{ type: 'braid-sw:cleared', ok: true }]);
+    worker.restore();
+  });
+
+  it('clears under the prefix offline composition writes with', async () => {
+    const worker = scope();
+    const deleted: string[] = [];
+    const caches = {
+      keys: async () => ['braid-shell', 'app-frag:billing', 'braid-frag:billing'],
+      delete: async (name: string) => void deleted.push(name),
+    } as unknown as CacheStorage;
+    setupBraidWorker({ fetch: vi.fn(), caches, offline: { snapshotUrl: '/registry.json', cachePrefix: 'app-frag' } });
+
+    let done: Promise<unknown> = Promise.resolve();
+    worker.dispatch('message', {
+      data: { type: 'braid-sw:clear' },
+      source: { postMessage: () => undefined },
+      waitUntil: (promise: Promise<unknown>) => void (done = promise),
+    });
+    await done;
+
+    expect(deleted.sort()).toEqual(['app-frag:billing', 'braid-shell']);
+    worker.restore();
+  });
+
   it('ignores messages that are not its own', () => {
     const worker = scope();
     setupBraidWorker({ buildId: 'b-7', fetch: vi.fn() });
