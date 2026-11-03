@@ -81,6 +81,24 @@ export class CheckoutPageComponent {
 
 ---
 
+## Asking before leaving unsaved work
+
+`braidLeaveGuard` is a `canDeactivate` guard. It asks before the router leaves a route while a fragment on the page holds unsaved work (`env.setDirty`):
+
+```ts
+import { braidLeaveGuard } from '@braidlabs/angular';
+
+export const routes: Routes = [
+  {
+    path: 'billing',
+    component: BillingPage,
+    canDeactivate: [braidLeaveGuard((slots) => confirm(`You have ${slots.length} unsaved form(s). Leave anyway?`))],
+  },
+];
+```
+
+The guard runs before the URL changes, so declining leaves the router and the address bar where they were. With nothing unsaved it lets the navigation through without asking. For links that leave the app, use `initBraid({ confirmLeave })` (see the core docs).
+
 ## Component API Reference
 
 | Input / Output / Signal | Type | Description |

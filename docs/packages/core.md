@@ -226,6 +226,18 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Asking before leaving unsaved work
+
+A fragment declares unsaved work with `env.setDirty(reason)`, and its slot holds it as `slot.dirty`. Braid can ask before a navigation loses it:
+
+```ts
+initBraid({ confirmLeave: (slots) => myDialog.confirm(`Leave ${slots.length} unsaved form(s)?`) });
+```
+
+- **Navigations to another document on this origin** wait while any slot is dirty, then go if `confirmLeave` resolves `true`. These are links, `location` changes and `navigation.navigate()` calls. This uses the Navigation API's `navigate` event, a listener on `navigation`, so nothing on the page is patched. Browsers without the API don't ask.
+- **Not held:** form posts, whose body would be lost when the navigation is started again; downloads; reloads; and back/forward, which can't be cancelled across documents. A host that also wants the browser's own prompt for those can check `dirtySlots().length` in `beforeunload`.
+- **Navigations inside a single-page app belong to its router.** Cancelling a router's own `pushState` would leave the router believing it navigated. Use the router's guard and `dirtySlots()` from `@braidlabs/core`, or `braidLeaveGuard` from `@braidlabs/angular`.
+
 ### Recovering from transient failures (opt-in)
 
 ```ts

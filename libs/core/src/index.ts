@@ -20,6 +20,7 @@ import { customElementAdapter } from './adapters/custom-element-adapter.js';
 import { contractAdapter } from './adapters/contract-adapter.js';
 import { FragmentSlot } from './elements/fragment-slot.js';
 import { BraidLate, BraidLateEnd } from './elements/late-content.js';
+import { installLeaveGuard } from './elements/leave-guard.js';
 
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
@@ -35,6 +36,7 @@ export { contractAdapter } from './adapters/contract-adapter.js';
 export { defineFragment } from './env/define-fragment.js';
 export type { FragmentDefinition } from './env/define-fragment.js';
 export { FragmentSlot, prefetchFragment } from './elements/fragment-slot.js';
+export { dirtySlots, type ConfirmLeave, type DirtySlot } from './elements/leave-guard.js';
 export { clearPrefetchedFragments } from './elements/prefetch.js';
 export type { FragmentSlotState } from './elements/fragment-slot.js';
 export { braidContext, createContextBus } from './context/context-bus.js';
@@ -86,4 +88,9 @@ export function initBraid(options: BraidOptions = {}): void {
   if (!customElements.get('fragment-slot')) {
     customElements.define('fragment-slot', FragmentSlot);
   }
+  // once per page, like the elements: a second initBraid replaces the question, not adds a guard
+  removeLeaveGuard?.();
+  removeLeaveGuard = options.confirmLeave ? installLeaveGuard(options.confirmLeave) : undefined;
 }
+
+let removeLeaveGuard: (() => void) | undefined;
