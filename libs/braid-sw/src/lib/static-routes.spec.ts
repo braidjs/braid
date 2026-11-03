@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { braidFetchHandler } from './asset-handler.js';
 import { braidGatewayHandler, setupBraidGateway } from './gateway.js';
 import { addStaticRoutes, patternLiteral, staticRoutesFor, type StaticRoute } from './static-routes.js';
 import { setupBraidWorker } from './worker.js';
@@ -50,15 +51,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The rules a worker registers at install, captured from its install listener as the browser would see them. */
+function registeredRules(setup: () => void): StaticRoute[] | undefined {
+  const listeners = new Map<string, (event: unknown) => void>();
+  vi.stubGlobal('addEventListener', (type: string, listener: (event: unknown) => void) => listeners.set(type, listener));
+  setup();
+  let rules: StaticRoute[] | undefined;
+  listeners.get('install')?.({
+    addRoutes: async (registered: StaticRoute[]) => {
+      rules = registered;
+    },
+    waitUntil: () => undefined,
+  });
+  return rules;
+}
+
+/** Cache storage that holds nothing, and a network that answers everything: enough to ask a handler whether it claims. */
+const quiet = {
+  caches: { open: async () => ({ match: async () => undefined, put: async () => undefined }), keys: async () => [] } as unknown as CacheStorage,
+  fetch: (async () => new Response('')) as unknown as typeof fetch,
+};
+
 describe('the gateway worker’s routes', () => {
-  it.each([undefined, '/manage', '/manage/'])('agree with what its handler claims (base path %s)', (basePath) => {
+  it.each([undefined, '/manage', '/manage/'])('are what its handler claims (base path %s)', (basePath) => {
     vi.stubGlobal('location', { origin: ORIGIN });
     const braid = braidGatewayHandler({ registry: [], mode: 'production', basePath });
-    const rules = staticRoutesFor({
-      pathnames: [`${patternLiteral(`${(basePath ?? '').replace(/\/+$/, '')}/__braid/`)}*`],
-      origin: ORIGIN,
-      navigations: true,
-    })!;
+    const rules = registeredRules(() => setupBraidGateway({ registry: [], mode: 'production', basePath }))!;
 
     for (const request of sample()) {
       expect(routeOf(rules, request), `${request.method} ${request.url} (${request.mode})`).toBe(
@@ -95,21 +113,24 @@ describe('the gateway worker’s routes', () => {
 });
 
 describe('the asset worker’s routes', () => {
-  it.each([false, true])('agree with what its listener claims (offline composition %s)', (offline) => {
-    const rules = staticRoutesFor({
-      pathnames: ['/__braid/frag/*', '/__braid/realm/*'],
-      getOnly: true,
-      navigations: offline,
-    })!;
-    const claims = (request: Request) =>
-      (request.method === 'GET' && /^\/__braid\/(frag|realm)\/[^/]+/.test(new URL(request.url).pathname)) ||
-      (offline && request.method === 'GET' && request.mode === 'navigate');
+  it('are what its listener claims', () => {
+    const answers = braidFetchHandler(quiet);
+    const rules = registeredRules(() => setupBraidWorker({ ...quiet, staticRoutes: true }))!;
 
     for (const request of sample()) {
       expect(routeOf(rules, request), `${request.method} ${request.url} (${request.mode})`).toBe(
-        claims(request) ? 'fetch-event' : 'network',
+        answers(request) ? 'fetch-event' : 'network',
       );
     }
+  });
+
+  it('are left out with offline composition, which also answers fetches for HTML no route can single out', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rules = registeredRules(() => setupBraidWorker({ ...quiet, staticRoutes: true, offline: { snapshotUrl: '/snapshot.json' } }));
+
+    expect(rules).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('offline'));
+    warn.mockRestore();
   });
 
   it('are registered only when asked for', () => {
@@ -141,6 +162,28 @@ describe('addStaticRoutes', () => {
     );
 
     await expect(refused).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it('keeps an IPv6 origin as an address, not pattern syntax', () => {
+    const rules = staticRoutesFor({ pathnames: ['/__braid/*'], origin: 'http://[::1]:4200', navigations: true })!;
+    const visit = (url: string) => {
+      const request = new Request(url);
+      Object.defineProperty(request, 'mode', { value: 'navigate' });
+      return request;
+    };
+
+    expect(routeOf(rules, visit('http://[::1]:4200/a/b?x'))).toBe('fetch-event');
+    expect(routeOf(rules, visit('http://[::2]:4200/a/b'))).toBe('network');
+  });
+
+  it('turns rules it cannot build into the same warning as a refusal', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const addRoutes = vi.fn(async () => undefined);
+
+    expect(addStaticRoutes({ addRoutes }, { pathnames: ['/(unclosed'], navigations: false })).toBeUndefined();
+    expect(addRoutes).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
   });

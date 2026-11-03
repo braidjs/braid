@@ -50,7 +50,9 @@ export interface BraidWorkerOptions extends BraidFetchHandlerOptions {
    * this worker does not answer go straight to the network, so they never start it.
    *
    * Off by default: the routes bypass every `fetch` listener in the worker, including any the same
-   * file adds of its own. Turn it on when `setupBraidWorker` is the only thing listening.
+   * file adds of its own. Turn it on when `setupBraidWorker` is the only thing listening. Ignored
+   * with `offline`, whose navigation handler also answers fetches for HTML, which no route can
+   * single out.
    */
   staticRoutes?: boolean;
 }
@@ -104,13 +106,18 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
   const navigate = options.offline ? braidNavigationHandler({ ...options, ...options.offline }) : null;
 
   scope.addEventListener('install', (event) => {
-    if (options.staticRoutes) {
-      // exactly what the fetch listener answers: fragment assets and realm stubs on any origin (as
-      // `braidFetchHandler` matches them), and navigations when it composes them offline
+    if (options.staticRoutes && navigate) {
+      // Offline composition also answers a page's own fetch for HTML (htmx, Turbo), which a route
+      // cannot single out: it can match a request's mode, but not its Accept header. Routing the
+      // rest to the network would bypass those, so a worker that composes offline keeps no routes.
+      console.warn('braid-sw: staticRoutes is ignored with offline composition, which also answers fetches for HTML');
+    } else if (options.staticRoutes) {
+      // exactly what the fetch listener answers: fragment assets and realm stubs on any origin, as
+      // `braidFetchHandler` matches them
       const routed = addStaticRoutes(event, {
         pathnames: [`${BRAID_FRAGMENT_PREFIX}*`, `${BRAID_REALM_PREFIX}*`],
         getOnly: true,
-        navigations: navigate !== null,
+        navigations: false,
       });
       if (routed) event.waitUntil?.(routed);
     }

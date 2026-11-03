@@ -58,13 +58,11 @@ export function staticRoutesFor(claimed: ClaimedRequests): StaticRoute[] | null 
   }));
   if (claimed.navigations) {
     // A worker only ever sees navigations into its own scope, so the origin is belt and braces:
-    // it keeps the rule saying exactly what the listener does.
-    const origin = claimed.origin === undefined ? undefined : new URL(claimed.origin);
+    // it keeps the rule saying exactly what the listener does. Through `baseURL`, which escapes
+    // what it takes, so an IPv6 host (`[::1]`) is not read as pattern syntax.
     rules.push({
       condition: {
-        ...(origin
-          ? { urlPattern: new Pattern({ protocol: origin.protocol.slice(0, -1), hostname: origin.hostname, port: origin.port }) }
-          : {}),
+        ...(claimed.origin === undefined ? {} : { urlPattern: new Pattern({ pathname: '*', baseURL: claimed.origin }) }),
         requestMode: 'navigate',
         requestMethod: 'GET',
       },
@@ -84,11 +82,17 @@ export function staticRoutesFor(claimed: ClaimedRequests): StaticRoute[] | null 
  */
 export function addStaticRoutes(event: RoutableInstallEvent, claimed: ClaimedRequests): Promise<void> | undefined {
   if (typeof event.addRoutes !== 'function') return undefined;
-  const rules = staticRoutesFor(claimed);
-  if (!rules) return undefined;
-  return event.addRoutes(rules).catch((error: unknown) => {
+  const warn = (error: unknown) =>
     console.warn('braid-sw: static routes were not registered; every request will start the worker', error);
-  });
+  let rules: StaticRoute[] | null;
+  try {
+    rules = staticRoutesFor(claimed);
+  } catch (error) {
+    warn(error);
+    return undefined;
+  }
+  if (!rules) return undefined;
+  return event.addRoutes(rules).catch(warn);
 }
 
 /** A path prefix as a literal in URLPattern syntax, so a base path is matched as written. */
