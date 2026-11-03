@@ -67,6 +67,12 @@
         "tools/braid-console/demo-server.mjs"
       ],
       "port": 9100
+    },
+    {
+      "name": "sw-gateway",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=3917", "BRAID_TSCONFIG=tsconfig.base.json", "node", "examples/sw-gateway/server.mjs"],
+      "port": 3917
     }
   ]
 }
