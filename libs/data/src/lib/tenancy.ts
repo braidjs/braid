@@ -259,10 +259,23 @@ export function createTenancy(options: TenancyOptions): Tenancy {
     current: () => (principal ? { ...principal } : null),
 
     async signIn(next) {
-      // Before activation, not after: a partition still named by a marker must not be readable for
-      // the window between signing in and noticing.
-      await recover();
-      return activate(next);
+      /**
+       * Under the lock sign-out purges with, so a sign-in in another tab waits for that purge to
+       * finish instead of re-registering a partition it is in the middle of destroying — which would
+       * leave the partition unregistered, out of reach of every later purge, and readable.
+       */
+      const outcome = await withLock(
+        `skew:data:purge:${next.userId}`,
+        async () => {
+          // Before activation, not after: a partition still named by a marker must not be readable
+          // for the window between signing in and noticing.
+          await recover();
+          return activate(next);
+        },
+        { ifAvailable: false },
+      );
+      if (!outcome.acquired) throw new Error('[skew/data] sign-in could not take the purge lock');
+      return outcome.value;
     },
 
     async switchTenant(actingAs) {

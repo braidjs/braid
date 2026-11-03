@@ -273,7 +273,9 @@ export function createEventBus(options: EventBusOptions): EventBus {
     ? createOutbox({
         driver: options.driver,
         owner: queueOwner(options.consumer),
-        partition: partition(),
+        // The function, not its value now: the queue must follow a user switch, not stay with
+        // whoever was signed in when the bus was built.
+        partition,
         collection: EVENT_COLLECTION,
       })
     : null;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryRecordDriver } from './memory-driver.js';
+import { withLock } from './locks.js';
 import { createRecordStore, type RecordDriver } from './record-store.js';
 import { createTenancy, partitionKey, TenancyRecordSchema } from './tenancy.js';
 import { versioned } from '@braidlabs/skew';
@@ -190,5 +191,26 @@ describe('an interrupted purge', () => {
     // the half-emptied partition it still has a pointer to.
     await expect(tabA.recover()).rejects.toThrow();
     expect(() => tabA.partition()).toThrow(/half-purged/);
+  });
+});
+
+describe('signIn during another tab\'s sign-out', () => {
+  it('waits for the purge to finish before activating the partition', async () => {
+    const { tenancy } = setup();
+    let release!: () => void;
+    const purging = new Promise<void>((resolve) => (release = resolve));
+    // Another tab holds the purge lock for this user while it destroys their data.
+    const held = withLock('skew:data:purge:alice', () => purging, { ifAvailable: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    let signedIn = false;
+    const signingIn = tenancy.signIn({ userId: 'alice' }).then(() => void (signedIn = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signedIn).toBe(false);
+
+    release();
+    await held;
+    await signingIn;
+    expect(signedIn).toBe(true);
   });
 });

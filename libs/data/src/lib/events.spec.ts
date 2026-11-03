@@ -359,6 +359,28 @@ describe('at-least-once events', () => {
     account.close();
   });
 
+  it("drains the signed-in person's queue after a user switch, not the one it was built under", async () => {
+    const { driver, consumers } = setup();
+    const person = { current: 'alice' };
+    const partition = () => `p_${person.current}`;
+    const emitter = createEventBus({ consumer: 'checkout', driver, consumers, partition, invalidator: createInvalidator({ partition: 'p' }) });
+    // Built while Alice is signed in, and still alive when Bob signs in: a long-lived page.
+    const account = createEventBus({ consumer: 'account', driver, consumers, partition, invalidator: createInvalidator({ partition: 'p' }) });
+    const handled = vi.fn();
+    account.channel('orders').addEventListener('order.placed', (event) => handled((event.payload as { id: string }).id));
+
+    await emitter.channel('orders').emit('order.placed', { id: 'alices' }, { delivery: 'at-least-once' });
+    person.current = 'bob';
+    await emitter.channel('orders').emit('order.placed', { id: 'bobs' }, { delivery: 'at-least-once' });
+
+    await account.flush();
+
+    // Bob's session handles Bob's event, and never Alice's.
+    expect(handled.mock.calls).toEqual([['bobs']]);
+    emitter.close();
+    account.close();
+  });
+
   it('keeps the event queued until it is handled, and deletes it after', async () => {
     const { driver, consumers } = setup();
     const bus = createEventBus({ consumer: 'account', driver, consumers, invalidator: createInvalidator({ partition: 'p' }) });
