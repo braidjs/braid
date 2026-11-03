@@ -58,8 +58,18 @@ import { setupBraidWorker } from '@braidlabs/sw';
 setupBraidWorker({
   buildId: self.__BUILD_ID,
   precache: ['billing', 'catalog'],
+  staticRoutes: true, // only if nothing else in this file listens for `fetch`
 });
 ```
+
+### Static routes: start the worker only for what it answers
+
+A worker with a `fetch` listener normally starts for *every* request in its scope. That includes requests its listener ignores, such as the shell's own scripts, images and API calls, and each of those waits for the worker to start. Where the browser supports the Service Worker Static Routing API (`InstallEvent.addRoutes`, Chromium today), both workers can instead declare at install time exactly which requests they answer. Everything else goes straight to the network, and the worker doesn't start for it.
+
+- **`setupBraidGateway` does this by default.** It answers its namespace and same-origin GET navigations. Pass `staticRoutes: false` if the same worker file adds its own `fetch` listener.
+- **`setupBraidWorker` does it only with `staticRoutes: true`.** It answers fragment assets and realm stubs, plus navigations when `offline` is set. It's off by default because the routes bypass every `fetch` listener in the worker, including any you added yourself.
+- **Browsers without the API, or that refuse the rules, behave as before**, and you get a console warning. Installation never fails because of it.
+- **DevTools can confirm it.** In resource timing, `workerMatchedSourceType` is `network` for a routed request and `fetch-event` for one the worker answered.
 
 ---
 

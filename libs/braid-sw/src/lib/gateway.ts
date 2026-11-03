@@ -9,6 +9,11 @@ import {
   braidFetchHandler,
   type BraidFetchHandlerOptions,
 } from './asset-handler.js';
+import {
+  addStaticRoutes,
+  patternLiteral,
+  type RoutableInstallEvent,
+} from './static-routes.js';
 
 /**
  * The gateway itself, run inside the worker: composition for an origin that has no server to put
@@ -74,8 +79,7 @@ export function braidGatewayHandler(
   options: BraidGatewayHandlerOptions,
 ): BraidGatewayHandler {
   const gateway = createGateway(options);
-  // as the gateway trims it, which has already refused a malformed one
-  const namespace = `${(options.basePath ?? '').replace(/\/+$/, '')}/__braid/`;
+  const namespace = namespaceOf(options.basePath);
   const network = (request: Request) => globalThis.fetch(request);
   const viaGateway = toFetchHandler(gateway, network);
   const compose = toWebMiddleware(gateway);
@@ -140,6 +144,13 @@ export interface BraidGatewayWorkerOptions extends BraidGatewayHandlerOptions {
    * `setupBraidWorker`: a page mid-session starts being served by a worker it did not load against.
    */
   claimClients?: boolean;
+  /**
+   * Declare at install, where the browser supports it (Chromium's static routing), that requests
+   * this worker does not answer go straight to the network, so they never start it. On by default:
+   * this is the whole worker. Turn it off if the same worker file adds its own `fetch` listener,
+   * which the routes would bypass.
+   */
+  staticRoutes?: boolean;
 }
 
 /** The message a page posts to an active worker that is not controlling it. */
@@ -168,7 +179,7 @@ export function setupBraidGateway(
       navigationPreload?: { enable(): Promise<void>; disable(): Promise<void> };
     };
   };
-  const { assets, claimClients, ...gatewayOptions } = options;
+  const { assets, claimClients, staticRoutes = true, ...gatewayOptions } = options;
   if (assets && gatewayOptions.basePath) {
     throw new Error(
       'braid-sw: `assets` is not yet supported together with `basePath`',
@@ -178,6 +189,18 @@ export function setupBraidGateway(
   const cached = assets
     ? braidFetchHandler({ ...assets, fetch: braid.fetch })
     : null;
+
+  if (staticRoutes) {
+    scope.addEventListener('install', (event) => {
+      // exactly what `braid.claims` answers: this origin's namespace, and every GET navigation
+      const routed = addStaticRoutes(event, {
+        pathnames: [`${patternLiteral(namespaceOf(gatewayOptions.basePath))}*`],
+        origin: (globalThis as { location?: { origin: string } }).location?.origin,
+        navigations: true,
+      });
+      if (routed) event.waitUntil?.(routed);
+    });
+  }
 
   scope.addEventListener('activate', (event) => {
     // Off, though every navigation passes through: the browser preloads *every* navigation in
@@ -241,6 +264,11 @@ async function asGatewayRequest(request: Request): Promise<Request> {
   });
 }
 
+/** The Braid namespace under a base path, as the gateway trims it (it has already refused a malformed one). */
+function namespaceOf(basePath: string | undefined): string {
+  return `${(basePath ?? '').replace(/\/+$/, '')}/__braid/`;
+}
+
 /**
  * Only the browser's own navigations. A page's `fetch` with an HTML `Accept` (htmx, Turbo, a
  * prefetch) is a fetch, and the gateway — which in a worker cannot see `Sec-Fetch-Dest` — would
@@ -257,4 +285,5 @@ interface GatewayFetchEvent {
   respondWith?(response: Promise<Response> | Response): void;
   waitUntil?(promise: Promise<unknown>): void;
   preloadResponse?: Promise<Response | undefined>;
+  addRoutes?: RoutableInstallEvent['addRoutes'];
 }

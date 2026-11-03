@@ -255,7 +255,10 @@ Two came from review rather than the e2e, and have specs:
 ### Open questions
 
 - **Worker startup on every navigation.** With preload off, a navigation's shell request waits for
-  the worker to boot, which can be tens of milliseconds on mobile.
+  the worker to boot, which can be tens of milliseconds on mobile. Requests it doesn't answer no
+  longer pay that where the browser has static routing. `setupBraidGateway` declares its namespace
+  and navigations at install (`staticRoutes`, on by default), and everything else goes straight to
+  the network.
 - **Which `x-braid-composed` value** a worker-composed online page should carry, so it can be told
   apart from a server-composed one in telemetry.
 - **`assets` together with `basePath`.** The asset handler only recognises the namespace at the
