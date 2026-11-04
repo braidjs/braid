@@ -46,24 +46,47 @@ export async function openFragmentCache(fragmentId: string, options: FragmentCac
   return (options.caches ?? (globalThis as { caches?: CacheStorage }).caches)?.open(name);
 }
 
-/** Deletes the fragment buckets this worker made, except those for `keep` (all of them when null). */
-export async function deleteFragmentBuckets(keep: readonly string[] | null, options: FragmentCacheOptions = {}): Promise<string[]> {
-  const buckets = bucketsOf(options);
+/**
+ * Deletes the fragment buckets this worker's prefix made, except those for `keep` (all of them when
+ * null). Only names in this worker's exact format: buckets are the whole origin's, and a looser match
+ * would take the realm's database buckets (`braid-db-…`), another worker's, or the app's own.
+ *
+ * `always` deletes even when `buckets` is off, where the API exists: sign-out must not leave a
+ * previous configuration's buckets, which may hold a previous user's offline documents.
+ */
+export async function deleteFragmentBuckets(
+  keep: readonly string[] | null,
+  options: FragmentCacheOptions = {},
+  { always = false }: { always?: boolean } = {},
+): Promise<string[]> {
+  const buckets = always ? bucketManager(options) : bucketsOf(options);
   if (!buckets) return [];
-  const prefix = `${bucketPrefix(options)}-`;
+  const format = new RegExp(`^${escapeRegExp(bucketPrefix(options))}_[a-z0-9-]{1,30}_[0-9a-f]{8}$`);
   const kept = new Set((keep ?? []).map((id) => bucketFor(id, options)));
   const deleted: string[] = [];
   for (const name of await buckets.keys()) {
-    if (!name.startsWith(prefix) || kept.has(name)) continue;
+    if (!format.test(name) || kept.has(name)) continue;
     await buckets.delete(name);
     deleted.push(name);
   }
   return deleted;
 }
 
+/** Whether this worker keeps fragment caches in buckets: asked for, and available. */
+export function usesBuckets(options: FragmentCacheOptions): boolean {
+  return bucketsOf(options) !== undefined;
+}
+
 function bucketsOf(options: FragmentCacheOptions): StorageBucketsLike | undefined {
-  if (!options.buckets) return undefined;
+  return options.buckets ? bucketManager(options) : undefined;
+}
+
+function bucketManager(options: FragmentCacheOptions): StorageBucketsLike | undefined {
   return options.storageBuckets ?? (globalThis as { navigator?: { storageBuckets?: StorageBucketsLike } }).navigator?.storageBuckets;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -72,15 +95,19 @@ function bucketsOf(options: FragmentCacheOptions): StorageBucketsLike | undefine
  * fragments apart.
  */
 export function bucketFor(fragmentId: string, options: FragmentCacheOptions = {}): string {
-  return `${bucketPrefix(options)}-${slug(fragmentId, 30)}-${fnv1a(fragmentId)}`;
+  return `${bucketPrefix(options)}_${slug(fragmentId, 30)}_${fnv1a(fragmentId)}`;
 }
 
+/**
+ * `braid-sw_` and the cache prefix: a namespace the realm's database buckets (`braid-db_`) never use.
+ * Underscores delimit and slugs never contain one, so one prefix's names cannot be read as another's.
+ */
 function bucketPrefix(options: FragmentCacheOptions): string {
-  return slug(options.cachePrefix ?? DEFAULT_CACHE_PREFIX, 20);
+  return `braid-sw_${slug(options.cachePrefix ?? DEFAULT_CACHE_PREFIX, 20)}`;
 }
 
 function slug(text: string, length: number): string {
-  return text.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, length) || 'x';
+  return text.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, length) || 'x';
 }
 
 function fnv1a(text: string): string {

@@ -35,6 +35,7 @@ export { contractAdapter } from './adapters/contract-adapter.js';
 export { defineFragment } from './env/define-fragment.js';
 export type { FragmentDefinition } from './env/define-fragment.js';
 export { FragmentSlot, prefetchFragment } from './elements/fragment-slot.js';
+export { clearBraidDatabases } from './compat/database-partition.js';
 export { clearPrefetchedFragments } from './elements/prefetch.js';
 export type { FragmentSlotState } from './elements/fragment-slot.js';
 export { braidContext, createContextBus } from './context/context-bus.js';

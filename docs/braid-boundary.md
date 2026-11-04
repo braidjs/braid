@@ -72,6 +72,7 @@ An untrusted fragment runs in a cross-origin frame. Under site isolation the bro
 
 - **It has to be cross-site, not only cross-origin.** `widgets.example.com` inside `www.example.com` is the same site, so it shares the host's process. Use a different registrable domain for the isolation to apply.
 - **Android isolates only some sites.** Chrome on Android gives separate processes only to sites it judges sensitive, so don't count on the separation there.
+- **Safari doesn't yet put cross-site frames in their own process**, so there it's isolation without the performance benefit.
 
 ## Choosing
 

@@ -36,7 +36,10 @@ interface RealmWindowLike {
 export async function installDatabasePartition(realm: Window, partition: string): Promise<DatabasePartitionKind> {
   const realmWindow = realm as unknown as RealmWindowLike;
   const buckets = realmWindow.navigator.storageBuckets;
-  if (typeof buckets?.open === 'function') {
+  const prefix = `braid:${encodeURIComponent(partition)}:`;
+  // Where a partition's data already is, it stays: a browser that gains buckets, or a bucket that
+  // was refused once, would otherwise hand the fragment an empty store and strand the old one.
+  if (typeof buckets?.open === 'function' && !(await hasPrefixedData(realmWindow.indexedDB, prefix))) {
     try {
       const bucket = await buckets.open(bucketName(partition));
       define(realm, 'indexedDB', bucket.indexedDB);
@@ -46,7 +49,6 @@ export async function installDatabasePartition(realm: Window, partition: string)
       // refused (an opaque origin, a quota policy): fall back to prefixing
     }
   }
-  const prefix = `braid:${encodeURIComponent(partition)}:`;
   if (realmWindow.indexedDB) define(realm, 'indexedDB', prefixedFactory(realmWindow.indexedDB, prefix));
   if (realmWindow.caches) define(realm, 'caches', prefixedCacheStorage(realmWindow.caches, prefix));
   return 'prefixed';
@@ -58,9 +60,17 @@ export async function installDatabasePartition(realm: Window, partition: string)
  * partition keeps two partitions apart.
  */
 export function bucketName(partition: string): string {
-  const readable = partition.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  return `braid-${readable || 'p'}-${fnv1a(partition)}`;
+  const readable = partition.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return `${BUCKET_NAMESPACE}${readable || 'p'}_${fnv1a(partition)}`;
 }
+
+/**
+ * Realm database buckets, and only them: a fixed namespace no other bucket of Braid's uses (the
+ * service worker's are `braid-sw-…`), matched in full, so clearing never takes an app's own bucket.
+ */
+const BUCKET_NAMESPACE = 'braid-db_';
+const BUCKET_FORMAT = /^braid-db_[a-z0-9-]{1,40}_[0-9a-f]{8}$/;
+const PREFIX_FORMAT = /^braid:[^:]+:/;
 
 function fnv1a(text: string): string {
   let hash = 0x811c9dc5;
@@ -82,12 +92,18 @@ export function prefixedFactory(native: IDBFactory, prefix: string): IDBFactory 
       value: (name: string, version?: number) => (version === undefined ? native.open(prefix + name) : native.open(prefix + name, version)),
     },
     deleteDatabase: { value: (name: string) => native.deleteDatabase(prefix + name) },
-    databases: {
-      value: async () =>
-        (await native.databases())
-          .filter((info) => info.name?.startsWith(prefix))
-          .map((info) => ({ ...info, name: info.name!.slice(prefix.length) })),
-    },
+    // only where the native factory has it, so feature detection tells the truth
+    ...(typeof native.databases === 'function'
+      ? {
+          databases: {
+            value: async () =>
+              (await native.databases())
+                .filter((info) => info.name?.startsWith(prefix))
+                .map((info) => ({ ...info, name: info.name!.slice(prefix.length) })),
+          },
+        }
+      : // shadowing the prototype's, which would throw on this object anyway
+        { databases: { value: undefined } }),
     cmp: { value: (first: unknown, second: unknown) => native.cmp(first, second) },
   }) as IDBFactory;
 }
@@ -111,4 +127,47 @@ export function prefixedCacheStorage(native: CacheStorage, prefix: string): Cach
       },
     },
   }) as CacheStorage;
+}
+
+async function hasPrefixedData(factory: IDBFactory | undefined, prefix: string): Promise<boolean> {
+  if (typeof factory?.databases !== 'function') return false;
+  try {
+    return (await factory.databases()).some((info) => info.name?.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deletes every fragment's partitioned IndexedDB and Cache Storage on this origin — the buckets,
+ * and the prefixed databases and caches of a browser without them. For sign-out on a shared device:
+ * a partitioned fragment's data lives where the origin's own `indexedDB.databases()` and
+ * `caches.keys()` do not list it, so a sign-out routine that clears those leaves it behind.
+ *
+ * Only Braid's own: realm buckets matched by their full name format, databases and caches by their
+ * `braid:<partition>:` prefix.
+ */
+export async function clearBraidDatabases(scope: Window = window): Promise<void> {
+  const realmWindow = scope as unknown as RealmWindowLike & {
+    navigator: { storageBuckets?: { keys(): Promise<string[]>; delete(name: string): Promise<void> } };
+  };
+  const buckets = realmWindow.navigator.storageBuckets;
+  if (buckets && typeof buckets.keys === 'function') {
+    for (const name of await buckets.keys()) if (BUCKET_FORMAT.test(name)) await buckets.delete(name);
+  }
+  const factory = realmWindow.indexedDB;
+  if (factory && typeof factory.databases === 'function') {
+    for (const { name } of await factory.databases()) {
+      if (name && PREFIX_FORMAT.test(name)) {
+        await new Promise<void>((resolve) => {
+          const request = factory.deleteDatabase(name);
+          request.onsuccess = request.onerror = request.onblocked = () => resolve();
+        });
+      }
+    }
+  }
+  const cacheStorage = realmWindow.caches;
+  if (cacheStorage) {
+    for (const name of await cacheStorage.keys()) if (PREFIX_FORMAT.test(name)) await cacheStorage.delete(name);
+  }
 }

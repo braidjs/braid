@@ -138,6 +138,8 @@ export function braidNavigationHandler(
 
       // In the fragment's own partition, so pruning a retired fragment takes its documents too.
       const cache = await openFragmentCache(manifest.id, options);
+      // a sign-out may have cleared while the bucket opened: nothing of the old session is written back
+      if (!current()) return;
       if (!cache) continue;
       if (mayKeep(response)) await cache.put(documentUrl, response.clone());
       else await cache.delete(documentUrl);
@@ -246,7 +248,7 @@ export async function clearBraidCaches(options: FragmentCacheOptions = {}): Prom
   await Promise.all(
     names.filter((name) => name === SHELL_CACHE || name.startsWith(prefix)).map((name) => cacheStorage.delete(name)),
   );
-  await deleteFragmentBuckets(null, options);
+  await deleteFragmentBuckets(null, options, { always: true });
 }
 
 /** Unbound fragments are fetched at their own path, bound ones at the page's — as on the server. */

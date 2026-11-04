@@ -76,8 +76,32 @@ describe('per-fragment buckets', () => {
 
     expect([...storageBuckets.buckets.keys()].sort()).toEqual([bucketFor('billing'), 'someone-elses-bucket'].sort());
     expect(removed).toContain(bucketFor('orders'));
-    // the kept fragment's old shared cache stays until it is not kept: only retired ones go
-    expect(shared.contents.has('braid-frag:billing')).toBe(true);
+    // with buckets in use, the old shared caches are superseded, kept fragments' included
+    expect(shared.contents.has('braid-frag:billing')).toBe(false);
+  });
+
+  it('never touch buckets that are not this worker’s: the realm’s databases, another prefix’s, the app’s', async () => {
+    const storageBuckets = fakeBuckets();
+    // what core names a realm database partition called "frag", and buckets that merely look alike
+    const others = ['braid-db_frag_1a2b3c4d', 'braid-sw_braid-frag-v2_orders_1a2b3c4d', 'braid-sw_other_orders_1a2b3c4d', 'braid-frag-orders-1a2b3c4d', 'app-cache'];
+    for (const name of others) await storageBuckets.open(name);
+    await storageBuckets.open(bucketFor('orders'));
+
+    await pruneFragmentCaches([], { buckets: true, storageBuckets, caches: memoryCaches() });
+    expect([...storageBuckets.buckets.keys()].sort()).toEqual([...others].sort());
+
+    await storageBuckets.open(bucketFor('orders'));
+    await clearBraidCaches({ buckets: true, storageBuckets, caches: memoryCaches() });
+    expect([...storageBuckets.buckets.keys()].sort()).toEqual([...others].sort());
+  });
+
+  it('are cleared at sign-out even by a worker that no longer uses them', async () => {
+    const storageBuckets = fakeBuckets();
+    await storageBuckets.open(bucketFor('billing'));
+
+    await clearBraidCaches({ storageBuckets, caches: memoryCaches() });
+
+    expect(storageBuckets.buckets.size).toBe(0);
   });
 
   it('are all deleted when the worker clears its caches at sign-out', async () => {
