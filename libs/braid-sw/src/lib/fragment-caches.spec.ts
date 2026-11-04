@@ -138,7 +138,19 @@ describe('per-fragment buckets', () => {
   it('get names the API accepts, distinct for ids that fold to the same text', () => {
     for (const id of ['billing', 'Billing', 'billing app', 'a'.repeat(200), 'ünïcode/✓']) {
       expect(bucketFor(id)).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+      // a prefix as long as one gets, with an id as long as one gets: still within the API's 64
+      expect(bucketFor(id, { cachePrefix: 'a-twenty-char-prefix' }).length).toBeLessThanOrEqual(64);
     }
     expect(bucketFor('Billing')).not.toBe(bucketFor('billing'));
+  });
+
+  it('keep a kept fragment’s shared cache while its bucket does not exist, since that is where its files fell back to', async () => {
+    const shared = memoryCaches();
+    await shared.open('braid-frag:billing');
+    const storageBuckets = fakeBuckets(); // billing's bucket was refused, so it was never made
+
+    await pruneFragmentCaches(['billing'], { buckets: true, storageBuckets, caches: shared });
+
+    expect(shared.contents.has('braid-frag:billing')).toBe(true);
   });
 });

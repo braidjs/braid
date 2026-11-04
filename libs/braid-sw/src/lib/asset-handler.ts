@@ -1,5 +1,5 @@
 import { parseBraidPathname } from '@braidlabs/gateway';
-import { DEFAULT_CACHE_PREFIX, deleteFragmentBuckets, openFragmentCache, usesBuckets, type FragmentCacheOptions } from './fragment-caches.js';
+import { DEFAULT_CACHE_PREFIX, deleteFragmentBuckets, keptWithBuckets, openFragmentCache, usesBuckets, type FragmentCacheOptions } from './fragment-caches.js';
 
 /**
  * Skew-aware asset serving: the one layer that can keep an open page working after a deploy.
@@ -150,12 +150,12 @@ export async function pruneFragmentCaches(
   const kept = new Set(keep.map((id) => `${cachePrefix}:${id}`));
   const removed: string[] = [];
 
-  // the shared cache storage first: with buckets on, this is also where a worker that just
-  // switched left its old per-fragment caches
-  // With buckets in use, every shared per-fragment cache is superseded, kept fragments' included.
-  const superseded = usesBuckets(options);
+  // The shared cache storage first: with buckets on, this is also where a worker that just
+  // switched left its old per-fragment caches. A kept fragment's shared cache is superseded only
+  // once its bucket exists; one whose bucket was refused falls back to it, and keeps it.
+  const superseded = new Set(usesBuckets(options) ? await keptWithBuckets(keep, options) : []);
   for (const name of (await cacheStorage?.keys()) ?? []) {
-    if (!name.startsWith(`${cachePrefix}:`) || (kept.has(name) && !superseded)) continue;
+    if (!name.startsWith(`${cachePrefix}:`) || (kept.has(name) && !superseded.has(name.slice(cachePrefix.length + 1)))) continue;
     await cacheStorage!.delete(name);
     removed.push(name);
   }

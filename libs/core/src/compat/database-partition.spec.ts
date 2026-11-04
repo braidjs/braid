@@ -137,6 +137,14 @@ describe('installDatabasePartition', () => {
     await ready;
     expect(await installDatabasePartition(window, 'orders')).toBe('prefixed');
   });
+
+  it('stays on prefixed names where the partition keeps only caches there', async () => {
+    const { window, ready } = realm();
+    await ready;
+    await window.caches.open('braid:orders:assets');
+    expect(await installDatabasePartition(window, 'orders')).toBe('prefixed');
+    expect(await window.caches.keys()).toEqual(['assets']);
+  });
 });
 
 describe('clearBraidDatabases', () => {

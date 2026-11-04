@@ -61,7 +61,7 @@ export async function deleteFragmentBuckets(
 ): Promise<string[]> {
   const buckets = always ? bucketManager(options) : bucketsOf(options);
   if (!buckets) return [];
-  const format = new RegExp(`^${escapeRegExp(bucketPrefix(options))}_[a-z0-9-]{1,30}_[0-9a-f]{8}$`);
+  const format = new RegExp(`^${escapeRegExp(bucketPrefix(options))}_[a-z0-9-]{1,25}_[0-9a-f]{8}$`);
   const kept = new Set((keep ?? []).map((id) => bucketFor(id, options)));
   const deleted: string[] = [];
   for (const name of await buckets.keys()) {
@@ -75,6 +75,14 @@ export async function deleteFragmentBuckets(
 /** Whether this worker keeps fragment caches in buckets: asked for, and available. */
 export function usesBuckets(options: FragmentCacheOptions): boolean {
   return bucketsOf(options) !== undefined;
+}
+
+/** The fragments among `keep` whose bucket exists, so their shared caches are superseded. */
+export async function keptWithBuckets(keep: readonly string[], options: FragmentCacheOptions): Promise<string[]> {
+  const buckets = bucketsOf(options);
+  if (!buckets) return [];
+  const existing = new Set(await buckets.keys());
+  return keep.filter((id) => existing.has(bucketFor(id, options)));
 }
 
 function bucketsOf(options: FragmentCacheOptions): StorageBucketsLike | undefined {
@@ -95,7 +103,7 @@ function escapeRegExp(text: string): string {
  * fragments apart.
  */
 export function bucketFor(fragmentId: string, options: FragmentCacheOptions = {}): string {
-  return `${bucketPrefix(options)}_${slug(fragmentId, 30)}_${fnv1a(fragmentId)}`;
+  return `${bucketPrefix(options)}_${slug(fragmentId, 25)}_${fnv1a(fragmentId)}`;
 }
 
 /**

@@ -39,7 +39,7 @@ export async function installDatabasePartition(realm: Window, partition: string)
   const prefix = `braid:${encodeURIComponent(partition)}:`;
   // Where a partition's data already is, it stays: a browser that gains buckets, or a bucket that
   // was refused once, would otherwise hand the fragment an empty store and strand the old one.
-  if (typeof buckets?.open === 'function' && !(await hasPrefixedData(realmWindow.indexedDB, prefix))) {
+  if (typeof buckets?.open === 'function' && !(await hasPrefixedData(realmWindow, prefix))) {
     try {
       const bucket = await buckets.open(bucketName(partition));
       define(realm, 'indexedDB', bucket.indexedDB);
@@ -129,13 +129,21 @@ export function prefixedCacheStorage(native: CacheStorage, prefix: string): Cach
   }) as CacheStorage;
 }
 
-async function hasPrefixedData(factory: IDBFactory | undefined, prefix: string): Promise<boolean> {
-  if (typeof factory?.databases !== 'function') return false;
-  try {
-    return (await factory.databases()).some((info) => info.name?.startsWith(prefix));
-  } catch {
-    return false;
-  }
+/** Whether the partition already keeps databases or caches under prefixed names. */
+async function hasPrefixedData(realm: RealmWindowLike, prefix: string): Promise<boolean> {
+  const has = async (names: () => Promise<readonly (string | undefined)[]>) => {
+    try {
+      return (await names()).some((name) => name?.startsWith(prefix));
+    } catch {
+      return false;
+    }
+  };
+  const factory = realm.indexedDB;
+  const caches = realm.caches;
+  return (
+    (typeof factory?.databases === 'function' && (await has(async () => (await factory.databases()).map((info) => info.name)))) ||
+    (caches !== undefined && (await has(() => caches.keys())))
+  );
 }
 
 /**

@@ -68,7 +68,7 @@ the code on the other side is hostile, compromised, or merely has a compromised 
 
 ### A performance option as well
 
-An untrusted fragment runs in a cross-origin frame. Under site isolation the browser gives a cross-*site* frame its own renderer process, so a CPU-heavy fragment (a chart engine, a large grid, a third-party widget) runs off the host's main thread and can't slow the host's input or rendering. Two caveats:
+An untrusted fragment runs in a cross-origin frame. Under site isolation the browser gives a cross-*site* frame its own renderer process, so a CPU-heavy fragment (a chart engine, a large grid, a third-party widget) runs off the host's main thread and can't slow the host's input or rendering. The caveats:
 
 - **It has to be cross-site, not only cross-origin.** `widgets.example.com` inside `www.example.com` is the same site, so it shares the host's process. Use a different registrable domain for the isolation to apply.
 - **Android isolates only some sites.** Chrome on Android gives separate processes only to sites it judges sensitive, so don't count on the separation there.
