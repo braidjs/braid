@@ -221,6 +221,10 @@ export class FragmentSlot extends HTMLElement {
   #dirty: string | null = null;
   #booted = false;
   #bootScheduled = false;
+  /** Which disconnect is current: only the last one decides whether the slot moved or left. */
+  #placementCheck = 0;
+  /** What the current boot depended on that a move can change; see {@link FragmentSlot.#moved}. */
+  #bootedWith: { name: string; document: Document; framed: boolean } | undefined;
   /**
    * A deferred boot's gate and the listeners that replay or release it; undefined for an eager slot
    * and once the slot leaves the DOM. Kept after the trigger fires, for the replay.
@@ -478,7 +482,62 @@ export class FragmentSlot extends HTMLElement {
     this.#bootGate = undefined;
   }
 
+  /**
+   * A move is not an unmount. `insertBefore` or `append` of a connected slot — a keyed list
+   * reordering, a framework reparenting, a layout change — disconnects and reconnects it in one go,
+   * and tearing down there would reboot a fragment that never left the page: its state gone, its
+   * document fetched again. So the decision waits a microtask: a slot back in the page by then, put
+   * there by the same synchronous script that took it out, moved; one that is not, left.
+   */
   disconnectedCallback() {
+    const check = ++this.#placementCheck;
+    queueMicrotask(() => {
+      if (check !== this.#placementCheck) return;
+      if (this.isConnected) this.#moved(false);
+      else this.#left();
+    });
+  }
+
+  /** `moveBefore()` moves a slot without disconnecting it at all: nothing inside it is reloaded. */
+  connectedMoveCallback() {
+    this.#moved(true);
+  }
+
+  /**
+   * Keeps the fragment running across a move, unless something it booted with no longer holds —
+   * then it reboots, as every move used to.
+   *
+   * - **An untrusted fragment's frame lives in the slot.** A move that disconnected the slot also
+   *   reloaded the frame, and nothing reconnects the reloaded document. `moveBefore` keeps it.
+   * - **A slot renamed while it was out of the page** names a different fragment now; the rename
+   *   itself went unheard, since only a connected slot acts on one.
+   * - **A slot moved into another document** left its realm behind in the first.
+   * - **A slot that had failed** gets the retry a remount always gave it — unless it is `gone` with
+   *   unsaved work, which recovery leaves alone too.
+   * - **A slot that brings its own code** may not sit inside another fragment's DOM. Booting checks
+   *   that, so the reboot fails the slot the way it would have failed there from the start.
+   */
+  #moved(atomic: boolean): void {
+    const booted = this.#bootedWith;
+    if (!this.#booted || !booted) return;
+    const stale =
+      (booted.framed && !atomic) ||
+      this.name !== booted.name ||
+      this.ownerDocument !== booted.document ||
+      this.#state === 'error' ||
+      (this.#state === 'gone' && this.#dirty === null);
+    let misplaced = false;
+    try {
+      this.#assertHostDeclaresCode(this.name);
+    } catch {
+      misplaced = true;
+    }
+    if (stale || misplaced) {
+      this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] reload after a move failed`, error));
+    }
+  }
+
+  #left(): void {
     this.#bootScheduled = false;
     this.#scheduleGeneration++;
     this.#recovery.reset();
@@ -490,10 +549,6 @@ export class FragmentSlot extends HTMLElement {
     this.#booted = false;
   }
 
-  /**
-   * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
-   * scheduled recovery reboot: the host has taken over.
-   */
   /**
    * A slot's `entry`, or its untrusted `src`, names the code a fragment runs — so only the host may
    * give one. A slot inside another fragment's DOM was written by that fragment, perhaps from data it
@@ -512,6 +567,10 @@ export class FragmentSlot extends HTMLElement {
     });
   }
 
+  /**
+   * Tears down and boots afresh. A host's reload also restores the recovery budget and cancels a
+   * scheduled recovery reboot: the host has taken over.
+   */
   async reload(): Promise<void> {
     this.#recovery.reset();
     await this.#reload();
@@ -602,6 +661,7 @@ export class FragmentSlot extends HTMLElement {
 
   async #boot(): Promise<void> {
     const fragmentId = this.name;
+    this.#bootedWith = { name: fragmentId, document: this.ownerDocument, framed: this.getAttribute('trust') === 'untrusted' };
 
     // A close still negotiating owns the shadow root until it finishes. Booting into it first
     // would render content that the completing close would then clear.
