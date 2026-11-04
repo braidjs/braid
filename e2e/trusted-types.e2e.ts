@@ -46,6 +46,13 @@ beforeAll(async () => {
       registry: [
         { id: 'pierced', pierce: ['/'], bound: false, src: '/', endpoint: endpoint(() => ran('pierced-p')) },
         { id: 'fetched', endpoint: endpoint(() => ran('fetched-p')) },
+        // a script inside SVG, which the gateway neutralizes like any other
+        {
+          id: 'svg',
+          endpoint: endpoint(() =>
+            html(`<p id="svg-p">waiting</p><svg><script>document.getElementById('svg-p').dataset.ran = 'yes';</script></svg>`),
+          ),
+        },
         {
           id: 'contract',
           endpoint: endpoint(
@@ -72,6 +79,7 @@ beforeAll(async () => {
     body:
       '<fragment-slot name="pierced"></fragment-slot>' +
       '<fragment-slot name="fetched"></fragment-slot>' +
+      '<fragment-slot name="svg"></fragment-slot>' +
       '<fragment-slot name="contract" adapter="contract" entry="/__braid/frag/contract/entry.js"></fragment-slot>' +
       '<fragment-slot name="writer"></fragment-slot>' +
       '<fragment-slot name="sanitized"></fragment-slot>',
@@ -100,7 +108,7 @@ describe('a host that enforces Trusted Types', () => {
       if (message.type() === 'error') realmErrors.push(message.text());
     });
     await page.goto(host.url);
-    await readySlots(page, 'pierced', 'fetched', 'contract', 'writer', 'sanitized');
+    await readySlots(page, 'pierced', 'fetched', 'svg', 'contract', 'writer', 'sanitized');
   });
 
   afterAll(async () => {
@@ -110,6 +118,8 @@ describe('a host that enforces Trusted Types', () => {
   it('boots pierced, fetched and contract fragments, their code running in their realms', async () => {
     await inSlot(page, 'pierced', '#pierced-p[data-ran="yes"]');
     await inSlot(page, 'fetched', '#fetched-p[data-ran="yes"]');
+    // neutralized by the gateway inside SVG too, and so kept and run in the realm
+    await inSlot(page, 'svg', '#svg-p[data-ran="yes"]');
     await inSlot(page, 'contract', '#contract-p');
   });
 

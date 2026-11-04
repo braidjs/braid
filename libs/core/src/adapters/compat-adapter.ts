@@ -131,9 +131,9 @@ export function parseFragmentContent(html: string, mainDocument: Document): HTML
  * Readies the fragment's scripts in markup imported from the parser's document, before any of it
  * reaches the page.
  *
- * - **Only what the gateway neutralized is kept.** The gateway gives every script `type="inert"`;
- *   one without it slipped past the rewriter, and nothing here can tell what it would do in the
- *   host, so it is dropped (in dev, with a warning).
+ * - **Only what the gateway neutralized is kept.** The gateway gives every script `type="inert"`,
+ *   an SVG one included; one without it slipped past the rewriter, and nothing here can tell what
+ *   it would do in the host, so it is dropped (in dev, with a warning).
  * - **Each inline script gets its own text back through Braid's Trusted Types policy.** Imported
  *   from another document, a script no longer counts as parser-written, and a host enforcing
  *   Trusted Types would refuse to mark it started below. Without a policy nothing changes.
@@ -142,7 +142,7 @@ export function parseFragmentContent(html: string, mainDocument: Document): HTML
  */
 function readyScripts<T extends Element>(root: T): T {
   for (const script of root.querySelectorAll('script')) {
-    if (script.namespaceURI !== XHTML || script.getAttribute('type') !== 'inert') {
+    if (script.getAttribute('type') !== 'inert') {
       if (isDevMode()) console.warn('[braid] a fragment script was not neutralized by the gateway and is dropped', script);
       script.remove();
       continue;
@@ -150,7 +150,18 @@ function readyScripts<T extends Element>(root: T): T {
     if (script.hasAttribute('src')) continue;
     const text = script.textContent ?? '';
     const trusted = trustedScript(text);
-    if (trusted !== text) script.textContent = trusted;
+    if (trusted === text) continue;
+    if (script.namespaceURI === XHTML) {
+      script.textContent = trusted;
+    } else if (!script.hasAttribute('href') && !script.hasAttribute('xlink:href')) {
+      // An SVG script's text cannot be given back through a policy (only an HTML script's setters
+      // take one), so a host enforcing Trusted Types would report it. Its realm runs an HTML copy
+      // whatever it is here, so the inert one in the page becomes an HTML script too.
+      const html = root.ownerDocument.createElement('script');
+      for (const attribute of script.attributes) html.setAttribute(attribute.name, attribute.value);
+      html.textContent = trusted;
+      script.replaceWith(html);
+    }
   }
   markStartedInPlace(root);
   return root;
