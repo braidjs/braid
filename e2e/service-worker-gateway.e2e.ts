@@ -105,6 +105,59 @@ describe('the gateway in a service worker', () => {
     await context.close();
   });
 
+  it('starts the worker only for what it answers: everything else is routed to the network at install', async () => {
+    const context = await firstVisit();
+    const page = await context.newPage();
+    await page.goto(server.url);
+    await page.waitForFunction(
+      () => navigator.serviceWorker.controller !== null,
+      undefined,
+      { timeout: 15_000 },
+    );
+
+    // a page load under the worker: its navigation and the realm frame's are the worker's, the
+    // shell's own script is not
+    await page.reload();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('fragment-slot[name="billing"]')
+          ?.shadowRoot?.querySelector('#status')?.textContent ===
+        'booted in its realm',
+      undefined,
+      { timeout: 15_000 },
+    );
+    const sources = await page.evaluate(() =>
+      [
+        ...performance.getEntriesByType('navigation'),
+        ...performance.getEntriesByType('resource'),
+      ].map((entry) => {
+        const timing = entry as PerformanceResourceTiming & {
+          workerMatchedSourceType?: string;
+        };
+        return {
+          path: new URL(timing.name).pathname,
+          source: timing.workerMatchedSourceType,
+        };
+      }),
+    );
+
+    const sourceOf = (match: (path: string) => boolean) =>
+      sources.find((entry) => match(entry.path))?.source;
+    expect(sourceOf((path) => path === '/'), JSON.stringify(sources)).toBe(
+      'fetch-event',
+    );
+    expect(
+      sourceOf((path) => path.startsWith('/__braid/realm/billing')),
+      JSON.stringify(sources),
+    ).toBe('fetch-event');
+    expect(
+      sourceOf((path) => path.endsWith('.js') && !path.startsWith('/__braid/')),
+      JSON.stringify(sources),
+    ).toBe('network');
+    await context.close();
+  });
+
   it('never sends a /__braid/ request to the static server', () => {
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((path) => path.startsWith('/__braid/'))).toEqual(

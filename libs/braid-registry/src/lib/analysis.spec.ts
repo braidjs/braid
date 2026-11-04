@@ -90,6 +90,31 @@ describe('validateRegistry', () => {
       ).toEqual([]);
     });
   });
+
+  it('refuses a speculate value the gateway would refuse, and flags one with nothing to speculate', () => {
+    const findings = validateRegistry([
+      { id: 'a', endpoint: 'https://a.internal', pierce: ['/a'], speculate: 'soon' as unknown as 'prefetch' },
+      { id: 'b', endpoint: 'https://b.internal', speculate: 'prerender' },
+      { id: 'c', endpoint: 'https://c.internal', pierce: ['/c'], speculate: 'prefetch' },
+    ]);
+
+    expect(findings).toContainEqual(expect.objectContaining({ code: 'invalid-speculate', severity: 'error', fragmentIds: ['a'] }));
+    expect(findings).toContainEqual(
+      expect.objectContaining({ code: 'speculate-without-pierce', severity: 'warning', fragmentIds: ['b'] }),
+    );
+    expect(findings.filter((finding) => finding.fragmentIds.includes('c'))).toEqual([]);
+  });
+
+  it('says when speculation will skip a fragment: chrome, or a pattern that matches any path', () => {
+    const findings = validateRegistry([
+      { id: 'header', endpoint: 'https://h.internal', pierce: ['/billing/*'], bound: false, speculate: 'prerender' },
+      { id: 'everything', endpoint: 'https://e.internal', pierce: ['/*'], speculate: 'prefetch' },
+      { id: 'home', endpoint: 'https://o.internal', pierce: ['/'], speculate: 'prefetch' },
+    ]);
+    const ignored = findings.filter((finding) => finding.code === 'speculate-ignored').map((finding) => finding.fragmentIds[0]);
+
+    expect(ignored).toEqual(['header', 'everything']);
+  });
 });
 
 describe('diffRegistries', () => {
