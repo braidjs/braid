@@ -52,7 +52,9 @@ export interface FragmentCapabilities {
    * Whose Web Storage the fragment sees. `'shared'` (the default) is the host origin's, as for any
    * same-origin frame. `'partitioned'` gives it a store of its own, keyed by fragment id;
    * `{ partition }` names a store several fragments share. See `compat/storage-partition.ts`.
-   * Compat fragments only; ignored elsewhere.
+   * `{ databases: true }` (with or without `partition`) also gives the partition its own
+   * IndexedDB and Cache Storage — a Storage Bucket where the browser has them, prefixed names
+   * elsewhere. See `compat/database-partition.ts`. Compat fragments only; ignored elsewhere.
    */
   storage?: StorageGrant;
   /**
@@ -150,7 +152,7 @@ export function resolveSharedGlobals(capabilities: FragmentCapabilities | undefi
 }
 
 /** A fragment's Web Storage grant. */
-export type StorageGrant = 'shared' | 'partitioned' | { partition: string };
+export type StorageGrant = 'shared' | 'partitioned' | { partition?: string; databases?: boolean };
 
 /**
  * The storage partition a fragment writes into, or `null` for the shared, host-origin store.
@@ -162,10 +164,19 @@ export function resolveStoragePartition(capabilities: FragmentCapabilities | und
   const grant: unknown = capabilities?.storage;
   if (grant === 'partitioned') return fragmentId;
   if (grant && typeof grant === 'object') {
-    const partition = (grant as { partition?: unknown }).partition;
+    const { partition, databases } = grant as { partition?: unknown; databases?: unknown };
     if (typeof partition === 'string' && partition !== '') return partition;
+    // databases of its own imply a partition of its own, named for the fragment as 'partitioned' is
+    if (databases === true && partition === undefined) return fragmentId;
   }
   return null;
+}
+
+/** The partition whose IndexedDB and Cache Storage a fragment gets, or `null` for the origin's. */
+export function resolveDatabasePartition(capabilities: FragmentCapabilities | undefined, fragmentId: string): string | null {
+  const grant: unknown = capabilities?.storage;
+  if (!grant || typeof grant !== 'object' || (grant as { databases?: unknown }).databases !== true) return null;
+  return resolveStoragePartition(capabilities, fragmentId);
 }
 
 /** Reads a capabilities block off a realm stub's adapter options, or off `initBraid` config. */

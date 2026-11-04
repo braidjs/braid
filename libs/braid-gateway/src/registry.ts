@@ -68,7 +68,7 @@ export interface FragmentManifest {
      * Whose Web Storage this trusted (compat) fragment sees: the host origin's (`'shared'`, the
      * default), its own (`'partitioned'`), or a store shared by name (`{ partition: 'kcd' }`).
      */
-    storage?: 'partitioned' | 'shared' | { partition: string };
+    storage?: 'partitioned' | 'shared' | { partition?: string; databases?: boolean };
     /** What the fragment's own runtime HTML writes may contain: `'sanitize'` or `'report'`. */
     html?: 'report' | 'sanitize';
     /** Host globals this trusted fragment shares; replaces the host's `initBraid` default. */

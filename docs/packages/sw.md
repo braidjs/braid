@@ -62,6 +62,14 @@ setupBraidWorker({
 });
 ```
 
+### Per-fragment Storage Buckets (opt-in)
+
+```js
+setupBraidWorker({ buildId: self.__BUILD_ID, precache: ['billing'], buckets: true });
+```
+
+With `buckets: true`, where the browser has Storage Buckets (Chromium), each fragment's cache (its chunks, its realm stub, its offline documents) lives in a bucket of its own. A bucket is the browser's unit of eviction, so a device short on space evicts one fragment's files rather than every fragment's at once, deploy-skew safety net included. Pruning a fragment that left the registry deletes its bucket, and signing out (`braid-sw:clear`) deletes them all. Buckets are named `braid-sw_<prefix>_<fragment>_<hash>`, and the worker only ever deletes names in exactly that format, never the realm's database buckets or the app's own. If a bucket is refused, or the browser has no buckets, the shared Cache Storage is used as before. Switching it on starts with empty fragment caches once, and pruning removes the shared ones it supersedes. Sign-out clears the worker's buckets even after it stops using them.
+
 ### Static routes: start the worker only for what it answers
 
 A worker with a `fetch` listener normally starts for *every* request in its scope. That includes requests its listener ignores, such as the shell's own scripts, images and API calls, and each of those waits for the worker to start. Where the browser supports the Service Worker Static Routing API (`InstallEvent.addRoutes`, Chromium today), both workers can instead declare at install time exactly which requests they answer. Everything else goes straight to the network, and the worker doesn't start for it.

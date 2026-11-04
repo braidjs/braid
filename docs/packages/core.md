@@ -47,6 +47,8 @@ Braid uses hidden, same-origin iframes as synchronous, DOM-capable JavaScript ex
 | `contract-blob` | `blob:` | None (Zero history pollution) | Modern contract-mode fragments |
 | `sandbox` | Cross-origin URL | Isolated | Untrusted third-party widgets |
 
+The `sandbox` realm (`trust="untrusted"`) is a performance option as well as a security one. Under site isolation, a cross-*site* frame gets its own renderer process, so a CPU-heavy fragment runs off the host's main thread. This needs a different registrable domain: a sibling subdomain shares the host's process. It doesn't apply on Android, where Chrome isolates only some sites, or in Safari. See [the trust tiers](../braid-boundary.md).
+
 ### 3. The Compat Adapter
 For applications that cannot be altered during a migration, the **Compat Adapter** provides full browser emulation strictly contained inside that fragment's realm:
 - **Zero Host Pollution:** Never modifies global variables (`window.*`), DOM prototypes, or listeners on the host page.
@@ -515,9 +517,25 @@ and copy the wrong value back. `capabilities.storage` gives a fragment a store o
   backend sets and sends it only its own (see `@braidlabs/gateway`, "Per-fragment cookies"). The
   fragment's `document.cookie` shows its own cookies under their own names, plus the host's;
   cookies it writes from script go into its scope.
-- **An accident barrier, not a security boundary.** Same-origin code can still reach
-  `top.localStorage` and the raw cookie jar. IndexedDB, Cache Storage and BroadcastChannel are not
-  partitioned.
+- **IndexedDB and Cache Storage, too, with `{ databases: true }`.** `capabilities.storage: { databases: true }` (with or without `partition`) gives the partition its own `indexedDB` and `caches` in the realm, installed before any fragment code runs:
+  - **Where the browser has Storage Buckets** (Chromium), the realm gets a bucket of its own (`braid-db_…`). The browser quotas, evicts and deletes it per partition, so one fragment filling its store doesn't cost another its data.
+  - **Elsewhere**, database and cache names are prefixed with the partition (`braid:<partition>:`), and only the partition's own are listed. `IDBDatabase.name` still shows the prefix.
+  - **A partition stays where its data is.** If it already has prefixed databases, it keeps using them even after the browser gains buckets.
+  - **Turning the grant on hides the fragment's existing data.** It was in the origin's shared store, and nothing migrates it.
+  - **Sign-out must clear it.** A partition's data isn't listed by the origin's own `indexedDB.databases()` or `caches.keys()`, so a sign-out routine that clears those leaves it behind. Call `clearBraidDatabases()` from `@braidlabs/core`, which deletes every partition's buckets, prefixed databases and caches and nothing else, or send `Clear-Site-Data: "storage"`.
+  - **What it doesn't cover:**
+    - workers the fragment starts, which see the origin's shared store;
+    - the origin private file system (`navigator.storage.getDirectory()`);
+    - `navigator.storage.persist()` and `estimate()`, which apply to the shared store.
+
+  Without a `partition`, the grant also partitions Web Storage and cookies under the fragment's id, as `'partitioned'` does.
+- **An accident barrier, not a security boundary.** Same-origin code can still reach the shared store:
+  - `top.localStorage` and the raw cookie jar;
+  - `parent.indexedDB` and `top.caches`;
+  - other partitions' buckets, through `navigator.storageBuckets`;
+  - prefixed databases, opened by their full names.
+
+  Buckets separate quota and eviction, not access. BroadcastChannel is not partitioned.
 
 Mounting in HTML:
 

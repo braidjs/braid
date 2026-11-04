@@ -183,6 +183,7 @@ export function setupBraidWorker(options: BraidWorkerOptions = {}): void {
       const cleared = clearBraidCaches({
         ...(composing.caches === undefined ? {} : { caches: composing.caches }),
         ...(composing.cachePrefix === undefined ? {} : { cachePrefix: composing.cachePrefix }),
+        ...(composing.buckets === undefined ? {} : { buckets: composing.buckets }),
       }).then(
         () => event.source?.postMessage?.({ type: 'braid-sw:cleared', ok: true }),
         // Answered either way, so a page waiting on the reply at sign-out is never left hanging.
