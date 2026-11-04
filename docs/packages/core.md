@@ -226,6 +226,27 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Asking before leaving unsaved work
+
+A fragment declares unsaved work with `env.setDirty(reason)`, and its slot holds it as `slot.dirty`. Braid can ask before a navigation loses it:
+
+```ts
+initBraid({ confirmLeave: (slots) => myDialog.confirm(`Leave ${slots.length} unsaved form(s)?`) });
+```
+
+- **Navigations to another document on this origin** wait while any slot is dirty, then go if `confirmLeave` resolves `true`. These are links, `location` changes and `navigation.navigate()` calls. This uses the Navigation API's `navigate` event, a listener on `navigation`, so nothing on the page is patched. Browsers without the API don't ask.
+- **One question at a time.** A link clicked while the user is still answering doesn't open a second dialog: a yes goes to the last one clicked. The navigation is started again as it was, a push or a replace, with its history state.
+- **Not held:** form posts, whose body would be lost when the navigation is started again; downloads; reloads; and back/forward, which can't be cancelled across documents. If you want the browser's own prompt for those, add a `beforeunload` handler, and check `leaveConfirmed()` so a navigation the user already said yes to isn't asked about twice:
+
+  ```ts
+  addEventListener('beforeunload', (event) => {
+    if (dirtySlots().length && !leaveConfirmed()) event.preventDefault();
+  });
+  ```
+- **Slots in shadow DOM count.** `dirtySlots()` looks inside every open shadow root, fragments' and components' alike (a Lit element, an Angular `ShadowDom` view).
+- **Calling `initBraid` again** only changes the guard if it passes `confirmLeave`. Pass `null` to remove it.
+- **Navigations inside a single-page app belong to its router.** Cancelling a router's own `pushState` would leave the router believing it navigated. Use the router's guard and `dirtySlots()` from `@braidlabs/core`, or `braidLeaveGuard` from `@braidlabs/angular`.
+
 ### Moving a slot
 
 A slot can move without its fragment noticing. If you reorder a keyed list, reparent the slot in a framework, or append it to another container, the fragment keeps running. It keeps the same realm and the same state, and its document isn't fetched again. A slot only closes its fragment when it actually leaves the page.

@@ -121,6 +121,13 @@ export interface BraidOptions {
    * `elements/recovery.ts` for what is and is not retried.
    */
   recover?: boolean | { attempts?: number; delayMs?: number };
+  /**
+   * Asked before the page navigates to another document on this origin while a slot holds unsaved
+   * work (`env.setDirty`): resolve true to leave, false to stay. Uses the Navigation API, so it
+   * applies where that exists. Navigations inside a single-page app belong to its router's guard;
+   * use `dirtySlots()` there (or `braidLeaveGuard` from `@braidlabs/angular`).
+   */
+  confirmLeave?: ((slots: readonly (HTMLElement & { readonly dirty: string | null })[]) => boolean | Promise<boolean>) | null;
 }
 
 /** See {@link BraidOptions.realmGlobals}. */
