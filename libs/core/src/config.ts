@@ -127,7 +127,7 @@ export interface BraidOptions {
    * applies where that exists. Navigations inside a single-page app belong to its router's guard;
    * use `dirtySlots()` there (or `braidLeaveGuard` from `@braidlabs/angular`).
    */
-  confirmLeave?: (slots: readonly (HTMLElement & { readonly dirty: string | null })[]) => boolean | Promise<boolean>;
+  confirmLeave?: ((slots: readonly (HTMLElement & { readonly dirty: string | null })[]) => boolean | Promise<boolean>) | null;
 }
 
 /** See {@link BraidOptions.realmGlobals}. */

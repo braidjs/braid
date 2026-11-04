@@ -5,3 +5,4 @@ export { provideBraidFragment } from './lib/fragment-settled';
 export { defineAngularFragment } from './lib/guest.js';
 export type { AngularFragmentOptions } from './lib/guest.js';
 export { braidLeaveGuard } from './lib/leave-guard';
+export type { BraidLeaveGuardOptions } from './lib/leave-guard';

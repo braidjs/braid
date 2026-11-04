@@ -17,15 +17,22 @@ export interface DirtySlot extends HTMLElement {
 }
 
 /**
- * The slots that hold unsaved work, in document order, including slots nested inside other
- * fragments. A router guard asks before leaving a view when this is not empty.
+ * The slots that hold unsaved work under `root`, in document order: inside open shadow roots too,
+ * whether a fragment's or a component's (a Lit element, an Angular `ShadowDom` view), and inside
+ * other fragments. A router guard asks before leaving a view when this is not empty.
  */
 export function dirtySlots(root: ParentNode = document): DirtySlot[] {
   const found: DirtySlot[] = [];
-  for (const slot of root.querySelectorAll<DirtySlot>('fragment-slot')) {
-    if (slot.dirty !== null && slot.dirty !== undefined) found.push(slot);
-    if (slot.shadowRoot) found.push(...dirtySlots(slot.shadowRoot));
-  }
+  const visit = (scope: ParentNode) => {
+    for (const element of scope.querySelectorAll('*')) {
+      if (element.localName === 'fragment-slot') {
+        const dirty = (element as DirtySlot).dirty;
+        if (dirty !== null && dirty !== undefined) found.push(element as DirtySlot);
+      }
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
+  };
+  visit(root);
   return found;
 }
 
@@ -35,13 +42,30 @@ export type ConfirmLeave = (slots: readonly DirtySlot[]) => boolean | Promise<bo
 interface NavigateEventLike extends Event {
   readonly cancelable: boolean;
   readonly navigationType: 'push' | 'replace' | 'reload' | 'traverse';
-  readonly destination: { readonly url: string; readonly sameDocument: boolean };
+  readonly destination: { readonly url: string; readonly sameDocument: boolean; getState?(): unknown };
   readonly formData: FormData | null;
   readonly downloadRequest: string | null;
 }
 
 interface NavigationLike extends EventTarget {
-  navigate(url: string, options?: { history?: 'push' | 'replace' }): unknown;
+  navigate(url: string, options?: { history?: 'push' | 'replace'; state?: unknown }): unknown;
+}
+
+/** How long after a yes `leaveConfirmed()` answers true: long enough for the page to unload. */
+const CONFIRMED_FOR_MS = 5_000;
+let confirmedAt = -Infinity;
+
+/**
+ * Whether the user has just agreed to leave through `confirmLeave`. A host's own `beforeunload`
+ * handler checks it, so a navigation the user already said yes to is not asked about a second time
+ * by the browser's own prompt:
+ *
+ * ```ts
+ * addEventListener('beforeunload', (event) => { if (dirtySlots().length && !leaveConfirmed()) event.preventDefault(); });
+ * ```
+ */
+export function leaveConfirmed(): boolean {
+  return performance.now() - confirmedAt < CONFIRMED_FOR_MS;
 }
 
 /**
@@ -50,44 +74,63 @@ interface NavigationLike extends EventTarget {
  *
  * Only what can be held and started again: a link or `location` change to another document on this
  * origin, by push or replace. Not form posts (their body would be lost), downloads, reloads, or
- * back/forward (which cannot be cancelled across documents). A page that leaves anyway still
- * meets the host's `beforeunload` handler, if it has one. Returns a function that removes the guard;
- * a browser without the Navigation API gets none.
+ * back/forward (which cannot be cancelled across documents). One question at a time: a navigation
+ * held while the user is still answering replaces the one being asked about, so a yes goes where they
+ * last clicked. Returns a function that removes the guard; a browser without the Navigation API gets
+ * none.
  */
 export function installLeaveGuard(confirm: ConfirmLeave): () => void {
   const navigation = (globalThis as { navigation?: NavigationLike }).navigation;
   if (!navigation) return () => undefined;
 
-  // the navigation the user agreed to, started again: let it through once
-  let allowed: string | null = null;
+  // the navigation the user agreed to, started again synchronously below: its event passes
+  let reissuing = false;
+  let pending: { url: string; history: 'push' | 'replace'; state: unknown } | null = null;
+  let removed = false;
 
   const onNavigate = (event: Event) => {
     const navigate = event as NavigateEventLike;
-    if (!navigate.cancelable || navigate.destination.sameDocument) return;
+    if (reissuing || !navigate.cancelable || navigate.destination.sameDocument) return;
     if (navigate.navigationType !== 'push' && navigate.navigationType !== 'replace') return;
     if (navigate.formData || navigate.downloadRequest !== null) return;
     if (new URL(navigate.destination.url).origin !== location.origin) return;
-    if (allowed === navigate.destination.url) {
-      allowed = null;
-      return;
-    }
 
     const slots = dirtySlots();
     if (slots.length === 0) return;
 
     navigate.preventDefault();
-    const { url } = navigate.destination;
-    const history = navigate.navigationType;
+    const target = { url: navigate.destination.url, history: navigate.navigationType, state: navigate.destination.getState?.() };
+    if (pending) {
+      // already asking: this is where a yes now goes
+      pending = target;
+      return;
+    }
+    pending = target;
     void Promise.resolve()
       .then(() => confirm(slots))
-      .then((leave) => {
-        if (!leave) return;
-        allowed = url;
-        navigation.navigate(url, { history });
-      })
-      .catch((error: unknown) => console.error('[braid] confirmLeave failed; staying on the page', error));
+      .then(
+        (leave) => {
+          const chosen = pending;
+          pending = null;
+          if (!leave || !chosen || removed) return;
+          confirmedAt = performance.now();
+          reissuing = true;
+          try {
+            navigation.navigate(chosen.url, { history: chosen.history, ...(chosen.state === undefined ? {} : { state: chosen.state }) });
+          } finally {
+            reissuing = false;
+          }
+        },
+        (error: unknown) => {
+          pending = null;
+          console.error('[braid] confirmLeave failed; staying on the page', error);
+        },
+      );
   };
 
   navigation.addEventListener('navigate', onNavigate);
-  return () => navigation.removeEventListener('navigate', onNavigate);
+  return () => {
+    removed = true;
+    navigation.removeEventListener('navigate', onNavigate);
+  };
 }
