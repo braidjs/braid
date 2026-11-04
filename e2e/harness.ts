@@ -38,6 +38,8 @@ export interface HostOptions {
   head?: string;
   /** Response headers for the host page, e.g. a content security policy. */
   pageHeaders?: Record<string, string>;
+  /** Other paths that serve the same host page, for routes the gateway pierces. */
+  pages?: string[];
 }
 
 export interface Host {
@@ -60,7 +62,8 @@ export async function startHost(options: HostOptions): Promise<Host> {
       return;
     }
     middleware(req, res, () => {
-      if (req.url === '/' || req.url?.startsWith('/?')) {
+      const path = new URL(req.url ?? '/', 'http://host').pathname;
+      if (path === '/' || options.pages?.includes(path)) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...options.pageHeaders }).end(page);
       } else {
         res.writeHead(404).end();

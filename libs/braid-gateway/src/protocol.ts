@@ -33,6 +33,9 @@ export const BRAID_NAMESPACE_PREFIX = BRAID_FRAGMENT_PREFIX;
 /** Where the gateway serves its generated service worker, when asked to. */
 export const BRAID_SERVICE_WORKER_PATH = '/__braid/sw.js';
 
+/** The Speculation Rules the gateway derives from its registry, served only when `speculationRules` is on. */
+export const BRAID_SPECULATION_RULES_PATH = '/__braid/speculation-rules.json';
+
 /** The web-vitals collector, served only when telemetry's `webVitals` is on. */
 export const BRAID_VITALS_SCRIPT_PATH = '/__braid/vitals.js';
 /** Where that collector beacons its report. */
