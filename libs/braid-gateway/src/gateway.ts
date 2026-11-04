@@ -10,6 +10,7 @@ import {
   braidFragmentUrl,
   parseBraidPathname,
   BRAID_SERVICE_WORKER_PATH,
+  BRAID_SPECULATION_RULES_PATH,
   BRAID_VITALS_BEACON_PATH,
   BRAID_VITALS_SCRIPT_PATH,
   BRAID_VIA_HEADER,
@@ -27,6 +28,7 @@ import {
   ResolvedFragmentManifest,
 } from './registry.js';
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
+import { speculationRulesFor } from './speculation.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
 import { scopeRequestCookies, scopeResponseCookies, scopeSetCookie, storagePartitionOf, withoutScopedCookies } from './cookie-scope.js';
@@ -304,6 +306,17 @@ export interface GatewayOptions {
    */
   serviceWorker?: boolean | ServiceWorkerOptions;
   /**
+   * Tell the browser which links it may fetch or render ahead of a click (Speculation Rules,
+   * Chromium), from the fragments whose manifest sets `speculate`.
+   *
+   * Every HTML document the gateway serves or passes through then carries
+   * `Speculation-Rules: "/__braid/speculation-rules.json"`. The header is the same for everyone,
+   * so a cached page stays shareable. The rules it points to are built per request from the
+   * registry: a fragment the caller may not fetch is left out, and when any fragment has access
+   * rules the response is private to the caller. Off by default.
+   */
+  speculationRules?: boolean;
+  /**
    * The path this gateway is mounted under, for a host that shares its domain and does not own the
    * root (`/manage`). The reserved namespaces move under it — `/manage/__braid/frag/…` — and the
    * gateway stops answering them at the root. Pass the same value to `initBraid({ basePath })` in
@@ -409,6 +422,14 @@ export interface BraidGateway {
    *             document requests are passed through and fragments boot client-side instead.
    */
   handle(request: Request, next?: () => Promise<Response>): Promise<Response | null>;
+
+  /**
+   * Headers a binding adds to a page it passes to the app when `handle` returned null — the
+   * pointer to the speculation rules, when `speculationRules` is on — or null for none. Set on the
+   * way out rather than by reading the app's response, so a passed-through page streams exactly as
+   * it would without the gateway. Browsers ignore them on anything but HTML.
+   */
+  pageHeaders(request: Request): Record<string, string> | null;
 
   /**
    * Resolves a websocket upgrade addressed to a fragment.
@@ -567,6 +588,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       serviceWorker && 'serviceWorker',
       options.discovery && 'discovery',
       vitalsEnabled && 'telemetry.webVitals',
+      options.speculationRules && 'speculationRules',
     ].filter(Boolean);
     if (unsupported.length) {
       throw new Error(
@@ -677,6 +699,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
   return {
     refreshRegistry,
+    pageHeaders,
 
     close() {
       closed = true;
@@ -719,38 +742,16 @@ export function createGateway(options: GatewayOptions): BraidGateway {
         return handleVitalsBeacon(request);
       }
 
+      if (options.speculationRules && requestUrl.pathname === BRAID_SPECULATION_RULES_PATH) {
+        return speculationRulesResponse(request);
+      }
+
       const route = braidRoute(requestUrl.pathname);
 
       if (!route) {
-        // HEAD gets the same answer without the body, so a monitor or link checker in front of a
-        // gateway with no app behind it sees the page a browser would.
-        if (options.documents && request.method === 'HEAD') {
-          const asGet = new Request(request.url, { method: 'GET', headers: request.headers });
-          const document = await options.documents(asGet, { manifests: await registry.current() });
-          if (document) {
-            const headers = new Headers(document.headers);
-            headers.append('vary', 'sec-fetch-dest');
-            applyPierceCacheControl(headers);
-            await document.body?.cancel();
-            return new Response(null, { status: document.status, headers });
-          }
-        }
-
-        const document =
-          options.documents && isDocumentRequest(request)
-            ? await options.documents(request, { manifests: await registry.current() })
-            : null;
-        if (document) {
-          // The defined document is the shell: pierced like an app's response when fragments match,
-          // and served as it is when none do.
-          const composed = await handleShellRequest(request, requestUrl, async () => document);
-          if (composed) return composed;
-          const served = new Response(document.body, document);
-          served.headers.append('vary', 'sec-fetch-dest');
-          applyPierceCacheControl(served.headers);
-          return served;
-        }
-        return next ? handleShellRequest(request, requestUrl, next) : null;
+        // A page the gateway leaves to the app comes back null, untouched: the binding adds the
+        // page headers on its way through, without the gateway reading the app's response.
+        return withPageHeaders(request, await pageResponse(request, requestUrl, next));
       }
 
       /**
@@ -1349,6 +1350,93 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     }
   }
 
+  /** A request outside the Braid namespace: a page, composed or passed to the shell. */
+  async function pageResponse(
+    request: Request,
+    requestUrl: URL,
+    next: (() => Promise<Response>) | undefined,
+  ): Promise<Response | null> {
+    // HEAD gets the same answer without the body, so a monitor or link checker in front of a
+    // gateway with no app behind it sees the page a browser would.
+    if (options.documents && request.method === 'HEAD') {
+      const asGet = new Request(request.url, { method: 'GET', headers: request.headers });
+      const document = await options.documents(asGet, { manifests: await registry.current() });
+      if (document) {
+        const headers = new Headers(document.headers);
+        headers.append('vary', 'sec-fetch-dest');
+        applyPierceCacheControl(headers);
+        await document.body?.cancel();
+        return new Response(null, { status: document.status, headers });
+      }
+    }
+
+    const document =
+      options.documents && isDocumentRequest(request)
+        ? await options.documents(request, { manifests: await registry.current() })
+        : null;
+    if (document) {
+      // The defined document is the shell: pierced like an app's response when fragments match,
+      // and served as it is when none do.
+      const composed = await handleShellRequest(request, requestUrl, async () => document);
+      if (composed) return composed;
+      const served = new Response(document.body, document);
+      served.headers.append('vary', 'sec-fetch-dest');
+      applyPierceCacheControl(served.headers);
+      return served;
+    }
+    return next ? handleShellRequest(request, requestUrl, next) : null;
+  }
+
+  /**
+   * The headers a page carries because of this gateway, for a browser navigation: today, the
+   * pointer to the speculation rules.
+   *
+   * Every page, not only composed ones: the page that *links* to a fragment's route is the one the
+   * browser speculates from, and it is usually not that route. The value is the same for every
+   * caller, so it never makes a page private, and a browser ignores it on anything but HTML.
+   */
+  function pageHeaders(request: Request): Record<string, string> | null {
+    if (!options.speculationRules || !isNavigation(request)) return null;
+    return { 'speculation-rules': `"${BRAID_SPECULATION_RULES_PATH}"` };
+  }
+
+  /** A page the gateway produced, with {@link pageHeaders} on it. */
+  function withPageHeaders(request: Request, page: Response | null): Response | null {
+    const headers = page && !isOpaque(page) ? pageHeaders(request) : null;
+    return headers ? withHeaders(page!, headers) : page;
+  }
+
+  /**
+   * The rules themselves: the pierce patterns of every fragment that asks for speculation, less
+   * those the caller may not list or fetch — as discovery and the namespace keep them out of sight.
+   *
+   * Private whenever the gateway can tell callers apart (a `principal` resolver) or any fragment
+   * has access rules: decided from configuration, so a shared cache never holds a list that a
+   * registry refresh has since made personal. Never stored in development, where nothing is filtered.
+   */
+  async function speculationRulesResponse(request: Request): Promise<Response> {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
+    }
+    const manifests = await registry.listFragments();
+    const personal = !isDevelopment && (options.principal !== undefined || manifests.some(hasAccessRules));
+    const principal = personal ? await resolvePrincipal(request) : undefined;
+    const visible = manifests.filter(
+      (manifest) => isDevelopment || !hasAccessRules(manifest) || (canList(manifest, principal) && canFetch(manifest, principal)),
+    );
+    return new Response(request.method === 'HEAD' ? null : JSON.stringify(speculationRulesFor(visible)), {
+      headers: {
+        'content-type': 'application/speculationrules+json',
+        ...(isDevelopment
+          ? { 'cache-control': 'no-store' }
+          : personal
+            ? { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
+            : // short: the registry it comes from refreshes on its own schedule
+              { 'cache-control': 'public, max-age=60' }),
+      },
+    });
+  }
+
   /**
    * Handles a request bound for the shell application.
    *
@@ -1692,7 +1780,7 @@ export function toWebMiddleware(
 ): (request: Request, next: () => Promise<Response>) => Promise<Response> {
   return async (request, next) => {
     const shellOnce = once(next);
-    return (await gateway.handle(request, shellOnce)) ?? shellOnce();
+    return (await gateway.handle(request, shellOnce)) ?? passThrough(gateway, request, await shellOnce());
   };
 }
 
@@ -1716,8 +1804,14 @@ export function toFetchHandler(
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     const shellOnce = once(() => Promise.resolve(appHandler(request)));
-    return (await gateway.handle(request, shellOnce)) ?? shellOnce();
+    return (await gateway.handle(request, shellOnce)) ?? passThrough(gateway, request, await shellOnce());
   };
+}
+
+/** The app's own response to a request the gateway passed to it, with the gateway's page headers. */
+function passThrough(gateway: BraidGateway, request: Request, response: Response): Response {
+  const headers = isOpaque(response) ? null : gateway.pageHeaders(request);
+  return headers ? withHeaders(response, headers) : response;
 }
 
 /** Memoizes an async thunk so the wrapped work happens at most once. */
@@ -1872,6 +1966,26 @@ function appendHop(request: Request): string {
  */
 function isOpaque(response: Response): boolean {
   return response.status === 0;
+}
+
+/** A top-level browser navigation: the request a page's own headers are for. */
+function isNavigation(request: Request): boolean {
+  return request.method === 'GET' && request.headers.get('sec-fetch-dest') === 'document';
+}
+
+/**
+ * The response with these headers set. A response's headers are often immutable (one `fetch`
+ * returned), so it is copied then — the body streams through the copy untouched.
+ */
+function withHeaders(response: Response, headers: Record<string, string>): Response {
+  try {
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  } catch {
+    const copy = new Response(response.body, response);
+    for (const [name, value] of Object.entries(headers)) copy.headers.set(name, value);
+    return copy;
+  }
 }
 
 /** How many Braid gateways a request has already crossed, from its `x-braid-via` entries. */

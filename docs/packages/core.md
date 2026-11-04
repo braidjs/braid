@@ -243,6 +243,7 @@ UI libraries render modals, menus and tooltips by appending to `document.body`, 
   - scripts, styles and other non-rendering elements;
   - everything in the body before mount, which is the fragment's own app.
 - **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
+- **A move keeps it open.** Moving the slot (see [Moving a slot](#moving-a-slot)) closes every open popover inside it, as the browser does for any element that leaves the page. The slot shows what it lifted again once it's back.
 - **The attribute is read when the fragment boots.** Changing it on a running slot takes effect at the next reload.
 - **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
 
@@ -256,6 +257,40 @@ fragment-slot.below-fold { content-visibility: auto; contain-intrinsic-size: aut
 
 - **It clips.** `content-visibility: auto` brings paint containment, so anything the fragment draws outside its slot is cut off: dropdowns, tooltips, modals portaled to its body. Portals lifted with `overlays="top-layer"` escape it; everything else doesn't. Use it on slots whose content stays inside them, or together with `overlays="top-layer"`.
 - **Reserve the space.** `contain-intrinsic-size: auto <height>` keeps the page from shifting while the fragment is skipped. `auto` remembers the real size once the fragment has rendered.
+
+### Asking before leaving unsaved work
+
+A fragment declares unsaved work with `env.setDirty(reason)`, and its slot holds it as `slot.dirty`. Braid can ask before a navigation loses it:
+
+```ts
+initBraid({ confirmLeave: (slots) => myDialog.confirm(`Leave ${slots.length} unsaved form(s)?`) });
+```
+
+- **Navigations to another document on this origin** wait while any slot is dirty, then go if `confirmLeave` resolves `true`. These are links, `location` changes and `navigation.navigate()` calls. This uses the Navigation API's `navigate` event, a listener on `navigation`, so nothing on the page is patched. Browsers without the API don't ask.
+- **One question at a time.** A link clicked while the user is still answering doesn't open a second dialog: a yes goes to the last one clicked. The navigation is started again as it was, a push or a replace, with its history state.
+- **Not held:** form posts, whose body would be lost when the navigation is started again; downloads; reloads; and back/forward, which can't be cancelled across documents. If you want the browser's own prompt for those, add a `beforeunload` handler, and check `leaveConfirmed()` so a navigation the user already said yes to isn't asked about twice:
+
+  ```ts
+  addEventListener('beforeunload', (event) => {
+    if (dirtySlots().length && !leaveConfirmed()) event.preventDefault();
+  });
+  ```
+- **Slots in shadow DOM count.** `dirtySlots()` looks inside every open shadow root, fragments' and components' alike (a Lit element, an Angular `ShadowDom` view).
+- **Calling `initBraid` again** only changes the guard if it passes `confirmLeave`. Pass `null` to remove it.
+- **Navigations inside a single-page app belong to its router.** Cancelling a router's own `pushState` would leave the router believing it navigated. Use the router's guard and `dirtySlots()` from `@braidlabs/core`, or `braidLeaveGuard` from `@braidlabs/angular`.
+
+### Moving a slot
+
+A slot can move without its fragment noticing. If you reorder a keyed list, reparent the slot in a framework, or append it to another container, the fragment keeps running. It keeps the same realm and the same state, and its document isn't fetched again. A slot only closes its fragment when it actually leaves the page.
+
+- **"Moved" means put back by the same synchronous code that took it out.** A slot decides one microtask after it's disconnected. If it's connected again by then, it moved. If it isn't, it left: its fragment is closed and its unsaved work is negotiated, as before. If the slot comes back after an `await`, a timer or a later render, the fragment boots again. So `slot.state` only becomes `closing` one microtask after `remove()`.
+- **`moveBefore()` keeps even more.** Where the browser supports it (Chromium today), `parent.moveBefore(slot, ref)` doesn't disconnect the slot at all. Focus inside the fragment, running CSS animations and transitions all carry over.
+- **Some moves still reboot**, because what the fragment booted with no longer holds:
+  - **An untrusted slot moved by anything other than `moveBefore`.** Its frame lives inside the slot, and the browser reloads a frame that is taken out of the page and put back.
+  - **A slot renamed while it was out of the page.**
+  - **A slot moved into another document.**
+  - **A slot that had failed** (`error`, or `gone` without unsaved work): it gets the retry a remount always gave it.
+- **Moving a slot into another fragment still has to obey that fragment's rules.** A slot that brings its own code (`entry`, or `trust="untrusted"`) is refused when it's moved into another fragment's DOM, just as it would have been refused there from the start.
 
 ### Recovering from transient failures (opt-in)
 
