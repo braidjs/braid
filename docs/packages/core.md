@@ -47,6 +47,8 @@ Braid uses hidden, same-origin iframes as synchronous, DOM-capable JavaScript ex
 | `contract-blob` | `blob:` | None (Zero history pollution) | Modern contract-mode fragments |
 | `sandbox` | Cross-origin URL | Isolated | Untrusted third-party widgets |
 
+The `sandbox` realm (`trust="untrusted"`) is a performance option as well as a security one. Under site isolation, a cross-*site* frame gets its own renderer process, so a CPU-heavy fragment runs off the host's main thread. This needs a different registrable domain: a sibling subdomain shares the host's process. It doesn't apply on Android, where Chrome isolates only some sites, or in Safari. See [the trust tiers](../braid-boundary.md).
+
 ### 3. The Compat Adapter
 For applications that cannot be altered during a migration, the **Compat Adapter** provides full browser emulation strictly contained inside that fragment's realm:
 - **Zero Host Pollution:** Never modifies global variables (`window.*`), DOM prototypes, or listeners on the host page.
