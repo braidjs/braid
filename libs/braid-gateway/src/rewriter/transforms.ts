@@ -43,9 +43,18 @@ export function withNonce(markup: string, nonce: string | null): string {
   return markup.replace(/<(script|style)(?=[\s>])/g, `<$1 nonce="${escapeAttribute(nonce)}"`);
 }
 
-/** The `<style>` that goes inside every fragment's shadow root. */
+/**
+ * The `<style>` that goes inside every fragment's shadow root.
+ *
+ * It opens with the reset for portals a slot lifts into the top layer (`overlays="top-layer"`,
+ * `@braidlabs/core`'s `overlay-layer.ts`), in a cascade layer declared here, first in the shadow
+ * root, so it ranks below every layer of the fragment's own and every unlayered rule. The client's
+ * slot stylesheet opens with the same rule; the overlays e2e test holds the two together.
+ */
 export const BRAID_FRAGMENT_STYLES =
-  '<style>:host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }</style>';
+  '<style>@layer braid-overlay-reset { :where([data-braid-overlay]) { position: absolute; inset: auto; margin: 0; padding: 0; border: 0; ' +
+  'background: none; color: inherit; overflow: visible; width: auto; height: auto; max-width: none; max-height: none; } }' +
+  ':host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }</style>';
 
 /**
  * Inline event handler content attributes (`onclick`, `onerror`, …).

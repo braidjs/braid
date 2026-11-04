@@ -20,9 +20,11 @@ let host: Host;
 const portals = () =>
   html(
     // the style after the buttons: a snippet's leading <style> is hoisted into a head the client drops
-    `<button id="open">open</button><button id="close">close</button><button id="toast">toast</button><button id="dialog">dialog</button>` +
+    `<button id="open">open</button><button id="close">close</button><button id="toast">toast</button><button id="dialog">dialog</button><button id="layered">layered</button>` +
       `<style>.inside { position: absolute; top: 400px; left: 400px; width: 120px; height: 40px; color: rgb(1, 2, 3); }` +
-      `.toast { position: fixed; right: 16px; bottom: 16px; width: 100px; height: 30px; }</style>` +
+      `.toast { position: fixed; right: 16px; bottom: 16px; width: 100px; height: 30px; }` +
+      // a library's styles in a cascade layer, as Tailwind v4's utilities are
+      `@layer ui { .layered-modal { position: fixed; inset: 0; background: rgb(0, 0, 0); padding: 20px; border: 3px solid; } }</style>` +
       `<script>
         const modal = document.createElement('div');
         modal.id = 'modal';
@@ -40,6 +42,12 @@ const portals = () =>
           toast.id = 'toast-box';
           toast.className = 'toast';
           document.body.appendChild(toast);
+        });
+        document.getElementById('layered').addEventListener('click', () => {
+          const layered = document.createElement('div');
+          layered.id = 'layered-modal';
+          layered.className = 'layered-modal';
+          document.body.appendChild(layered);
         });
         document.getElementById('dialog').addEventListener('click', () => {
           const dialog = document.createElement('dialog');
@@ -104,6 +112,8 @@ const read = (page: Page, slot: string, selector: string, fact: string) =>
         color: style.color,
         border: style.borderTopWidth,
         padding: style.paddingTop,
+        position: style.position,
+        background: style.backgroundColor,
         box: { right: Math.round(rect.right), bottom: Math.round(rect.bottom), width: Math.round(rect.width), height: Math.round(rect.height) },
         left: Math.round(rect.left),
       };
@@ -160,6 +170,23 @@ describe('a fragment’s portals in a clipping host container', () => {
     await page.waitForTimeout(100);
 
     expect(await read(page, 'lifted', '#toast-box', 'box')).toEqual({ right: 1000 - 16, bottom: 700 - 16, width: 100, height: 30 });
+    await page.close();
+  });
+
+  it('keep a library’s own layered styles: the reset loses to every layer of the fragment’s', async () => {
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.goto(host.url);
+    await readySlots(page, 'lifted');
+    await press(page, 'lifted', 'layered');
+    await page.waitForTimeout(100);
+
+    expect(await read(page, 'lifted', '#layered-modal', 'open')).toBe(true);
+    expect(await read(page, 'lifted', '#layered-modal', 'position')).toBe('fixed');
+    expect(await read(page, 'lifted', '#layered-modal', 'background')).toBe('rgb(0, 0, 0)');
+    expect(await read(page, 'lifted', '#layered-modal', 'padding')).toBe('20px');
+    expect(await read(page, 'lifted', '#layered-modal', 'border')).toBe('3px');
+    expect(await read(page, 'lifted', '#layered-modal', 'box')).toMatchObject({ width: 1000, height: 700 });
     await page.close();
   });
 

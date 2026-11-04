@@ -24,12 +24,17 @@ export const OVERLAY_ATTRIBUTE = 'data-braid-overlay';
 /**
  * Undoes the browser's popover look (centred, bordered, padded, opaque) so a lifted portal looks as
  * it did in the body, laid out from the page's origin as a body child would be. `inset: auto`
- * rather than zeros, so a portal anchored by `right` or `bottom` alone does not stretch. Zero
- * specificity: any rule of the fragment's own, or its inline style, wins.
+ * rather than zeros, so a portal anchored by `right` or `bottom` alone does not stretch.
+ *
+ * It must lose to everything of the fragment's: any author rule beats the browser's popover rules,
+ * so it only needs to beat those. So it sits in a cascade layer declared first in the slot's
+ * stylesheet (the first in its shadow root), below every layer of the fragment's own — Tailwind's
+ * utilities, say — and every unlayered rule, and its selector has no specificity. The gateway's
+ * slot stylesheet for a pierced slot opens with the same rule.
  */
 export const OVERLAY_STYLES =
-  `:where([${OVERLAY_ATTRIBUTE}]) { position: absolute; inset: auto; margin: 0; padding: 0; border: 0; ` +
-  'background: none; color: inherit; overflow: visible; width: auto; height: auto; max-width: none; max-height: none; }';
+  `@layer braid-overlay-reset { :where([${OVERLAY_ATTRIBUTE}]) { position: absolute; inset: auto; margin: 0; padding: 0; border: 0; ` +
+  'background: none; color: inherit; overflow: visible; width: auto; height: auto; max-width: none; max-height: none; } }';
 
 /**
  * Body children that are not overlays: they render nothing, a `<dialog>` has the top layer of its
@@ -46,7 +51,6 @@ export function liftPortals(contentRoot: HTMLElement, signal: AbortSignal): void
   // the element the fragment's realm answers `document.body` with (see document-overrides.ts)
   const body = contentRoot.querySelector('braid-body') ?? contentRoot.firstElementChild;
   if (!body || typeof HTMLElement.prototype.showPopover !== 'function') return;
-  adoptOverlayStyles(contentRoot);
 
   const lift = (node: Node) => {
     if (!(node instanceof HTMLElement) || node.parentNode !== body) return;
@@ -104,17 +108,4 @@ export function reshowLifted(contentRoot: HTMLElement): void {
       // not showable now: it stays as the fragment left it
     }
   }
-}
-
-/**
- * The reset, adopted into the slot's shadow root: a client-rendered slot and a server-rendered
- * (pierced) one alike, whatever stylesheet the gateway wrote — and with no inline `<style>` for a
- * strict CSP to refuse.
- */
-function adoptOverlayStyles(contentRoot: HTMLElement): void {
-  const root = Node.prototype.getRootNode.call(contentRoot);
-  if (!(root instanceof ShadowRoot) || typeof CSSStyleSheet !== 'function' || !('adoptedStyleSheets' in root)) return;
-  const sheet = new CSSStyleSheet();
-  sheet.replaceSync(OVERLAY_STYLES);
-  root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
 }
