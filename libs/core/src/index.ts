@@ -20,6 +20,7 @@ import { customElementAdapter } from './adapters/custom-element-adapter.js';
 import { contractAdapter } from './adapters/contract-adapter.js';
 import { FragmentSlot } from './elements/fragment-slot.js';
 import { BraidLate, BraidLateEnd } from './elements/late-content.js';
+import { claimBraidPolicy } from './trusted-types.js';
 
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
@@ -83,6 +84,8 @@ export function initBraid(options: BraidOptions = {}): void {
     customElements.define('braid-late', BraidLate);
     customElements.define('braid-late-end', BraidLateEnd);
   }
+  // before any slot boots: the policy name the host's directive grants must be Braid's first
+  claimBraidPolicy();
   if (!customElements.get('fragment-slot')) {
     customElements.define('fragment-slot', FragmentSlot);
   }

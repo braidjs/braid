@@ -1,7 +1,7 @@
 import { AdapterBootContext, InstalledAdapter } from './adapter.js';
 import { CompatShadowRoot, compatMetadataSymbol } from '../compat/metadata.js';
 import { initializeRealmContext } from '../compat/realm-patches.js';
-import { executeScriptsInFragmentContent } from '../compat/script-execution.js';
+import { executeScriptsInFragmentContent, markStartedInPlace } from '../compat/script-execution.js';
 import { installRealmGlobals } from '../compat/shared-globals.js';
 import { isDevMode } from '../config.js';
 import { trustedHTML, trustedScript } from '../trusted-types.js';
@@ -117,32 +117,46 @@ export function parseFragmentContent(html: string, mainDocument: Document): HTML
 
   const braidHtml = parsed.body.querySelector('braid-html');
   if (braidHtml) {
-    return retrustScripts(mainDocument.importNode(braidHtml, true) as HTMLElement);
+    return readyScripts(mainDocument.importNode(braidHtml, true) as HTMLElement);
   }
 
   const wrapper = mainDocument.createElement('braid-html');
   const braidBody = mainDocument.createElement('braid-body');
   braidBody.append(...[...parsed.body.childNodes].map((node) => mainDocument.importNode(node, true)));
   wrapper.append(braidBody);
-  return retrustScripts(wrapper);
+  return readyScripts(wrapper);
 }
 
 /**
- * Gives the fragment's inline scripts their own text back through Braid's Trusted Types policy.
+ * Readies the fragment's scripts in markup imported from the parser's document, before any of it
+ * reaches the page.
  *
- * Imported from the parser's document, a script no longer counts as parser-written, and a host
- * that enforces Trusted Types reports it on insertion — though it is inert and only ever runs in
- * the fragment's realm. Without a policy (no enforcement, or no Trusted Types) nothing changes.
+ * - **Only what the gateway neutralized is kept.** The gateway gives every script `type="inert"`;
+ *   one without it slipped past the rewriter, and nothing here can tell what it would do in the
+ *   host, so it is dropped (in dev, with a warning).
+ * - **Each inline script gets its own text back through Braid's Trusted Types policy.** Imported
+ *   from another document, a script no longer counts as parser-written, and a host enforcing
+ *   Trusted Types would refuse to mark it started below. Without a policy nothing changes.
+ * - **Each is marked started now, while the tree is detached**, so there is no moment at which a
+ *   blessed script is in the page unmarked. The fragment's realm runs fresh copies; these never run.
  */
-function retrustScripts<T extends Element>(root: T): T {
+function readyScripts<T extends Element>(root: T): T {
   for (const script of root.querySelectorAll('script')) {
+    if (script.namespaceURI !== XHTML || script.getAttribute('type') !== 'inert') {
+      if (isDevMode()) console.warn('[braid] a fragment script was not neutralized by the gateway and is dropped', script);
+      script.remove();
+      continue;
+    }
     if (script.hasAttribute('src')) continue;
     const text = script.textContent ?? '';
     const trusted = trustedScript(text);
     if (trusted !== text) script.textContent = trusted;
   }
+  markStartedInPlace(root);
   return root;
 }
+
+const XHTML = 'http://www.w3.org/1999/xhtml';
 
 /**
  * Resolves once every image that holds a document's load event has loaded or failed.

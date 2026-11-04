@@ -37,9 +37,11 @@ function policyFor(realm: object): PassThroughPolicy | null {
     try {
       const same = (input: string) => input;
       policy = factory.createPolicy(POLICY_NAME, { createHTML: same, createScript: same });
-    } catch {
-      // the host's `trusted-types` directive does not list `braid`: writes go as plain strings,
-      // and enforcement reports them, which names the fix
+    } catch (error) {
+      // Not listed in the host's `trusted-types` directive, or the name already taken — by a second
+      // copy of the runtime, or by script that ran first. Writes go as plain strings and enforcement
+      // reports them; the warning says which.
+      console.warn(`[braid] could not create the "${POLICY_NAME}" Trusted Types policy: ${(error as Error)?.message ?? error}`);
       policy = null;
     }
   }
@@ -55,4 +57,13 @@ export function trustedHTML(markup: string, realm: object = globalThis): string 
 /** Script text Braid writes itself. */
 export function trustedScript(source: string, realm: object = globalThis): string {
   return (policyFor(realm)?.createScript(source) as string | undefined) ?? source;
+}
+
+/**
+ * Creates the host's policy now, if the page has Trusted Types. Called by `initBraid`, before any
+ * fragment code runs: what the host's directive grants is the name `braid`, so it must be Braid's
+ * before anything else on the page can create it.
+ */
+export function claimBraidPolicy(): void {
+  policyFor(globalThis);
 }

@@ -102,10 +102,14 @@ export function createHtmlPolicy(mode: HtmlPolicyMode, fragmentId: string, mainD
 
   return {
     filter(markup, context, sink) {
-      // a TrustedHTML was vetted by the host's own policy, and re-parsing it as a string here would
-      // be refused by that policy anyway; anything else is a string to the native setter, and here
-      const trustedTypes = (globalThis as { trustedTypes?: { isHTML(value: unknown): boolean } }).trustedTypes;
-      if (trustedTypes?.isHTML(markup)) return null;
+      // A TrustedHTML the host's own realm minted was vetted by a policy the host allowed, and
+      // re-parsing it as a string here would be refused by that policy anyway. One minted in the
+      // fragment's realm was vetted by nobody the host chose — the realm document carries no
+      // Trusted Types policy of its own — so it is cleaned like any string.
+      const hostTrustedHTML = (globalThis as { TrustedHTML?: { prototype: object } }).TrustedHTML;
+      if (hostTrustedHTML && markup !== null && typeof markup === 'object' && Object.getPrototypeOf(markup) === hostTrustedHTML.prototype) {
+        return null;
+      }
       markup = String(markup);
       if (context.namespaceURI === XHTML && TEXT_ONLY_CONTEXTS.has(context.localName)) return null;
 

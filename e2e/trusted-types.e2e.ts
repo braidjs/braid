@@ -17,15 +17,24 @@ const ran = (id: string) =>
   html(`<p id="${id}">waiting</p><script>document.getElementById(${JSON.stringify(id)}).dataset.ran = 'yes';</script>`);
 
 /** A compat fragment that writes raw markup, directly and through a setter it captured, and records what happened. */
-const writes = (id: string) =>
+const writes = (id: string, mint = false) =>
   html(
-    `<div id="${id}-direct"></div><div id="${id}-captured"></div><p id="${id}-done"></p>` +
+    `<div id="${id}-direct"></div><div id="${id}-captured"></div><div id="${id}-minted"></div><p id="${id}-done"></p>` +
       `<script>
         const outcome = (write) => { try { write(); return 'written'; } catch (error) { return error.name; } };
         const done = document.getElementById(${JSON.stringify(`${id}-done`)});
         done.dataset.direct = outcome(() => { document.getElementById(${JSON.stringify(`${id}-direct`)}).innerHTML = '<b id="${id}-b">bold</b><img src="x" onerror="window.parent.pwned = true">'; });
         const setter = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set;
         done.dataset.captured = outcome(() => { setter.call(document.getElementById(${JSON.stringify(`${id}-captured`)}), '<i>captured</i>'); });
+        // the host's directive grants the name braid, and Braid created it before any fragment ran
+        done.dataset.claim = outcome(() => window.parent.trustedTypes.createPolicy('braid', { createHTML: (markup) => markup }));
+        ${
+          mint
+            ? `// a TrustedHTML of the fragment's own minting: the host did not vet it, so the sanitizer cleans it
+        const own = trustedTypes.createPolicy('fragment-own', { createHTML: (markup) => markup });
+        done.dataset.minted = outcome(() => { document.getElementById(${JSON.stringify(`${id}-minted`)}).innerHTML = own.createHTML('<b id="${id}-minted-b">minted</b><img src="x" onerror="window.parent.pwned = true">'); });`
+            : ''
+        }
       </script>`,
   );
 
@@ -53,7 +62,7 @@ beforeAll(async () => {
           ),
         },
         { id: 'writer', endpoint: endpoint(() => writes('writer')) },
-        { id: 'sanitized', capabilities: { html: 'sanitize' }, endpoint: endpoint(() => writes('sanitized')) },
+        { id: 'sanitized', capabilities: { html: 'sanitize' }, endpoint: endpoint(() => writes('sanitized', true)) },
       ],
     },
     head: `<script>
@@ -109,6 +118,8 @@ describe('a host that enforces Trusted Types', () => {
     expect(await done.evaluate((element) => ({ ...(element as HTMLElement).dataset }))).toEqual({
       direct: 'TypeError',
       captured: 'TypeError',
+      // taken: Braid claimed it at initBraid, before any fragment code ran
+      claim: 'TypeError',
     });
     expect(await page.evaluate(() => (window as unknown as { pwned?: boolean }).pwned)).toBeUndefined();
   });
@@ -121,13 +132,65 @@ describe('a host that enforces Trusted Types', () => {
       () => document.querySelector('fragment-slot[name="sanitized"]')!.shadowRoot!.querySelector('#sanitized-direct img')?.getAttribute('onerror') ?? null,
     );
     expect(img).toBeNull();
+
+    // a TrustedHTML the fragment minted itself is cleaned too, not passed through as vetted
+    expect(await done.evaluate((element) => (element as HTMLElement).dataset['minted'])).toBe('written');
+    const minted = await page.evaluate(() => {
+      const shadow = document.querySelector('fragment-slot[name="sanitized"]')!.shadowRoot!;
+      return { bold: shadow.querySelector('#sanitized-minted-b') !== null, handler: shadow.querySelector('#sanitized-minted img')?.getAttribute('onerror') ?? null };
+    });
+    expect(minted).toEqual({ bold: true, handler: null });
+    expect(await page.evaluate(() => (window as unknown as { pwned?: boolean }).pwned)).toBeUndefined();
   });
 
   it('reports no violation of its own: only the fragment’s blocked writes', async () => {
     const violations = await page.evaluate(() => (window as unknown as { violations: { sample: string }[] }).violations);
-    const braidCaused = violations.filter((violation) => !/bold|captured/.test(violation.sample));
+    // the fragments' own blocked writes, and their attempts to claim the policy name, are theirs
+    const braidCaused = violations.filter(
+      (violation) => !/bold|captured/.test(violation.sample) && (violation as { directive?: string }).directive !== 'trusted-types',
+    );
     expect(braidCaused, JSON.stringify(violations)).toEqual([]);
     // the realms report in the console: nothing of Braid's own (a script it wrote, or a boot error)
     expect(realmErrors.filter((text) => /TrustedScript|BraidError/.test(text)), realmErrors.join('\n')).toEqual([]);
+  });
+});
+
+describe('a page with only pierced fragments', () => {
+  it('has the braid policy before any fragment code runs, so a fragment cannot take the name', async () => {
+    const pierced = await startHost({
+      pageHeaders: { 'content-security-policy': "require-trusted-types-for 'script'; trusted-types braid" },
+      gateway: {
+        registry: [
+          {
+            id: 'claimer',
+            pierce: ['/'],
+            bound: false,
+            src: '/',
+            // nothing on this page parses fetched markup, which is where the policy used to be created first
+            endpoint: endpoint(() =>
+              html(
+                `<p id="out"></p><script>
+                  let outcome;
+                  try { window.parent.trustedTypes.createPolicy('braid', { createHTML: (markup) => markup }); outcome = 'claimed'; }
+                  catch (error) { outcome = error.name; }
+                  document.getElementById('out').dataset.claim = outcome;
+                </script>`,
+              ),
+            ),
+          },
+        ],
+      },
+      body: '<fragment-slot name="claimer"></fragment-slot>',
+    });
+    const page = await browser.newPage();
+    try {
+      await page.goto(pierced.url);
+      await readySlots(page, 'claimer');
+      const out = await inSlot(page, 'claimer', '#out[data-claim]');
+      expect(await out.evaluate((element) => (element as HTMLElement).dataset['claim'])).toBe('TypeError');
+    } finally {
+      await page.close();
+      await pierced.close();
+    }
   });
 });
