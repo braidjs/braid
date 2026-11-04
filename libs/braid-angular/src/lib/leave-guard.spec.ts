@@ -102,14 +102,25 @@ describe('braidLeaveGuard, in shadow DOM and scoped', () => {
     expect(confirm).toHaveBeenCalledWith([slot]);
   });
 
-  it('asks only about the view being left, given where it is', async () => {
+  it('asks only about the view being left, given its host element as the docs show', async () => {
     slotWith('in a sidebar that outlives the route');
     const confirm = vi.fn(() => false);
-    const guard = braidLeaveGuard<ShadowPage>(confirm, { within: (page) => page.host.nativeElement.shadowRoot });
+    const guard = braidLeaveGuard<ShadowPage>(confirm, { within: (page) => page.host.nativeElement });
     const { router } = await startOn(ShadowPage, guard as CanDeactivateFn<unknown>);
 
     expect(await router.navigateByUrl('/next')).toBe(true);
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks about a slot in the view’s own shadow DOM, given its host element', async () => {
+    const confirm = vi.fn(() => false);
+    const guard = braidLeaveGuard<ShadowPage>(confirm, { within: (page) => page.host.nativeElement });
+    const { router, page } = await startOn(ShadowPage, guard as CanDeactivateFn<unknown>);
+    const inView = slotWith('in the view');
+    page.host.nativeElement.shadowRoot!.append(inView);
+
+    expect(await router.navigateByUrl('/next')).toBe(false);
+    expect(confirm).toHaveBeenCalledWith([inView]);
   });
 
   it('stays when confirm fails', async () => {

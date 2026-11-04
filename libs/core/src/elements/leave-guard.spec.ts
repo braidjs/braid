@@ -73,6 +73,16 @@ describe('dirtySlots', () => {
 
     expect(dirtySlots(view)).toEqual([mine]);
   });
+
+  it('counts the root itself: a component whose view is its own shadow root, or a slot', () => {
+    const page = document.createElement('x-page');
+    document.body.append(page);
+    const inView = slot('in the view', page.attachShadow({ mode: 'open' }));
+    const alone = slot('alone');
+
+    expect(dirtySlots(page)).toEqual([inView]);
+    expect(dirtySlots(alone)).toEqual([alone]);
+  });
 });
 
 describe('installLeaveGuard', () => {

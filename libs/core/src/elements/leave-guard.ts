@@ -20,18 +20,23 @@ export interface DirtySlot extends HTMLElement {
  * The slots that hold unsaved work under `root`, in document order: inside open shadow roots too,
  * whether a fragment's or a component's (a Lit element, an Angular `ShadowDom` view), and inside
  * other fragments. A router guard asks before leaving a view when this is not empty.
+ *
+ * `root` itself counts too: a slot, or a component whose view is in its own shadow root — a routed
+ * Angular `ShadowDom` component's host element, say.
  */
 export function dirtySlots(root: ParentNode = document): DirtySlot[] {
   const found: DirtySlot[] = [];
-  const visit = (scope: ParentNode) => {
-    for (const element of scope.querySelectorAll('*')) {
-      if (element.localName === 'fragment-slot') {
-        const dirty = (element as DirtySlot).dirty;
-        if (dirty !== null && dirty !== undefined) found.push(element as DirtySlot);
-      }
-      if (element.shadowRoot) visit(element.shadowRoot);
+  const check = (element: Element) => {
+    if (element.localName === 'fragment-slot') {
+      const dirty = (element as DirtySlot).dirty;
+      if (dirty !== null && dirty !== undefined) found.push(element as DirtySlot);
     }
+    if (element.shadowRoot) visit(element.shadowRoot);
   };
+  const visit = (scope: ParentNode) => {
+    for (const element of scope.querySelectorAll('*')) check(element);
+  };
+  if (root instanceof Element) check(root);
   visit(root);
   return found;
 }
