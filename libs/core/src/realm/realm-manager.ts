@@ -8,6 +8,7 @@ import {
   braidFragmentUrl,
   braidRealmUrl,
 } from '../protocol.js';
+import { trustedScript } from '../trusted-types.js';
 
 /**
  * Realm manager. A realm is the isolated JS context a fragment executes in — a hidden
@@ -253,7 +254,7 @@ function createRealmHandle(
     script.type = 'module';
     // import declarations are hoisted, so appending the completion call after the fragment's
     // own source is valid regardless of what the source imports
-    script.textContent = `${source}\n;window.${callbackName}?.();`;
+    script.textContent = trustedScript(`${source}\n;window.${callbackName}?.();`, realmWindow);
 
     const onError = (event: ErrorEvent) =>
       reject(

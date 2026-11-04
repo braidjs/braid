@@ -149,13 +149,31 @@ describe('HTML sink policy', () => {
       expect(shadowRoot.querySelector('img')!.hasAttribute('onerror')).toBe(false);
     });
 
-    it('passes a TrustedHTML, which the host’s own policy vetted, to the native setter', () => {
-      const trusted = { toString: () => '<img onerror="x()">' };
-      vi.stubGlobal('trustedTypes', { isHTML: (value: unknown) => value === trusted });
+    it('passes a TrustedHTML the host’s own realm minted, which a policy it allowed vetted, to the native setter', () => {
+      class TrustedHTML {
+        toString() {
+          return '<img onerror="x()">';
+        }
+      }
+      vi.stubGlobal('TrustedHTML', TrustedHTML);
       try {
         const { container } = boundary('sanitize');
-        container.innerHTML = trusted as unknown as string;
+        container.innerHTML = new TrustedHTML() as unknown as string;
         expect(container.querySelector('img')!.hasAttribute('onerror')).toBe(true);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('cleans a TrustedHTML minted anywhere else, such as the fragment’s own realm', () => {
+      class TrustedHTML {}
+      // a TrustedHTML from another realm: another prototype, vetted by no policy the host chose
+      const foreign = { toString: () => '<img onerror="x()">' };
+      vi.stubGlobal('TrustedHTML', TrustedHTML);
+      try {
+        const { container } = boundary('sanitize');
+        container.innerHTML = foreign as unknown as string;
+        expect(container.querySelector('img')!.hasAttribute('onerror')).toBe(false);
       } finally {
         vi.unstubAllGlobals();
       }

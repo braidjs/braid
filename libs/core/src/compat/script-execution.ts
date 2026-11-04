@@ -4,6 +4,7 @@
 import { assert } from '../utils/assert.js';
 import { getInternalReference } from './metadata.js';
 import { isRunnable, markRunnable } from './born-inert-scripts.js';
+import { trustedScript } from '../trusted-types.js';
 
 /**
  * Script execution machinery for compat fragments: any script that enters a fragment's DOM is
@@ -292,7 +293,7 @@ export function attachScriptToRealm({
     for (const attribute of inertScript.attributes) {
       execScript.setAttribute(attribute.name, attribute.value);
     }
-    execScript.textContent = inertScript.textContent;
+    execScript.textContent = trustedScript(inertScript.textContent ?? '', realmDocument.defaultView ?? globalThis);
   }
 
   // the following line will append the executable script to the realm
@@ -412,14 +413,14 @@ function primeForMarking(scripts: HTMLScriptElement[]): () => void {
     const type = nativeGetAttribute.call(script, 'type');
     const emptied = !script.hasAttribute('src') && script.textContent === '';
     nativeSetAttribute.call(script, 'type', 'text/javascript');
-    if (emptied) script.textContent = '//';
+    if (emptied) script.textContent = trustedScript('//');
     return { script, type, emptied };
   });
   return () => {
     for (const { script, type, emptied } of saved) {
       if (type === null) nativeRemoveAttribute.call(script, 'type');
       else nativeSetAttribute.call(script, 'type', type);
-      if (emptied) script.textContent = '';
+      if (emptied) script.textContent = trustedScript('');
       startedInHost.add(script);
     }
   };
@@ -532,7 +533,7 @@ function prepareUnattachedInlineScript(script: HTMLScriptElement, realmDocument:
   const inertScript = script;
 
   // neutralize the script so that it doesn't execute in the main JS context
-  inertScript.textContent = '//inert';
+  inertScript.textContent = trustedScript('//inert');
   document.body.appendChild(inertScript);
 
   // now restore the inert script so the code using it doesn't see what we did

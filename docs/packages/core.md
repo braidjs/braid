@@ -382,6 +382,23 @@ like the gateway's to those writes:
   HTML strings, and `"sanitize"` breaks it. That is what `"report"` is for.
 - **An unknown value is ignored, with a warning.** It never turns the policy on.
 
+### Hosts that enforce Trusted Types
+
+Braid runs on a host page with `Content-Security-Policy: require-trusted-types-for 'script'`. List its policy, `braid`, in your `trusted-types` directive:
+
+```
+Content-Security-Policy: require-trusted-types-for 'script'; trusted-types braid my-app-policy
+```
+
+- **Braid's own writes go through the `braid` policy.** That means parsing the markup the gateway prepared, marking a fragment's script as already started, and, with `capabilities.html: 'sanitize'`, parsing a fragment's write into an inert document to clean it. Braid creates the policy in `initBraid`, before any fragment code runs, and never exports it.
+- **The name is the capability.** Your directive grants whoever creates `braid` first, so Braid creates it at once. Don't add `'allow-duplicates'`, which would let any script create another. If creation fails, Braid warns and says why: the name isn't listed, or it was already taken, for example by a second copy of the runtime.
+- **A fragment's plain-string HTML writes meet your enforcement.** `el.innerHTML = '<b>…</b>'` in a fragment throws, even through a setter the fragment captured, because the node belongs to your document. A fragment that writes HTML should use `capabilities.html: 'sanitize'`, whose cleaned nodes are inserted directly and never need a trusted string.
+- **Your allowlist doesn't bind a fragment's own policies.** A compat realm is its own document, and the gateway doesn't give it your Trusted Types directives. So a fragment can create a policy there (Angular's, DOMPurify's, its own) and assign the trusted values it mints to your nodes, and the browser accepts them. With `capabilities.html: 'sanitize'`, Braid cleans those values like any string. Only `TrustedHTML` minted by your page passes through untouched. The trusted tier is an accident barrier, not a boundary: use the untrusted tier for code you don't trust.
+- **A compat fragment that creates scripts at runtime** (chunk loaders, analytics snippets) creates them in your document, so setting their `src` or text throws under enforcement.
+- **A contract fragment's realm inherits your policy.** Its `blob:` document takes the host's CSP, and Braid creates its policy there too, to load the fragment's entry module.
+- **Without `braid` in the directive**, Braid's writes are refused and reported, and fetched compat and contract fragments fail to boot. Pierced compat fragments still boot, because their markup arrives in the page itself.
+- **Scripts inside a `<template>` in a fragment's markup** are reported when the fragment clones them, although they never run in your page.
+
 ### Mount prerequisites
 
 Some fragments can't do anything useful until something outside them is ready, most often a

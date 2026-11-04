@@ -36,6 +36,8 @@ export interface HostOptions {
   braidSource?: string;
   /** Extra `<head>` markup, e.g. styles. */
   head?: string;
+  /** Response headers for the host page, e.g. a content security policy. */
+  pageHeaders?: Record<string, string>;
   /** Other paths that serve the same host page, for routes the gateway pierces. */
   pages?: string[];
 }
@@ -62,7 +64,7 @@ export async function startHost(options: HostOptions): Promise<Host> {
     middleware(req, res, () => {
       const path = new URL(req.url ?? '/', 'http://host').pathname;
       if (path === '/' || options.pages?.includes(path)) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page);
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...options.pageHeaders }).end(page);
       } else {
         res.writeHead(404).end();
       }
