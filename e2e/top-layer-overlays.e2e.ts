@@ -161,6 +161,36 @@ describe('a fragment’s portals in a clipping host container', () => {
     await page.close();
   });
 
+  for (const how of ['append', 'moveBefore'] as const) {
+    it(`stay open when the slot is moved with ${how}`, async () => {
+      const page = await browser.newPage();
+      await page.goto(host.url);
+      await readySlots(page, 'lifted');
+      if (how === 'moveBefore' && !(await page.evaluate(() => 'moveBefore' in Element.prototype))) return void (await page.close());
+      await press(page, 'lifted', 'open');
+      await page.waitForTimeout(100);
+      expect(await read(page, 'lifted', '#modal', 'open')).toBe(true);
+
+      // into another clipping container, the way a layout change reparents a component
+      await page.evaluate((method) => {
+        const slot = document.querySelector('fragment-slot[name="lifted"]')!;
+        const frame = document.createElement('div');
+        frame.className = 'frame';
+        document.body.append(frame);
+        if (method === 'moveBefore') (frame as Element & { moveBefore(node: Node, child: Node | null): void }).moveBefore(slot, null);
+        else frame.append(slot);
+      }, how);
+      await page.waitForTimeout(100);
+
+      expect(await page.evaluate(() => document.querySelector('fragment-slot[name="lifted"]')!.getAttribute('state'))).toMatch(/^(ready|healthy)$/);
+      expect(await read(page, 'lifted', '#modal', 'open')).toBe(true);
+      // still the same element, its listener still the fragment's
+      await page.mouse.click(460, 420);
+      expect(await read(page, 'lifted', '#modal', 'clicked')).toBe('1');
+      await page.close();
+    });
+  }
+
   it('keep a portal anchored bottom-right where it was anchored, at its own size', async () => {
     const page = await browser.newPage();
     await page.setViewportSize({ width: 1000, height: 700 });

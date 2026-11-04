@@ -98,10 +98,11 @@ export function liftPortals(contentRoot: HTMLElement, signal: AbortSignal): void
 
 /**
  * Shows again what the slot lifted. A move that disconnected the slot closed every open popover in
- * it, and nothing was appended to the body for the observer to notice.
+ * it, and nothing was appended to the body for the observer to notice. (`moveBefore` keeps them
+ * open.)
  */
-export function reshowLifted(contentRoot: HTMLElement): void {
-  for (const element of contentRoot.querySelectorAll<HTMLElement>(`[${OVERLAY_ATTRIBUTE}]`)) {
+export function reshowLifted(root: ParentNode): void {
+  for (const element of root.querySelectorAll<HTMLElement>(`[${OVERLAY_ATTRIBUTE}]`)) {
     try {
       if (!element.matches(':popover-open')) element.showPopover();
     } catch {

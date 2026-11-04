@@ -38,7 +38,7 @@ import { DEFERRED_ATTRIBUTE, lateContentArrival } from './late-content.js';
 import { startPrefetch, takePrefetchedDocument } from './prefetch.js';
 import { createRecovery } from './recovery.js';
 import { resolveHtmlPolicy } from '../compat/html-policy.js';
-import { liftPortals, OVERLAY_STYLES } from './overlay-layer.js';
+import { liftPortals, OVERLAY_STYLES, reshowLifted } from './overlay-layer.js';
 
 /**
  * What the slot reports about its fragment.
@@ -537,7 +537,10 @@ export class FragmentSlot extends HTMLElement {
     }
     if (stale || misplaced) {
       this.#reload().catch((error: unknown) => console.error(`[braid:${this.name}] reload after a move failed`, error));
+      return;
     }
+    // leaving the page closed every popover in the slot, the overlays it lifted among them
+    if (!atomic && this.shadowRoot) reshowLifted(this.shadowRoot);
   }
 
   #left(): void {

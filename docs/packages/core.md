@@ -243,7 +243,7 @@ UI libraries render modals, menus and tooltips by appending to `document.body`, 
   - scripts, styles and other non-rendering elements;
   - everything in the body before mount, which is the fragment's own app.
 - **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
-- **A move keeps it open.** Moving the slot (see [Moving a slot](#moving-a-slot)) closes every open popover inside it, as the browser does for any element that leaves the page. The slot shows what it lifted again once it's back.
+- **A move keeps it open.** A move that takes the slot out of the page and puts it back (see [Moving a slot](#moving-a-slot)) closes every open popover inside it, so the slot shows what it lifted again. `moveBefore()` never closes them.
 - **The attribute is read when the fragment boots.** Changing it on a running slot takes effect at the next reload.
 - **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
 
