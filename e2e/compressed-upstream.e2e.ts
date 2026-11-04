@@ -59,10 +59,24 @@ describe('a compressing upstream behind the Node gateway', () => {
         const state = await page
           .waitForSelector(`fragment-slot[name="${name}"]:is([state="healthy"], [state="error"])`, { state: 'attached', timeout: 15_000 })
           .then((slot) => slot.getAttribute('state'));
-        const text = await page.evaluate(
-          (slotName) => document.querySelector(`fragment-slot[name="${slotName}"]`)?.shadowRoot?.querySelector('#app')?.textContent,
-          name,
-        );
+        // `healthy` says the realm checked in, not that its external script has run: wait for that, a
+        // little, rather than racing it (a realm that never boots still fails, as `…`)
+        const text = await page
+          .waitForFunction(
+            (slotName) => {
+              const content = document.querySelector(`fragment-slot[name="${slotName}"]`)?.shadowRoot?.querySelector('#app')?.textContent;
+              return content === 'booted' ? content : null;
+            },
+            name,
+            { timeout: 5_000 },
+          )
+          .then((handle) => handle.jsonValue())
+          .catch(() =>
+            page.evaluate(
+              (slotName) => document.querySelector(`fragment-slot[name="${slotName}"]`)?.shadowRoot?.querySelector('#app')?.textContent,
+              name,
+            ),
+          );
         if (state !== 'healthy' || text !== 'booted') failures.push(`load ${load}: ${name} ${state} ${text}`);
       }
       await page.close();

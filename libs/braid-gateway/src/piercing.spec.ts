@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createGateway, toWebMiddleware } from './gateway.js';
-import { prepareFragmentHtml, pierceShellHtml } from './rewriter/transforms.js';
+import { BRAID_FRAGMENT_STYLES, prepareFragmentHtml, pierceShellHtml } from './rewriter/transforms.js';
 
 function streamOf(html: string): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -407,7 +407,7 @@ describe('pierceShellHtml()', () => {
     expect(output).toBe(
       `<body><fragment-slot name="other"></fragment-slot>` +
         `<fragment-slot name="billing" data-braid-pierced=""><template shadowrootmode="open">` +
-        `<style>:host, braid-document, braid-html, braid-body { display: block; } braid-head { display: none; }</style>` +
+        BRAID_FRAGMENT_STYLES +
         `<braid-document>B</braid-document></template></fragment-slot></body>`,
     );
   });

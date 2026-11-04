@@ -20,6 +20,8 @@ import { customElementAdapter } from './adapters/custom-element-adapter.js';
 import { contractAdapter } from './adapters/contract-adapter.js';
 import { FragmentSlot } from './elements/fragment-slot.js';
 import { BraidLate, BraidLateEnd } from './elements/late-content.js';
+import { claimBraidPolicy } from './trusted-types.js';
+import { installLeaveGuard } from './elements/leave-guard.js';
 
 export { BraidError } from './errors.js';
 export type { BraidErrorStage } from './errors.js';
@@ -36,6 +38,7 @@ export { defineFragment } from './env/define-fragment.js';
 export type { FragmentDefinition } from './env/define-fragment.js';
 export { FragmentSlot, prefetchFragment } from './elements/fragment-slot.js';
 export { clearBraidDatabases } from './compat/database-partition.js';
+export { dirtySlots, leaveConfirmed, type ConfirmLeave, type DirtySlot } from './elements/leave-guard.js';
 export { clearPrefetchedFragments } from './elements/prefetch.js';
 export type { FragmentSlotState } from './elements/fragment-slot.js';
 export { braidContext, createContextBus } from './context/context-bus.js';
@@ -84,7 +87,17 @@ export function initBraid(options: BraidOptions = {}): void {
     customElements.define('braid-late', BraidLate);
     customElements.define('braid-late-end', BraidLateEnd);
   }
+  // before any slot boots: the policy name the host's directive grants must be Braid's first
+  claimBraidPolicy();
   if (!customElements.get('fragment-slot')) {
     customElements.define('fragment-slot', FragmentSlot);
   }
+  // Once per page, like the elements. A later initBraid that names `confirmLeave` replaces the
+  // question (null or undefined removes it); one that does not leaves it, as config merges.
+  if ('confirmLeave' in options) {
+    removeLeaveGuard?.();
+    removeLeaveGuard = options.confirmLeave ? installLeaveGuard(options.confirmLeave) : undefined;
+  }
 }
+
+let removeLeaveGuard: (() => void) | undefined;

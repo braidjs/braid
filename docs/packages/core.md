@@ -228,6 +228,72 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Modals and menus that escape the slot (opt-in)
+
+UI libraries render modals, menus and tooltips by appending to `document.body`, which normally escapes whatever clips the component that opened them. In a compat fragment, `document.body` is the fragment's own body inside the slot. So a host container with `overflow: hidden` clips the fragment's modal, and a transformed container becomes its fixed-position frame.
+
+```html
+<fragment-slot name="billing" overlays="top-layer"></fragment-slot>
+```
+
+- **What the fragment appends to its body after it mounts is lifted into the browser's top layer**, as a manual popover. It renders above and outside every ancestor's clipping, `content-visibility: auto` included. It stays where it was in the DOM: inside the fragment's shadow tree, styled by the fragment's stylesheets, its events handled by the fragment's own listeners. Removing it closes it, appending it again shows it again (libraries reuse their portal element), and moving it into the fragment's app makes it an ordinary element once more. Client-rendered and server-rendered (pierced) slots behave the same.
+- **It is laid out against the page, not the slot**, as a body child would be. The browser's popover look (centred, bordered, padded) is undone by rules in a cascade layer ranked below everything of the fragment's, so the library's own styles win: unlayered, inline or in layers of their own, as Tailwind's are. A portal anchored by `right` or `bottom` stays anchored there.
+- **It stacks by the order it was shown, not by `z-index`.** In the top layer, the most recently shown element is on top, and every lifted element is above all of the host's non-top-layer content, sticky headers and `z-index` modals included. Don't enable it for a fragment whose visual containment the host relies on.
+- **Left alone:**
+  - elements the fragment marks `popover` itself, which are the fragment's to show;
+  - `<dialog>`, which has the top layer of its own through `showModal()`;
+  - scripts, styles and other non-rendering elements;
+  - everything in the body before mount, which is the fragment's own app.
+- **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
+- **A move keeps it open.** A move that takes the slot out of the page and puts it back (see [Moving a slot](#moving-a-slot)) closes every open popover inside it, so the slot shows what it lifted again. `moveBefore()` never closes them.
+- **The attribute is read when the fragment boots.** Changing it on a running slot takes effect at the next reload.
+- **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
+
+### Skipping offscreen fragments
+
+For a fragment below the fold, the browser can skip rendering it until it's near the viewport:
+
+```css
+fragment-slot.below-fold { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+```
+
+- **It clips.** `content-visibility: auto` brings paint containment, so anything the fragment draws outside its slot is cut off: dropdowns, tooltips, modals portaled to its body. Portals lifted with `overlays="top-layer"` escape it; everything else doesn't. Use it on slots whose content stays inside them, or together with `overlays="top-layer"`.
+- **Reserve the space.** `contain-intrinsic-size: auto <height>` keeps the page from shifting while the fragment is skipped. `auto` remembers the real size once the fragment has rendered.
+
+### Asking before leaving unsaved work
+
+A fragment declares unsaved work with `env.setDirty(reason)`, and its slot holds it as `slot.dirty`. Braid can ask before a navigation loses it:
+
+```ts
+initBraid({ confirmLeave: (slots) => myDialog.confirm(`Leave ${slots.length} unsaved form(s)?`) });
+```
+
+- **Navigations to another document on this origin** wait while any slot is dirty, then go if `confirmLeave` resolves `true`. These are links, `location` changes and `navigation.navigate()` calls. This uses the Navigation API's `navigate` event, a listener on `navigation`, so nothing on the page is patched. Browsers without the API don't ask.
+- **One question at a time.** A link clicked while the user is still answering doesn't open a second dialog: a yes goes to the last one clicked. The navigation is started again as it was, a push or a replace, with its history state.
+- **Not held:** form posts, whose body would be lost when the navigation is started again; downloads; reloads; and back/forward, which can't be cancelled across documents. If you want the browser's own prompt for those, add a `beforeunload` handler, and check `leaveConfirmed()` so a navigation the user already said yes to isn't asked about twice:
+
+  ```ts
+  addEventListener('beforeunload', (event) => {
+    if (dirtySlots().length && !leaveConfirmed()) event.preventDefault();
+  });
+  ```
+- **Slots in shadow DOM count.** `dirtySlots()` looks inside every open shadow root, fragments' and components' alike (a Lit element, an Angular `ShadowDom` view).
+- **Calling `initBraid` again** only changes the guard if it passes `confirmLeave`. Pass `null` to remove it.
+- **Navigations inside a single-page app belong to its router.** Cancelling a router's own `pushState` would leave the router believing it navigated. Use the router's guard and `dirtySlots()` from `@braidlabs/core`, or `braidLeaveGuard` from `@braidlabs/angular`.
+
+### Moving a slot
+
+A slot can move without its fragment noticing. If you reorder a keyed list, reparent the slot in a framework, or append it to another container, the fragment keeps running. It keeps the same realm and the same state, and its document isn't fetched again. A slot only closes its fragment when it actually leaves the page.
+
+- **"Moved" means put back by the same synchronous code that took it out.** A slot decides one microtask after it's disconnected. If it's connected again by then, it moved. If it isn't, it left: its fragment is closed and its unsaved work is negotiated, as before. If the slot comes back after an `await`, a timer or a later render, the fragment boots again. So `slot.state` only becomes `closing` one microtask after `remove()`.
+- **`moveBefore()` keeps even more.** Where the browser supports it (Chromium today), `parent.moveBefore(slot, ref)` doesn't disconnect the slot at all. Focus inside the fragment, running CSS animations and transitions all carry over.
+- **Some moves still reboot**, because what the fragment booted with no longer holds:
+  - **An untrusted slot moved by anything other than `moveBefore`.** Its frame lives inside the slot, and the browser reloads a frame that is taken out of the page and put back.
+  - **A slot renamed while it was out of the page.**
+  - **A slot moved into another document.**
+  - **A slot that had failed** (`error`, or `gone` without unsaved work): it gets the retry a remount always gave it.
+- **Moving a slot into another fragment still has to obey that fragment's rules.** A slot that brings its own code (`entry`, or `trust="untrusted"`) is refused when it's moved into another fragment's DOM, just as it would have been refused there from the start.
+
 ### Recovering from transient failures (opt-in)
 
 ```ts
@@ -317,6 +383,23 @@ like the gateway's to those writes:
 - **Legacy apps may depend on what it removes.** jQuery-era code often puts `onclick="…"` inside
   HTML strings, and `"sanitize"` breaks it. That is what `"report"` is for.
 - **An unknown value is ignored, with a warning.** It never turns the policy on.
+
+### Hosts that enforce Trusted Types
+
+Braid runs on a host page with `Content-Security-Policy: require-trusted-types-for 'script'`. List its policy, `braid`, in your `trusted-types` directive:
+
+```
+Content-Security-Policy: require-trusted-types-for 'script'; trusted-types braid my-app-policy
+```
+
+- **Braid's own writes go through the `braid` policy.** That means parsing the markup the gateway prepared, marking a fragment's script as already started, and, with `capabilities.html: 'sanitize'`, parsing a fragment's write into an inert document to clean it. Braid creates the policy in `initBraid`, before any fragment code runs, and never exports it.
+- **The name is the capability.** Your directive grants whoever creates `braid` first, so Braid creates it at once. Don't add `'allow-duplicates'`, which would let any script create another. If creation fails, Braid warns and says why: the name isn't listed, or it was already taken, for example by a second copy of the runtime.
+- **A fragment's plain-string HTML writes meet your enforcement.** `el.innerHTML = '<b>…</b>'` in a fragment throws, even through a setter the fragment captured, because the node belongs to your document. A fragment that writes HTML should use `capabilities.html: 'sanitize'`, whose cleaned nodes are inserted directly and never need a trusted string.
+- **Your allowlist doesn't bind a fragment's own policies.** A compat realm is its own document, and the gateway doesn't give it your Trusted Types directives. So a fragment can create a policy there (Angular's, DOMPurify's, its own) and assign the trusted values it mints to your nodes, and the browser accepts them. With `capabilities.html: 'sanitize'`, Braid cleans those values like any string. Only `TrustedHTML` minted by your page passes through untouched. The trusted tier is an accident barrier, not a boundary: use the untrusted tier for code you don't trust.
+- **A compat fragment that creates scripts at runtime** (chunk loaders, analytics snippets) creates them in your document, so setting their `src` or text throws under enforcement.
+- **A contract fragment's realm inherits your policy.** Its `blob:` document takes the host's CSP, and Braid creates its policy there too, to load the fragment's entry module.
+- **Without `braid` in the directive**, Braid's writes are refused and reported, and fetched compat and contract fragments fail to boot. Pierced compat fragments still boot, because their markup arrives in the page itself.
+- **Scripts inside a `<template>` in a fragment's markup** are reported when the fragment clones them, although they never run in your page.
 
 ### Mount prerequisites
 

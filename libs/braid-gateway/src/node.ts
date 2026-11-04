@@ -45,7 +45,13 @@ export function toNodeMiddleware(
       );
 
       if (!response) {
-        if (!captured) next();
+        if (!captured) {
+          // set before the app runs, never by reading its response: the page streams as it would
+          for (const [name, value] of Object.entries(gateway.pageHeaders(request) ?? {})) {
+            if (!res.headersSent && !res.hasHeader(name)) res.setHeader(name, value);
+          }
+          next();
+        }
         return;
       }
 

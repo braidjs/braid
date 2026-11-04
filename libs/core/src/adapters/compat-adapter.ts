@@ -1,9 +1,10 @@
 import { AdapterBootContext, InstalledAdapter } from './adapter.js';
 import { CompatShadowRoot, compatMetadataSymbol } from '../compat/metadata.js';
 import { initializeRealmContext } from '../compat/realm-patches.js';
-import { executeScriptsInFragmentContent } from '../compat/script-execution.js';
+import { executeScriptsInFragmentContent, markStartedInPlace } from '../compat/script-execution.js';
 import { installRealmGlobals } from '../compat/shared-globals.js';
 import { isDevMode } from '../config.js';
+import { trustedHTML, trustedScript } from '../trusted-types.js';
 
 /**
  * The compat adapter — the emulation layer, contained.
@@ -111,19 +112,62 @@ export const compatAdapter: InstalledAdapter = {
  * saw a bare markup snippet.
  */
 export function parseFragmentContent(html: string, mainDocument: Document): HTMLElement {
-  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  // markup the gateway prepared, parsed where nothing runs: Braid's own write (see trusted-types.ts)
+  const parsed = new DOMParser().parseFromString(trustedHTML(html), 'text/html');
 
   const braidHtml = parsed.body.querySelector('braid-html');
   if (braidHtml) {
-    return mainDocument.importNode(braidHtml, true) as HTMLElement;
+    return readyScripts(mainDocument.importNode(braidHtml, true) as HTMLElement);
   }
 
   const wrapper = mainDocument.createElement('braid-html');
   const braidBody = mainDocument.createElement('braid-body');
   braidBody.append(...[...parsed.body.childNodes].map((node) => mainDocument.importNode(node, true)));
   wrapper.append(braidBody);
-  return wrapper;
+  return readyScripts(wrapper);
 }
+
+/**
+ * Readies the fragment's scripts in markup imported from the parser's document, before any of it
+ * reaches the page.
+ *
+ * - **Only what the gateway neutralized is kept.** The gateway gives every script `type="inert"`,
+ *   an SVG one included; one without it slipped past the rewriter, and nothing here can tell what
+ *   it would do in the host, so it is dropped (in dev, with a warning).
+ * - **Each inline script gets its own text back through Braid's Trusted Types policy.** Imported
+ *   from another document, a script no longer counts as parser-written, and a host enforcing
+ *   Trusted Types would refuse to mark it started below. Without a policy nothing changes.
+ * - **Each is marked started now, while the tree is detached**, so there is no moment at which a
+ *   blessed script is in the page unmarked. The fragment's realm runs fresh copies; these never run.
+ */
+function readyScripts<T extends Element>(root: T): T {
+  for (const script of root.querySelectorAll('script')) {
+    if (script.getAttribute('type') !== 'inert') {
+      if (isDevMode()) console.warn('[braid] a fragment script was not neutralized by the gateway and is dropped', script);
+      script.remove();
+      continue;
+    }
+    if (script.hasAttribute('src')) continue;
+    const text = script.textContent ?? '';
+    const trusted = trustedScript(text);
+    if (trusted === text) continue;
+    if (script.namespaceURI === XHTML) {
+      script.textContent = trusted;
+    } else if (!script.hasAttribute('href') && !script.hasAttribute('xlink:href')) {
+      // An SVG script's text cannot be given back through a policy (only an HTML script's setters
+      // take one), so a host enforcing Trusted Types would report it. Its realm runs an HTML copy
+      // whatever it is here, so the inert one in the page becomes an HTML script too.
+      const html = root.ownerDocument.createElement('script');
+      for (const attribute of script.attributes) html.setAttribute(attribute.name, attribute.value);
+      html.textContent = trusted;
+      script.replaceWith(html);
+    }
+  }
+  markStartedInPlace(root);
+  return root;
+}
+
+const XHTML = 'http://www.w3.org/1999/xhtml';
 
 /**
  * Resolves once every image that holds a document's load event has loaded or failed.
