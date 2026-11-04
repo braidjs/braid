@@ -234,11 +234,28 @@ UI libraries render modals, menus and tooltips by appending to `document.body`, 
 <fragment-slot name="billing" overlays="top-layer"></fragment-slot>
 ```
 
-- **What the fragment appends to its body after it mounts is lifted into the browser's top layer**, as a manual popover. It renders above and outside every ancestor's clipping. It stays where it was in the DOM: inside the fragment's shadow tree, styled by the fragment's stylesheets, its events handled by the fragment's own listeners. Removing it closes it.
-- **It is laid out against the page, not the slot**, as a body child would be. The browser's popover look (centred, bordered, padded) is undone with zero-specificity rules, so the library's own styles and inline styles win.
-- **Left alone:** elements the fragment marks `popover` itself, which are the fragment's to show; scripts, styles and other non-rendering elements; and everything in the body before mount, which is the fragment's own app.
+- **What the fragment appends to its body after it mounts is lifted into the browser's top layer**, as a manual popover. It renders above and outside every ancestor's clipping, `content-visibility: auto` included. It stays where it was in the DOM: inside the fragment's shadow tree, styled by the fragment's stylesheets, its events handled by the fragment's own listeners. Removing it closes it, appending it again shows it again (libraries reuse their portal element), and moving it into the fragment's app makes it an ordinary element once more. Client-rendered and server-rendered (pierced) slots behave the same.
+- **It is laid out against the page, not the slot**, as a body child would be. The browser's popover look (centred, bordered, padded) is undone with zero-specificity rules, so the library's own styles and inline styles win. A portal anchored by `right` or `bottom` stays anchored there.
+- **It stacks by the order it was shown, not by `z-index`.** In the top layer, the most recently shown element is on top, and every lifted element is above all of the host's non-top-layer content, sticky headers and `z-index` modals included. Don't enable it for a fragment whose visual containment the host relies on.
+- **Left alone:**
+  - elements the fragment marks `popover` itself, which are the fragment's to show;
+  - `<dialog>`, which has the top layer of its own through `showModal()`;
+  - scripts, styles and other non-rendering elements;
+  - everything in the body before mount, which is the fragment's own app.
 - **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
+- **The attribute is read when the fragment boots.** Changing it on a running slot takes effect at the next reload.
 - **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
+
+### Skipping offscreen fragments
+
+For a fragment below the fold, the browser can skip rendering it until it's near the viewport:
+
+```css
+fragment-slot.below-fold { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+```
+
+- **It clips.** `content-visibility: auto` brings paint containment, so anything the fragment draws outside its slot is cut off: dropdowns, tooltips, modals portaled to its body. Portals lifted with `overlays="top-layer"` escape it; everything else doesn't. Use it on slots whose content stays inside them, or together with `overlays="top-layer"`.
+- **Reserve the space.** `contain-intrinsic-size: auto <height>` keeps the page from shifting while the fragment is skipped. `auto` remembers the real size once the fragment has rendered.
 
 ### Recovering from transient failures (opt-in)
 
