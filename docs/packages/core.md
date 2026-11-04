@@ -226,6 +226,38 @@ document ends without its markup, the slot boots client-side.
 - **Reserve the slot's space.** Style `fragment-slot[data-braid-deferred]` as a skeleton of the
   fragment's usual size, so the content landing does not shift the page.
 
+### Modals and menus that escape the slot (opt-in)
+
+UI libraries render modals, menus and tooltips by appending to `document.body`, which normally escapes whatever clips the component that opened them. In a compat fragment, `document.body` is the fragment's own body inside the slot. So a host container with `overflow: hidden` clips the fragment's modal, and a transformed container becomes its fixed-position frame.
+
+```html
+<fragment-slot name="billing" overlays="top-layer"></fragment-slot>
+```
+
+- **What the fragment appends to its body after it mounts is lifted into the browser's top layer**, as a manual popover. It renders above and outside every ancestor's clipping, `content-visibility: auto` included. It stays where it was in the DOM: inside the fragment's shadow tree, styled by the fragment's stylesheets, its events handled by the fragment's own listeners. Removing it closes it, appending it again shows it again (libraries reuse their portal element), and moving it into the fragment's app makes it an ordinary element once more. Client-rendered and server-rendered (pierced) slots behave the same.
+- **It is laid out against the page, not the slot**, as a body child would be. The browser's popover look (centred, bordered, padded) is undone by rules in a cascade layer ranked below everything of the fragment's, so the library's own styles win: unlayered, inline or in layers of their own, as Tailwind's are. A portal anchored by `right` or `bottom` stays anchored there.
+- **It stacks by the order it was shown, not by `z-index`.** In the top layer, the most recently shown element is on top, and every lifted element is above all of the host's non-top-layer content, sticky headers and `z-index` modals included. Don't enable it for a fragment whose visual containment the host relies on.
+- **Left alone:**
+  - elements the fragment marks `popover` itself, which are the fragment's to show;
+  - `<dialog>`, which has the top layer of its own through `showModal()`;
+  - scripts, styles and other non-rendering elements;
+  - everything in the body before mount, which is the fragment's own app.
+- **Opt-in, because it changes positioning.** A fragment that appends its whole app to the body after it mounts would see the app lifted too.
+- **A move keeps it open.** A move that takes the slot out of the page and puts it back (see [Moving a slot](#moving-a-slot)) closes every open popover inside it, so the slot shows what it lifted again. `moveBefore()` never closes them.
+- **The attribute is read when the fragment boots.** Changing it on a running slot takes effect at the next reload.
+- **Compat fragments only.** A contract fragment renders into `env.root` and can use `popover` itself.
+
+### Skipping offscreen fragments
+
+For a fragment below the fold, the browser can skip rendering it until it's near the viewport:
+
+```css
+fragment-slot.below-fold { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+```
+
+- **It clips.** `content-visibility: auto` brings paint containment, so anything the fragment draws outside its slot is cut off: dropdowns, tooltips, modals portaled to its body. Portals lifted with `overlays="top-layer"` escape it; everything else doesn't. Use it on slots whose content stays inside them, or together with `overlays="top-layer"`.
+- **Reserve the space.** `contain-intrinsic-size: auto <height>` keeps the page from shifting while the fragment is skipped. `auto` remembers the real size once the fragment has rendered.
+
 ### Asking before leaving unsaved work
 
 A fragment declares unsaved work with `env.setDirty(reason)`, and its slot holds it as `slot.dirty`. Braid can ask before a navigation loses it:
