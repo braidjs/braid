@@ -36,4 +36,12 @@ describe('route scope', () => {
       expect(routesMayOverlap(a!, b!), `${a} ≁ ${b}`).toBe(false);
     }
   });
+
+  it('sees an overlap through a slash an optional part owns', () => {
+    // `/report{/:id}?.pdf` reads as `/report/:id?.pdf`, yet matches `/report.pdf` with no slash.
+    expect(routesMayOverlap('/report{/:id}?.pdf', '/report.:ext')).toBe(true);
+    expect(routesMayOverlap('/x{/:a}?-y', '/x-:z')).toBe(true);
+    // and still tells two different sections apart
+    expect(routesMayOverlap('/billing/:id?', '/checkout/:x')).toBe(false);
+  });
 });
