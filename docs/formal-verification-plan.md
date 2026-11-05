@@ -114,6 +114,20 @@ ownership checks.
 Step 2, the exact automata check, stays open. A property is only as strong as its generator, and
 this one has already been wrong once.
 
+**Still outside the generator, found in verification:**
+
+- **Empty segments.** `routesMayOverlap('/billing/', '/billing//*')` is `false`, yet the gateway
+  pierces both on `/billing//`. This is a real false negative, present on main before this work
+  too.
+- **Dot segments and encodings.** No `..` or `%2e` is generated, so `canonicalRoute` goes
+  unexercised: replacing it with the identity function survives the property.
+- **Non-final `*` modifiers.** A `*` modifier is generated only at the end, so dropping the `*`
+  half of the optional-slash fix also survives. The code itself handles `/report{/:id}*.pdf`
+  correctly.
+
+Adding the first of these to the generator, and fixing what it finds, is the next step for this
+item.
+
 ### 3. Schema migrations and lenses: laws as properties
 
 **Scope.** `libs/skew/src/lib/versioned.ts` and `lens.ts`, and the contract resolver.
@@ -203,6 +217,6 @@ for us. Fold it into the same tooling.
 
 ## Order
 
-Items 2 and 3 are done. Next is item 1,
+Item 2 is done and item 3 partly done. Next is item 1,
 the high-value one, in its own branch with its own CI job. Then item 4, only if item 1's
 tooling earns it.
