@@ -1,6 +1,6 @@
 # Formal verification for Braid — plan
 
-Status: items 2 and 3 done (2026-11-04); items 1 and 4 not started · Touches: data, skew, registry, core, sw, CI
+Status: item 2 done and item 3 partly done (2026-11-04); items 1 and 4 not started · Touches: data, skew, registry, core, sw, CI
 
 ## Problem
 
@@ -76,8 +76,8 @@ positive costs a refused publish. A false negative is a takeover.
 **Steps.**
 
 1. Property-based tests with fast-check. Generate patterns from the URLPattern pathname grammar
-   (literals, `:name`, `*`, `{…}` groups, regex groups) and generate paths that match them, then
-   assert soundness. These run in the existing vitest suite.
+   (literals, `:name`, typed and spanning regex groups, `{…}` groups, `?`/`+`/`*` modifiers) and
+   generate paths that match them, then assert soundness. These run in the existing vitest suite.
 2. Optional, only if step 1 finds anything: decide overlap exactly. Compile both patterns to
    automata and test their intersection for emptiness, then cross-check `routesMayOverlap`
    against it.
@@ -95,8 +95,24 @@ same generator found two counterexamples:
 - `{/123}/pay/x-1` beside `/123/*` (the RG-1 shape);
 - `/x-1/b/` beside `/x-1/b` (the sampler ignores trailing-slash tolerance).
 
-Both stand until RG-1 is fixed. Step 2 (exact automata) is not needed for `routesMayOverlap`;
-the property found nothing there.
+Both stand until RG-1 is fixed.
+
+The first version of the property was too weak to say anything about `routesMayOverlap` itself.
+It had no `?`, `+` or `*` modifiers, and 92% of its cases landed in a branch that cannot fail by
+construction. Review found the hole it missed: URLPattern reads `/report{/:id}?.pdf` as
+`/report/:id?.pdf`, the prefix rule kept a `/` the optional part owns, and so it called the route
+disjoint from `/report.:ext`, though both match `/report.pdf`. That was a takeover hole in the
+ownership checks.
+
+- **Generator:** it now emits optional groups and params (present and absent), optional params
+  glued into literals, optional segments the path lacks, `+`/`*`/`{/*}?` rest parts, and regexes
+  spanning two segments. It finds that hole within milliseconds.
+- **Fix:** shipped in the same branch.
+- **Strength guards:** two tests require the property to catch both the RG-1 sampler and the old
+  prefix rule, so a generator that narrows again fails a test.
+
+Step 2, the exact automata check, stays open. A property is only as strong as its generator, and
+this one has already been wrong once.
 
 ### 3. Schema migrations and lenses: laws as properties
 
@@ -104,9 +120,10 @@ the property found nothing there.
 
 **Properties.**
 
-- Round trip: `up(down(x))` keeps every field the older version represents, for lossless steps.
+- Round trip: `down(up(x))` returns `x` for lossless steps.
   Steps declared `lossy` drop exactly the fields they name.
-- Composition: migrating v1→v3 in one call equals v1→v2 then v2→v3.
+- Composition: a schema with two ops steps reads v1 data as their ops concatenated would, and
+  `write({ as: 1 })` comes back down to the v1 document.
 - Prototype safety: no lens op, on any generated path, leaves `Object.prototype` changed (DS-3).
 
 **Acceptance.**
@@ -115,11 +132,35 @@ the property found nothing there.
 - The prototype-safety property fails against the unfixed `setAt`. DS-3 is not fixed yet; it is
   a P1 item, so this property lands together with that fix.
 
-**Done (2026-11-04), except prototype safety:** `libs/skew/src/lib/lens.properties.spec.ts`.
-It checks the round trip (`down(up(x))` equals `x`, nothing lossy), that no input is mutated, and
-that ops steps compose on read and on `write({ as: 1 })`. Each law runs over generated lossless
-op lists (rename, move, wrap, convert). Inverting `rename` the wrong way fails both round-trip
-laws. The prototype-safety law waits for the DS-3 fix.
+**Partly done (2026-11-04):** `libs/skew/src/lib/lens.properties.spec.ts` checks:
+
+- the round trip (`down(up(x))` equals `x`, nothing reported lossy);
+- that no input is mutated;
+- that ops steps compose on read and on `write({ as: 1 })`.
+
+Each law runs over a deliberately narrow subset: flat scalar documents, and top-level rename/move
+to a fresh field, wrap with no `also`, and convert integer→string with no `via`. Inverting
+`rename` the wrong way fails both round-trip laws.
+
+Not yet covered:
+- the "lossy steps drop exactly the fields they name" law;
+- a read chained through v2;
+- prototype safety, which waits for the DS-3 fix.
+
+**Found in review, outside that subset, not yet fixed.** Each lens reports itself invertible with
+nothing lossy, yet does not round-trip:
+
+- `hoist {a, k}` on `{a: {k: 1, other: 2}}` comes back as `{a: {k: 1}}`: the siblings are dropped
+  without being reported.
+- `convert {to: 'number'}` on `{a: '007'}` comes back as `{a: '7'}`.
+- A rename onto an occupied field overwrites it: `{a: 1, b: 2}` comes back as `{a: 1}`.
+- A rename into a nested path prunes an empty object the document already had: `{x: 1, a: {}}`
+  comes back as `{x: 1}`.
+- `convert` with `via: {'1': 'x', 'true': 'y'}` cannot restore a boolean: `true` comes back as
+  `'true'`.
+
+The fix is to report these lossy (or refuse them as non-invertible) in `lens.ts`, then widen the
+generator to these shapes so the laws check it.
 
 ### 4. The untrusted handshake: a small model, as documentation
 

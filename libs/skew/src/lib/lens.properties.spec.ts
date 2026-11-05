@@ -11,6 +11,14 @@ import { versioned } from './versioned.js';
  * free" is a claim about every ops list, not about the handful a spec happens to list. For the
  * lossless ops it is exact: going up and coming back down returns the original document. And a
  * chain of ops steps must mean what its ops mean concatenated, whichever way it is read.
+ *
+ * What this covers, and what it does not. Documents are flat scalars and ops are top-level:
+ * rename and move to a fresh field, wrap with no `also`, convert integer to string with no `via`.
+ * Wider shapes break the round trip today while the lens still reports itself invertible and
+ * lossless — `hoist` drops siblings, `convert` to number turns `'007'` into `'7'`, rename onto an
+ * occupied field overwrites it, a rename into a nested path prunes an empty object the document
+ * already had, and `via` cannot restore a boolean key. Those are recorded in
+ * docs/formal-verification-plan.md; widening this generator is how their fix is checked.
  */
 
 const ctx: MigrationContext = { now: () => new Date('2026-08-10T12:00:00.000Z') };
@@ -19,6 +27,7 @@ type Kind = 'int' | 'text' | 'flag' | 'object';
 type Scalar = number | string | boolean | null;
 
 const scalar: fc.Arbitrary<{ kind: Kind; value: Scalar }> = fc.oneof(
+  // -0 becomes 0 deliberately: data reaches lenses through JSON, which has no -0.
   fc.integer({ min: -1_000_000, max: 1_000_000 }).map((value) => ({ kind: 'int' as const, value: value === 0 ? 0 : value })),
   // Never a numeric string: those are what a number→string convert produces, and would read back
   // as numbers on the way down.
@@ -55,7 +64,7 @@ function losslessOps(kinds: Readonly<Record<string, Kind>>, choices: readonly [n
     switch (what % 3) {
       case 0: {
         const to = `r${fresh.n++}`;
-        ops.push(which % 2 ? { rename: { from: field, to } } : { move: { from: field, to } });
+        ops.push(Math.floor(what / 3) % 2 ? { rename: { from: field, to } } : { move: { from: field, to } });
         current.delete(field);
         current.set(to, kind);
         break;
@@ -74,6 +83,7 @@ function losslessOps(kinds: Readonly<Record<string, Kind>>, choices: readonly [n
   return ops;
 }
 
+// `which` picks the field; `what` picks the op and, for a rename, rename against move.
 const choicesArb = fc.array(fc.tuple(fc.nat(), fc.nat()), { maxLength: 8 });
 
 const roundTripCase = fc.record({ document: documentArb, choices: choicesArb }).map(({ document, choices }) => ({
