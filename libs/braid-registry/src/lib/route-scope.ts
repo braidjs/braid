@@ -51,6 +51,49 @@ export function withinPrefixes(pattern: string, prefixes: readonly string[]): bo
 const PATTERN_SYNTAX = /[:*({?+\\]/;
 
 /**
+ * The literal text every path a pattern matches must start with.
+ *
+ * Not simply everything before the first syntax character. In a pathname, a param, regex group or
+ * wildcard takes the `/` before it as its prefix, and when the part is optional (`?`) or may be empty
+ * (`*`), so is that slash: URLPattern reads `/report{/:id}?.pdf` as `/report/:id?.pdf`, which still
+ * matches `/report.pdf`. Only that slash is dropped; a required part keeps it, so `/blog/*` and
+ * `/blogging/*` stay apart.
+ */
+function literalPrefix(canonical: string): string {
+  const start = canonical.search(PATTERN_SYNTAX);
+  const prefix = canonical.slice(0, start);
+  if (!prefix.endsWith('/')) return prefix;
+  const modifier = canonical[endOfPart(canonical, start)];
+  return modifier === '?' || modifier === '*' ? prefix.slice(0, -1) : prefix;
+}
+
+/**
+ * Where the part starting at `index` ends, so the character there is its modifier, if any. Parts
+ * that do not take a `/` prefix (a `{…}` group, an escape) end where they start, so no modifier
+ * is read for them.
+ */
+function endOfPart(pattern: string, index: number): number {
+  let at = index;
+  const closeParen = (from: number) => {
+    let depth = 0;
+    for (let i = from; i < pattern.length; i++) {
+      if (pattern[i] === '\\') i++;
+      else if (pattern[i] === '(') depth++;
+      else if (pattern[i] === ')' && --depth === 0) return i + 1;
+    }
+    return pattern.length;
+  };
+  if (pattern[at] === ':') {
+    at++;
+    while (at < pattern.length && /[\w$]/.test(pattern[at]!)) at++;
+    return pattern[at] === '(' ? closeParen(at) : at;
+  }
+  if (pattern[at] === '(') return closeParen(at);
+  if (pattern[at] === '*') return at + 1;
+  return index;
+}
+
+/**
  * Whether two route patterns could answer the same request, allowing for the trailing-slash
  * tolerance the gateway applies — judged conservatively, for refusing a claim.
  *
@@ -59,7 +102,8 @@ const PATTERN_SYNTAX = /[:*({?+\\]/;
  *
  * - two literal routes overlap when they are the same path, ignoring a trailing slash;
  * - a literal and a pattern overlap when the pattern matches the literal, with or without the slash;
- * - two patterns are presumed to overlap when one's literal prefix is a prefix of the other's.
+ * - two patterns are presumed to overlap when one's literal prefix is a prefix of the other's —
+ *   the literal text every match starts with, which stops short of a slash an optional part owns.
  *
  * The last can refuse routes that are in fact disjoint — `/billing/:id(\\d+)` beside
  * `/billing/:slug([a-z]+)` — which is the right way to be wrong when the cost of the other way is
@@ -80,7 +124,7 @@ export function routesMayOverlap(a: string, b: string): boolean {
     const matcher = new URLPattern({ pathname: pattern });
     return [literal, literal === '/' ? '/' : `${literal}/`].some((pathname) => matcher.test({ pathname }));
   }
-  const prefixA = ca.slice(0, ca.search(PATTERN_SYNTAX));
-  const prefixB = cb.slice(0, cb.search(PATTERN_SYNTAX));
+  const prefixA = literalPrefix(ca);
+  const prefixB = literalPrefix(cb);
   return prefixA.startsWith(prefixB) || prefixB.startsWith(prefixA);
 }
