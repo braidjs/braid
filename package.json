@@ -119,6 +119,7 @@
     "eslint-config-prettier": "^10.0.0",
     "express": "^4.22.2",
     "fake-indexeddb": "^6.2.5",
+    "fast-check": "4.10.2",
     "h3": "^2.0.1-rc.26",
     "jose": "6.2.12",
     "jsdom": "^27.1.0",
