@@ -222,7 +222,7 @@ const appPrefix = (appId: string) => `apps/${keySegment(appId)}/`;
 /** What FINOS's IntentHandler keeps for an intent it holds until an app starts: the parts read here. */
 interface HeldIntent {
   appId?: { appId: string; instanceId?: string };
-  r?: { from?: { instanceId?: string } };
+  r?: { from?: { instanceId?: string }; intent?: unknown; context?: { type?: unknown }; newInstance?: unknown };
 }
 
 /** One connected fragment, as the agent's host side sees it. */
@@ -449,6 +449,8 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     // announces itself with one — before the fragment has its `fdc3`, so the context listener it
     // adds next finds FINOS ready to deliver the open's context to it.
     if (launch) await context.announce(server, instanceId);
+    // held intents tied to an instance of this app that is gone are this one's now
+    if (container) context.adopt(appId, instanceId, (id) => slotsIn(container).some((other) => launches.get(other)?.instanceId === id));
     if (signal.aborted) return undefined;
     if (slot) {
       launches.delete(slot);
@@ -741,11 +743,9 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   private readonly instances = new Map<InstanceID, AppRegistration>();
   private readonly deliveries = new Map<InstanceID, (message: object) => void>();
   /**
-   * Requests on their way to {@link open} that must launch, noted by {@link inspect}: an
-   * `fdc3.open`, and a raise asking for a new instance. FINOS reaches `open` from either within the
-   * same task, so a note it never claims is dropped after one.
+   * Raises in progress that asked for a new instance, noted by {@link inspect} for
+   * {@link narrowIntents}, which has no other way to tell; dropped after a task.
    */
-  private readonly opening: { from: InstanceID; appId: string }[] = [];
   private readonly newInstance: { from: InstanceID; intent?: string; contextType?: string }[] = [];
 
   constructor(
@@ -785,12 +785,7 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     }, 0);
   }
 
-  /** Removes and reports the first note that matches. */
-  private static take<T>(list: T[], matches: (note: T) => boolean): boolean {
-    const index = list.findIndex(matches);
-    if (index >= 0) list.splice(index, 1);
-    return index >= 0;
-  }
+
 
   /**
    * Looks at a request on its way to the agent, and returns what the agent should get:
@@ -799,8 +794,7 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    *   it: the one listening for the intent, or — when none is yet — the app's only instance, so
    *   the agent holds the intent until that fragment's listener arrives. FINOS would otherwise
    *   treat it as a request to launch the app. A raise asking for a new instance is left alone.
-   * - An `fdc3.open`, and a raise asking for a new instance, are noted, so {@link open} launches
-   *   for them rather than handing back an instance that is still booting.
+   * - A raise asking for a new instance is noted, so {@link narrowIntents} offers it launches.
    */
   inspect(message: object, from: InstanceID): object {
     const { type, payload } = message as {
@@ -812,11 +806,6 @@ class BraidServerContext implements ServerContext<AppRegistration> {
         app?: { appId?: unknown; instanceId?: unknown };
       };
     };
-    if (type === 'openRequest') {
-      const appId = (payload?.app as { appId?: unknown } | undefined)?.appId;
-      if (typeof appId === 'string') BraidServerContext.hold(this.opening, { from, appId });
-      return message;
-    }
     if (type !== 'raiseIntentRequest' && type !== 'raiseIntentForContextRequest') return message;
     if (payload?.newInstance === true) {
       BraidServerContext.hold(this.newInstance, {
@@ -865,27 +854,45 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   }
 
   /**
-   * Called for `fdc3.open`, and when the agent holds an intent for an app that has no instance
-   * listening. `fdc3.open` and a raise for a new instance launch one. Any other held intent waits
-   * for an instance that is booting — connected, or mounted and not yet connected, including one an
-   * earlier raise just launched — and launches only when there is none. Deciding here, when the
-   * launch would happen, is what keeps two quick raises from mounting the app twice.
+   * Called for `fdc3.open`, and when FINOS holds an intent for an app to start. FINOS adds the held
+   * intent and calls this in one step, so the newest held intent for the app from this raiser that
+   * is not yet tied to an instance is that raise's — and none means `fdc3.open`.
    *
-   * An app the directory does not know rejects with `AppNotFound` — only `fdc3.open` can ask for
-   * one, and it answers a rejection; the intent path never sees one.
+   * - `fdc3.open` launches. An app the directory does not know rejects with `AppNotFound`, which
+   *   FINOS answers the open with.
+   * - A held intent launches when its raise asked for a new instance. Otherwise it waits for an
+   *   instance that is booting — connected but not listening for it, or mounted and not yet
+   *   connected, including one an earlier raise just launched — and launches only when there is
+   *   none; deciding here, when the launch would happen, keeps two quick raises from mounting the
+   *   app twice.
+   *
+   * Either way the held intent is then tied to that instance (see {@link adopt}): FINOS holds it
+   * for "any instance of the app" and drops the id returned here, so otherwise whichever instance
+   * added a listener first would take it.
    */
   async open(appId: string, from?: AppRegistration): Promise<InstanceID> {
     if (!this.launchable) return this.live(appId)[0]?.instanceId ?? this.createUUID();
     const raiser = from?.instanceId;
-    if (BraidServerContext.take(this.opening, (note) => note.from === raiser && note.appId === appId)) {
-      if (!this.knows(appId)) throw new Error(OpenError.AppNotFound);
+    const held = [...this.heldIntents()]
+      .reverse()
+      .find((intent) => intent.appId?.appId === appId && intent.appId.instanceId === undefined && intent.r?.from?.instanceId === raiser);
+    // a string the directory has: anything else is refused before a slot is mounted for it
+    const known = typeof appId === 'string' && this.knows(appId);
+    if (!held) {
+      if (!known) throw new Error(OpenError.AppNotFound);
       return this.launch(appId) ?? this.createUUID();
     }
-    // from here on, FINOS is holding an intent for the app
-    const fresh = BraidServerContext.take(this.newInstance, (note) => note.from === raiser);
-    const instanceId = (fresh ? undefined : (this.live(appId)[0]?.instanceId ?? this.mounting(appId))) ?? this.launch(appId);
+    if (!known) return this.createUUID();
+    const request = held.r ?? {};
+    const contextType = typeof request.context?.type === 'string' ? request.context.type : undefined;
+    const booting =
+      request.newInstance === true
+        ? undefined
+        : (this.live(appId).find((instance) => !this.hasListener(instance.instanceId, String(request.intent), contextType))?.instanceId ??
+          this.mounting(appId));
+    const instanceId = booting ?? this.launch(appId);
     if (!instanceId) return this.createUUID();
-    this.pin(appId, raiser, instanceId);
+    held.appId = { appId, instanceId };
     return instanceId;
   }
 
@@ -896,17 +903,18 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   heldIntents: () => Set<HeldIntent> = () => new Set();
 
   /**
-   * Ties the intent FINOS has just held for `appId` to the instance that will take it. FINOS holds
-   * it for "any instance of the app" and drops the id open() returns, so otherwise the first
-   * instance to add a listener takes it — an older one, rather than the one launched for it. It
-   * adds the held intent and calls open() in one step, so the newest untied one from this raiser
-   * is this raise's.
+   * A new instance of `appId` takes over the held intents tied to an instance of that app that is
+   * gone — torn down, or its slot removed before it connected (a restore replaces slots) — so they
+   * reach the instance that replaced it rather than waiting out their timeout. `pending` says which
+   * not-yet-connected instance ids still have a slot.
    */
-  private pin(appId: string, raiser: InstanceID | undefined, instanceId: InstanceID): void {
-    const held = [...this.heldIntents()]
-      .reverse()
-      .find((intent) => intent.appId?.appId === appId && intent.appId.instanceId === undefined && intent.r?.from?.instanceId === raiser);
-    if (held) held.appId = { appId, instanceId };
+  adopt(appId: string, instanceId: InstanceID, pending: (id: InstanceID) => boolean): void {
+    for (const held of this.heldIntents()) {
+      const tied = held.appId?.instanceId;
+      if (held.appId?.appId !== appId || tied === undefined || tied === instanceId) continue;
+      if (this.instances.get(tied)?.state === State.Connected || pending(tied)) continue;
+      held.appId = { appId, instanceId };
+    }
   }
 
   /**

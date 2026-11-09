@@ -141,7 +141,14 @@ of it:
   when one is running, and the intent goes to that new instance.
 - An intent for an app that is already open but not listening yet (still booting, or mounted in
   the container and not yet connected) waits for that instance instead of launching another. So two
-  quick raises for an app that isn't running mount it once.
+  quick raises for an app that isn't running mount it once. If that slot is removed before the app
+  listens, as a layout restore does, the intent goes to the instance that replaces it.
+- A held intent goes to the instance it was launched for or is waiting on, never to another
+  instance of the app that happens to add a listener first.
+
+One case is ambiguous: a fragment that raises the same intent with the same context type twice in
+one tick, once with `newInstance: true` and once without, may have the plain raise offered launches
+too.
 
 Without a container nothing is launched. `fdc3.open` rejects with `ErrorOnLaunch` and a
 `newInstance: true` raise with `TargetAppUnavailable`, as they always have. A raise that only an app

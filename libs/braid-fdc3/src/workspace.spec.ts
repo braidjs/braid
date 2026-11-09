@@ -353,6 +353,60 @@ describe('launching, under the races review found', () => {
     expect(oldHandler).not.toHaveBeenCalled();
   });
 
+  it('refuses a malformed or unknown fdc3.open without mounting anything', async () => {
+    const { agent, container, mount } = await setup();
+    void agent;
+    const blotter = (await mount('blotter')).fdc3;
+    for (const app of ['billing', { appId: 7 }, {}, { appId: ['billing'] }, { appId: 'not-in-directory' }]) {
+      await expect(blotter.open(app as never), JSON.stringify(app)).rejects.toThrow('AppNotFound');
+    }
+    await settle();
+    expect(container.children).toHaveLength(0);
+  });
+
+  it('delivers both a plain raise and a newInstance raise made together', async () => {
+    const { container, mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const running = vi.fn(async () => undefined);
+    await (await mount('research')).fdc3.addIntentListener('ViewResearch', running);
+
+    const fresh = blotter.raiseIntent('ViewResearch', instrument, { appId: 'research' }, true);
+    const plain = blotter.raiseIntent('ViewResearch', instrument);
+    await vi.waitFor(() => expect(container.children.length).toBeGreaterThanOrEqual(1));
+    const launched = vi.fn(async () => undefined);
+    for (const slot of container.children) await (await slot.booted)!.fdc3.addIntentListener('ViewResearch', launched);
+    await Promise.all([fresh, plain]);
+    await vi.waitFor(() => expect(running.mock.calls.length + launched.mock.calls.length).toBe(2));
+    expect(launched.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hands an intent waiting on a slot that is removed to the slot that replaces it', async () => {
+    const { container, mount, place } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const raised = blotter.raiseIntent('ViewResearch', instrument);
+    await vi.waitFor(() => expect(container.children).toHaveLength(1));
+    container.children[0].remove(); // before it connected
+    const { fdc3: replacement } = await place('research');
+    const handled = vi.fn(async () => undefined);
+    await replacement.addIntentListener('ViewResearch', handled);
+    expect((await raised).source.appId).toBe('research');
+    await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+  });
+
+  it('hands an intent waiting on a slot to its replacement when a layout is restored', async () => {
+    const { agent, container, mount, store } = await setup();
+    await store.set('layouts/r', { version: 1, savedAt: '', slots: [{ appId: 'research' }] });
+    const blotter = (await mount('blotter')).fdc3;
+    const raised = blotter.raiseIntent('ViewResearch', instrument);
+    await vi.waitFor(() => expect(container.children).toHaveLength(1));
+    await agent.layouts.restore('r');
+    const replacement = (await container.children[0].booted)!.fdc3;
+    const handled = vi.fn(async () => undefined);
+    await replacement.addIntentListener('ViewResearch', handled);
+    expect((await raised).source.appId).toBe('research');
+    await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+  });
+
   it('tells the resolver which apps are starting rather than to be launched', async () => {
     const resolveIntent = vi.fn<IntentResolverHook>(async () => undefined);
     const { mount } = await setup({ resolveIntent });
