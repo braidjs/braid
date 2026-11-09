@@ -243,6 +243,11 @@ export interface AccessRule {
 
 /** Who is asking, as resolved from a request by the gateway's host application. */
 export interface Principal {
+  /**
+   * Who this is: a stable, unique user id (an OIDC `sub`, say). Only per-user state needs it —
+   * the gateway's `preferences` are keyed by it and refused without it. Access rules ignore it.
+   */
+  subject?: string;
   roles?: readonly string[];
   scopes?: readonly string[];
 }

@@ -315,3 +315,6 @@ function nodeRequestToWebRequest(req: IncomingMessage, options: { bodyless?: boo
     ...(hasBody ? { duplex: 'half' } : {}),
   } as RequestInit);
 }
+
+export { filePreferenceBackend } from './preferences-file.js';
+export type { FilePreferenceBackendOptions } from './preferences-file.js';
