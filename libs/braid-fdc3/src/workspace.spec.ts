@@ -201,6 +201,41 @@ describe('launching', () => {
     expect(running).not.toHaveBeenCalled();
   });
 
+  it('offers only launches for newInstance: true when several apps are running and listening', async () => {
+    const resolveIntent = vi.fn<IntentResolverHook>(async ({ candidates }) => ({ candidate: candidates.find((c) => c.appId === 'research')! }));
+    const { container, mount } = await setup({ resolveIntent });
+    const blotter = (await mount('blotter')).fdc3;
+    const running = vi.fn(async () => undefined);
+    await (await mount('billing')).fdc3.addIntentListener('ViewInvoice', running);
+    await (await mount('research')).fdc3.addIntentListener('ViewInvoice', running);
+
+    const raised = blotter.raiseIntent('ViewInvoice', instrument, undefined, true);
+    await vi.waitFor(() => expect(container.children).toHaveLength(1));
+    const offered = resolveIntent.mock.calls[0][0].candidates.map((c) => [c.appId, c.instanceId !== undefined]);
+    expect(offered.sort()).toEqual([
+      ['billing', false],
+      ['research', false],
+    ]);
+    expect(container.children[0].getAttribute('name')).toBe('research');
+    const fresh = (await container.children[0].booted)!.fdc3;
+    const handled = vi.fn(async () => undefined);
+    await fresh.addIntentListener('ViewInvoice', handled);
+    await raised;
+    await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+    expect(running).not.toHaveBeenCalled();
+  });
+
+  it('launches an app named in a raise when it is not running', async () => {
+    const { container, mount } = await setup();
+    const raised = (await mount('blotter')).fdc3.raiseIntent('ViewInvoice', instrument, { appId: 'billing' });
+    await vi.waitFor(() => expect(container.children).toHaveLength(1));
+    const billing = (await container.children[0].booted)!.fdc3;
+    const handled = vi.fn(async () => undefined);
+    await billing.addIntentListener('ViewInvoice', handled);
+    expect((await raised).source.appId).toBe('billing');
+    await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+  });
+
   it('launches for newInstance: true with no app named, too', async () => {
     const { container, mount } = await setup();
     const blotter = (await mount('blotter')).fdc3;

@@ -954,9 +954,12 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     const fresh = this.newInstance.some((note) => note.from === raiser.instanceId);
     const narrowed = appIntents
       .map((appIntent) => {
-        const listening = appIntent.apps.filter(
-          (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name, context?.type),
-        );
+        // a raise for a new instance is offered launches only: every app the directory names for it
+        const listening = fresh
+          ? []
+          : appIntent.apps.filter(
+              (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name, context?.type),
+            );
         const listens = (appId: string) => listening.some((candidate) => candidate.appId === appId);
         const entries = appIntent.apps.filter((app) => app.instanceId === undefined && !listens(app.appId));
         const waiting = fresh ? [] : entries.filter((app) => this.booting(app.appId));

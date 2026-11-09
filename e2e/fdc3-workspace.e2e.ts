@@ -18,9 +18,9 @@ const fragment = (appId: string, listens: boolean) =>
   html(`<p>${appId}</p><script>
     top.log = top.log || [];
     top.instances = top.instances || [];
-    top.instances.push({ appId: ${JSON.stringify(appId)}, fdc3, braidDesktop });
+    const me = top.instances.push({ appId: ${JSON.stringify(appId)}, fdc3, braidDesktop });
     fdc3.addContextListener('fdc3.instrument', (context) => top.log.push('${appId}:context:' + context.id.ticker));
-    ${listens ? `fdc3.addIntentListener('ViewInvoice', (context) => { top.log.push('${appId}:intent:' + context.id.ticker); });` : ''}
+    ${listens ? `fdc3.addIntentListener('ViewInvoice', (context) => { top.log.push('${appId}:intent:' + context.id.ticker, '${appId}#' + me + ':intent'); });` : ''}
     braidDesktop.onSaveLayout(() => ({ tab: top.tabs && top.tabs[${JSON.stringify(appId)}] }));
     if (braidDesktop.restoredState !== undefined) top.log.push('${appId}:restored:' + JSON.stringify(braidDesktop.restoredState));
   </script>`);
@@ -62,8 +62,22 @@ beforeAll(async () => {
       window.agentReady = (async () => {
         const response = await fetch('/__braid/registry/appd/v2/apps');
         const applications = response.ok ? (await response.json()).applications : [];
-        const store = new URLSearchParams(location.search).get('store') === 'server' ? serverStore() : localStorageStore();
-        return (window.agent = createBraidDesktopAgent({ directory: applications, container: document.getElementById('desk'), store }));
+        const query = new URLSearchParams(location.search);
+        const store = query.get('store') === 'server' ? serverStore() : localStorageStore();
+        // ?resolver=hook: a host resolver that picks research, recording what it was asked
+        window.resolverCalls = [];
+        const resolveIntent = query.get('resolver') === 'hook'
+          ? async (request) => {
+              window.resolverCalls.push(request.candidates.map((c) => c.appId).sort());
+              return { candidate: request.candidates.find((c) => c.appId === 'research') };
+            }
+          : undefined;
+        // any resolver dialog that ever appears is counted
+        window.dialogsSeen = 0;
+        new MutationObserver((records) => {
+          for (const record of records) for (const node of record.addedNodes) if (node.localName === 'braid-intent-resolver') window.dialogsSeen++;
+        }).observe(document.body, { childList: true });
+        return (window.agent = createBraidDesktopAgent({ directory: applications, container: document.getElementById('desk'), store, resolveIntent }));
       })();
     </script>`,
     braidSource: '{ realmGlobals: (fragment) => window.agentReady.then((agent) => agent.realmGlobals(fragment)) }',
@@ -81,6 +95,8 @@ type Win = Window & {
   agent: import('../libs/braid-fdc3/src/index.js').BraidDesktopAgent;
   agentReady: Promise<unknown>;
   tabs: Record<string, string>;
+  resolverCalls: string[][];
+  dialogsSeen: number;
 };
 
 async function signedIn(user: string): Promise<BrowserContext> {
@@ -89,23 +105,27 @@ async function signedIn(user: string): Promise<BrowserContext> {
   return context;
 }
 
-async function open(context: BrowserContext, store: 'local' | 'server'): Promise<Page> {
+async function open(context: BrowserContext, store: 'local' | 'server', query = ''): Promise<Page> {
   const page = await context.newPage();
   page.on('pageerror', (error) => console.error('page error:', error.message));
-  await page.goto(`${host.url}?store=${store}`);
+  await page.goto(`${host.url}?store=${store}${query}`);
   await readySlots(page, 'blotter');
   await page.evaluate(() => (window as unknown as Win).agentReady);
   return page;
 }
 
 /** Mounts an app in the desk the way a host's own markup would, and waits for it to boot. */
-async function place(page: Page, appId: string) {
+async function place(page: Page, appId: string, attributes: Record<string, string> = {}) {
   const count = await page.locator(`#desk fragment-slot[name="${appId}"]`).count();
-  await page.evaluate((id) => {
-    const slot = document.createElement('fragment-slot');
-    slot.setAttribute('name', id);
-    document.getElementById('desk')!.append(slot);
-  }, appId);
+  await page.evaluate(
+    ([id, extra]) => {
+      const slot = document.createElement('fragment-slot');
+      slot.setAttribute('name', id);
+      for (const [name, value] of Object.entries(extra)) slot.setAttribute(name, value);
+      document.getElementById('desk')!.append(slot);
+    },
+    [appId, attributes] as const,
+  );
   await page.waitForFunction(
     ([id, before]) => (window as unknown as Win).instances?.filter((instance) => instance.appId === id).length > before,
     [appId, count] as const,
@@ -116,16 +136,19 @@ const log = (page: Page) => page.evaluate(() => [...((window as unknown as Win).
 const desk = (page: Page) => page.locator('#desk fragment-slot').evaluateAll((slots) => slots.map((slot) => slot.getAttribute('name')));
 
 /** Raises ViewInvoice from the blotter; resolves with where it went, or the error it rejected with. */
-function raise(page: Page) {
-  return page.evaluate(async () => {
-    const blotter = (window as unknown as Win).instances.find((instance) => instance.appId === 'blotter')!.fdc3;
-    try {
-      const resolution = await blotter.raiseIntent('ViewInvoice', { type: 'fdc3.instrument', id: { ticker: 'AAPL' } });
-      return resolution.source.appId;
-    } catch (error) {
-      return `error:${(error as Error).message}`;
-    }
-  });
+function raise(page: Page, app?: { appId: string }, newInstance?: boolean) {
+  return page.evaluate(
+    async ([target, fresh]) => {
+      const blotter = (window as unknown as Win).instances.find((instance) => instance.appId === 'blotter')!.fdc3;
+      try {
+        const resolution = await blotter.raiseIntent('ViewInvoice', { type: 'fdc3.instrument', id: { ticker: 'AAPL' } }, target ?? undefined, fresh ?? undefined);
+        return resolution.source.appId;
+      } catch (error) {
+        return `error:${(error as Error).message}`;
+      }
+    },
+    [app ?? null, newInstance ?? null] as const,
+  );
 }
 
 const dialog = (page: Page) => page.locator('braid-intent-resolver dialog');
@@ -162,6 +185,46 @@ describe('raising an intent', () => {
     expect(await raise(page)).toBe('billing');
     expect(await desk(page)).toEqual(['billing']);
     await expect.poll(() => log(page)).toContain('billing:intent:AAPL');
+    await context.close();
+  });
+
+  it('launches an app named in the raise when it is not running', async () => {
+    const context = await signedIn('named');
+    const page = await open(context, 'local');
+    expect(await raise(page, { appId: 'research' })).toBe('research');
+    expect(await desk(page)).toEqual(['research']);
+    await expect.poll(() => log(page)).toContain('research:intent:AAPL');
+    await context.close();
+  });
+
+  it('newInstance: true with two apps running offers launches only, and the new instance takes it', async () => {
+    const context = await signedIn('fresh');
+    const page = await open(context, 'local');
+    await place(page, 'billing'); // instance #2 (the blotter is #1)
+    await place(page, 'research'); // #3
+
+    const raised = raise(page, undefined, true);
+    await dialog(page).waitFor({ state: 'visible' });
+    const notes = await dialog(page).locator('ul button .note').allTextContents();
+    expect(notes).toEqual(['new', 'new']);
+    await dialog(page).locator('ul button', { hasText: 'Research' }).click();
+    expect(await raised).toBe('research');
+    expect(await desk(page)).toEqual(['billing', 'research', 'research']);
+    await expect.poll(() => log(page)).toContain('research#4:intent');
+    expect((await log(page)).filter((entry) => /#[23]:intent/.test(entry))).toEqual([]);
+    await context.close();
+  });
+
+  it('a resolveIntent hook replaces the dialog', async () => {
+    const context = await signedIn('hook');
+    const page = await open(context, 'local', '&resolver=hook');
+    await place(page, 'billing');
+    await place(page, 'research');
+
+    expect(await raise(page)).toBe('research');
+    await expect.poll(() => log(page)).toContain('research:intent:AAPL');
+    expect(await page.evaluate(() => (window as unknown as Win).resolverCalls)).toEqual([['billing', 'research']]);
+    expect(await page.evaluate(() => (window as unknown as Win).dialogsSeen)).toBe(0);
     await context.close();
   });
 });
@@ -264,7 +327,7 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
   it('saves the desk as a layout and restores it after a reload: slots, channels, app state', async () => {
     const context = await signedIn(`layout-${store}`);
     const page = await open(context, store);
-    await place(page, 'billing');
+    await place(page, 'billing', { src: '/billing/42', props: '{"compact":true}' });
     await place(page, 'research');
     await page.evaluate(async () => {
       const win = window as unknown as Win;
@@ -280,6 +343,11 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
     expect(await desk(page)).toEqual([]);
     await page.evaluate(() => (window as unknown as Win).agent.layouts.restore('morning'));
     expect(await desk(page)).toEqual(['billing', 'research']);
+    const restoredSlot = await page.locator('#desk fragment-slot[name="billing"]').evaluate((slot) => [
+      slot.getAttribute('src'),
+      (slot as HTMLElement & { props: unknown }).props,
+    ]);
+    expect(restoredSlot).toEqual(['/billing/42', { compact: true }]);
     await readySlots(page, 'billing', 'research');
     await expect.poll(() => log(page)).toContain('billing:restored:{"tab":"overdue"}');
     const channels = await page.evaluate(() =>
@@ -302,6 +370,14 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
       expect(await theirs.evaluate(() => (window as unknown as Win).agent.layouts.list())).toEqual([]);
       await stranger.close();
     }
+
+    await page.evaluate(() => (window as unknown as Win).agent.layouts.delete('morning'));
+    await page.reload();
+    await readySlots(page, 'blotter');
+    await page.evaluate(() => (window as unknown as Win).agentReady);
+    expect(await page.evaluate(() => (window as unknown as Win).agent.layouts.list())).toEqual([]);
+    const missing = await page.evaluate(() => (window as unknown as Win).agent.layouts.restore('morning').catch((error: Error) => error.message));
+    expect(missing).toContain('no saved layout');
     await context.close();
   });
 });

@@ -168,14 +168,20 @@ A resolver can only pick one of the candidates it was given. Anything else cance
 ### Preferences
 
 ```ts
-await agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] });
+await agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] }); // replaces, does not merge
+await agent.preferences.getHost(); // { defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] }
 await agent.preferences.intentChoice('ViewChart', 'fdc3.instrument'); // 'chart', or undefined
 await agent.preferences.forgetIntentChoice('ViewChart', 'fdc3.instrument');
 ```
 
 - `defaultUserChannel` is joined for every fragment before its code runs.
+- The agent reads these once, when the first fragment connects, and keeps them; `setHost` updates
+  the kept copy. A store that takes longer than a second to answer is skipped. Fragments connect
+  without the preferences rather than waiting, and the next connect tries the store again.
 - `hiddenApps` are never offered as a choice. When hiding apps leaves one candidate, the raise goes
-  to it without asking.
+  to it without asking; when it leaves none, the raise rejects with `UserCancelledResolution`.
+  Hiding governs the choice, not delivery: an app that is the only one able to take an intent
+  still gets it.
 
 ### App settings: `window.braidDesktop`
 
@@ -213,7 +219,8 @@ if (braidDesktop.restoredState) showTab(braidDesktop.restoredState.tab);
 ```
 
 Restoring mounts fresh slots, rejoins each to its saved channel, and hands each app its saved state
-as `braidDesktop.restoredState`. Apps the directory no longer has are skipped. Slots outside the
+as `braidDesktop.restoredState`. A saved slot for an app the directory doesn't have (or no longer
+has) comes back as a plain slot, without FDC3, channel or state. Slots outside the
 container aren't saved or touched.
 
 ### Where it is all kept
