@@ -43,7 +43,7 @@ export function dialogResolver(document: Document): IntentResolverHook {
         const button = document.createElement('button');
         button.type = 'button';
         button.dataset.index = String(index);
-        if (candidate.icon && /^https?:/i.test(candidate.icon)) {
+        if (candidate.icon && /^https:/i.test(candidate.icon)) {
           const icon = document.createElement('img');
           icon.src = candidate.icon;
           icon.alt = '';

@@ -340,7 +340,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
         get: (key: string) => store.get(prefix + keySegment(String(key))),
         set: (key: string, value: unknown) => store.set(prefix + keySegment(String(key)), value),
         delete: (key: string) => store.delete(prefix + keySegment(String(key))),
-        keys: async () => (await store.list(prefix)).map((key) => decodeURIComponent(key.slice(prefix.length))),
+        keys: async () => decodedSegments(await store.list(prefix), prefix),
       }),
       onSaveLayout(handler: () => unknown) {
         if (typeof handler !== 'function') throw new TypeError('braidDesktop.onSaveLayout takes a function');
@@ -494,7 +494,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       },
 
       async list() {
-        return (await store.list('layouts/')).map((key) => decodeURIComponent(key.slice('layouts/'.length)));
+        return decodedSegments(await store.list('layouts/'), 'layouts/');
       },
 
       async delete(name) {
@@ -502,6 +502,17 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       },
     },
   };
+}
+
+/** Keys under `prefix`, decoded back to the names they were made from; one that does not decode is skipped. */
+function decodedSegments(keys: string[], prefix: string): string[] {
+  return keys.flatMap((key) => {
+    try {
+      return [decodeURIComponent(key.slice(prefix.length))];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** The `<fragment-slot>` children of a container, in document order. */

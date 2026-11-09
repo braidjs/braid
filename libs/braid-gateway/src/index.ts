@@ -53,8 +53,8 @@ export { satisfies, canList, canFetch } from './registry.js';
 export { DEFAULT_DISCOVERY_PATH, DEFAULT_DISCOVERY_PAGE_SIZE } from './discovery.js';
 export type { DiscoveryOptions, DiscoveryEntry, DiscoveryPage } from './discovery.js';
 export { appdResponse, toAppdApplication } from './appd.js';
-export { memoryPreferenceBackend, isPreferenceKey, DEFAULT_PREFERENCES_PATH } from './preferences.js';
-export type { PreferencesOptions, PreferenceBackend } from './preferences.js';
+export { memoryPreferenceBackend, isPreferenceKey, withinLimits, PreferenceQuotaError, DEFAULT_PREFERENCES_PATH } from './preferences.js';
+export type { PreferencesOptions, PreferenceBackend, PreferenceLimits } from './preferences.js';
 export type {
   AppdApplication,
   AppdListResponse,

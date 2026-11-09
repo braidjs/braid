@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { PreferenceBackend } from './preferences.js';
+import { PreferenceQuotaError, withinLimits, type PreferenceBackend } from './preferences.js';
 
 export interface FilePreferenceBackendOptions {
   /** Directory to hold one JSON file per user. Created on first write. */
@@ -13,8 +13,9 @@ export interface FilePreferenceBackendOptions {
  * it contains — can name a path outside `directory` or collide with another.
  *
  * For a single-instance gateway or a mounted volume. Writes are atomic by rename, and writes for
- * one subject run one at a time, so concurrent saves never lose each other's keys. Behind several
- * gateway instances, implement {@link PreferenceBackend} over your database instead.
+ * one subject run one at a time — the quota check with them — so concurrent saves never lose each
+ * other's keys or pass the quota together. Files are readable by the gateway's user only. Behind
+ * several gateway instances, implement {@link PreferenceBackend} over your database instead.
  */
 export function filePreferenceBackend(options: FilePreferenceBackendOptions): PreferenceBackend {
   const { directory } = options;
@@ -37,11 +38,16 @@ export function filePreferenceBackend(options: FilePreferenceBackendOptions): Pr
     const run = (queues.get(subject) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       const entries = await read(subject);
       change(entries);
-      await mkdir(directory, { recursive: true });
+      await mkdir(directory, { recursive: true, mode: 0o700 });
       const file = fileFor(subject);
       const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(temporary, JSON.stringify({ entries }), 'utf8');
-      await rename(temporary, file);
+      try {
+        await writeFile(temporary, JSON.stringify({ entries }), { encoding: 'utf8', mode: 0o600 });
+        await rename(temporary, file);
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
     });
     queues.set(subject, run);
     void run.finally(() => {
@@ -55,8 +61,9 @@ export function filePreferenceBackend(options: FilePreferenceBackendOptions): Pr
       await queues.get(subject)?.catch(() => undefined);
       return (await read(subject))[key];
     },
-    set(subject, key, json) {
+    set(subject, key, json, limits) {
       return update(subject, (entries) => {
+        if (!withinLimits(Object.entries(entries), key, json, limits)) throw new PreferenceQuotaError();
         entries[key] = json;
       });
     },

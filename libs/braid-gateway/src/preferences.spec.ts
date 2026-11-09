@@ -1,23 +1,30 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGateway } from './gateway.js';
-import { isPreferenceKey, memoryPreferenceBackend, type PreferenceBackend } from './preferences.js';
+import { isPreferenceKey, memoryPreferenceBackend, type PreferenceBackend, type PreferenceLimits } from './preferences.js';
 import { filePreferenceBackend } from './preferences-file.js';
 
 const ORIGIN = 'https://portal.example';
+const LIMITS: PreferenceLimits = { maxEntries: 1000, maxTotalBytes: 1024 * 1024 };
 
 /** A gateway whose principal is whoever the `x-user` header names. */
-function gateway(backend: PreferenceBackend = memoryPreferenceBackend(), extra: { maxValueBytes?: number; maxEntries?: number } = {}) {
+function gateway(
+  backend: PreferenceBackend = memoryPreferenceBackend(),
+  extra: { maxValueBytes?: number; maxEntries?: number; maxTotalBytes?: number; path?: string } = {},
+  principal?: (request: Request) => { subject: string } | undefined,
+) {
   return createGateway({
     registry: [{ id: 'billing', endpoint: 'https://billing.internal' }],
     mode: 'production',
     preferences: { backend, ...extra },
-    principal: (request) => {
-      const user = request.headers.get('x-user');
-      return user ? { subject: user } : undefined;
-    },
+    principal:
+      principal ??
+      ((request) => {
+        const user = request.headers.get('x-user');
+        return user ? { subject: user } : undefined;
+      }),
   });
 }
 
@@ -36,6 +43,16 @@ const put = (path: string, value: unknown, user = 'alice', headers: Record<strin
     body: JSON.stringify(value),
     headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...headers },
   });
+
+const directories: string[] = [];
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+async function tempDirectory() {
+  const created = await mkdtemp(join(tmpdir(), 'braid-prefs-'));
+  directories.push(created);
+  return created;
+}
 
 describe('isPreferenceKey()', () => {
   it('accepts slash-separated safe segments and nothing else', () => {
@@ -128,6 +145,52 @@ describe('the preferences endpoint', () => {
     expect((await braid.handle(put('/a', 4)))!.status).toBe(204);
   });
 
+  it('holds the entry and byte quotas under concurrent writes, in both backends', async () => {
+    for (const backend of [memoryPreferenceBackend(), filePreferenceBackend({ directory: await tempDirectory() })]) {
+      const braid = gateway(backend, { maxEntries: 3 });
+      const statuses = await Promise.all(Array.from({ length: 10 }, (_, index) => braid.handle(put(`/k${index}`, index)).then((r) => r!.status)));
+      expect(statuses.filter((status) => status === 204)).toHaveLength(3);
+      expect(statuses.filter((status) => status === 413)).toHaveLength(7);
+      expect(await backend.list('alice', '')).toHaveLength(3);
+    }
+    const small = gateway(memoryPreferenceBackend(), { maxTotalBytes: 100 });
+    expect((await small.handle(put('/a', 'x'.repeat(60))))!.status).toBe(204);
+    expect((await small.handle(put('/b', 'x'.repeat(60))))!.status).toBe(413);
+    // replacing a value counts the new one, not both
+    expect((await small.handle(put('/a', 'y'.repeat(60))))!.status).toBe(204);
+  });
+
+  it('refuses cross-origin requests by Origin when the browser sends no Sec-Fetch-Site, and cross-site reads', async () => {
+    const braid = gateway();
+    const fromElsewhere = { 'content-type': 'application/json', origin: 'https://evil.example' };
+    const write = request('/k', { method: 'PUT', user: 'alice', body: '1', headers: fromElsewhere });
+    expect((await braid.handle(write))!.status).toBe(403);
+    const remove = request('/k', { method: 'DELETE', user: 'alice', headers: { origin: 'https://evil.example' } });
+    expect((await braid.handle(remove))!.status).toBe(403);
+    const sameOrigin = request('/k', { method: 'PUT', user: 'alice', body: '1', headers: { 'content-type': 'application/json', origin: ORIGIN } });
+    expect((await braid.handle(sameOrigin))!.status).toBe(204);
+    const probe = request('/k', { user: 'alice', headers: { 'sec-fetch-site': 'cross-site' } });
+    expect((await braid.handle(probe))!.status).toBe(403);
+  });
+
+  it('answers a principal resolver that throws with a generic 500', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const braid = gateway(memoryPreferenceBackend(), {}, () => {
+      throw new Error('session store down');
+    });
+    const response = (await braid.handle(request('/k', { user: 'alice' })))!;
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain('session store');
+    error.mockRestore();
+  });
+
+  it('refuses a path that would claim every request', () => {
+    for (const path of ['/', '', 'prefs', '//x']) {
+      expect(() => gateway(memoryPreferenceBackend(), { path }), path).toThrow('preferences.path');
+    }
+    expect(() => gateway(memoryPreferenceBackend(), { path: '/me/prefs/' })).not.toThrow();
+  });
+
   it('refuses malformed keys, prefixes and bodies with 400', async () => {
     const braid = gateway();
     for (const path of ['/a%2Fb', '/a%20b', '/%E0%A4%A', '/a/%2E']) {
@@ -157,33 +220,27 @@ describe('the preferences endpoint', () => {
 });
 
 describe('filePreferenceBackend()', () => {
-  const directories: string[] = [];
-  afterEach(async () => {
-    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-  });
-  async function directory() {
-    const created = await mkdtemp(join(tmpdir(), 'braid-prefs-'));
-    directories.push(created);
-    return created;
-  }
+  const directory = tempDirectory;
 
   it('keeps entries across backends on the same directory, per subject', async () => {
     const dir = await directory();
     const first = filePreferenceBackend({ directory: dir });
-    await first.set('alice', 'apps/billing/theme', '"dark"');
-    await first.set('../../etc/passwd', 'k', '1');
+    await first.set('alice', 'apps/billing/theme', '"dark"', LIMITS);
+    await first.set('../../etc/passwd', 'k', '1', LIMITS);
 
     const second = filePreferenceBackend({ directory: dir });
     expect(await second.get('alice', 'apps/billing/theme')).toBe('"dark"');
     expect(await second.get('bob', 'apps/billing/theme')).toBeUndefined();
     expect(await second.list('alice', 'apps/')).toEqual(['apps/billing/theme']);
-    // one hashed file per subject, all inside the directory
-    expect((await readdir(dir)).every((name) => /^[0-9a-f]{64}\.json$/.test(name))).toBe(true);
+    // one hashed file per subject, all inside the directory, readable by the gateway's user only
+    const names = await readdir(dir);
+    expect(names.every((name) => /^[0-9a-f]{64}\.json$/.test(name))).toBe(true);
+    expect((await stat(join(dir, names[0]))).mode & 0o777).toBe(0o600);
   });
 
   it('loses no key when writes for one subject race', async () => {
     const backend = filePreferenceBackend({ directory: await directory() });
-    await Promise.all(Array.from({ length: 20 }, (_, index) => backend.set('alice', `k${index}`, String(index))));
+    await Promise.all(Array.from({ length: 20 }, (_, index) => backend.set('alice', `k${index}`, String(index), LIMITS)));
     expect((await backend.list('alice', '')).length).toBe(20);
     await backend.delete('alice', 'k3');
     expect(await backend.get('alice', 'k3')).toBeUndefined();

@@ -379,17 +379,25 @@ createGateway({
 | `DELETE /__braid/preferences/{key}` | 204 |
 | `GET /__braid/preferences?prefix={prefix}` | 200 `{ "keys": [...] }` |
 
-- **Keyed by `subject`.** Entries belong to the `subject` your `principal` resolver returns, such as
-  an OIDC `sub`. A request without one is refused with 401. Nothing in a request can name another
-  subject, so one user can't read or write another's entries.
-- **No cross-site writes.** A write must be `application/json`, which an HTML form can't send and
-  a cross-origin `fetch` must preflight. A write the browser marks as cross-site or same-site (not
-  same-origin) gets 403.
-- **Bounded.** Values are limited to 256 KiB (`maxValueBytes`) and a user to 1000 entries
-  (`maxEntries`); past either, 413. A key is up to eight `/`-separated segments of
-  `A-Z a-z 0-9 . _ ~ % -`, each percent-encoded in the URL. Anything else gets 400.
+- **Keyed by `subject`.** Entries belong to the `subject` your `principal` resolver returns. It
+  must be globally unique and come from your session, never from anything the client sends. An
+  OIDC `sub` is unique only per issuer, so with several identity providers use `${iss}|${sub}`.
+  A request without a subject is refused with 401. Nothing in a request can name another subject,
+  so one user can't read or write another's entries.
+- **Same-origin only.** Any request that `Sec-Fetch-Site` marks as cross-site or same-site, or
+  that has an `Origin` from another origin when that header is absent, gets 403. That covers reads
+  too. PUT and DELETE also need a CORS preflight, which this endpoint never grants, and a PUT must
+  be `application/json` (415 otherwise), which an HTML form can't send.
+- **Bounded.** A value is limited to 64 KiB (`maxValueBytes`), and a user to 1000 entries
+  (`maxEntries`) and 1 MiB in all (`maxTotalBytes`); past any of these, 413. The backend enforces
+  the quotas together with the write, so concurrent requests can't exceed them. A key is up to
+  eight `/`-separated segments of `A-Z a-z 0-9 . _ ~ % -`, each percent-encoded in the URL;
+  anything else gets 400. A slow body is bounded only by your server's own timeouts
+  (`server.requestTimeout` in Node).
 - **Never cached.** Every answer is `private, no-store`.
 - **Backends.** `memoryPreferenceBackend()` for tests. `filePreferenceBackend({ directory })`, from
-  `@braidlabs/gateway/node`, keeps one file per user, named by a hash of the subject, written
-  atomically. Behind several gateway instances, implement `PreferenceBackend` (`get`, `set`,
-  `delete`, `list`) over your database.
+  `@braidlabs/gateway/node`, keeps one file per user (mode 0600, named by a hash of the subject),
+  written atomically. Behind several gateway instances, implement `PreferenceBackend` (`get`,
+  `set`, `delete`, `list`) over your database. Its `set(subject, key, json, limits)` must check
+  `limits` in the same transaction as the write. `withinLimits()` does the arithmetic. Reject with
+  `PreferenceQuotaError` to have the gateway answer 413.
