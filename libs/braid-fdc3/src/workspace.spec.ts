@@ -316,12 +316,55 @@ describe('launching, under the races review found', () => {
     expect(container.children.map((slot) => slot.getAttribute('name'))).toEqual(['research']);
   });
 
-  it('two newInstance raises launch two instances', async () => {
+  it('two newInstance raises launch two instances, and each takes its own intent', async () => {
     const { container, mount } = await setup();
     const blotter = (await mount('blotter')).fdc3;
-    void blotter.raiseIntent('ViewResearch', instrument, { appId: 'research' }, true).catch(() => undefined);
-    void blotter.raiseIntent('ViewResearch', instrument, { appId: 'research' }, true).catch(() => undefined);
+    const one = blotter.raiseIntent('ViewResearch', { ...instrument, id: { ticker: 'ONE' } }, { appId: 'research' }, true);
+    const two = blotter.raiseIntent('ViewResearch', { ...instrument, id: { ticker: 'TWO' } }, { appId: 'research' }, true);
     await vi.waitFor(() => expect(container.children).toHaveLength(2));
+    const received: string[][] = [[], []];
+    const instances = await Promise.all(container.children.map((slot) => slot.booted));
+    await Promise.all(
+      instances.map((globals, index) =>
+        globals!.fdc3.addIntentListener('ViewResearch', async (context) => void received[index].push(String(context.id?.ticker))),
+      ),
+    );
+    const ids = await Promise.all(instances.map(async (globals) => (await globals!.fdc3.getInfo()).appMetadata.instanceId));
+    const sources = [(await one).source.instanceId, (await two).source.instanceId];
+    await vi.waitFor(() => expect(received.flat()).toHaveLength(2));
+    expect(received.map((tickers) => tickers.length)).toEqual([1, 1]);
+    expect(new Set(sources)).toEqual(new Set(ids));
+  });
+
+  it('a newInstance raise goes to the instance launched for it, not one that starts listening first', async () => {
+    const { container, mount } = await setup();
+    const blotter = (await mount('blotter')).fdc3;
+    const old = (await mount('research')).fdc3; // connected, not yet listening
+    const raised = blotter.raiseIntent('ViewResearch', instrument, { appId: 'research' }, true);
+    await vi.waitFor(() => expect(container.children).toHaveLength(1));
+    const oldHandler = vi.fn(async () => undefined);
+    await old.addIntentListener('ViewResearch', oldHandler);
+    const fresh = (await container.children[0].booted)!.fdc3;
+    const freshHandler = vi.fn(async () => undefined);
+    await fresh.addIntentListener('ViewResearch', freshHandler);
+
+    expect((await raised).source.instanceId).toBe((await fresh.getInfo()).appMetadata.instanceId);
+    await vi.waitFor(() => expect(freshHandler).toHaveBeenCalledTimes(1));
+    expect(oldHandler).not.toHaveBeenCalled();
+  });
+
+  it('tells the resolver which apps are starting rather than to be launched', async () => {
+    const resolveIntent = vi.fn<IntentResolverHook>(async () => undefined);
+    const { mount } = await setup({ resolveIntent });
+    const blotter = (await mount('blotter')).fdc3;
+    await mount('research'); // connected, not listening
+    await (await mount('billing')).fdc3.addIntentListener('ViewInvoice', async () => undefined);
+    await blotter.raiseIntent('ViewInvoice', instrument).catch(() => undefined);
+    const offered = resolveIntent.mock.calls[0][0].candidates.map((c) => [c.appId, c.instanceId !== undefined, c.starting === true]);
+    expect(offered.sort()).toEqual([
+      ['billing', true, false],
+      ['research', false, true],
+    ]);
   });
 });
 

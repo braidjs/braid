@@ -84,8 +84,10 @@ export interface BraidDesktopAgentOptions {
 export interface IntentCandidate {
   intent: string;
   appId: string;
-  /** Set for a running instance; absent for the app, which choosing launches. */
+  /** Set for a running instance; absent for the app itself, which choosing launches — or, when `starting`, waits for. */
   instanceId?: string;
+  /** The app is open but not yet listening for the intent; choosing it waits for that instance rather than launching one. */
+  starting?: true;
   /** The directory's title for the app, or its id. */
   title: string;
   /** The directory's first icon, if it has one. */
@@ -217,6 +219,12 @@ const intentKey = (intent: string, contextType: string) => `intents/${keySegment
 const layoutKey = (name: string) => `layouts/${keySegment(name)}`;
 const appPrefix = (appId: string) => `apps/${keySegment(appId)}/`;
 
+/** What FINOS's IntentHandler keeps for an intent it holds until an app starts: the parts read here. */
+interface HeldIntent {
+  appId?: { appId: string; instanceId?: string };
+  r?: { from?: { instanceId?: string } };
+}
+
 /** One connected fragment, as the agent's host side sees it. */
 interface Instance {
   appId: string;
@@ -276,6 +284,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   // which instances are listening for what: the agent's intent handler is the source of truth
   const intentHandler = server.handlers.find((handler): handler is IntentHandler => handler instanceof IntentHandler);
   context.hasListener = (instanceId, intent, contextType) => intentHandler?.hasListener(instanceId, intent, contextType) ?? false;
+  context.heldIntents = () => (intentHandler as unknown as { pendingIntents?: Set<HeldIntent> } | undefined)?.pendingIntents ?? new Set();
 
   /**
    * The page's preferences, read once and kept: every fragment's connect waits on them, so a slow
@@ -305,7 +314,11 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
           return {
             intent: appIntent.intent.name,
             appId: app.appId,
-            ...(app.instanceId ? { instanceId: app.instanceId } : {}),
+            ...(app.instanceId
+              ? { instanceId: app.instanceId }
+              : (app.instanceMetadata as { braidStarting?: unknown } | undefined)?.braidStarting === true
+                ? { starting: true as const }
+                : {}),
             title: record?.title ?? app.appId,
             ...(icon ? { icon } : {}),
           };
@@ -733,7 +746,7 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    * same task, so a note it never claims is dropped after one.
    */
   private readonly opening: { from: InstanceID; appId: string }[] = [];
-  private readonly newInstance: { from: InstanceID }[] = [];
+  private readonly newInstance: { from: InstanceID; intent?: string; contextType?: string }[] = [];
 
   constructor(
     private readonly schedule: (task: () => void) => void,
@@ -806,7 +819,11 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     }
     if (type !== 'raiseIntentRequest' && type !== 'raiseIntentForContextRequest') return message;
     if (payload?.newInstance === true) {
-      BraidServerContext.hold(this.newInstance, { from });
+      BraidServerContext.hold(this.newInstance, {
+        from,
+        ...(typeof payload.intent === 'string' ? { intent: payload.intent } : {}),
+        ...(typeof payload.context?.type === 'string' ? { contextType: payload.context.type } : {}),
+      });
       return message;
     }
     const app = payload?.app;
@@ -860,19 +877,37 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   async open(appId: string, from?: AppRegistration): Promise<InstanceID> {
     if (!this.launchable) return this.live(appId)[0]?.instanceId ?? this.createUUID();
     const raiser = from?.instanceId;
-    const launch =
-      BraidServerContext.take(this.opening, (note) => note.from === raiser && note.appId === appId) ||
-      BraidServerContext.take(this.newInstance, (note) => note.from === raiser);
-    if (!launch) {
-      const booting = this.live(appId)[0]?.instanceId ?? this.mounting(appId);
-      if (booting) return booting;
+    if (BraidServerContext.take(this.opening, (note) => note.from === raiser && note.appId === appId)) {
+      if (!this.knows(appId)) throw new Error(OpenError.AppNotFound);
+      return this.launch(appId) ?? this.createUUID();
     }
-    if (!this.knows(appId)) throw new Error(OpenError.AppNotFound);
-    return this.launch(appId) ?? this.createUUID();
+    // from here on, FINOS is holding an intent for the app
+    const fresh = BraidServerContext.take(this.newInstance, (note) => note.from === raiser);
+    const instanceId = (fresh ? undefined : (this.live(appId)[0]?.instanceId ?? this.mounting(appId))) ?? this.launch(appId);
+    if (!instanceId) return this.createUUID();
+    this.pin(appId, raiser, instanceId);
+    return instanceId;
   }
 
   /** Whether the directory has the app; set by the agent. */
   knows: (appId: string) => boolean = () => false;
+
+  /** The intents FINOS is holding for an app to start; set by the agent from its intent handler. */
+  heldIntents: () => Set<HeldIntent> = () => new Set();
+
+  /**
+   * Ties the intent FINOS has just held for `appId` to the instance that will take it. FINOS holds
+   * it for "any instance of the app" and drops the id open() returns, so otherwise the first
+   * instance to add a listener takes it — an older one, rather than the one launched for it. It
+   * adds the held intent and calls open() in one step, so the newest untied one from this raiser
+   * is this raise's.
+   */
+  private pin(appId: string, raiser: InstanceID | undefined, instanceId: InstanceID): void {
+    const held = [...this.heldIntents()]
+      .reverse()
+      .find((intent) => intent.appId?.appId === appId && intent.appId.instanceId === undefined && intent.r?.from?.instanceId === raiser);
+    if (held) held.appId = { appId, instanceId };
+  }
 
   /**
    * `fdc3.close()`, refused: fragments are torn down by their host, not by the agent. The agent
@@ -951,7 +986,12 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    */
   async narrowIntents(raiser: AppIdentifier, appIntents: AppIntent[], context?: Context): Promise<AppIntent[]> {
     // a raise for a new instance is not held for a booting one; open() takes the note when it launches
-    const fresh = this.newInstance.some((note) => note.from === raiser.instanceId);
+    const fresh = this.newInstance.some(
+      (note) =>
+        note.from === raiser.instanceId &&
+        (note.contextType ?? 'fdc3.nothing') === (context?.type ?? 'fdc3.nothing') &&
+        (note.intent === undefined || appIntents.some((appIntent) => appIntent.intent.name === note.intent)),
+    );
     const narrowed = appIntents
       .map((appIntent) => {
         // a raise for a new instance is offered launches only: every app the directory names for it
@@ -965,7 +1005,9 @@ class BraidServerContext implements ServerContext<AppRegistration> {
         const waiting = fresh ? [] : entries.filter((app) => this.booting(app.appId));
         // launching is for an app nothing running or booting can take the intent for
         const launches = this.launchable ? entries.filter((app) => !waiting.includes(app)) : [];
-        return { ...appIntent, apps: [...listening, ...waiting, ...launches] };
+        // marked, so the resolver can say choosing it waits rather than launches
+        const marked = waiting.map((app) => ({ ...app, instanceMetadata: { ...app.instanceMetadata, braidStarting: true } }));
+        return { ...appIntent, apps: [...listening, ...marked, ...launches] };
       })
       .filter((appIntent) => appIntent.apps.length > 0);
     return narrowed;

@@ -99,7 +99,7 @@ platform:
   reporting it, and any call still pending is answered with `AgentDisconnected`.
 - **Intents wait for a fragment that is still booting.** A fragment is mounted before its bundle
   has added its intent listener. An intent raised to it in that window is held until the listener
-  arrives, or for up to 20 seconds, rather than lost. Raising by app (`{ appId: 'billing' }`)
+  arrives, or for up to 20 seconds, rather than lost. `raiseIntent` by app (`{ appId: 'billing' }`)
   resolves to that app's live instance. A raise with `newInstance: false` and no target is not
   held: while the app's only instance is still booting, it rejects with `TargetInstanceUnavailable`.
 - **FDC3 3.0 metadata comes through.** A `traceId` passed to `broadcast` or `raiseIntent` reaches
@@ -138,18 +138,29 @@ of it:
 - An intent that no running app can take launches the app that declares it, and the intent is
   delivered once that fragment adds its listener.
 - `raiseIntent(intent, context, app, true)` (`newInstance: true`) launches a new instance even
-  when one is running.
+  when one is running, and the intent goes to that new instance.
+- An intent for an app that is already open but not listening yet (still booting, or mounted in
+  the container and not yet connected) waits for that instance instead of launching another. So two
+  quick raises for an app that isn't running mount it once.
 
-Without a container nothing is launched. `fdc3.open` rejects with `ErrorOnLaunch`, as it always has.
+Without a container nothing is launched. `fdc3.open` rejects with `ErrorOnLaunch` and a
+`newInstance: true` raise with `TargetAppUnavailable`, as they always have. A raise that only an app
+with no instance could take rejects with `NoAppsFound`.
 
 ### Choosing an app for an intent
 
 When more than one app can take a raise, the agent asks a resolver. In a browser the default is a
-built-in modal dialog. It lists the running instances and, for apps with no instance listening, a
-"new" entry that launches one. Tab moves between choices, Enter picks one and Escape cancels, which
-rejects the raise with `UserCancelledResolution`. Ticking **Remember my choice** saves the app for
-that intent and context type, and the next raise goes straight to it. If that app is no longer a
-candidate, the dialog comes back.
+built-in modal dialog. Each choice is marked:
+
+- **open**: a running instance that listens for the intent;
+- **starting**: an app that is open but not listening yet, so choosing it waits for that instance;
+- **new**: an app with no instance, so choosing it launches one.
+
+A `newInstance: true` raise is offered only **new** entries, one for each app that declares the
+intent. Tab moves between choices, Enter picks one and Escape cancels, which rejects the raise with
+`UserCancelledResolution`. Ticking **Remember my choice** saves the app for that intent and context
+type, and the next raise goes straight to it. If that app is no longer a candidate, the dialog comes
+back.
 
 To use your own UI, pass `resolveIntent`. Pass `false` to refuse such raises:
 
@@ -157,7 +168,7 @@ To use your own UI, pass `resolveIntent`. Pass `false` to refuse such raises:
 createBraidDesktopAgent({
   directory,
   resolveIntent: async ({ context, raisedBy, candidates }) => {
-    const candidate = await myPicker(candidates); // { intent, appId, instanceId?, title, icon? }
+    const candidate = await myPicker(candidates); // { intent, appId, instanceId?, starting?, title, icon? }
     return candidate && { candidate, remember: true };
   },
 });

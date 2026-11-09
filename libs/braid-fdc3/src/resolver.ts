@@ -53,9 +53,11 @@ export function dialogResolver(document: Document): IntentResolverHook {
         name.textContent = intents.length === 1 ? candidate.title : `${candidate.title} — ${candidate.intent}`;
         const note = document.createElement('span');
         note.className = 'note';
-        note.textContent = candidate.instanceId ? 'open' : 'new';
+        const state = candidate.instanceId ? 'open' : candidate.starting ? 'starting' : 'new';
+        note.textContent = state;
         button.append(name, note);
-        button.setAttribute('aria-label', `${name.textContent}, ${candidate.instanceId ? 'already open' : 'opens a new one'}`);
+        const spoken = { open: 'already open', starting: 'starting', new: 'opens a new one' }[state];
+        button.setAttribute('aria-label', `${name.textContent}, ${spoken}`);
         if (index === 0) button.autofocus = true;
         item.append(button);
         list.append(item);

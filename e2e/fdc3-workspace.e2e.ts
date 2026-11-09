@@ -215,6 +215,19 @@ describe('raising an intent', () => {
     await context.close();
   });
 
+  it('two quick newInstance raises launch two instances, and each takes one', async () => {
+    const context = await signedIn('fresh-twice');
+    const page = await open(context, 'local');
+    const results = await Promise.all([raise(page, { appId: 'research' }, true), raise(page, { appId: 'research' }, true)]);
+    expect(results).toEqual(['research', 'research']);
+    expect(await desk(page)).toEqual(['research', 'research']);
+    await expect.poll(async () => (await log(page)).filter((entry) => /^research#\d+:intent$/.test(entry)).sort()).toEqual([
+      'research#2:intent',
+      'research#3:intent',
+    ]);
+    await context.close();
+  });
+
   it('a resolveIntent hook replaces the dialog', async () => {
     const context = await signedIn('hook');
     const page = await open(context, 'local', '&resolver=hook');

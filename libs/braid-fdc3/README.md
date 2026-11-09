@@ -26,7 +26,7 @@ import { createBraidDesktopAgent, serverStore } from '@braidlabs/fdc3';
 
 const agent = createBraidDesktopAgent({
   directory: applications,
-  container: document.getElementById('desk'), // where fdc3.open and intents mount apps
+  container: document.getElementById('desk')!, // where fdc3.open and intents mount apps
   store: serverStore(), // per signed-in user, on the gateway; localStorageStore() is the default
 });
 
