@@ -319,6 +319,8 @@ describe('resolving intents', () => {
     await expect(blotter.raiseIntent('ViewInvoice', instrument)).rejects.toThrow('UserCancelledResolution');
     const offered = resolveIntent.mock.calls[0][0].candidates.map((c: { appId: string; instanceId?: string }) => [c.appId, !!c.instanceId]);
     expect(offered).toEqual(expect.arrayContaining([['billing', true], ['research', false]]));
+    // billing is already listening, so launching another is not offered
+    expect(offered).toHaveLength(2);
   });
 });
 

@@ -850,8 +850,8 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    * - an app without an instance (the directory's entry) while one is mounted and none of its
    *   instances listens yet — the agent then holds the intent until the listener arrives, and
    *   {@link open} hands it that instance;
-   * - with a container, any other app the directory names for the intent, which choosing launches.
-   *   A raise that asked for a new instance gets only these.
+   * - with a container, an app the directory names for the intent that has no instance listening
+   *   for it, which choosing launches. A raise that asked for a new instance gets only these.
    *
    * Without a container, an app with no live instance drops out, which makes the raise a clean
    * `NoAppsFound`.
@@ -873,7 +873,10 @@ class BraidServerContext implements ServerContext<AppRegistration> {
           : entries.filter(
               (app) => this.live(app.appId).length > 0 && !listening.some((candidate) => candidate.appId === app.appId),
             );
-        const launches = this.launchable ? entries.filter((app) => !waiting.includes(app)) : [];
+        // launching is for an app nothing running can take the intent for; one already listening is the choice
+        const launches = this.launchable
+          ? entries.filter((app) => !waiting.includes(app) && !listening.some((candidate) => candidate.appId === app.appId))
+          : [];
         for (const app of waiting) booting.add(app.appId);
         return { ...appIntent, apps: [...listening, ...waiting, ...launches] };
       })

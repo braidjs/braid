@@ -3,14 +3,14 @@ import type { IntentCandidate, IntentResolverHook } from './agent.js';
 /**
  * The built-in intent resolver: a modal `<dialog>` listing the candidates, with "Remember my
  * choice". Keyboard-usable as a dialog is — Tab between choices, Enter to pick, Escape to cancel —
- * and announced by its heading. It lives in a shadow root of its own, so neither the page's styles
- * nor its fragments' reach it.
+ * and announced by its heading. It lives in a shadow root of its own, so the page's styles do not
+ * reach it.
  */
 export function dialogResolver(document: Document): IntentResolverHook {
   return ({ candidates, context }) =>
     new Promise((resolve) => {
       const host = document.createElement('braid-intent-resolver');
-      const root = host.attachShadow({ mode: 'closed' });
+      const root = host.attachShadow({ mode: 'open' });
       const dialog = document.createElement('dialog');
       dialog.setAttribute('aria-labelledby', 'title');
       const intents = [...new Set(candidates.map((candidate) => candidate.intent))];
