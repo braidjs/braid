@@ -143,7 +143,10 @@ export interface BraidDesktopApi {
     delete(key: string): Promise<void>;
     keys(): Promise<string[]>;
   };
-  /** Supplies this instance's state when the page's layout is saved; it must be JSON. Returns an unsubscribe. */
+  /**
+   * Supplies this instance's state when the page's layout is saved: JSON, within 2 seconds. The
+   * handler registered last is the one asked. Returns an unsubscribe.
+   */
   onSaveLayout(handler: () => unknown): () => void;
   /** The state this instance saved, when it was mounted by restoring a layout; otherwise undefined. */
   readonly restoredState: unknown;
@@ -185,6 +188,8 @@ const MESSAGE_TIMEOUT_MS = 10_000;
 const INTENT_TIMEOUT_MS = 20_000;
 /** How long saving a layout waits for each app's state. */
 const SAVE_STATE_TIMEOUT_MS = 2_000;
+/** How long a fragment's connect waits to read the page's preferences before going without. */
+const HOST_READ_TIMEOUT_MS = 1_000;
 
 /** FDC3's eight recommended user channels, as `@finos/fdc3-standard` defines them. */
 const USER_CHANNELS: readonly [string, string][] = [
@@ -250,6 +255,17 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   });
   context.launchable = container !== undefined;
   context.knows = (appId) => directory.retrieveAppsById(appId).length > 0;
+  // a slot in the container that has not connected yet: launched by the agent, or placed by the host
+  context.mounting = (appId) => {
+    if (!container) return undefined;
+    for (const slot of slotsIn(container)) {
+      if (slot.getAttribute('name') !== appId || bySlot.has(slot)) continue;
+      let launch = launches.get(slot);
+      if (!launch) launches.set(slot, (launch = { instanceId: crypto.randomUUID() }));
+      return launch.instanceId;
+    }
+    return undefined;
+  };
   const userChannels: ChannelState[] = USER_CHANNELS.map(([color, glyph]) => ({
     id: `fdc3.channel.${glyph}`,
     type: ChannelType.user,
@@ -261,14 +277,21 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   const intentHandler = server.handlers.find((handler): handler is IntentHandler => handler instanceof IntentHandler);
   context.hasListener = (instanceId, intent, contextType) => intentHandler?.hasListener(instanceId, intent, contextType) ?? false;
 
-  async function hostPreferences(): Promise<HostPreferences> {
-    try {
-      const stored = await store.get(HOST_KEY);
-      return stored && typeof stored === 'object' ? (stored as HostPreferences) : {};
-    } catch {
-      // preferences that cannot be read are no preferences, not a fragment that fails to connect
-      return {};
-    }
+  /**
+   * The page's preferences, read once and kept: every fragment's connect waits on them, so a slow
+   * store must not slow every boot. A read that fails or takes too long is no preferences — not a
+   * fragment that fails to connect — and is tried again next time.
+   */
+  let host: Promise<HostPreferences> | undefined;
+  function hostPreferences(): Promise<HostPreferences> {
+    host ??= withTimeout(store.get(HOST_KEY), HOST_READ_TIMEOUT_MS).then(
+      (stored) => (stored && typeof stored === 'object' ? (stored as HostPreferences) : {}),
+      () => {
+        host = undefined;
+        return {};
+      },
+    );
+    return host;
   }
 
   /** The candidates for a raise, as the resolver sees them; hidden apps left out. */
@@ -318,7 +341,10 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     const contextType = typeof raised?.type === 'string' ? raised.type : 'fdc3.nothing';
     let choice = candidates.length === 1 ? candidates[0] : await remembered(candidates, contextType);
     if (!choice && candidates.length > 1 && resolveIntent) {
-      const answer = await resolveIntent({ context: raised, raisedBy, candidates: candidates.map((candidate) => ({ ...candidate })) });
+      // a resolver that throws has chosen nothing
+      const answer = await resolveIntent({ context: raised, raisedBy, candidates: candidates.map((candidate) => ({ ...candidate })) }).catch(
+        () => undefined,
+      );
       // only one of what was offered: a resolver cannot route the intent anywhere else
       const offered = answer && candidates.find((candidate) => sameCandidate(candidate, answer.candidate));
       if (offered) {
@@ -356,8 +382,8 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     signal: AbortSignal,
     slot: Element | undefined,
   ): Promise<{ fdc3: DesktopAgent; braidDesktop: BraidDesktopApi } | undefined> {
+    // kept until the connect succeeds: a boot cut short and retried connects as the same launch
     const launch = slot ? launches.get(slot) : undefined;
-    if (slot) launches.delete(slot);
     const instanceId = launch?.instanceId ?? context.createUUID();
     let open = true;
 
@@ -411,7 +437,10 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     // adds next finds FINOS ready to deliver the open's context to it.
     if (launch) await context.announce(server, instanceId);
     if (signal.aborted) return undefined;
-    if (slot) bySlot.set(slot, instance);
+    if (slot) {
+      launches.delete(slot);
+      bySlot.set(slot, instance);
+    }
     return { fdc3: agent, braidDesktop: braidDesktopFor(appId, instance, launch?.restore?.state) };
   }
 
@@ -425,14 +454,27 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     const handler = instance && [...instance.saveHandlers].at(-1);
     if (!handler) return undefined;
     try {
-      const state = await Promise.race([
-        Promise.resolve().then(handler),
-        new Promise((resolve) => setTimeout(resolve, SAVE_STATE_TIMEOUT_MS, undefined)),
-      ]);
+      const state = await withTimeout(Promise.resolve().then(handler), SAVE_STATE_TIMEOUT_MS);
       return state === undefined ? undefined : JSON.parse(JSON.stringify(state));
     } catch {
       return undefined;
     }
+  }
+
+  async function savedSlot(slot: Element): Promise<SavedSlot> {
+    const saved: SavedSlot = { appId: slot.getAttribute('name')! };
+    const instance = bySlot.get(slot);
+    const src = slot.getAttribute('src');
+    if (src !== null) saved.src = src;
+    const props = (slot as Element & { props?: Record<string, unknown> }).props;
+    if (props && typeof props === 'object' && Object.keys(props).length > 0) saved.props = JSON.parse(JSON.stringify(props));
+    const [channel, state] = await Promise.all([
+      instance ? withTimeout(instance.fdc3.getCurrentChannel(), SAVE_STATE_TIMEOUT_MS).catch(() => null) : null,
+      stateOf(instance),
+    ]);
+    if (channel?.type === 'user') saved.channel = channel.id;
+    if (state !== undefined) saved.state = state;
+    return saved;
   }
 
   return {
@@ -444,7 +486,9 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     preferences: {
       getHost: hostPreferences,
       async setHost(preferences) {
-        await store.set(HOST_KEY, preferences ?? {});
+        const value = JSON.parse(JSON.stringify(preferences ?? {})) as HostPreferences;
+        await store.set(HOST_KEY, value);
+        host = Promise.resolve(value);
       },
       async intentChoice(intent, contextType) {
         const stored = (await store.get(intentKey(intent, contextType))) as { appId?: unknown } | undefined;
@@ -457,23 +501,9 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
 
     layouts: {
       async save(name) {
-        const slots: SavedSlot[] = [];
-        for (const slot of slotsIn(needContainer())) {
-          const appId = slot.getAttribute('name');
-          if (!appId) continue;
-          const instance = bySlot.get(slot);
-          const saved: SavedSlot = { appId };
-          const src = slot.getAttribute('src');
-          if (src !== null) saved.src = src;
-          const props = (slot as Element & { props?: Record<string, unknown> }).props;
-          if (props && typeof props === 'object' && Object.keys(props).length > 0) saved.props = JSON.parse(JSON.stringify(props));
-          const channel = instance ? await instance.fdc3.getCurrentChannel().catch(() => null) : null;
-          if (channel?.type === 'user') saved.channel = channel.id;
-          const state = await stateOf(instance);
-          if (state !== undefined) saved.state = state;
-          slots.push(saved);
-        }
-        const layout: SavedLayout = { version: 1, savedAt: new Date().toISOString(), slots };
+        // every app at once: one that is slow to give its state does not hold up the rest
+        const named = slotsIn(needContainer()).filter((slot) => slot.getAttribute('name'));
+        const layout: SavedLayout = { version: 1, savedAt: new Date().toISOString(), slots: await Promise.all(named.map(savedSlot)) };
         await store.set(layoutKey(name), layout);
         return layout;
       },
@@ -486,10 +516,12 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
         }
         for (const slot of slotsIn(target)) slot.remove();
         for (const saved of layout.slots) {
-          if (typeof saved?.appId !== 'string' || directory.retrieveAppsById(saved.appId).length === 0) continue;
-          mountSlot(target, saved, (slot) =>
-            launches.set(slot, { instanceId: context.createUUID(), restore: { channel: saved.channel, state: saved.state } }),
-          );
+          if (typeof saved?.appId !== 'string' || saved.appId === '') continue;
+          // every saved slot comes back; only an app the directory has gets FDC3, and with it its channel and state
+          const fdc3App = directory.retrieveAppsById(saved.appId).length > 0;
+          mountSlot(target, saved, (slot) => {
+            if (fdc3App) launches.set(slot, { instanceId: context.createUUID(), restore: { channel: saved.channel, state: saved.state } });
+          });
         }
       },
 
@@ -502,6 +534,17 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       },
     },
   };
+}
+
+/** `promise`, or a rejection once `ms` have passed; the timer does not outlive it. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('timed out')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /** Keys under `prefix`, decoded back to the names they were made from; one that does not decode is skipped. */
@@ -685,13 +728,12 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   private readonly instances = new Map<InstanceID, AppRegistration>();
   private readonly deliveries = new Map<InstanceID, (message: object) => void>();
   /**
-   * Apps whose booting instance should take an intent the agent is about to hold, by raiser — set
-   * by {@link narrowIntents} and read by {@link open} within the same raise. Cleared after a task,
-   * which is after every continuation of that raise has run.
+   * Requests on their way to {@link open} that must launch, noted by {@link inspect}: an
+   * `fdc3.open`, and a raise asking for a new instance. FINOS reaches `open` from either within the
+   * same task, so a note it never claims is dropped after one.
    */
-  private readonly reuse = new Map<InstanceID, Set<string>>();
-  /** Raisers whose raise in progress asked for a new instance; cleared after a task, likewise. */
-  private readonly newInstance = new Set<InstanceID>();
+  private readonly opening: { from: InstanceID; appId: string }[] = [];
+  private readonly newInstance: { from: InstanceID }[] = [];
 
   constructor(
     private readonly schedule: (task: () => void) => void,
@@ -711,13 +753,41 @@ class BraidServerContext implements ServerContext<AppRegistration> {
   launchable = false;
 
   /**
+   * A mounted instance of the app that has not connected yet — one the agent launched, or a slot
+   * the host placed in the container — as the instance id it will connect as. Set by the agent.
+   */
+  mounting: (appId: string) => InstanceID | undefined = () => undefined;
+
+  /** The app has an instance that will be able to take an intent, but none listening for it yet. */
+  private booting(appId: string): boolean {
+    return this.live(appId).length > 0 || this.mounting(appId) !== undefined;
+  }
+
+  /** Adds `note` to `list` for one task. */
+  private static hold<T>(list: T[], note: T): void {
+    list.push(note);
+    setTimeout(() => {
+      const index = list.indexOf(note);
+      if (index >= 0) list.splice(index, 1);
+    }, 0);
+  }
+
+  /** Removes and reports the first note that matches. */
+  private static take<T>(list: T[], matches: (note: T) => boolean): boolean {
+    const index = list.findIndex(matches);
+    if (index >= 0) list.splice(index, 1);
+    return index >= 0;
+  }
+
+  /**
    * Looks at a request on its way to the agent, and returns what the agent should get:
    *
    * - A raise that names an app but no instance is resolved here to the instance that will take
    *   it: the one listening for the intent, or — when none is yet — the app's only instance, so
    *   the agent holds the intent until that fragment's listener arrives. FINOS would otherwise
    *   treat it as a request to launch the app. A raise asking for a new instance is left alone.
-   * - A raise asking for a new instance is noted, so {@link narrowIntents} offers only launches.
+   * - An `fdc3.open`, and a raise asking for a new instance, are noted, so {@link open} launches
+   *   for them rather than handing back an instance that is still booting.
    */
   inspect(message: object, from: InstanceID): object {
     const { type, payload } = message as {
@@ -729,10 +799,14 @@ class BraidServerContext implements ServerContext<AppRegistration> {
         app?: { appId?: unknown; instanceId?: unknown };
       };
     };
+    if (type === 'openRequest') {
+      const appId = (payload?.app as { appId?: unknown } | undefined)?.appId;
+      if (typeof appId === 'string') BraidServerContext.hold(this.opening, { from, appId });
+      return message;
+    }
     if (type !== 'raiseIntentRequest' && type !== 'raiseIntentForContextRequest') return message;
     if (payload?.newInstance === true) {
-      this.newInstance.add(from);
-      setTimeout(() => this.newInstance.delete(from), 0);
+      BraidServerContext.hold(this.newInstance, { from });
       return message;
     }
     const app = payload?.app;
@@ -775,16 +849,23 @@ class BraidServerContext implements ServerContext<AppRegistration> {
 
   /**
    * Called for `fdc3.open`, and when the agent holds an intent for an app that has no instance
-   * listening. If the raise found the app mounted and still booting (see {@link narrowIntents}),
-   * that instance is the one it waits for; otherwise a new one is launched. An app the directory
-   * does not know rejects with `AppNotFound` — only `fdc3.open` can ask for one, and it answers a
-   * rejection; the intent path never sees one.
+   * listening. `fdc3.open` and a raise for a new instance launch one. Any other held intent waits
+   * for an instance that is booting — connected, or mounted and not yet connected, including one an
+   * earlier raise just launched — and launches only when there is none. Deciding here, when the
+   * launch would happen, is what keeps two quick raises from mounting the app twice.
+   *
+   * An app the directory does not know rejects with `AppNotFound` — only `fdc3.open` can ask for
+   * one, and it answers a rejection; the intent path never sees one.
    */
   async open(appId: string, from?: AppRegistration): Promise<InstanceID> {
-    const booting = from ? this.reuse.get(from.instanceId) : undefined;
-    if (booting?.has(appId) || !this.launchable) {
-      booting?.delete(appId);
-      return this.live(appId)[0]?.instanceId ?? this.createUUID();
+    if (!this.launchable) return this.live(appId)[0]?.instanceId ?? this.createUUID();
+    const raiser = from?.instanceId;
+    const launch =
+      BraidServerContext.take(this.opening, (note) => note.from === raiser && note.appId === appId) ||
+      BraidServerContext.take(this.newInstance, (note) => note.from === raiser);
+    if (!launch) {
+      const booting = this.live(appId)[0]?.instanceId ?? this.mounting(appId);
+      if (booting) return booting;
     }
     if (!this.knows(appId)) throw new Error(OpenError.AppNotFound);
     return this.launch(appId) ?? this.createUUID();
@@ -858,46 +939,32 @@ class BraidServerContext implements ServerContext<AppRegistration> {
    *
    * - an instance only once it listens for the intent, for this context's type — before then,
    *   sending it the intent would lose it;
-   * - an app without an instance (the directory's entry) while one is mounted and none of its
-   *   instances listens yet — the agent then holds the intent until the listener arrives, and
-   *   {@link open} hands it that instance;
+   * - an app without an instance (the directory's entry) while one is booting — connected, or
+   *   mounted and not yet connected — and none listens yet: the agent then holds the intent until
+   *   the listener arrives, and {@link open} hands it that instance rather than launching another;
    * - with a container, an app the directory names for the intent that has no instance listening
-   *   for it, which choosing launches. A raise that asked for a new instance gets only these.
+   *   or booting, which choosing launches. A raise that asked for a new instance launches even
+   *   when one is booting.
    *
    * Without a container, an app with no live instance drops out, which makes the raise a clean
    * `NoAppsFound`.
    */
   async narrowIntents(raiser: AppIdentifier, appIntents: AppIntent[], context?: Context): Promise<AppIntent[]> {
-    const raiserId = raiser.instanceId;
-    const fresh = raiserId !== undefined && this.newInstance.has(raiserId);
-    const booting = new Set<string>();
+    // a raise for a new instance is not held for a booting one; open() takes the note when it launches
+    const fresh = this.newInstance.some((note) => note.from === raiser.instanceId);
     const narrowed = appIntents
       .map((appIntent) => {
-        const listening = fresh
-          ? []
-          : appIntent.apps.filter(
-              (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name, context?.type),
-            );
-        const entries = appIntent.apps.filter((app) => app.instanceId === undefined);
-        const waiting = fresh
-          ? []
-          : entries.filter(
-              (app) => this.live(app.appId).length > 0 && !listening.some((candidate) => candidate.appId === app.appId),
-            );
-        // launching is for an app nothing running can take the intent for; one already listening is the choice
-        const launches = this.launchable
-          ? entries.filter((app) => !waiting.includes(app) && !listening.some((candidate) => candidate.appId === app.appId))
-          : [];
-        for (const app of waiting) booting.add(app.appId);
+        const listening = appIntent.apps.filter(
+          (app) => app.instanceId !== undefined && this.hasListener(app.instanceId, appIntent.intent.name, context?.type),
+        );
+        const listens = (appId: string) => listening.some((candidate) => candidate.appId === appId);
+        const entries = appIntent.apps.filter((app) => app.instanceId === undefined && !listens(app.appId));
+        const waiting = fresh ? [] : entries.filter((app) => this.booting(app.appId));
+        // launching is for an app nothing running or booting can take the intent for
+        const launches = this.launchable ? entries.filter((app) => !waiting.includes(app)) : [];
         return { ...appIntent, apps: [...listening, ...waiting, ...launches] };
       })
       .filter((appIntent) => appIntent.apps.length > 0);
-    if (raiserId !== undefined && booting.size > 0) {
-      this.reuse.set(raiserId, booting);
-      setTimeout(() => {
-        if (this.reuse.get(raiserId) === booting) this.reuse.delete(raiserId);
-      }, 0);
-    }
     return narrowed;
   }
 }
