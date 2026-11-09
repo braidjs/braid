@@ -121,13 +121,14 @@ describe('realm globals', () => {
     return frame.contentWindow as Window & Record<string, unknown>;
   }
 
-  it('calls the hook with the fragment id and its teardown signal', async () => {
+  it('calls the hook with the fragment id, its slot and its teardown signal', async () => {
     const hook = vi.fn(() => ({ fdc3: 'agent' }));
     setBraidConfig({ realmGlobals: hook });
     const signal = new AbortController().signal;
+    const slot = document.createElement('fragment-slot');
 
-    expect(await resolveRealmGlobals('billing', signal)).toEqual({ fdc3: 'agent' });
-    expect(hook).toHaveBeenCalledWith({ fragmentId: 'billing', signal });
+    expect(await resolveRealmGlobals('billing', signal, slot)).toEqual({ fdc3: 'agent' });
+    expect(hook).toHaveBeenCalledWith({ fragmentId: 'billing', signal, slot });
   });
 
   it('gives nothing, and does not throw, when the hook throws or rejects', async () => {
@@ -136,14 +137,14 @@ describe('realm globals', () => {
     const signal = new AbortController().signal;
 
     setBraidConfig({ realmGlobals: () => { throw new Error('boom'); } });
-    expect(await resolveRealmGlobals('billing', signal)).toBeUndefined();
+    expect(await resolveRealmGlobals('billing', signal, document.createElement('div'))).toBeUndefined();
     setBraidConfig({ realmGlobals: async () => { throw new Error('boom'); } });
-    expect(await resolveRealmGlobals('billing', signal)).toBeUndefined();
+    expect(await resolveRealmGlobals('billing', signal, document.createElement('div'))).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it('gives nothing without a hook', async () => {
-    expect(await resolveRealmGlobals('billing', new AbortController().signal)).toBeUndefined();
+    expect(await resolveRealmGlobals('billing', new AbortController().signal, document.createElement('div'))).toBeUndefined();
   });
 
   it('defines plain values a classic script reads as bare identifiers', () => {

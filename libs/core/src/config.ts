@@ -65,8 +65,8 @@ export interface BraidOptions {
    * initBraid({ realmGlobals: braidDesktopAgent.realmGlobals }); // window.fdc3, bound to each fragment
    * ```
    *
-   * Called once per boot with the fragment's id and a signal that aborts when it is torn down, so
-   * whatever was handed out can be released. Return `undefined` to give a fragment nothing. A hook
+   * Called once per boot with the fragment's id, the `<fragment-slot>` it boots in, and a signal
+   * that aborts when it is torn down, so whatever was handed out can be released. Return `undefined` to give a fragment nothing. A hook
    * that throws or rejects gives that fragment nothing and does not fail its boot. Names the realm
    * already defines are skipped, as with `sharedGlobals`.
    *
@@ -134,6 +134,8 @@ export interface BraidOptions {
 export type RealmGlobalsHook = (fragment: {
   fragmentId: string;
   signal: AbortSignal;
+  /** The `<fragment-slot>` the fragment boots in. */
+  slot: HTMLElement;
 }) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
 
 interface ResolvedBraidConfig {

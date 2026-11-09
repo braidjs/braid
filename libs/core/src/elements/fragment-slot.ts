@@ -921,7 +921,7 @@ export class FragmentSlot extends HTMLElement {
 
       if (signal.aborted) return;
 
-      const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal) : undefined;
+      const realmGlobals = adapter.installsRealmGlobals ? await resolveRealmGlobals(fragmentId, signal, this) : undefined;
       if (signal.aborted) return;
       const storagePartition = resolveStoragePartition(capabilities, fragmentId);
       const htmlPolicy = resolveHtmlPolicy(capabilities, fragmentId);

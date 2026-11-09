@@ -53,11 +53,15 @@ export function installSharedGlobals(
  * The host's `realmGlobals` for one fragment, or nothing. A hook that throws or rejects must not
  * take the fragment down with it: the fragment boots without them, and dev mode says why.
  */
-export async function resolveRealmGlobals(fragmentId: string, signal: AbortSignal): Promise<Record<string, unknown> | undefined> {
+export async function resolveRealmGlobals(
+  fragmentId: string,
+  signal: AbortSignal,
+  slot: HTMLElement,
+): Promise<Record<string, unknown> | undefined> {
   const hook = getBraidConfig().realmGlobals;
   if (!hook) return undefined;
   try {
-    const globals = await hook({ fragmentId, signal });
+    const globals = await hook({ fragmentId, signal, slot });
     return globals && typeof globals === 'object' ? globals : undefined;
   } catch (error) {
     if (isDevMode()) console.warn(`[braid:${fragmentId}] realmGlobals hook failed; the fragment boots without them.`, error);
