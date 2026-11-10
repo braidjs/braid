@@ -175,6 +175,8 @@ describe('validateRegistry with shells', () => {
     expect(codes([route({ area: 7 })])).toEqual(['invalid-shell-field']);
     expect(codes([route({ area: 'desk', apps: 'billing' })])).toEqual(['invalid-shell-field']);
     expect(codes([route('desk')])).toEqual(['invalid-shell-field']);
+    expect(codes([route({ area: 'desk', apps: Array(33).fill('billing') })])).toEqual(['invalid-shell-field']);
+    expect(codes([route({ area: 'desk', apps: Array(32).fill('billing') })])).toEqual([]);
   });
 
   it('reports a slotted fragment that is not registered, naming the shell', () => {

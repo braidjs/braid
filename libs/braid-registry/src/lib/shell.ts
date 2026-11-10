@@ -44,10 +44,13 @@ export interface ShellRoute {
  * `createWorkspace()` from `@braidlabs/console/workspace` launches apps and what its layouts save
  * and restore. The fixed areas around it are untouched by either.
  */
+/** The most starting apps a workspace may list: each is a fragment fetched and booted on every page view. */
+export const MAX_WORKSPACE_APPS = 32;
+
 export interface ShellWorkspace {
   /** An area of the route's layout that no slot fills. */
   area: string;
-  /** Fragment ids open when the page first loads, in order. The same app may be listed twice. */
+  /** Fragment ids open when the page first loads, in order, at most {@link MAX_WORKSPACE_APPS}. The same app may be listed twice. */
   apps?: string[];
 }
 
@@ -374,6 +377,7 @@ function shapeProblems(shell: ShellManifest): string[] {
       if (workspace !== undefined) {
         if (typeof workspace !== 'object' || workspace === null || !isString(workspace.area)) problems.push(`${at}.workspace.area must be a string`);
         else if (workspace.apps !== undefined && !isStringList(workspace.apps)) problems.push(`${at}.workspace.apps must be a list of fragment ids`);
+        else if ((workspace.apps?.length ?? 0) > MAX_WORKSPACE_APPS) problems.push(`${at}.workspace.apps lists more than ${MAX_WORKSPACE_APPS} apps`);
       }
       return undefined;
     });

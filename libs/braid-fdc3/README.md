@@ -41,8 +41,7 @@ import { createWorkspace } from '@braidlabs/console/workspace';
 const workspace = createWorkspace();
 const agent = createBraidDesktopAgent({
   directory: applications,
-  container: workspace.container,
-  resolveIntent: workspace.intentResolver(dialogResolver(document, { remember: true })),
+  ...workspace.fdc3(dialogResolver(document, { remember: true })), // container and resolveIntent
 });
 initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
 ```

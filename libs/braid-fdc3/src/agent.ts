@@ -69,8 +69,11 @@ export interface BraidDesktopAgentOptions {
    * Where the agent mounts fragments it launches — for `fdc3.open`, and for an intent whose app is
    * not running. A `<fragment-slot>` the host places there itself counts as that app starting.
    * Without one nothing is launched: `fdc3.open` rejects with `ErrorOnLaunch`.
+   *
+   * A function is asked each time, for a container a framework renders after the agent is
+   * created or replaces later; while it returns nothing, a launch is refused as if there were none.
    */
-  container?: Element;
+  container?: Element | (() => Element | null | undefined);
   /**
    * Chooses among the apps that can take an intent, when there is more than one. Defaults to a
    * built-in dialog in a browser; `false` refuses such a raise with `UserCancelledResolution`.
@@ -159,7 +162,10 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   // a directory that failed to load is an empty one, not a page that fails to compose
   const records = Array.isArray(options.directory) ? [...options.directory] : [];
   const directory = new BasicDirectory(records, FDC3_VERSION);
-  const { container } = options;
+  /** The container now: the one given, or whatever the host's function finds at this moment. */
+  const containerNow = (): Element | undefined =>
+    (typeof options.container === 'function' ? options.container() : options.container) ?? undefined;
+  const canLaunch = options.container !== undefined;
   const resolveIntent =
     options.resolveIntent === false
       ? undefined
@@ -171,15 +177,17 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   const bySlot = new Map<Element, InstanceID>();
 
   const context: BraidServerContext = new BraidServerContext(taskQueue(), (appId: string): InstanceID | undefined => {
+    const container = containerNow();
     if (!container) return undefined;
     const instanceId = crypto.randomUUID();
     mountSlot(container, appId, (slot) => launches.set(slot, { instanceId }));
     return instanceId;
   });
-  context.launchable = container !== undefined;
+  context.launchable = canLaunch;
   context.knows = (appId) => directory.retrieveAppsById(appId).length > 0;
   // a slot in the container that has not connected yet: launched by the agent, or placed by the host
   context.mounting = (appId) => {
+    const container = containerNow();
     if (!container) return undefined;
     for (const slot of slotsIn(container)) {
       if (slot.getAttribute('name') !== appId || bySlot.has(slot)) continue;
@@ -258,7 +266,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       { appId, instanceId },
       (message) => server.receive(context.inspect(message, instanceId) as never, instanceId),
       () => open,
-      container !== undefined,
+      canLaunch,
     );
     context.setInstanceDetails(instanceId, { appId, instanceId, state: State.Connected });
     context.onMessage(instanceId, (message) => {
@@ -298,6 +306,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     // adds next finds FINOS ready to deliver the open's context to it.
     if (launch) await context.announce(server, instanceId);
     // held intents tied to an instance of this app that is gone are this one's now
+    const container = containerNow();
     if (container) context.adopt(appId, instanceId, (id) => slotsIn(container).some((other) => launches.get(other)?.instanceId === id));
     if (signal.aborted) return undefined;
     if (slot) {
@@ -616,7 +625,10 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     const known = typeof appId === 'string' && this.knows(appId);
     if (!held) {
       if (!known) throw new Error(OpenError.AppNotFound);
-      return this.launch(appId) ?? this.createUUID();
+      // a container that is not on the page right now: refused, rather than an open that waits out its timeout
+      const launched = this.launch(appId);
+      if (!launched) throw new Error(OpenError.ErrorOnLaunch);
+      return launched;
     }
     if (!known) return this.createUUID();
     const request = held.r ?? {};

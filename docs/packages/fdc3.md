@@ -126,6 +126,10 @@ const agent = createBraidDesktopAgent({
 });
 ```
 
+`container` may also be a function returning the element, asked at each launch, for one a
+framework renders later or replaces. While it returns nothing, `fdc3.open` rejects with
+`ErrorOnLaunch`.
+
 ### Launching
 
 With a `container`, launching an app means mounting a `<fragment-slot name="{appId}">` at the end
@@ -198,14 +202,17 @@ import { createWorkspace, serverStore } from '@braidlabs/console/workspace';
 const workspace = createWorkspace({ store: serverStore() }); // the page's [data-braid-workspace]
 const agent = createBraidDesktopAgent({
   directory: applications,
-  container: workspace.container,
-  // hidden apps are never offered, a remembered choice answers without asking,
-  // and ticking "Remember my choice" in the dialog is kept
-  resolveIntent: workspace.intentResolver(dialogResolver(document, { remember: true })),
+  // launches into the workspace area; hidden apps are never offered, a remembered choice answers
+  // without asking, and ticking "Remember my choice" in the dialog is kept
+  ...workspace.fdc3(dialogResolver(document, { remember: true })),
 });
 // each fragment joins its saved or default user channel before its code runs, and gets braidDesktop
 initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
 ```
+
+`workspace.fdc3(resolver)` returns the agent's `container` and `resolveIntent` options. The
+container is a function, asked at each launch, so the area may be rendered by a framework after
+the agent is created.
 
 `dialogResolver(document, { remember: true })` is the built-in dialog with its **Remember my
 choice** box. Without the option the box is not shown, because nothing would keep the choice.

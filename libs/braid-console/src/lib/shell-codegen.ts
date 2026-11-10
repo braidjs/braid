@@ -1,5 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
-import { formatAreas, isSafeTrackList, parseAreas, type ShellFramework, type ShellManifest, type ShellRoute } from '@braidlabs/registry';
+import { formatAreas, isSafeTrackList, MAX_WORKSPACE_APPS, parseAreas, type ShellFramework, type ShellManifest, type ShellRoute } from '@braidlabs/registry';
 
 /**
  * The host code a shell describes, for each framework a shell can be.
@@ -89,7 +89,7 @@ function describeRoute(shell: ShellManifest, route: ShellRoute, stem: string, by
   const workspace =
     workspaceArea === undefined
       ? undefined
-      : { area: workspaceArea, apps: (route.workspace?.apps ?? []).filter((app) => typeof app === 'string' && app !== '').map(placed) };
+      : { area: workspaceArea, apps: (route.workspace?.apps ?? []).filter((app) => typeof app === 'string' && app !== '').slice(0, MAX_WORKSPACE_APPS).map(placed) };
   return {
     path: route.path,
     stem,
@@ -164,6 +164,15 @@ function workspaceModule(shell: ShellManifest): GeneratedFile {
       ``,
       js(`workspace.open('fragment-id') launches an app; workspace.layouts.save('name') and`),
       js(`workspace.layouts.restore('name') keep and bring back what is open.`),
+      ``,
+      js(`Opens a route's starting apps once its layout has rendered the area, unless apps are already`),
+      js(`open there. The workspace owns the area's children — it removes and adds them when a layout`),
+      js(`is restored — so the framework renders the area empty and never its apps.`),
+      `export function openStartingApps(apps: readonly { id: string; src?: string }[]): void {`,
+      `  const area = workspace.container;`,
+      `  if (!area || area.querySelector(':scope > fragment-slot')) return;`,
+      `  for (const app of apps) workspace.open(app.id, app.src ? { src: app.src } : {});`,
+      `}`,
     ].join('\n'),
   };
 }
@@ -238,6 +247,7 @@ function reactRoutes(shell: ShellManifest, routes: RouteView[]): GeneratedFile {
   const components = routes.flatMap((route) => [
     js(`Route ${route.path}`),
     `export function ${route.componentName}() {`,
+    ...(route.workspace ? [`  useEffect(() => openStartingApps(${startingApps(route)}), []);`] : []),
     `  return (`,
     // Braces, not quotes: a JSX string attribute has no escapes, so a value is only safe as a JS
     // expression.
@@ -248,9 +258,8 @@ function reactRoutes(shell: ShellManifest, routes: RouteView[]): GeneratedFile {
     ),
     ...(route.workspace
       ? [
-          `      <div data-braid-workspace="" style={{ gridArea: ${jsString(route.workspace.area)} }}>`,
-          ...route.workspace.apps.map((app) => `        <BraidFragment name={${jsString(app.fragment)}}${app.src ? ` src={${jsString(app.src)}}` : ''} />`),
-          `      </div>`,
+          `      {/* empty on purpose: the workspace adds and removes the apps here */}`,
+          `      <div data-braid-workspace="" style={{ gridArea: ${jsString(route.workspace.area)} }} />`,
         ]
       : []),
     ...(route.empty.length ? [`      {/* empty areas: ${commentSafe(route.empty.join(', '))} */}`] : []),
@@ -271,7 +280,9 @@ function reactRoutes(shell: ShellManifest, routes: RouteView[]): GeneratedFile {
             js(`./workspace, and route each path below to its layout.`),
           ]
         : [js(`Call initBraidReact() once before rendering, and route each path below to its layout.`)]),
+      ...(routes.some((route) => route.workspace) ? [`import { useEffect } from 'react';`] : []),
       `import { BraidFragment } from '@braidlabs/react';`,
+      ...(routes.some((route) => route.workspace) ? [`import { openStartingApps } from './workspace';`] : []),
       `import './shell-layout.css';`,
       ``,
       ...components,
@@ -296,11 +307,8 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
       ),
       ...(route.workspace
         ? [
-            `  <div data-braid-workspace style="grid-area: ${escapeAngular(route.workspace.area)}">`,
-            ...route.workspace.apps.map(
-              (app) => `    <braid-fragment name="${escapeAngular(app.fragment)}"${app.src ? ` src="${escapeAngular(app.src)}"` : ''} />`,
-            ),
-            `  </div>`,
+            `  <!-- empty on purpose: the workspace adds and removes the apps here -->`,
+            `  <div data-braid-workspace style="grid-area: ${escapeAngular(route.workspace.area)}"></div>`,
           ]
         : []),
       `</div>`,
@@ -317,7 +325,15 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
       ...cssRule(route, `.${route.stem}`).map((line) => `    ${templateLiteral(line)}`),
       `  \`,`,
       `})`,
-      `export class ${route.componentName} {}`,
+      ...(route.workspace
+        ? [
+            `export class ${route.componentName} {`,
+            `  constructor() {`,
+            `    afterNextRender(() => openStartingApps(${startingApps(route)}));`,
+            `  }`,
+            `}`,
+          ]
+        : [`export class ${route.componentName} {}`]),
       ``,
     ];
   });
@@ -331,9 +347,10 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
         ...(routes.some((route) => route.workspace)
           ? [js(`Add provideBraid({ realmGlobals }) to the application's providers once, with realmGlobals`), js(`from ./workspace.`)]
           : [js(`Add provideBraid() to the application's providers once.`)]),
-        `import { Component } from '@angular/core';`,
+        `import { ${routes.some((route) => route.workspace) ? 'afterNextRender, ' : ''}Component } from '@angular/core';`,
         `import type { Routes } from '@angular/router';`,
         `import { BraidFragment } from '@braidlabs/angular';`,
+        ...(routes.some((route) => route.workspace) ? [`import { openStartingApps } from './workspace';`] : []),
         ``,
         ...components,
         `export const routes: Routes = [`,
@@ -342,6 +359,12 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
       ].join('\n'),
     },
   ];
+}
+
+/** A route's starting apps as a JS array literal, for `openStartingApps`. */
+function startingApps(route: RouteView): string {
+  const apps = (route.workspace?.apps ?? []).map((app) => `{ id: ${jsString(app.fragment)}${app.src ? `, src: ${jsString(app.src)}` : ''} }`);
+  return `[${apps.join(', ')}]`;
 }
 
 /** URLPattern pathname → Angular route path: no leading slash, and a trailing `*` becomes `**`. */

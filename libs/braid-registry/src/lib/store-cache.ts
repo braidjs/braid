@@ -45,7 +45,8 @@ export function cacheSnapshotStore(options: CacheSnapshotStoreOptions = {}): Sna
     },
     async put(snapshot) {
       const cache = await open();
-      if (await cache.match(snapshotKey(snapshot.id))) return;
+      // an entry that does not read back is not one: written again rather than left unreadable
+      if (await read(cache, snapshotKey(snapshot.id))) return;
       await cache.put(snapshotKey(snapshot.id), new Response(JSON.stringify(snapshot), { headers: { 'content-type': 'application/json' } }));
     },
     async list({ limit, before } = {}) {

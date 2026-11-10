@@ -106,6 +106,9 @@ describe('renderShellDocument()', () => {
     expect(page).not.toContain('<fragment-slot name="billing" data-braid-area="main">');
     expect(page).toContain('<fragment-slot name="&lt;img onerror=x&gt;"></fragment-slot>');
 
+    const flood = { ...storefront.routes[0], workspace: { area: 'main', apps: Array(5000).fill('billing') } };
+    expect(renderShellDocument(storefront, flood, manifests, { runtimeSrc: RUNTIME }).match(/<fragment-slot name="billing"><\/fragment-slot>/g)).toHaveLength(32);
+
     const nowhere = { ...storefront.routes[0], workspace: { area: 'nope"><script>', apps: 7 as never } };
     expect(renderShellDocument(storefront, nowhere, manifests, { runtimeSrc: RUNTIME })).not.toContain('data-braid-workspace');
   });

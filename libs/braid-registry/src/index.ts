@@ -34,7 +34,7 @@ export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from
 export { subgraph, supergraph } from './lib/supergraph.js';
 export type { SubgraphOptions, SubgraphSource } from './lib/supergraph.js';
 
-export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
+export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS, MAX_WORKSPACE_APPS } from './lib/shell.js';
 export type {
   ShellManifest,
   ShellFramework,

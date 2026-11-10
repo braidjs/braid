@@ -80,11 +80,7 @@ beforeAll(async () => {
         }).observe(document.body, { childList: true });
         // no container given: the workspace finds the page's [data-braid-workspace]
         const workspace = (window.workspace = createWorkspace({ store }));
-        const agent = createBraidDesktopAgent({
-          directory: applications,
-          container: workspace.container,
-          resolveIntent: workspace.intentResolver(resolveIntent),
-        });
+        const agent = createBraidDesktopAgent({ directory: applications, ...workspace.fdc3(resolveIntent) });
         return workspace.realmGlobals(agent.realmGlobals);
       })();
     </script>`,

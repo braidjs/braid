@@ -494,11 +494,18 @@ What "at-least-once" means here, precisely:
 - **In order, one at a time, per consumer.** A queue drains oldest first and stops at the first
   failure, so a later event never overtakes an earlier one that has not been handled. Across
   tabs, a lock makes sure only one of them drains a consumer's queue at a time.
-- **It gives up loudly, not silently.** An entry is abandoned after `maxAttempts` (5 by default),
-  dropped after the channel's `ttlMs` (one hour by default), and the oldest is dropped when a
-  consumer's queue for the channel passes `maxDepth` (500 by default). Each is reported to
-  `onEventError`. Set these for your case: an inbox wants a long `ttlMs`; a "refresh" wants a
-  short one.
+- **Register every handler before you drain.** A consumer has one queue for all its channels. An
+  entry whose event type has no handler registered counts as a failure: it stays, it is reported,
+  and everything behind it for that consumer waits. Add all your listeners at start-up, then call
+  `flush()`.
+- **It gives up loudly, not silently.** An entry is abandoned after `maxAttempts` failed deliveries
+  (5 by default). Each is reported to `onEventError`.
+- **Retention is enforced when the next event is written, not by a clock.** Each emit first drops
+  that consumer's entries on the channel that are older than `ttlMs` (one hour by default), and
+  the oldest ones beyond `maxDepth` (500 by default), reporting each. So a stale entry is removed
+  by the next emit on its channel; if nothing more is emitted, it is still delivered when the
+  consumer drains. Treat `ttlMs` as a storage bound, and have a handler check `event.at` itself if
+  acting on an old event would be wrong.
 - **Unknown consumers get nothing.** A queue is written for each name in `consumers`. A fragment
   not on the list is not waited for, because a queue cannot wait for a reader it does not know
   exists.
@@ -866,7 +873,7 @@ and next to your own fragments.
 ```ts
 // host
 import { createBraidDesktopAgent } from '@braidlabs/fdc3';
-const agent = createBraidDesktopAgent({ directory, container: document.querySelector('#desk') });
+const agent = createBraidDesktopAgent({ directory, container: document.querySelector('#desk')! });
 initBraid({ realmGlobals: agent.realmGlobals });
 
 // any app in the directory — standard FDC3, nothing Braid-specific
@@ -879,7 +886,7 @@ How it lines up with the rest of this guide:
 
 | FDC3 | Closest Braid mechanism | The difference that matters |
 | --- | --- | --- |
-| `broadcast` on a user or app channel | channel state | FDC3's `broadcast` is state *and* event at once: the last context is replayed to an app that joins or listens later. Do not broadcast something with a verb |
+| `broadcast` on a user or app channel | channel state | FDC3's `broadcast` is state *and* event at once: a channel keeps the last context of each type, and an app that joins a user channel later is handed it (on an app channel it asks, with `getCurrentContext`). Do not broadcast something with a verb |
 | `raiseIntent` | intents | Resolved against the app directory. With a `container`, an app that is not running is launched and the intent is held until its listener is added. Several candidates go to a resolver, which is the user's choice |
 | private channels | — | A channel only the two parties hold |
 
@@ -887,7 +894,7 @@ How it lines up with the rest of this guide:
 | --- | --- |
 | Reach | The page: one agent, its apps. Not other tabs |
 | Timing | Asynchronous. A request is answered within 10 seconds or fails with a timeout; an intent has 20 seconds to be handled |
-| Late subscriber | Channels: caught up with the last context. Intents: held for an app that is starting |
+| Late subscriber | User channels: caught up with the last context on joining. App channels: `getCurrentContext()`. Intents: held for an app that is starting |
 | Durability | None in the agent. Saved layouts and remembered choices are the [console workspace](./packages/console.md) |
 | Trust | Trusted fragments with a directory record. Each can speak only as itself |
 
@@ -972,8 +979,8 @@ it. Any payload that crosses a fragment boundary is a versioned contract.
 - Channels do not buffer. A slow subscriber does not slow the publisher; it just runs later.
 - For state that changes at high frequency (a pointer position, a streaming price), publish at
   the rate the slowest consumer can render, not the rate it changes. Only the last value matters.
-- Durable queues are bounded by `ttlMs` and `maxDepth`. Size them from the worst case: consumers
-  × events per hour × hours a consumer can be away.
+- Durable queues are bounded by `ttlMs` and `maxDepth`, applied each time an event is written.
+  Size them from the worst case: consumers × events per hour × hours a consumer can be away.
 - Payloads are cloned for every receiver. Send ids and let receivers load what they need, rather
   than sending the document.
 

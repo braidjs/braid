@@ -118,8 +118,10 @@ async function setup(
       ? undefined
       : createBraidDesktopAgent({
           directory: await registryDirectory(),
-          ...area,
-          resolveIntent: options.resolveIntent ? workspace.intentResolver(options.resolveIntent) : false,
+          // as a host wires it: the area looked up at each launch, hidden apps filtered, the resolver wrapped
+          ...workspace.fdc3(options.resolveIntent || undefined),
+          ...(options.withContainer === false ? { container: undefined } : {}),
+          ...(options.resolveIntent ? {} : { resolveIntent: false as const }),
         });
   const realmGlobals = workspace.realmGlobals(agent?.realmGlobals);
   /** A fragment the host mounted itself, not in the workspace area. */
@@ -216,6 +218,18 @@ describe('resolving intents', () => {
     await (await all.mount('research')).fdc3.addIntentListener('ViewInvoice', async () => undefined);
     await expect(raiser.raiseIntent('ViewInvoice', instrument)).rejects.toThrow('UserCancelledResolution');
     expect(resolveIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides apps from the choice, not from delivery: the only app able to take an intent still gets it', async () => {
+    const store = memoryStore();
+    await store.set('host', { hiddenApps: ['research'] });
+    const resolveIntent = vi.fn<IntentResolverHook>(async () => undefined);
+    const { mount } = await setup({ store, resolveIntent });
+    const blotter = (await mount('blotter')).fdc3;
+    const handled = vi.fn(async () => undefined);
+    await (await mount('research')).fdc3.addIntentListener('ViewResearch', handled);
+    expect((await blotter.raiseIntent('ViewResearch', instrument)).source.appId).toBe('research');
+    expect(resolveIntent).not.toHaveBeenCalled();
   });
 
   it('keeps nothing when the resolver answers with something it was not offered', async () => {
@@ -409,5 +423,27 @@ describe('without an FDC3 agent', () => {
     ];
     expect(await resolve({ candidates })).toBeUndefined();
     expect(await resolve({ candidates: candidates.slice(0, 1) })).toEqual({ candidate: candidates[0] });
+  });
+
+  it('wires an agent to an area a framework renders later: refused until it is there, launched into once it is', async () => {
+    const container = fakeContainer(() => realmGlobals);
+    let rendered: Element | null = null;
+    // `container` as a getter, standing in for the page's [data-braid-workspace] lookup
+    const workspace = createWorkspace({
+      store: memoryStore(),
+      get container() {
+        return rendered;
+      },
+    });
+    const agent = createBraidDesktopAgent({ directory: await registryDirectory(), ...workspace.fdc3(), resolveIntent: false });
+    const realmGlobals = workspace.realmGlobals(agent.realmGlobals);
+    const controller = new AbortController();
+    teardown.push(controller);
+    const blotter = ((await realmGlobals({ fragmentId: 'blotter', signal: controller.signal })) as Globals).fdc3!;
+
+    await expect(blotter.open({ appId: 'billing' })).rejects.toThrow('ErrorOnLaunch');
+    rendered = container as unknown as Element;
+    expect((await blotter.open({ appId: 'billing' })).appId).toBe('billing');
+    expect(container.children.map((slot) => slot.getAttribute('name'))).toEqual(['billing']);
   });
 });

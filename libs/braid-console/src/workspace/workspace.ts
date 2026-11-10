@@ -13,8 +13,7 @@ import { keySegment, localStorageStore, type PreferenceStore } from './store.js'
  * const workspace = createWorkspace();                       // the page's [data-braid-workspace]
  * const agent = createBraidDesktopAgent({
  *   directory,
- *   container: workspace.container,
- *   resolveIntent: workspace.intentResolver(dialogResolver(document, { remember: true })),
+ *   ...workspace.fdc3(dialogResolver(document, { remember: true })),
  * });
  * initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
  * ```
@@ -116,10 +115,25 @@ export interface Workspace {
    * Wraps an intent resolver with the user's preferences: hidden apps are never offered, a
    * remembered choice answers without asking, and an answer with `remember: true` is kept.
    * Without `inner`, a raise that still has several candidates is cancelled.
+   *
+   * Hiding governs the choice, not delivery: an agent asks a resolver only when several apps
+   * could take an intent, so an app that is the only one able to still gets it.
    */
   intentResolver<C extends WorkspaceIntentCandidate, R extends { context?: { type?: unknown }; candidates: C[] }>(
     inner?: WorkspaceIntentResolver<C, R>,
   ): WorkspaceIntentResolver<C, R>;
+  /**
+   * The options that put an FDC3 agent on this workspace, to spread into
+   * `createBraidDesktopAgent({ directory, ...workspace.fdc3(resolver) })`: the agent launches into
+   * the workspace area (looked up at each launch, so a framework may render it late), and `inner`
+   * is wrapped as {@link Workspace.intentResolver} does.
+   */
+  fdc3<C extends WorkspaceIntentCandidate, R extends { context?: { type?: unknown }; candidates: C[] }>(
+    inner?: WorkspaceIntentResolver<C, R>,
+  ): {
+    container: () => Element | undefined;
+    resolveIntent: WorkspaceIntentResolver<C, R>;
+  };
   /** Mounts an app at the end of the workspace area, and returns its `<fragment-slot>`. */
   open(appId: string, options?: { src?: string; props?: Record<string, unknown> }): Element;
   preferences: {
@@ -272,9 +286,20 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
     return saved;
   }
 
-  return {
+  /** The candidates left once the user's hidden apps are taken out. */
+  async function visible<C extends WorkspaceIntentCandidate>(candidates: C[]): Promise<C[]> {
+    const { hiddenApps = [] } = await hostPreferences();
+    const hidden = Array.isArray(hiddenApps) ? hiddenApps : [];
+    return candidates.filter((candidate) => !hidden.includes(candidate.appId));
+  }
+
+  const workspace: Workspace = {
     get container() {
       return area();
+    },
+
+    fdc3(inner) {
+      return { container: area, resolveIntent: workspace.intentResolver(inner) };
     },
 
     realmGlobals(inner) {
@@ -301,9 +326,7 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
 
     intentResolver(inner) {
       return async (request) => {
-        const { hiddenApps = [] } = await hostPreferences();
-        const hidden = Array.isArray(hiddenApps) ? hiddenApps : [];
-        const candidates = request.candidates.filter((candidate) => !hidden.includes(candidate.appId));
+        const candidates = await visible(request.candidates);
         if (candidates.length === 0) return undefined;
         if (candidates.length === 1) return { candidate: candidates[0] };
         const contextType = typeof request.context?.type === 'string' ? request.context.type : 'fdc3.nothing';
@@ -375,6 +398,7 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
       },
     },
   };
+  return workspace;
 }
 
 function isFdc3(value: unknown): value is Fdc3Channels {

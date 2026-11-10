@@ -182,9 +182,16 @@ describe('comment and template breakouts', () => {
       const code = all(target, desk);
 
       expect(code).toMatch(/data-braid-workspace(="")? style=(\{\{ gridArea: "desk" \}\}|"grid-area: desk")/);
-      // starting apps carry no grid area: they share the workspace's
-      expect(code).toMatch(/<(BraidFragment|braid-fragment|fragment-slot) name=\{?"billing"\}?( \/)?>/);
-      expect(code).toMatch(/notifications.{0,4} src=.{0,2}\/inbox/);
+      if (target === 'vanilla') {
+        // plain DOM: the starting apps are in the markup, with no grid area of their own
+        expect(code).toContain('<fragment-slot name="billing"></fragment-slot>');
+        expect(code).toContain('<fragment-slot name="notifications" src="/inbox"></fragment-slot>');
+      } else {
+        // a framework renders the area empty and the workspace opens the apps: it owns those children
+        expect(code).toMatch(/data-braid-workspace(="")? style=[^>]*(\/>|><\/div>)/);
+        expect(code).toContain('openStartingApps([{ id: "billing" }, { id: "notifications", src: "/inbox" }, ');
+        expect(code).not.toMatch(/<(BraidFragment|braid-fragment) name=\{?"billing"/);
+      }
       // the workspace took the area a slot also named
       expect(code).not.toMatch(/billing.{0,6}(grid-area: desk|gridArea: "desk")/);
       expect(code).toContain("from '@braidlabs/console/workspace'");
@@ -192,12 +199,12 @@ describe('comment and template breakouts', () => {
       expect(code).toMatch(/realmGlobals/);
       expect(code).toContain('[data-braid-workspace] {');
       // a hostile app id stays inside its attribute or string
-      if (target === 'react') {
-        // a JS expression, which is the only safe place for it in JSX
-        expect(code).toContain(`name={${JSON.stringify('"}<x>{{y}}`${z}')}}`);
-      } else {
+      if (target === 'vanilla') {
         expect(code).not.toContain('<x>');
         expect(code).toContain('&lt;x&gt;');
+      } else {
+        // a JS string literal, in code that the parse test below checks
+        expect(code).toContain(`{ id: ${JSON.stringify('"}<x>{{y}}`${z}')} }`);
       }
     });
 

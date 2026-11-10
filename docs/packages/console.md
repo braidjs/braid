@@ -97,8 +97,11 @@ fragments.
 ```
 
 **What it renders.** In every target the area becomes an element marked `data-braid-workspace`,
-holding a `<fragment-slot>` for each starting app. The **Code** tab adds the wiring: a
-`workspace.ts` module for React and Angular, and the same few lines inline for Plain JS. A Plain JS
+holding a `<fragment-slot>` for each starting app (at most 32). The **Code** tab adds the wiring:
+the same few lines inline for Plain JS, and a `workspace.ts` module for React and Angular. There
+the framework renders the area empty and the workspace opens the starting apps after render,
+because the workspace adds and removes the area's children itself when a layout is restored, and
+a framework must not own them. A Plain JS
 shell [served from its definition](./registry.md#serving-shells-from-their-definition) renders the
 area too; its runtime module creates the workspace.
 
@@ -148,6 +151,10 @@ await workspace.preferences.forgetIntentChoice('ViewChart', 'fdc3.instrument');
 They are read once, when the first fragment boots, and kept. A store that takes longer than a
 second to answer is skipped: fragments boot without preferences rather than waiting.
 
+`hiddenApps` are never offered as a choice. When hiding leaves one candidate the raise goes to it
+without asking, and when it leaves none the raise is cancelled. Hiding governs the choice, not
+delivery: an app that is the only one able to take an intent still gets it.
+
 **Where it is kept.** Under keys such as `host`, `intents/{intent}/{contextType}`,
 `apps/{appId}/{key}` and `layouts/{name}`, in the `store`:
 
@@ -160,9 +167,11 @@ second to answer is skipped: fragments boot without preferences rather than wait
 Any object with `get`, `set`, `delete` and `list` is a `PreferenceStore`. The gateway side is
 described under [Per-user preferences](./gateway.md#per-user-preferences-opt-in).
 
-**With FDC3.** The workspace needs no FDC3 agent, and works with one. Wrap the agent's two hooks and
-it also restores each app's user channel, joins a default channel, hides apps from the intent
-resolver and remembers the user's choice. See
+**With FDC3.** The workspace needs no FDC3 agent, and works with one. Spread `workspace.fdc3(resolver)`
+into the agent's options and wrap its `realmGlobals`, and it also restores each app's user channel,
+joins a default channel, hides apps from the intent resolver and remembers the user's choice. An
+app joins its channel before its own code runs, but just after `fdc3.open` has resolved for the
+opener, so an opener should pass context to `open` rather than broadcast straight after it. See
 [`@braidlabs/fdc3`](./fdc3.md#preferences-app-settings-and-layouts-the-workspace).
 
 Not supported: sizes and positions within the area (a layout is an order, laid out by your CSS),
@@ -188,7 +197,8 @@ import { cacheSnapshotStore, createRegistryApi, shellDocuments, snapshotRegistry
 
 const store = cacheSnapshotStore();              // snapshots in Cache Storage: they outlive the worker
 const registry = snapshotRegistry({ store });
-const api = createRegistryApi({ store, authorize: () => true });
+// fragments may only be served from this origin, so a publish cannot point the page at another
+const api = createRegistryApi({ store, authorize: () => true, endpointOrigins: [self.location.origin] });
 const braid = braidGatewayHandler({
   mode: 'production',
   registry,
@@ -196,16 +206,23 @@ const braid = braidGatewayHandler({
   documents: shellDocuments({ registry, runtimeSrc: '/runtime.js' }),
 });
 
+async function registryApi(request) {
+  // the only request another site can aim at the worker is a navigation (a link, a posted form);
+  // the console calls the API with fetch, so navigations are refused, and a write must be JSON
+  if (request.mode === 'navigate') return new Response(null, { status: 403 });
+  const json = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() === 'application/json';
+  if (request.method !== 'GET' && request.method !== 'HEAD' && !json) return new Response(null, { status: 415 });
+
+  const response = (await api.handle(request)) ?? new Response(null, { status: 404 });
+  // a publish or a pin moved HEAD: serve it on the next navigation
+  if (request.method !== 'GET' && response.ok) await braid.gateway.refreshRegistry().catch(() => undefined);
+  return response;
+}
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin === self.location.origin && url.pathname.startsWith('/__braid/registry-api/')) {
-    event.respondWith(
-      api.handle(event.request).then(async (response) => {
-        // a publish or a pin moved HEAD: serve it on the next navigation
-        if (event.request.method !== 'GET' && response?.ok) await braid.gateway.refreshRegistry().catch(() => undefined);
-        return response ?? new Response(null, { status: 404 });
-      }),
-    );
+    event.respondWith(registryApi(event.request));
     return;
   }
   const handled = braid(event.request, event.preloadResponse);
@@ -224,9 +241,13 @@ Know what this is before relying on it:
   profile, and go when the user clears site data. Nobody else sees what is published. Use it to
   design and preview; ship a design with the **Code** tab, or by publishing to a registry on a
   server.
-- **There is no one to authorize.** The API is reachable only from pages on the origin, and any of
-  them could write the cache directly. `authorize: () => true` is honest here and wrong on a
-  server.
+- **The origin is the only boundary.** There is no session to authorize against, so
+  `authorize: () => true` — honest here, wrong on a server. Any script on the origin can publish,
+  as it could write the cache directly. Other sites are kept out by the worker itself: a worker
+  answers its own pages' requests and navigations into its scope, so it must refuse navigations to
+  the API (a form posted from anywhere is one) and take writes only as JSON, as above. Keep
+  `endpointOrigins` to the origin, so that even a publish cannot make the page load a fragment
+  from somewhere else.
 - **No environments or promotion.** `cacheSnapshotStore` tracks HEAD only, so History lists and
   re-pins but has no environments.
 

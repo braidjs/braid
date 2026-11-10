@@ -65,6 +65,13 @@ beforeAll(async () => {
       res.writeHead(404).end();
     } else if (scripts[pathname]) {
       void scripts[pathname].then((source) => res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-cache' }).end(source));
+    } else if (pathname === '/attacker.html') {
+      // another site's page: a form needs no CORS, and text/plain lets it shape a JSON body
+      const target = `http://127.0.0.1:${(server.address() as AddressInfo).port}/__braid/registry-api/snapshots`;
+      const name = '{"manifests":[{"id":"evil","endpoint":"https://evil.example/"}],"ignored":"';
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(
+        `<!doctype html><form method="POST" enctype="text/plain" action="${target}"><input name='${name}' value='"}'></form>`,
+      );
     } else if (pathname === '/console/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(consolePage);
     } else if (/^\/apps\/(notes|chart)\//.test(pathname)) {
@@ -136,6 +143,25 @@ describe('the console on a static host, behind the service-worker gateway', () =
     expect(again?.fromServiceWorker()).toBe(true);
     await readySlots(page, 'notes');
 
+    expect(leaked).toEqual([]);
+    await context.close();
+  });
+
+  it('refuses a publish forged by another site: a form posted into the worker\u2019s scope', async () => {
+    const context = await browser.newContext();
+    const page = await openConsole(context);
+    const fragments = () => page.evaluate(async () => ((await (await fetch('/__braid/registry')).json()) as { items: { id: string }[] }).items.map((item) => item.id));
+    const before = await fragments();
+    expect(before).toContain('notes');
+
+    // the same server on another host name is another origin, and another site
+    const attacker = await context.newPage();
+    await attacker.goto(`${url.replace('127.0.0.1', 'localhost')}attacker.html`);
+    const [response] = await Promise.all([attacker.waitForNavigation(), attacker.evaluate(() => document.querySelector('form')!.submit())]);
+    expect(response?.fromServiceWorker()).toBe(true);
+    expect(response?.status()).toBe(403);
+
+    expect(await fragments()).toEqual(before);
     expect(leaked).toEqual([]);
     await context.close();
   });

@@ -1,5 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
-import { isSafeAssetUrl, isSafeTrackList, parseAreas, type ShellManifest, type ShellRoute } from './shell.js';
+import { isSafeAssetUrl, isSafeTrackList, MAX_WORKSPACE_APPS, parseAreas, type ShellManifest, type ShellRoute } from './shell.js';
 import type { RegistrySnapshot } from './snapshot.js';
 import { claimsWholeSite, withinPrefixes } from './route-scope.js';
 
@@ -100,7 +100,10 @@ export function renderShellDocument(
     .filter(([area]) => known(area) && area !== workspaceArea)
     .map(([area, fragmentId]) => slotFor(fragmentId, area));
   if (workspaceArea !== undefined) {
-    const apps = Array.isArray(route.workspace?.apps) ? route.workspace.apps.filter((app) => typeof app === 'string' && app !== '') : [];
+    // capped here too: a snapshot stored before validation existed is still rendered
+    const apps = Array.isArray(route.workspace?.apps)
+      ? route.workspace.apps.filter((app) => typeof app === 'string' && app !== '').slice(0, MAX_WORKSPACE_APPS)
+      : [];
     slots.push(`<div data-braid-workspace data-braid-area="${escapeHtml(workspaceArea)}">${apps.map((app) => slotFor(app)).join('')}</div>`);
   }
   // apps sit side by side and share the area; a host stylesheet can lay them out any other way

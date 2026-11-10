@@ -23,9 +23,10 @@ const worker = self as unknown as WorkerScope;
 
 const store = cacheSnapshotStore();
 const registry = snapshotRegistry({ store });
-// Only this origin's pages reach the worker, and any of them could write the cache directly, so
-// there is no one to authorize against: the origin is the boundary.
-const api = createRegistryApi({ store, authorize: () => true });
+// There is no server to hold a session, so there is no one to authorize: the boundary is the
+// origin, and `registryApi` below is what keeps other sites on the far side of it. Published
+// fragments may only be served from this origin, so a publish cannot point the page at another.
+const api = createRegistryApi({ store, authorize: () => true, endpointOrigins: [worker.location.origin] });
 const braid = braidGatewayHandler({
   mode: 'production',
   registry,
@@ -50,6 +51,15 @@ worker.addEventListener('install', (event) => event.waitUntil(seed().then(() => 
 worker.addEventListener('activate', (event) => event.waitUntil(worker.clients.claim()));
 
 async function registryApi(request: Request): Promise<Response> {
+  // Pages this worker controls are same-origin, and call the API with fetch. The one request any
+  // other site can aim here is a navigation — a link, or a form it posts — and the console never
+  // navigates to the API, so those are refused outright rather than left to the API's own
+  // cross-site check, which reads headers a worker is not promised on a navigation.
+  if (request.mode === 'navigate') return new Response('the registry API does not take navigations', { status: 403 });
+  // and a write is JSON, which no form can send
+  const json = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() === 'application/json';
+  if (request.method !== 'GET' && request.method !== 'HEAD' && !json) return new Response('writes are application/json', { status: 415 });
+
   const response = (await api.handle(request)) ?? new Response(null, { status: 404 });
   // a publish or a pin moved HEAD: serve it now, rather than on the gateway's next reload
   if (request.method !== 'GET' && response.ok) await braid.gateway.refreshRegistry().catch(() => undefined);

@@ -31,8 +31,9 @@ await workspace.layouts.restore('morning');
 
 Every fragment gets `window.braidDesktop` (its own settings, `onSaveLayout`, `restoredState`).
 Preferences, settings and layouts are kept in `localStorage` by default, or per signed-in user on
-the gateway with `serverStore()`. It needs no FDC3 agent; beside `@braidlabs/fdc3` it wraps the
-agent's `resolveIntent` and `realmGlobals` to remember choices and restore channels.
+the gateway with `serverStore()`. It needs no FDC3 agent; beside `@braidlabs/fdc3`,
+`workspace.fdc3(resolver)` and `workspace.realmGlobals(agent.realmGlobals)` wire the two together
+to remember choices and restore channels.
 
 ## As a library
 
