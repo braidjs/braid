@@ -15,28 +15,43 @@ const APPS = {
   comms: { title: 'Comms', glyph: '🛰️' },
 };
 const $ = (selector) => document.querySelector(selector);
+function element(tag, className, text = '') {
+  const node = document.createElement(tag);
+  node.className = className;
+  node.textContent = text;
+  return node;
+}
+/** Says what went wrong where the desk's one status line is. */
+function report(message) {
+  $('#empty').textContent = message;
+  $('#empty').hidden = false;
+}
 
 const workspace = createWorkspace();
 
 // ── Choosing an app for an intent ────────────────────────────────────────────────────────────
 // The agent asks this only when several apps could take a raise. The workspace wraps it: a
 // remembered choice answers without asking, and `remember: true` is kept for next time.
+//
+// `dialogResolver` from @braidlabs/fdc3 does all of this, in a shadow root the page's styles do
+// not reach. This one is the desk's own so it can wear the desk's theme; it assumes one intent
+// per raise, which is all Starport's apps do.
 function chooser({ candidates, context }) {
   return new Promise((resolve) => {
     const dialog = $('#chooser');
+    let answer;
     $('#chooser-what').textContent = `${candidates[0].intent} · ${context?.name ?? context?.type ?? ''}`;
-    const list = $('#chooser-list');
-    list.replaceChildren(
+    $('#chooser-remember').checked = false;
+    $('#chooser-list').replaceChildren(
       ...candidates.map((candidate, index) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.dataset.app = candidate.appId;
         button.autofocus = index === 0;
+        const glyph = element('span', 'glyph', APPS[candidate.appId]?.glyph ?? '✨');
+        glyph.setAttribute('aria-hidden', 'true');
         const state = candidate.instanceId ? 'open' : candidate.starting ? 'starting' : 'will launch';
-        button.innerHTML = `<span class="glyph"></span><span class="name"></span><span class="state"></span>`;
-        button.children[0].textContent = APPS[candidate.appId]?.glyph ?? '✨';
-        button.children[1].textContent = candidate.title;
-        button.children[2].textContent = state;
+        button.append(glyph, element('span', 'name', candidate.title), element('span', 'state', state));
         button.onclick = () => {
           answer = { candidate, remember: $('#chooser-remember').checked };
           dialog.close();
@@ -44,79 +59,77 @@ function chooser({ candidates, context }) {
         return button;
       }),
     );
-    let answer;
-    $('#chooser-remember').checked = false;
-    dialog.addEventListener(
-      'close',
-      () => resolve(answer),
-      { once: true },
-    );
+    // Escape and Cancel close it with no answer, which cancels the raise
+    dialog.addEventListener('close', () => resolve(answer), { once: true });
     dialog.showModal();
   });
 }
+$('#chooser-cancel').onclick = () => $('#chooser').close();
 
 // ── The agent, and Braid ─────────────────────────────────────────────────────────────────────
-const response = await fetch('/__braid/registry/appd/v2/apps');
-const directory = response.ok ? (await response.json()).applications : [];
+// A directory that fails to load leaves the apps without fdc3, rather than the desk without apps.
+const response = await fetch('/__braid/registry/appd/v2/apps').catch(() => undefined);
+const directory = response?.ok ? (await response.json()).applications : [];
+if (!response?.ok) report('The app directory did not load, so the apps cannot talk to each other. Is the gateway running?');
+
 const onDesk = workspace.fdc3(chooser);
 const agent = createBraidDesktopAgent({
   directory,
   ...onDesk,
   // the workspace has stored a remembered choice by the time its resolver answers
-  resolveIntent: (request) => onDesk.resolveIntent(request).finally(() => showRemembered()),
+  resolveIntent: (request) => onDesk.resolveIntent(request).finally(() => showRemembered().catch(() => undefined)),
 });
 
-// every app joins the same channel before its code runs, so a ship picked in one is seen in all
-if (!(await workspace.preferences.getHost()).defaultUserChannel) {
-  await workspace.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1' });
+// Every app joins the same channel before its code runs, so a ship picked in one is seen in all.
+// setHost replaces the preferences, so whatever else is there is carried over.
+const preferences = await workspace.preferences.getHost();
+if (!preferences.defaultUserChannel) {
+  await workspace.preferences.setHost({ ...preferences, defaultUserChannel: 'fdc3.channel.1' });
 }
 initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
 
 // ── The dock: launch an app, see what is open, close it ──────────────────────────────────────
+// Closing an app is removing its slot; the workspace and the agent see it go.
 const desk = workspace.container;
+const slotsOf = (id) => [...desk.querySelectorAll(`:scope > fragment-slot[name="${id}"]`)];
 for (const [id, app] of Object.entries(APPS)) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.dataset.launch = id;
-  button.title = `Launch ${app.title}`;
-  button.innerHTML = `<span class="glyph">${app.glyph}</span><span>${app.title}</span><i></i>`;
-  button.onclick = () => workspace.open(id).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  $('#dock').append(button);
+  const entry = element('span', 'app');
+  entry.dataset.app = id;
+  const launch = element('button', 'launch');
+  launch.type = 'button';
+  const glyph = element('span', 'glyph', app.glyph);
+  glyph.setAttribute('aria-hidden', 'true');
+  launch.append(glyph, element('span', 'title', app.title), element('span', 'count'));
+  launch.onclick = () => {
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    workspace.open(id).scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'nearest' });
+  };
+  const close = element('button', 'close', '×');
+  close.type = 'button';
+  close.setAttribute('aria-label', `Close ${app.title}`);
+  close.onclick = () => {
+    slotsOf(id).at(-1)?.remove();
+    launch.focus();
+  };
+  entry.append(launch, close);
+  $('#dock').append(entry);
 }
 
 function showOpen() {
-  const open = [...desk.querySelectorAll(':scope > fragment-slot')];
-  const counts = {};
-  for (const slot of open) counts[slot.getAttribute('name')] = (counts[slot.getAttribute('name')] ?? 0) + 1;
-  for (const button of $('#dock').children) {
-    const count = counts[button.dataset.launch] ?? 0;
-    button.classList.toggle('running', count > 0);
-    button.querySelector('i').textContent = count > 1 ? String(count) : '';
+  let open = 0;
+  for (const entry of $('#dock').children) {
+    const id = entry.dataset.app;
+    const count = slotsOf(id).length;
+    open += count;
+    entry.classList.toggle('running', count > 0);
+    entry.querySelector('.count').textContent = count > 1 ? String(count) : '';
+    entry.querySelector('.close').hidden = count === 0;
+    entry.querySelector('.launch').setAttribute('aria-label', count ? `Launch another ${APPS[id].title} (${count} open)` : `Launch ${APPS[id].title}`);
   }
-  $('#empty').hidden = open.length > 0;
+  $('#empty').hidden = open > 0;
 }
 new MutationObserver(showOpen).observe(desk, { childList: true });
 showOpen();
-
-// One × for the whole desk: it rides the corner of whichever tile the pointer is over. It is the
-// desk's, not the app's — closing an app is just removing its slot.
-const close = $('#close-tile');
-let hovered;
-desk.addEventListener('pointerover', (event) => {
-  const slot = event.target.closest?.('fragment-slot');
-  if (!slot || slot === hovered) return;
-  hovered = slot;
-  const box = slot.getBoundingClientRect();
-  close.style.top = `${box.top + scrollY + 10}px`;
-  close.style.left = `${box.right + scrollX - 40}px`;
-  close.setAttribute('aria-label', `Close ${APPS[slot.getAttribute('name')]?.title ?? 'app'}`);
-  close.hidden = false;
-});
-close.onclick = () => {
-  hovered?.remove();
-  hovered = undefined;
-  close.hidden = true;
-};
 
 // ── Layouts ──────────────────────────────────────────────────────────────────────────────────
 async function showLayouts() {
@@ -128,16 +141,14 @@ async function showLayouts() {
       restore.type = 'button';
       restore.dataset.restore = name;
       restore.textContent = name;
-      restore.onclick = () => workspace.layouts.restore(name);
+      // a layout deleted in another tab is no longer there to restore
+      restore.onclick = () => workspace.layouts.restore(name).catch(showLayouts);
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'x';
       remove.setAttribute('aria-label', `Delete layout ${name}`);
       remove.textContent = '×';
-      remove.onclick = async () => {
-        await workspace.layouts.delete(name);
-        await showLayouts();
-      };
+      remove.onclick = () => workspace.layouts.delete(name).then(showLayouts, showLayouts);
       item.append(restore, remove);
       return item;
     }),
@@ -148,8 +159,8 @@ $('#save-layout').addEventListener('submit', async (event) => {
   const input = $('#layout-name');
   const name = input.value.trim();
   if (!name) return;
-  await workspace.layouts.save(name);
-  input.value = '';
+  // saving under a name that exists replaces that layout
+  await workspace.layouts.save(name).then(() => (input.value = ''), () => report('That layout could not be saved.'));
   await showLayouts();
 });
 await showLayouts();

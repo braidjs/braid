@@ -111,6 +111,8 @@ async function serveStatic(pathname, res) {
         'content-type': TYPES[extname(resolved)] ?? 'application/octet-stream',
         'cache-control': 'no-cache',
         'x-content-type-options': 'nosniff',
+        // the desk may be framed by nothing but itself
+        ...(pathname.startsWith('/apps/') ? {} : { 'x-frame-options': 'SAMEORIGIN' }),
       })
       .end(body);
   } catch {
@@ -136,9 +138,17 @@ export async function start({ port = 0, bundles, gateway } = {}) {
     }),
   );
   server.on('request', (req, res) => {
-    const { pathname } = new URL(req.url, 'http://localhost');
+    // a request-target such as `//` is not a URL, and any page can make a browser send one here
+    let pathname;
+    try {
+      ({ pathname } = new URL(req.url, 'http://localhost'));
+    } catch {
+      return void res.writeHead(400).end();
+    }
     if (scripts[pathname]) {
-      res.writeHead(200, { 'content-type': TYPES['.js'], 'cache-control': 'no-cache' }).end(scripts[pathname]);
+      res
+        .writeHead(200, { 'content-type': TYPES['.js'], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' })
+        .end(scripts[pathname]);
       return;
     }
     // the apps' own files are fetched by the gateway, as from any other deployment

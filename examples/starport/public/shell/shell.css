@@ -51,17 +51,18 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 .brand p { margin: 0; color: var(--sp-dim); font-size: 13px; }
 
 #dock { display: flex; gap: 8px; margin-inline: auto; padding: 6px; border-radius: 16px; background: var(--sp-panel); border: 1px solid var(--sp-line); }
-#dock button {
-  position: relative; display: flex; align-items: center; gap: 8px;
-  padding: 8px 14px; border-radius: 11px; border: 1px solid transparent; background: transparent;
-  font-weight: 600; transition: background 0.15s, transform 0.15s;
-}
-#dock button:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
-#dock button.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
-#dock button.running::after { content: ''; position: absolute; bottom: 3px; left: 50%; width: 14px; height: 3px; margin-left: -7px; border-radius: 3px; background: var(--sp-teal); }
+#dock .app { position: relative; display: flex; border-radius: 11px; border: 1px solid transparent; transition: background 0.15s, transform 0.15s; }
+#dock .app:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
+#dock .app.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
+#dock .app.running::after { content: ''; position: absolute; bottom: 3px; left: 22px; width: 14px; height: 3px; border-radius: 3px; background: var(--sp-teal); }
+#dock button { border: 0; background: transparent; border-radius: 11px; font-weight: 600; }
+#dock .launch { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 14px; }
 #dock .glyph { font-size: 18px; }
-#dock i { font: 600 11px var(--sp-mono); color: var(--sp-amber); }
-#dock i:empty { display: none; }
+#dock .count { font: 600 11px var(--sp-mono); color: var(--sp-amber); }
+#dock .count:empty { display: none; }
+#dock .close { padding: 0 11px 0 3px; color: var(--sp-dim); font-size: 16px; }
+#dock .close:hover { color: var(--sp-pink); }
+#dock .close[hidden] { display: none; }
 
 .layouts { display: flex; align-items: center; gap: 12px; }
 #layouts { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; }
@@ -84,7 +85,7 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
   margin: 18px 28px -4px; padding: 6px 6px 6px 16px; border-radius: 999px;
   background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.35); color: #fde68a; font-size: 14px;
 }
-#remembered[hidden], #empty[hidden], #close-tile[hidden] { display: none; }
+#remembered[hidden], #empty[hidden] { display: none; }
 #forget { padding: 4px 12px; border-radius: 999px; background: var(--sp-amber); }
 
 /* The workspace: each app is a tile. The slots are the workspace's to add and remove. */
@@ -103,11 +104,6 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 @keyframes dock-in { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
 @media (prefers-reduced-motion: reduce) { [data-braid-workspace] > fragment-slot { animation: none; } }
 
-#close-tile {
-  position: absolute; z-index: 4; width: 28px; height: 28px; border-radius: 50%;
-  border: 1px solid var(--sp-line); background: rgba(7, 10, 26, 0.8); color: var(--sp-dim); font-size: 17px; line-height: 1;
-}
-#close-tile:hover { color: #fff; background: var(--sp-pink); border-color: transparent; }
 #empty { margin: 12vh auto; text-align: center; color: var(--sp-dim); font-size: 17px; }
 
 dialog {

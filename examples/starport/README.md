@@ -53,5 +53,7 @@ The repository's e2e (`e2e/starport-example.e2e.ts`) runs this example in Chromi
 
 - Everything the user keeps is in `localStorage`, so it is per browser. A gateway with
   `preferences` and a `serverStore` keeps it per signed-in user instead.
-- The gateway runs in development mode, for apps on loopback over http. Don't ship that.
+- The gateway runs in development mode, for apps on loopback over http. That mode ignores `access`
+  rules, lists every app's endpoint, returns detailed errors and rewrites `Origin`. Anywhere other
+  people can reach, use `mode: 'production'`, which is the default.
 - The tiles are a grid. The workspace orders apps; it is not a window manager.

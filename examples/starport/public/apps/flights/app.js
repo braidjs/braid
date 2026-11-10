@@ -28,20 +28,27 @@ for (const ship of SHIPS) {
   row.cells[2].textContent = ship.eta;
   row.cells[3].firstChild.textContent = ship.status;
   row.cells[3].firstChild.classList.add(ship.status.toLowerCase().replace(' ', '-'));
-  const pick = () => fdc3.broadcast(context(ship));
+  // its own broadcast does not come back to it, so a pick is shown here and then told to the desk
+  const pick = () => {
+    show(ship);
+    fdc3.broadcast(context(ship));
+  };
   row.addEventListener('click', pick);
-  row.addEventListener('keydown', (event) => event.key === 'Enter' && pick());
+  row.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    pick();
+  });
 }
 
 function show(ship) {
   selected = ship;
-  for (const row of rows.rows) row.setAttribute('aria-selected', String(row.dataset.ship === ship?.id.registry));
+  for (const row of rows.rows) row.toggleAttribute('aria-current', row.dataset.ship === ship?.id.registry);
   document.getElementById('picked').textContent = ship ? `${ship.name} selected` : 'No ship selected';
   document.getElementById('plot').disabled = document.getElementById('hail').disabled = !ship;
 }
 
-// its own broadcast does not come back, so a pick shows at once; another Flights' pick arrives here
-rows.addEventListener('click', (event) => show(SHIPS.find((ship) => ship.id.registry === event.target.closest('tr')?.dataset.ship)));
+// another Flights' pick arrives here
 fdc3.addContextListener('starport.ship', (ship) => show(SHIPS.find((known) => known.id.registry === ship.id?.registry)));
 
 // "Plot route" does not say which app. Two can take it; the desk asks, or remembers.

@@ -49,9 +49,7 @@
       <fragment-slot name="star-map"></fragment-slot>
       <fragment-slot name="cargo"></fragment-slot>
     </main>
-    <p id="empty" hidden>The desk is clear. Launch an app from the dock, or restore a layout.</p>
-
-    <button type="button" id="close-tile" hidden>×</button>
+    <p id="empty" role="status" hidden>The desk is clear. Launch an app from the dock, or restore a layout.</p>
 
     <dialog id="chooser" aria-labelledby="chooser-title">
       <h2 id="chooser-title">Which app should take this?</h2>
@@ -59,7 +57,7 @@
       <div id="chooser-list"></div>
       <footer>
         <label><input type="checkbox" id="chooser-remember" /> Remember my choice</label>
-        <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="button" id="chooser-cancel">Cancel</button>
       </footer>
     </dialog>
   </body>

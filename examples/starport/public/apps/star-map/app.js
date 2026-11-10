@@ -40,7 +40,12 @@ function plot(ship) {
 
 fdc3.addContextListener('starport.ship', (ship) => {
   highlight(ship);
-  if (!plotted || plotted.name !== ship.name) document.getElementById('status').textContent = `${ship.name} is between ${ship.from} and ${ship.to}.`;
+  if (plotted?.name === ship.name) return;
+  // another ship: the old course goes
+  plotted = undefined;
+  document.getElementById('route').setAttribute('d', '');
+  document.getElementById('ship').setAttribute('r', 0);
+  document.getElementById('status').textContent = `${ship.name} is between ${ship.from} and ${ship.to}.`;
 });
 fdc3.addIntentListener('PlotRoute', (ship) => plot(ship));
 

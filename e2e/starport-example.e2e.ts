@@ -38,6 +38,8 @@ async function ready(page: Page) {
   await page.waitForSelector('html[data-ready]');
   await page.locator('main fragment-slot[name="flights"] tr[data-ship="NX-204"]').waitFor();
   await page.locator('main fragment-slot[name="cargo"] #manifest[data-loaded]').waitFor();
+  // the map's markup is there before its script has run; its ports are drawn by the script
+  await page.locator('main fragment-slot[name="star-map"] #ports .port').first().waitFor();
 }
 
 const app = (page: Page, id: string) => page.locator(`main fragment-slot[name="${id}"]`);
@@ -49,7 +51,12 @@ describe('the Starport example', () => {
     const page = await desk();
     expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
 
-    await pick(page, 'NX-204');
+    // by keyboard, as by pointer: the board shows its own pick and enables what acts on it
+    expect(await app(page, 'flights').locator('#plot').isDisabled()).toBe(true);
+    await app(page, 'flights').locator('tr[data-ship="NX-204"]').focus();
+    await page.keyboard.press('Enter');
+    expect(await app(page, 'flights').locator('#picked').textContent()).toBe('Marigold selected');
+    expect(await app(page, 'flights').locator('#plot').isDisabled()).toBe(false);
     await expect.poll(() => app(page, 'star-map').locator('#status').textContent()).toBe('Marigold is between Ceres and Europa.');
     await expect.poll(() => app(page, 'cargo').locator('#title').textContent()).toBe('Manifest · Marigold (NX-204)');
     expect(await app(page, 'cargo').locator('#items tr').count()).toBe(3);
@@ -76,12 +83,15 @@ describe('the Starport example', () => {
     expect(await open(page)).toEqual(['flights', 'star-map', 'cargo', 'radar']);
     expect(await app(page, 'star-map').locator('#status').textContent()).not.toContain('Course plotted');
     await expect.poll(() => page.locator('#remembered').textContent()).toContain('Radar');
+    expect(await page.locator('#remembered').isVisible()).toBe(true);
 
     // the next raise is not asked about
     await pick(page, 'KT-077');
     await app(page, 'flights').locator('#plot').click();
     await expect.poll(() => app(page, 'radar').locator('#status').textContent()).toContain('Locked on Slow Comet');
     expect(await chooser.isVisible()).toBe(false);
+    // and Star Map, which was not chosen either time, never plotted a course
+    expect(await app(page, 'star-map').locator('#status').textContent()).toBe('Slow Comet is between Titan and Mars.');
 
     // forgotten, it is asked again
     await page.locator('#forget').click();
@@ -103,18 +113,15 @@ describe('the Starport example', () => {
     expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
     await app(page, 'cargo').locator('#col-hazard').uncheck();
     await app(page, 'cargo').locator('#manifest[data-saved="mass"]').waitFor();
-    await page.locator('#dock button[data-launch="radar"]').click();
+    await page.locator('#dock [data-app="radar"] .launch').click();
     await app(page, 'radar').locator('#status').waitFor();
 
     await page.locator('#layout-name').fill('night shift');
     await page.locator('#save-layout button').click();
     await page.locator('#layouts button[data-restore="night shift"]').waitFor();
 
-    // close two apps with the desk's ×
-    for (const id of ['star-map', 'radar']) {
-      await app(page, id).hover();
-      await page.locator('#close-tile').click();
-    }
+    // close two apps from the dock
+    for (const id of ['star-map', 'radar']) await page.locator(`#dock [data-app="${id}"] .close`).click();
     expect(await open(page)).toEqual(['flights', 'cargo']);
 
     await page.locator('#layouts button[data-restore="night shift"]').click();

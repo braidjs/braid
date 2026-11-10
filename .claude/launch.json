@@ -16,11 +16,7 @@
     {
       "name": "site-dev",
       "runtimeExecutable": "node",
-      "runtimeArgs": [
-        "apps/site/dev.mjs",
-        "--port",
-        "8787"
-      ],
+      "runtimeArgs": ["apps/site/dev.mjs", "--port", "8787"],
       "port": 8787
     },
     {
@@ -40,21 +36,13 @@
     {
       "name": "prod-remote",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "nx",
-        "serve-dist",
-        "prod-remote"
-      ],
+      "runtimeArgs": ["nx", "serve-dist", "prod-remote"],
       "port": 4411
     },
     {
       "name": "prod-host",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "nx",
-        "serve-dist",
-        "prod-host"
-      ],
+      "runtimeArgs": ["nx", "serve-dist", "prod-host"],
       "port": 4410
     },
     {
@@ -83,35 +71,19 @@
     {
       "name": "docs",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "vitepress",
-        "dev",
-        "docs",
-        "--port",
-        "5179"
-      ],
+      "runtimeArgs": ["vitepress", "dev", "docs", "--port", "5179"],
       "port": 5179
     },
     {
       "name": "sw-gateway",
       "runtimeExecutable": "env",
-      "runtimeArgs": [
-        "PORT=3917",
-        "BRAID_TSCONFIG=tsconfig.base.json",
-        "node",
-        "examples/sw-gateway/server.mjs"
-      ],
+      "runtimeArgs": ["PORT=3917", "BRAID_TSCONFIG=tsconfig.base.json", "node", "examples/sw-gateway/server.mjs"],
       "port": 3917
     },
     {
       "name": "starport",
       "runtimeExecutable": "env",
-      "runtimeArgs": [
-        "PORT=3918",
-        "BRAID_TSCONFIG=tsconfig.base.json",
-        "node",
-        "examples/starport/server.mjs"
-      ],
+      "runtimeArgs": ["PORT=3918", "BRAID_TSCONFIG=tsconfig.base.json", "node", "examples/starport/server.mjs"],
       "port": 3918
     }
   ]
