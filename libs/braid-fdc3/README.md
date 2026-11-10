@@ -18,29 +18,33 @@ The agent is built on the FINOS reference implementation (`@finos/fdc3-web-impl`
 `@finos/fdc3-agent-proxy`). Trusted fragments, compat and custom-element, get `window.fdc3` before
 their first script runs. A fragment whose id has no directory record gets none.
 
-FDC3 leaves layouts and user preferences to each desktop agent. Braid's are opt-in: give the agent
-a `container` and a `store`.
+Give the agent a `container` and it can launch apps:
 
 ```ts
-import { createBraidDesktopAgent, serverStore } from '@braidlabs/fdc3';
-
 const agent = createBraidDesktopAgent({
   directory: applications,
   container: document.getElementById('desk')!, // where fdc3.open and intents mount apps
-  store: serverStore(), // per signed-in user, on the gateway; localStorageStore() is the default
 });
-
-await agent.layouts.save('morning'); // the container's slots, channels and each app's state
-await agent.layouts.restore('morning');
-await agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy'] });
 ```
 
 - **Launching.** `fdc3.open`, `newInstance: true`, and intents no running app can take mount a
   `<fragment-slot>` in the container.
-- **Resolving.** A built-in dialog chooses among several apps and can remember the choice; a
-  `resolveIntent` hook replaces it.
-- **App settings.** Each fragment gets `window.braidDesktop.settings`, plus `onSaveLayout` and
-  `restoredState` for layouts.
+- **Resolving.** A built-in dialog chooses among several apps; a `resolveIntent` hook replaces it.
+
+Preferences, per-app settings and saved layouts are not part of FDC3 and not part of this package.
+They are the workspace in `@braidlabs/console/workspace`, which composes around the agent:
+
+```ts
+import { createBraidDesktopAgent, dialogResolver } from '@braidlabs/fdc3';
+import { createWorkspace } from '@braidlabs/console/workspace';
+
+const workspace = createWorkspace();
+const agent = createBraidDesktopAgent({
+  directory: applications,
+  ...workspace.fdc3(dialogResolver(document, { remember: true })), // container and resolveIntent
+});
+initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
+```
 
 Not supported yet: `fdc3.close()`, FDC3 for untrusted or contract fragments, and a live-updating
 directory.

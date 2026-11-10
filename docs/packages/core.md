@@ -546,6 +546,9 @@ Mounting in HTML:
 
 ### Shared context, and fragments that mount late
 
+For how context compares with props, slot events, channels and intents, see the
+[events and data guide](../events-and-data.md).
+
 The host publishes state on the context bus. Each fragment reads it at the contract version it
 declares:
 

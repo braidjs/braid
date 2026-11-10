@@ -1,8 +1,9 @@
 import type { Principal } from './registry.js';
 
 /**
- * Per-user preferences, served by the gateway for `@braidlabs/fdc3`'s `serverStore`: an FDC3
- * page's remembered intent choices, each app's settings and its saved layouts.
+ * Per-user preferences, served by the gateway for the workspace's `serverStore`
+ * (`@braidlabs/console/workspace`): a page's preferences, remembered intent choices, each app's
+ * settings and its saved layouts.
  *
  * The gateway already resolves who is asking (its `principal` option), so it is the natural place
  * to keep what belongs to that person. Each entry is keyed by the principal's `subject` and a

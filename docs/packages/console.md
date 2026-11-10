@@ -31,6 +31,9 @@ Viewing fragments needs nothing deployed. Everything else needs `createRegistryA
 [`@braidlabs/registry`](./registry.md) mounted beside the gateway. Without it those views explain
 what to mount instead of failing.
 
+The package has a second entry, `@braidlabs/console/workspace`: the runtime for a
+[workspace](#the-workspace) area designed into a shell. It has no React in it.
+
 ---
 
 ## Shells and the layout designer
@@ -62,11 +65,191 @@ The **Code** tab generates the host for each framework a shell can be:
 | Angular SSR | the Angular files plus `server.ts` with the gateway mounted in front of the SSR handler |
 | Plain JS | one HTML page per route with `<fragment-slot>`s |
 
+A route may also have one **workspace** area: see [The workspace](#the-workspace) below.
+
 Every value is escaped for where it lands. A **Plain JS** shell needs no code at all: the gateway
 can serve it straight from its definition, so publishing it puts the page live with no rebuild (see
 [serving shells from their definition](./registry.md#serving-shells-from-their-definition)). For
 the other frameworks, the code is yours to build and serve, and the gateway pierces fragments into
 what your app returns.
+
+---
+
+## The workspace
+
+Most areas of a shell hold one fixed fragment. A **workspace** area holds whatever apps the user
+has open: they launch apps into it, and save and restore named layouts of it. The fixed areas
+around it — navigation, a header — stay exactly as designed.
+
+**Designing it.** In the layout preview, pick an area and tick **Workspace**. Add the **starting
+apps** that are open when the page first loads. A route has at most one workspace; ticking another
+area moves it there. The area shows hatched in the preview with its starting apps, and the shell
+validates like any other: the area must exist, hold no fixed fragment, and name registered
+fragments.
+
+```json
+{
+  "path": "/desk",
+  "layout": { "areas": "nav desk", "columns": "220px 1fr" },
+  "slots": { "nav": "navigation" },
+  "workspace": { "area": "desk", "apps": ["blotter", "chart"] }
+}
+```
+
+**What it renders.** In every target the area becomes an element marked `data-braid-workspace`,
+holding a `<fragment-slot>` for each starting app (at most 32). The **Code** tab adds the wiring:
+the same few lines inline for Plain JS, and a `workspace.ts` module for React and Angular. There
+the framework renders the area empty and the workspace opens the starting apps after render,
+because the workspace adds and removes the area's children itself when a layout is restored, and
+a framework must not own them. A Plain JS
+shell [served from its definition](./registry.md#serving-shells-from-their-definition) renders the
+area too; its runtime module creates the workspace.
+
+**Running it.** `createWorkspace()` finds the page's `[data-braid-workspace]` element:
+
+```ts
+import { initBraid } from '@braidlabs/core';
+import { createWorkspace } from '@braidlabs/console/workspace';
+
+const workspace = createWorkspace();
+initBraid({ realmGlobals: workspace.realmGlobals() });
+
+workspace.open('chart', { props: { symbol: 'AAPL' } }); // launch an app into the area
+await workspace.layouts.save('morning');                // the area's apps, in order, with their state
+await workspace.layouts.restore('morning');             // replaces the area's apps; nothing outside it
+await workspace.layouts.list();                         // ['morning']
+await workspace.layouts.delete('morning');
+```
+
+A layout is the area's `<fragment-slot>`s in order: each one's app, `src` and `props`, and whatever
+state the app gives. A reload shows the shell as designed, with its starting apps; restoring a
+layout is the page's call, so a "restore my last layout on load" is one line in the host.
+
+**Inside an app.** Every fragment gets `window.braidDesktop`:
+
+```ts
+await braidDesktop.settings.set('columns', ['due', 'amount']); // this app's, for this user
+await braidDesktop.settings.get('columns');                    // after a reload too
+
+braidDesktop.onSaveLayout(() => ({ tab: currentTab }));        // JSON, within 2 seconds
+if (braidDesktop.restoredState) showTab(braidDesktop.restoredState.tab);
+```
+
+Settings belong to the app and the user, and every instance of the app shares them. One app cannot
+name another's keys through `braidDesktop`. That keeps settings apart; it is not a security
+boundary, because trusted fragments share the page's origin and its storage.
+
+**Preferences.**
+
+```ts
+await workspace.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] }); // replaces
+await workspace.preferences.getHost();
+await workspace.preferences.intentChoice('ViewChart', 'fdc3.instrument'); // 'chart', or undefined
+await workspace.preferences.forgetIntentChoice('ViewChart', 'fdc3.instrument');
+```
+
+They are read once, when the first fragment boots, and kept. A store that takes longer than a
+second to answer is skipped: fragments boot without preferences rather than waiting.
+
+`hiddenApps` are never offered as a choice. When hiding leaves one candidate the raise goes to it
+without asking, and when it leaves none the raise is cancelled. Hiding governs the choice, not
+delivery: an app that is the only one able to take an intent still gets it.
+
+**Where it is kept.** Under keys such as `host`, `intents/{intent}/{contextType}`,
+`apps/{appId}/{key}` and `layouts/{name}`, in the `store`:
+
+| Store | Kept | Per |
+| :--- | :--- | :--- |
+| `localStorageStore()` (default) | in `localStorage`, under `braid.workspace/` | origin and browser profile |
+| `serverStore({ url })` | on the gateway, `createGateway({ preferences })` | signed-in user, in any browser |
+| `memoryStore()` | in memory, until reload | page |
+
+Any object with `get`, `set`, `delete` and `list` is a `PreferenceStore`. The gateway side is
+described under [Per-user preferences](./gateway.md#per-user-preferences-opt-in).
+
+**With FDC3.** The workspace needs no FDC3 agent, and works with one. Spread `workspace.fdc3(resolver)`
+into the agent's options and wrap its `realmGlobals`, and it also restores each app's user channel,
+joins a default channel, hides apps from the intent resolver and remembers the user's choice. An
+app joins its channel before its own code runs, but just after `fdc3.open` has resolved for the
+opener, so an opener should pass context to `open` rather than broadcast straight after it. See
+[`@braidlabs/fdc3`](./fdc3.md#preferences-app-settings-and-layouts-the-workspace).
+
+Not supported: sizes and positions within the area (a layout is an order, laid out by your CSS),
+and layouts shared between users.
+
+---
+
+## Behind the service-worker gateway
+
+The console is a static bundle, so it can be served from a bucket or a CDN. Its backend can be
+the gateway in a service worker ([`@braidlabs/sw/gateway`](./sw.md#the-gateway-in-the-worker-static-hosting))
+on the same origin:
+
+| View | With the in-worker gateway |
+| :--- | :--- |
+| Fragments, Topology | Work as they are, with `discovery` on: the worker answers `/__braid/registry` |
+| Shells, History, Edit fragments | Work once the registry write API is composed into the worker, over a store in the browser |
+
+```js
+// sw.js
+import { braidGatewayHandler } from '@braidlabs/sw/gateway';
+import { cacheSnapshotStore, createRegistryApi, shellDocuments, snapshotRegistry } from '@braidlabs/registry';
+
+const store = cacheSnapshotStore();              // snapshots in Cache Storage: they outlive the worker
+const registry = snapshotRegistry({ store });
+// fragments may only be served from this origin, so a publish cannot point the page at another
+const api = createRegistryApi({ store, authorize: () => true, endpointOrigins: [self.location.origin] });
+const braid = braidGatewayHandler({
+  mode: 'production',
+  registry,
+  discovery: {},
+  documents: shellDocuments({ registry, runtimeSrc: '/runtime.js' }),
+});
+
+async function registryApi(request) {
+  // the only request another site can aim at the worker is a navigation (a link, a posted form);
+  // the console calls the API with fetch, so navigations are refused, and a write must be JSON
+  if (request.mode === 'navigate') return new Response(null, { status: 403 });
+  const json = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() === 'application/json';
+  if (request.method !== 'GET' && request.method !== 'HEAD' && !json) return new Response(null, { status: 415 });
+
+  const response = (await api.handle(request)) ?? new Response(null, { status: 404 });
+  // a publish or a pin moved HEAD: serve it on the next navigation
+  if (request.method !== 'GET' && response.ok) await braid.gateway.refreshRegistry().catch(() => undefined);
+  return response;
+}
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin === self.location.origin && url.pathname.startsWith('/__braid/registry-api/')) {
+    event.respondWith(registryApi(event.request));
+    return;
+  }
+  const handled = braid(event.request, event.preloadResponse);
+  if (handled) event.respondWith(handled);
+});
+```
+
+Seed the store with a first snapshot when the worker installs (`createSnapshot`, `store.put`,
+`store.setHead`), and start the console after the worker controls the page, as any page behind
+the in-worker gateway does. A shell published from the console is then served by the worker on
+the next navigation.
+
+Know what this is before relying on it:
+
+- **It is one browser's registry.** Snapshots live in that browser's Cache Storage, per origin and
+  profile, and go when the user clears site data. Nobody else sees what is published. Use it to
+  design and preview; ship a design with the **Code** tab, or by publishing to a registry on a
+  server.
+- **The origin is the only boundary.** There is no session to authorize against, so
+  `authorize: () => true` — honest here, wrong on a server. Any script on the origin can publish,
+  as it could write the cache directly. Other sites are kept out by the worker itself: a worker
+  answers its own pages' requests and navigations into its scope, so it must refuse navigations to
+  the API (a form posted from anywhere is one) and take writes only as JSON, as above. Keep
+  `endpointOrigins` to the origin, so that even a publish cannot make the page load a fragment
+  from somewhere else.
+- **No environments or promotion.** `cacheSnapshotStore` tracks HEAD only, so History lists and
+  re-pins but has no environments.
 
 ---
 

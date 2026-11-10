@@ -161,6 +161,24 @@ describe('validateRegistry with shells', () => {
     expect(codes([shell({ routes: [{ path: '/x', layout: { areas: 'main' }, slots: { aside: 'billing' } }] })])).toEqual(['slot-unknown-area']);
   });
 
+  it('accepts a workspace in an area no slot fills, with registered starting apps', () => {
+    const route = { path: '/x', layout: { areas: 'nav desk' }, slots: { nav: 'billing' }, workspace: { area: 'desk', apps: ['billing', 'billing'] } };
+    expect(codes([shell({ routes: [route] })])).toEqual([]);
+  });
+
+  it('reports a workspace in an unknown area, in a slotted area, with an unregistered app, or malformed', () => {
+    const route = (workspace: unknown, slots: Record<string, string> = {}) =>
+      shell({ routes: [{ path: '/x', layout: { areas: 'nav desk' }, slots, workspace: workspace as never }] });
+    expect(codes([route({ area: 'aside' })])).toEqual(['slot-unknown-area']);
+    expect(codes([route({ area: 'desk' }, { desk: 'billing' })])).toEqual(['invalid-shell-layout']);
+    expect(codes([route({ area: 'desk', apps: ['ghost', 'ghost'] })])).toEqual(['slot-unknown-fragment']);
+    expect(codes([route({ area: 7 })])).toEqual(['invalid-shell-field']);
+    expect(codes([route({ area: 'desk', apps: 'billing' })])).toEqual(['invalid-shell-field']);
+    expect(codes([route('desk')])).toEqual(['invalid-shell-field']);
+    expect(codes([route({ area: 'desk', apps: Array(33).fill('billing') })])).toEqual(['invalid-shell-field']);
+    expect(codes([route({ area: 'desk', apps: Array(32).fill('billing') })])).toEqual([]);
+  });
+
   it('reports a slotted fragment that is not registered, naming the shell', () => {
     const findings = validateRegistry([reviews], { shells: [shell()] });
 

@@ -70,6 +70,9 @@ if (user) {
 
 ## Channels: state, events, and late joiners
 
+Not sure whether you want a channel, an intent, props or something else? The
+[events and data guide](../events-and-data.md) starts from the problem and compares them.
+
 `createEventBus` gives each channel two halves, because state is not an event:
 
 ```ts

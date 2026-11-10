@@ -1,5 +1,5 @@
 import type { FragmentManifest } from '@braidlabs/gateway';
-import { isSafeAssetUrl, isSafeTrackList, parseAreas, type ShellManifest, type ShellRoute } from './shell.js';
+import { isSafeAssetUrl, isSafeTrackList, MAX_WORKSPACE_APPS, parseAreas, type ShellManifest, type ShellRoute } from './shell.js';
 import type { RegistrySnapshot } from './snapshot.js';
 import { claimsWholeSite, withinPrefixes } from './route-scope.js';
 
@@ -42,7 +42,8 @@ export interface RenderShellOptions {
 
 /**
  * Renders one route of a shell as a complete HTML document: its head, its layout as a CSS grid,
- * and a `<fragment-slot>` for each slotted area, ready for the gateway to pierce.
+ * a `<fragment-slot>` for each slotted area, ready for the gateway to pierce, and — when the route
+ * has a workspace — a `[data-braid-workspace]` element in its area holding the starting apps.
  *
  * Everything from the snapshot is treated as untrusted at render time, not only at publish time —
  * a snapshot stored before a validation rule existed is still served:
@@ -81,18 +82,35 @@ export function renderShellDocument(
   ];
   const areaRules = grid ? parsed.areas.map((area) => `[data-braid-area="${area.name}"]{grid-area:${area.name}}`) : [];
 
+  const known = (area: unknown): area is string => grid && parsed.areas.some((candidate) => candidate.name === area);
+  const slotFor = (fragmentId: string, area?: string) => {
+    const manifest = byId.get(fragmentId);
+    // a path on the fragment's own endpoint; anything else is not a src the client should resolve
+    const src =
+      manifest?.bound === false && typeof manifest.src === 'string' && manifest.src.startsWith('/') && isSafeAssetUrl(manifest.src)
+        ? ` src="${escapeHtml(manifest.src)}"`
+        : '';
+    return `<fragment-slot name="${escapeHtml(fragmentId)}"${area === undefined ? '' : ` data-braid-area="${escapeHtml(area)}"`}${src}></fragment-slot>`;
+  };
+
+  // one area, one occupant: the workspace wins an area a stored snapshot also slotted
+  const workspaceArea = known(route.workspace?.area) ? route.workspace!.area : undefined;
   const slots = Object.entries(route.slots ?? {})
     // area names were checked by parseAreas; an unknown area has nowhere to go
-    .filter(([area]) => grid && parsed.areas.some((known) => known.name === area))
-    .map(([area, fragmentId]) => {
-      const manifest = byId.get(fragmentId);
-      // a path on the fragment's own endpoint; anything else is not a src the client should resolve
-      const src =
-        manifest?.bound === false && typeof manifest.src === 'string' && manifest.src.startsWith('/') && isSafeAssetUrl(manifest.src)
-          ? ` src="${escapeHtml(manifest.src)}"`
-          : '';
-      return `<fragment-slot name="${escapeHtml(fragmentId)}" data-braid-area="${escapeHtml(area)}"${src}></fragment-slot>`;
-    });
+    .filter(([area]) => known(area) && area !== workspaceArea)
+    .map(([area, fragmentId]) => slotFor(fragmentId, area));
+  if (workspaceArea !== undefined) {
+    // capped here too: a snapshot stored before validation existed is still rendered
+    const apps = Array.isArray(route.workspace?.apps)
+      ? route.workspace.apps.filter((app) => typeof app === 'string' && app !== '').slice(0, MAX_WORKSPACE_APPS)
+      : [];
+    slots.push(`<div data-braid-workspace data-braid-area="${escapeHtml(workspaceArea)}">${apps.map((app) => slotFor(app)).join('')}</div>`);
+  }
+  // apps sit side by side and share the area; a host stylesheet can lay them out any other way
+  const workspaceRules =
+    workspaceArea === undefined
+      ? ''
+      : `[data-braid-workspace]{display:flex;min-width:0;${trackDeclaration('gap', route.layout.gap).join('')}}[data-braid-workspace]>fragment-slot{flex:1 1 0;min-width:0}`;
 
   const ownViewport = (head.meta ?? []).some((meta) => meta.name === 'viewport');
 
@@ -116,7 +134,7 @@ export function renderShellDocument(
         (sheet) =>
           `<link rel="stylesheet" href="${escapeHtml(sheet.href)}"${sheet.integrity ? ` integrity="${escapeHtml(sheet.integrity)}" crossorigin="anonymous"` : ''}>`,
       ),
-    `<style>.braid-shell{${gridDeclarations.join(';')}}${areaRules.join('')}</style>`,
+    `<style>.braid-shell{${gridDeclarations.join(';')}}${areaRules.join('')}${workspaceRules}</style>`,
     ...(head.scripts ?? [])
       .filter((script) => assetAllowed(script?.src))
       .map((script) => {

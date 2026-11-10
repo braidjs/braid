@@ -19,6 +19,8 @@ export { createSnapshot, verifySnapshot, serializeSnapshot, parseSnapshot, SNAPS
 export type { RegistrySnapshot, SnapshotInput } from './lib/snapshot.js';
 
 export { memorySnapshotStore, toRef, compareRefs, refCursor, isAfterCursor } from './lib/store.js';
+export { cacheSnapshotStore } from './lib/store-cache.js';
+export type { CacheSnapshotStoreOptions } from './lib/store-cache.js';
 export type { SnapshotStore, SnapshotRef } from './lib/store.js';
 
 export { snapshotRegistry } from './lib/source.js';
@@ -32,11 +34,12 @@ export { validateRegistry, findPierceOverlaps, diffRegistries, fieldOwner } from
 export { subgraph, supergraph } from './lib/supergraph.js';
 export type { SubgraphOptions, SubgraphSource } from './lib/supergraph.js';
 
-export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS } from './lib/shell.js';
+export { parseAreas, formatAreas, validateShells, isSafeAssetUrl, isSafeTrackList, SHELL_FRAMEWORKS, MAX_WORKSPACE_APPS } from './lib/shell.js';
 export type {
   ShellManifest,
   ShellFramework,
   ShellRoute,
+  ShellWorkspace,
   ShellLayout,
   ShellHead,
   ShellMeta,

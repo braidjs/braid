@@ -1,5 +1,5 @@
 /**
- * Where the agent keeps what it remembers for a user: intent choices, host preferences, each
+ * Where the workspace keeps what it remembers for a user: intent choices, host preferences, each
  * app's settings and saved layouts. Values are JSON; keys are `/`-separated paths such as
  * `apps/billing/theme` (see {@link isStoreKey}).
  *
@@ -38,13 +38,13 @@ export function keySegment(value: string): string {
 }
 
 function checkKey(key: string): void {
-  if (!isStoreKey(key)) throw new TypeError(`braid-fdc3: "${key}" is not a store key`);
+  if (!isStoreKey(key)) throw new TypeError(`braid-workspace: "${key}" is not a store key`);
 }
 
 /** A JSON round trip: what a store holds is data, never a live object shared with the caller. */
 function toJson(value: unknown): string {
   const json = JSON.stringify(value);
-  if (json === undefined) throw new TypeError('braid-fdc3: a stored value must be JSON');
+  if (json === undefined) throw new TypeError('braid-workspace: a stored value must be JSON');
   return json;
 }
 
@@ -72,7 +72,7 @@ export function memoryStore(): PreferenceStore {
 }
 
 export interface LocalStorageStoreOptions {
-  /** Prepended to every key in `localStorage`, so the agent's entries stay apart from the page's. Defaults to `braid.fdc3/`. */
+  /** Prepended to every key in `localStorage`, so the workspace's entries stay apart from the page's. Defaults to `braid.workspace/`. */
   prefix?: string;
   /** Defaults to `localStorage`. */
   storage?: Storage;
@@ -84,7 +84,7 @@ export interface LocalStorageStoreOptions {
  * page never fails to compose over its preferences.
  */
 export function localStorageStore(options: LocalStorageStoreOptions = {}): PreferenceStore {
-  const prefix = options.prefix ?? 'braid.fdc3/';
+  const prefix = options.prefix ?? 'braid.workspace/';
   let storage: Storage | undefined;
   try {
     storage = options.storage ?? globalThis.localStorage;
@@ -146,7 +146,7 @@ export function serverStore(options: ServerStoreOptions = {}): PreferenceStore {
     return `${base}/${key.split('/').map(encodeURIComponent).join('/')}`;
   };
   async function ok(response: Response, what: string): Promise<Response> {
-    if (!response.ok) throw new Error(`braid-fdc3: ${what} failed with ${response.status}`);
+    if (!response.ok) throw new Error(`braid-workspace: ${what} failed with ${response.status}`);
     return response;
   }
   return {

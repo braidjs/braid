@@ -4,10 +4,10 @@ import { memoryPreferenceBackend } from '../libs/braid-gateway/src/index.js';
 import { bundleModule, endpoint, html, launch, readySlots, startHost, type Host } from './harness.js';
 
 /**
- * @braidlabs/fdc3's workspace in Chromium, through a real gateway: fdc3.open mounting a real
- * <fragment-slot>, the built-in resolver dialog driven by the keyboard, remembered choices, host
- * preferences, app settings and layouts — each surviving a reload, with the browser store and with
- * the gateway's per-user store.
+ * The console workspace around an FDC3 agent, in Chromium, through a real gateway: fdc3.open
+ * mounting a real <fragment-slot>, the agent's resolver dialog driven by the keyboard, and the
+ * workspace's remembered choices, host preferences, app settings and layouts — each surviving a
+ * reload, with the browser store and with the gateway's per-user store.
  */
 
 /**
@@ -56,9 +56,10 @@ beforeAll(async () => {
         return user ? { subject: user } : undefined;
       },
     },
-    modules: { '/fdc3.js': bundleModule('libs/braid-fdc3/src/index.ts') },
+    modules: { '/fdc3.js': bundleModule('libs/braid-fdc3/src/index.ts'), '/workspace.js': bundleModule('libs/braid-console/src/workspace.ts') },
     head: `<script type="module">
-      import { createBraidDesktopAgent, localStorageStore, serverStore } from '/fdc3.js';
+      import { createBraidDesktopAgent, dialogResolver } from '/fdc3.js';
+      import { createWorkspace, localStorageStore, serverStore } from '/workspace.js';
       window.agentReady = (async () => {
         const response = await fetch('/__braid/registry/appd/v2/apps');
         const applications = response.ok ? (await response.json()).applications : [];
@@ -71,17 +72,20 @@ beforeAll(async () => {
               window.resolverCalls.push(request.candidates.map((c) => c.appId).sort());
               return { candidate: request.candidates.find((c) => c.appId === 'research') };
             }
-          : undefined;
+          : dialogResolver(document, { remember: true });
         // any resolver dialog that ever appears is counted
         window.dialogsSeen = 0;
         new MutationObserver((records) => {
           for (const record of records) for (const node of record.addedNodes) if (node.localName === 'braid-intent-resolver') window.dialogsSeen++;
         }).observe(document.body, { childList: true });
-        return (window.agent = createBraidDesktopAgent({ directory: applications, container: document.getElementById('desk'), store, resolveIntent }));
+        // no container given: the workspace finds the page's [data-braid-workspace]
+        const workspace = (window.workspace = createWorkspace({ store }));
+        const agent = createBraidDesktopAgent({ directory: applications, ...workspace.fdc3(resolveIntent) });
+        return workspace.realmGlobals(agent.realmGlobals);
       })();
     </script>`,
-    braidSource: '{ realmGlobals: (fragment) => window.agentReady.then((agent) => agent.realmGlobals(fragment)) }',
-    body: '<fragment-slot name="blotter"></fragment-slot><div id="desk"></div>',
+    braidSource: '{ realmGlobals: (fragment) => window.agentReady.then((realmGlobals) => realmGlobals(fragment)) }',
+    body: '<fragment-slot name="blotter"></fragment-slot><div id="desk" data-braid-workspace></div>',
   });
 });
 afterAll(async () => {
@@ -91,8 +95,8 @@ afterAll(async () => {
 
 type Win = Window & {
   log: string[];
-  instances: { appId: string; fdc3: import('@finos/fdc3-standard').DesktopAgent; braidDesktop: import('../libs/braid-fdc3/src/index.js').BraidDesktopApi }[];
-  agent: import('../libs/braid-fdc3/src/index.js').BraidDesktopAgent;
+  instances: { appId: string; fdc3: import('@finos/fdc3-standard').DesktopAgent; braidDesktop: import('../libs/braid-console/src/workspace.js').BraidDesktopApi }[];
+  workspace: import('../libs/braid-console/src/workspace.js').Workspace;
   agentReady: Promise<unknown>;
   tabs: Record<string, string>;
   resolverCalls: string[][];
@@ -180,7 +184,7 @@ describe('raising an intent', () => {
   it('launches an app nothing running can take it for, and delivers the intent once it listens', async () => {
     const context = await signedIn('launcher');
     const page = await open(context, 'local');
-    await page.evaluate(() => (window as unknown as Win).agent.preferences.setHost({ hiddenApps: ['research'] }));
+    await page.evaluate(() => (window as unknown as Win).workspace.preferences.setHost({ hiddenApps: ['research'] }));
 
     expect(await raise(page)).toBe('billing');
     expect(await desk(page)).toEqual(['billing']);
@@ -285,10 +289,10 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
     await place(page, 'research');
     expect(await raise(page)).toBe(other);
     expect(await page.locator('braid-intent-resolver').count()).toBe(0);
-    expect(await page.evaluate(() => (window as unknown as Win).agent.preferences.intentChoice('ViewInvoice', 'fdc3.instrument'))).toBe(other);
+    expect(await page.evaluate(() => (window as unknown as Win).workspace.preferences.intentChoice('ViewInvoice', 'fdc3.instrument'))).toBe(other);
 
     // forgotten, it asks again
-    await page.evaluate(() => (window as unknown as Win).agent.preferences.forgetIntentChoice('ViewInvoice', 'fdc3.instrument'));
+    await page.evaluate(() => (window as unknown as Win).workspace.preferences.forgetIntentChoice('ViewInvoice', 'fdc3.instrument'));
     const again = raise(page);
     await dialog(page).waitFor({ state: 'visible' });
     await page.keyboard.press('Escape');
@@ -299,7 +303,7 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
   it('applies host preferences: the default user channel, and hidden apps', async () => {
     const context = await signedIn(`host-${store}`);
     const page = await open(context, store);
-    await page.evaluate(() => (window as unknown as Win).agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.4', hiddenApps: ['research'] }));
+    await page.evaluate(() => (window as unknown as Win).workspace.preferences.setHost({ defaultUserChannel: 'fdc3.channel.4', hiddenApps: ['research'] }));
     await page.reload();
     await readySlots(page, 'blotter');
     await page.evaluate(() => (window as unknown as Win).agentReady);
@@ -346,15 +350,15 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
       const win = window as unknown as Win;
       win.tabs = { billing: 'overdue' };
       await win.instances.find((instance) => instance.appId === 'billing')!.fdc3.joinUserChannel('fdc3.channel.2');
-      await win.agent.layouts.save('morning');
+      await win.workspace.layouts.save('morning');
     });
-    expect(await page.evaluate(() => (window as unknown as Win).agent.layouts.list())).toEqual(['morning']);
+    expect(await page.evaluate(() => (window as unknown as Win).workspace.layouts.list())).toEqual(['morning']);
 
     await page.reload();
     await readySlots(page, 'blotter');
     await page.evaluate(() => (window as unknown as Win).agentReady);
     expect(await desk(page)).toEqual([]);
-    await page.evaluate(() => (window as unknown as Win).agent.layouts.restore('morning'));
+    await page.evaluate(() => (window as unknown as Win).workspace.layouts.restore('morning'));
     expect(await desk(page)).toEqual(['billing', 'research']);
     const restoredSlot = await page.locator('#desk fragment-slot[name="billing"]').evaluate((slot) => [
       slot.getAttribute('src'),
@@ -380,16 +384,16 @@ describe.each(['local', 'server'] as const)('with the %s store', (store) => {
       expect(await backend.list(`layout-${store}`, 'layouts/')).toEqual(['layouts/morning']);
       const stranger = await signedIn('someone-else');
       const theirs = await open(stranger, 'server');
-      expect(await theirs.evaluate(() => (window as unknown as Win).agent.layouts.list())).toEqual([]);
+      expect(await theirs.evaluate(() => (window as unknown as Win).workspace.layouts.list())).toEqual([]);
       await stranger.close();
     }
 
-    await page.evaluate(() => (window as unknown as Win).agent.layouts.delete('morning'));
+    await page.evaluate(() => (window as unknown as Win).workspace.layouts.delete('morning'));
     await page.reload();
     await readySlots(page, 'blotter');
     await page.evaluate(() => (window as unknown as Win).agentReady);
-    expect(await page.evaluate(() => (window as unknown as Win).agent.layouts.list())).toEqual([]);
-    const missing = await page.evaluate(() => (window as unknown as Win).agent.layouts.restore('morning').catch((error: Error) => error.message));
+    expect(await page.evaluate(() => (window as unknown as Win).workspace.layouts.list())).toEqual([]);
+    const missing = await page.evaluate(() => (window as unknown as Win).workspace.layouts.restore('morning').catch((error: Error) => error.message));
     expect(missing).toContain('no saved layout');
     await context.close();
   });

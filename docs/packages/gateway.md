@@ -20,7 +20,7 @@ npm install @braidlabs/gateway
 4. **Data-Driven Manifest Registry:** Configured via JSON manifests, local files, URLs, or dynamic KV/database loaders. Deploying a new fragment requires zero gateway redeployments.
 5. **FDC3 App Directory Projection:** Can serve the manifest registry in standard FDC3 App Directory (AppD v2) format at `/__braid/registry/appd/v2/apps`.
 6. **Federation:** A team's gateway can join this one as a subgraph. Its fragments are composed into this registry and pierced directly, with no shell within a shell. See [Federating gateways](/braid-federation).
-7. **Per-user preferences (opt-in):** Stores each signed-in user's JSON entries at `/__braid/preferences/*`, same-origin only and within quotas, for `@braidlabs/fdc3`'s `serverStore()`. See [Per-user preferences](#per-user-preferences-opt-in).
+7. **Per-user preferences (opt-in):** Stores each signed-in user's JSON entries at `/__braid/preferences/*`, same-origin only and within quotas, for the [console workspace](./console.md#the-workspace)'s `serverStore()`. See [Per-user preferences](#per-user-preferences-opt-in).
 
 ---
 
@@ -357,7 +357,7 @@ createGateway({
 ## Per-user preferences (opt-in)
 
 `preferences` serves each signed-in user's own JSON entries at `/__braid/preferences/*`. It is what
-`serverStore()` from [@braidlabs/fdc3](./fdc3.md) talks to, so remembered intent choices, app
+`serverStore()` from the [console workspace](./console.md#the-workspace) talks to, so preferences, app
 settings and saved layouts follow the user to any browser.
 
 ```ts

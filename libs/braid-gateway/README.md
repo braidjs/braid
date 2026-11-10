@@ -306,7 +306,7 @@ first redirect for a URL or loader registry.
 ## Per-user preferences (opt-in)
 
 `preferences` serves each signed-in user's own JSON entries at `/__braid/preferences/*`. It is what
-`serverStore()` from `@braidlabs/fdc3` talks to, so remembered intent choices, app settings and
+`serverStore()` from `@braidlabs/console/workspace` talks to, so preferences, app settings and
 saved layouts follow the user to any browser.
 
 ```ts

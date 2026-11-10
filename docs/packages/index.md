@@ -63,8 +63,8 @@ These packages manage origin routing, streaming HTML composition, declarative sh
 | [`@braidlabs/cli`](./cli.md) | Local development server, manifest scaffolding, and multi-origin proxying. | `braid dev`, `braid init` |
 | [`@braidlabs/registry`](./registry.md) | Immutable manifest snapshots, content-addressed versioning, and validation. | `createRegistry`, `validateManifest` |
 | [`@braidlabs/sw`](./sw.md) | Service Worker partition handler for skew-safe chunk delivery across rolling deploys. | `createBraidFetchHandler`, `braidServiceWorker` |
-| [`@braidlabs/console`](./console.md) | Visual registry inspector and gateway status dashboard. | `<BraidConsole>`, `mountConsole` |
-| [`@braidlabs/fdc3`](./fdc3.md) | FDC3 3.0 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory, with opt-in launching, an intent resolver, layouts and per-user preferences. | `createBraidDesktopAgent`, `serverStore`, `dialogResolver` |
+| [`@braidlabs/console`](./console.md) | Registry console: fragments, topology, a shell designer and history. Its `/workspace` entry runs a shell's workspace area: launching apps, per-user preferences, app settings and saved layouts. | `<RegistryConsole>`, `<ShellsPanel>`, `createWorkspace` |
+| [`@braidlabs/fdc3`](./fdc3.md) | FDC3 3.0 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory, with opt-in launching and an intent resolver. | `createBraidDesktopAgent`, `dialogResolver` |
 | [`@braidlabs/otel`](./otel.md) | OpenTelemetry for Braid: fragment fetches as spans in your existing traces, attributed per fragment. | `otelGatewayTelemetry` |
 
 ---

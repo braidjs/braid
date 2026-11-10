@@ -45,9 +45,13 @@
   history, and handles rollback, promotion and approval.
 - **Speaks FDC3.** The registry serves itself as an FDC3 2.2 App Directory, and `@braidlabs/fdc3`
   gives each fragment a `window.fdc3`, so fragments share channels and intents like apps on a
-  desktop. Opt in to a workspace and it also launches apps for `fdc3.open` and intents, asks the
-  user which app to use, and saves layouts and preferences, in the browser or per user on the
-  gateway.
+  desktop. Give it a container and it also launches apps for `fdc3.open` and intents, and asks
+  the user which app to use.
+- **Has a workspace.** Mark an area of a shell as the workspace in the console's designer, and
+  users launch apps there and save and restore layouts, with preferences and per-app settings kept
+  in the browser or per user on the gateway. It needs no FDC3, and works with it.
+- **Says which mechanism to use.** Props, context, channels, durable events, intents, FDC3: the
+  [events and data guide](docs/events-and-data.md) starts from the problem and shows the tradeoffs.
 
 Braid is a successor to [web-fragments](https://github.com/web-fragments/web-fragments), and builds
 on its core idea.
@@ -101,10 +105,10 @@ All packages are published under [`@braidlabs`](https://www.npmjs.com/org/braidl
 | **Framework bindings** | [`@braidlabs/angular`](libs/braid-angular)             | `<braid-fragment>`, `provideBraid()`, `defineAngularFragment()`                 |
 |                        | [`@braidlabs/react`](libs/braid-react)                 | `<BraidFragment>`, host-navigation wiring, `defineReactFragment()`              |
 | **Operations**         | [`@braidlabs/registry`](libs/braid-registry)           | Snapshots, validation, the write API, environments, ownership, audit, GitOps    |
-|                        | [`@braidlabs/console`](libs/braid-console)             | Registry console: fragments, shell designer, history and rollback               |
+|                        | [`@braidlabs/console`](libs/braid-console)             | Registry console and shell designer; workspace runtime: layouts, preferences     |
 |                        | [`@braidlabs/cli`](libs/braid-cli)                     | `braid dev`, scaffolding, registry commands, `detangle` off module federation   |
 |                        | [`@braidlabs/otel`](libs/otel)                         | OpenTelemetry spans for fragment fetches, in the traces you already collect     |
-| **Interop**            | [`@braidlabs/fdc3`](libs/braid-fdc3)                   | FDC3 3.0 Desktop Agent: `window.fdc3` per fragment, launching, layouts, prefs   |
+| **Interop**            | [`@braidlabs/fdc3`](libs/braid-fdc3)                   | FDC3 3.0 Desktop Agent: `window.fdc3` per fragment, launching, intent resolver  |
 | **Version skew**       | [`@braidlabs/skew`](libs/skew)                         | Versioned envelopes, migration chains, build identity. No dependencies          |
 |                        | [`@braidlabs/contract`](libs/contract)                 | Migrations published as a document an API serves and clients resolve            |
 |                        | [`@braidlabs/build`](libs/build)                       | `skew-stamp` and `skew-contract`: build identity and contract types             |

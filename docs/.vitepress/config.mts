@@ -53,6 +53,7 @@ export default defineConfig({
     nav: [
       { text: 'Getting started', link: '/getting-started' },
       { text: 'Explained', link: '/braid-explained' },
+      { text: 'Events & data', link: '/events-and-data' },
       { text: 'Tutorial', link: '/tutorial/' },
       { text: 'Packages', link: '/packages/' },
       { text: 'Talk deck', link: '/braid-deck.html', target: '_blank' },
@@ -64,6 +65,12 @@ export default defineConfig({
         items: [
           { text: 'Getting started', link: '/getting-started' },
           { text: 'Braid, explained', link: '/braid-explained' },
+        ],
+      },
+      {
+        text: 'Guides',
+        items: [
+          { text: 'Events and data: which mechanism', link: '/events-and-data' },
         ],
       },
       {

@@ -142,6 +142,55 @@ describe('<ShellsPanel>', () => {
     expect(container.querySelector('button[aria-label="Area nav, holds reviews"]')).toBeTruthy();
   });
 
+  it('makes an area the workspace with starting apps, shows it in the preview and the code, and publishes it', async () => {
+    const api = server({});
+    await render(api);
+    await click(button('Edit'));
+    await click(container.querySelector('button[aria-label^="Area main"]'));
+    const workspaceBox = () => [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((el) => el.closest('label')?.textContent?.includes('Workspace in'));
+    await click(workspaceBox());
+
+    // the area's fixed fragment gives way, and the fragment picker with it
+    expect(container.querySelector('button[aria-label="Area main, workspace, opens empty"]')).toBeTruthy();
+    expect([...container.querySelectorAll('label')].some((el) => el.textContent?.includes('Fragment in'))).toBe(false);
+
+    const add = () => container.querySelector<HTMLSelectElement>('select[aria-label="Add a starting app"]');
+    await choose(add(), 'billing');
+    await choose(add(), 'reviews');
+    await choose(add(), 'billing');
+    expect(container.querySelector('button[aria-label="Area main, workspace, opens with billing, reviews, billing"]')).toBeTruthy();
+    await click(container.querySelector('button[aria-label="Remove reviews from the workspace"]'));
+
+    // one workspace a route: marking another area moves it there, apps and all
+    await click(container.querySelector('button[aria-label^="Area nav"]'));
+    await click(workspaceBox());
+    expect(container.querySelector('button[aria-label="Area nav, workspace, opens with billing, billing"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label^="Area main, workspace"]')).toBeNull();
+
+    await click(button('Code'));
+    expect(container.textContent).toContain('data-braid-workspace');
+    expect(container.textContent).toContain('createWorkspace()');
+
+    await click(button('Publish & pin'));
+    const shells = api.calls.find((call) => call.method === 'POST')?.body?.['shells'] as ShellManifest[];
+    expect(shells[0].routes[0].workspace).toEqual({ area: 'nav', apps: ['billing', 'billing'] });
+    expect(shells[0].routes[0].slots).not.toHaveProperty('nav');
+  });
+
+  it('turns the workspace back into an ordinary area', async () => {
+    const withWorkspace = { ...storefront, routes: [{ ...storefront.routes[0], workspace: { area: 'nav', apps: ['billing'] } }] };
+    const api = server({ head: { id: 'reg_a', snapshot: { id: 'reg_a', createdAt: '', manifests, shells: [withWorkspace] } } });
+    await render(api);
+    await click(button('Edit'));
+    await click(container.querySelector('button[aria-label^="Area nav, workspace"]'));
+    await click([...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((el) => el.closest('label')?.textContent?.includes('Workspace in')));
+
+    expect(container.querySelector('button[aria-label="Area nav, empty"]')).toBeTruthy();
+    await click(button('Publish & pin'));
+    const shells = api.calls.find((call) => call.method === 'POST')?.body?.['shells'] as ShellManifest[];
+    expect(shells[0].routes[0].workspace).toBeUndefined();
+  });
+
   it('refuses a javascript: script URL and never puts the shell head into the page', async () => {
     const before = document.querySelectorAll('script, link').length;
     await render(server({}));

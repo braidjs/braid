@@ -3,6 +3,7 @@ import ts from 'typescript';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { ShellFramework, ShellManifest } from '@braidlabs/registry';
 import { angularPath, shellCode, SHELL_TARGETS } from './shell-codegen.js';
+import { createWorkspace, memoryStore, type Workspace } from '../workspace.js';
 
 const fragments: FragmentManifest[] = [
   { id: 'notifications', endpoint: 'https://n.internal', bound: false, src: '/inbox' },
@@ -163,5 +164,102 @@ describe('comment and template breakouts', () => {
     const names = shellCode(colliding, fragments, 'vanilla').map((file) => file.name);
 
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  describe('with a workspace area', () => {
+    const desk: ShellManifest = {
+      ...shell,
+      routes: [
+        {
+          path: '/desk',
+          layout: { areas: 'nav desk', columns: '220px 1fr', gap: '8px' },
+          slots: { nav: 'reviews', desk: 'billing' },
+          workspace: { area: 'desk', apps: ['billing', 'notifications', '"}<x>{{y}}`${z}'] },
+        },
+      ],
+    };
+
+    it.each(SHELL_TARGETS.map((t) => t.id))('%s: renders the area as [data-braid-workspace] with its starting apps, and wires the workspace', (target) => {
+      const code = all(target, desk);
+
+      expect(code).toMatch(/data-braid-workspace(="")? style=(\{\{ gridArea: "desk" \}\}|"grid-area: desk")/);
+      if (target === 'vanilla') {
+        // plain DOM: the starting apps are in the markup, with no grid area of their own
+        expect(code).toContain('<fragment-slot name="billing"></fragment-slot>');
+        expect(code).toContain('<fragment-slot name="notifications" src="/inbox"></fragment-slot>');
+      } else {
+        // a framework renders the area empty and the workspace opens the apps: it owns those children
+        expect(code).toMatch(/data-braid-workspace(="")? style=[^>]*(\/>|><\/div>)/);
+        expect(code).toContain('openStartingApps([{ id: "billing" }, { id: "notifications", src: "/inbox" }, ');
+        expect(code).not.toMatch(/<(BraidFragment|braid-fragment) name=\{?"billing"/);
+      }
+      // the workspace took the area a slot also named
+      expect(code).not.toMatch(/billing.{0,6}(grid-area: desk|gridArea: "desk")/);
+      expect(code).toContain("from '@braidlabs/console/workspace'");
+      expect(code).toContain('createWorkspace()');
+      expect(code).toMatch(/realmGlobals/);
+      expect(code).toContain('[data-braid-workspace] {');
+      // a hostile app id stays inside its attribute or string
+      if (target === 'vanilla') {
+        expect(code).not.toContain('<x>');
+        expect(code).toContain('&lt;x&gt;');
+      } else {
+        // a JS string literal, in code that the parse test below checks
+        expect(code).toContain(`{ id: ${JSON.stringify('"}<x>{{y}}`${z}')} }`);
+      }
+    });
+
+    it('produces code that parses, with a hostile app id', () => {
+      for (const target of ['react', 'angular', 'angular-ssr'] as const) {
+        for (const file of shellCode(desk, fragments, target).filter((f) => f.language === 'tsx' || f.language === 'typescript')) {
+          const output = ts.transpileModule(file.code, {
+            reportDiagnostics: true,
+            fileName: file.name,
+            compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, experimentalDecorators: true },
+          });
+          expect(output.diagnostics?.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')) ?? [], file.name).toEqual([]);
+        }
+      }
+    });
+
+    it('generates a workspace module that opens the starting apps once, where save and restore can see them', async () => {
+      // the generated workspace.ts itself, run against the area a framework layout renders: empty
+      const file = shellCode(desk, fragments, 'angular').find((f) => f.name === 'workspace.ts')!;
+      const compiled = ts.transpileModule(file.code, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+      const generated = {} as { workspace: Workspace; openStartingApps(apps: { id: string; src?: string }[]): void };
+      new Function('require', 'exports', compiled)(() => ({ createWorkspace: () => createWorkspace({ store: memoryStore() }) }), generated);
+
+      const area = document.createElement('div');
+      area.setAttribute('data-braid-workspace', '');
+      document.body.append(area);
+      try {
+        const names = () => [...area.children].map((child) => `${child.localName}:${child.getAttribute('name')}`);
+        generated.openStartingApps([{ id: 'billing' }, { id: 'notifications', src: '/inbox' }]);
+        expect(names()).toEqual(['fragment-slot:billing', 'fragment-slot:notifications']);
+        // a second render of the layout must not open them again
+        generated.openStartingApps([{ id: 'billing' }]);
+        expect(names()).toHaveLength(2);
+
+        expect((await generated.workspace.layouts.save('start')).slots).toEqual([{ appId: 'billing' }, { appId: 'notifications', src: '/inbox' }]);
+        generated.workspace.open('reviews');
+        await generated.workspace.layouts.save('one');
+        await generated.workspace.layouts.restore('start');
+        expect(names()).toEqual(['fragment-slot:billing', 'fragment-slot:notifications']);
+      } finally {
+        area.remove();
+      }
+    });
+
+    it('emits no workspace module or wiring for a shell without one', () => {
+      for (const target of SHELL_TARGETS.map((t) => t.id)) {
+        expect(shellCode(shell, fragments, target).map((file) => file.name)).not.toContain('workspace.ts');
+        expect(all(target)).not.toContain('workspace');
+      }
+    });
+
+    it('does not count the workspace area as empty', () => {
+      const code = all('react', { ...desk, routes: [{ ...desk.routes[0], slots: { nav: 'reviews' } }] });
+      expect(code).not.toContain('empty areas');
+    });
   });
 });

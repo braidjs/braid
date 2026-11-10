@@ -172,8 +172,8 @@ export interface GatewayOptions {
    */
   discovery?: DiscoveryOptions;
   /**
-   * Serves each signed-in user's preferences at `/__braid/preferences/*`, for `@braidlabs/fdc3`'s
-   * `serverStore`: remembered intent choices, app settings and saved layouts. Entries are keyed by
+   * Serves each signed-in user's preferences at `/__braid/preferences/*`, for the workspace's
+   * `serverStore` (`@braidlabs/console/workspace`): preferences, app settings and saved layouts. Entries are keyed by
    * the `subject` your `principal` resolver returns; a request without one is refused with 401.
    * Off unless configured. See {@link PreferencesOptions}.
    */

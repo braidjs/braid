@@ -19,6 +19,10 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
     },
+    "./workspace": {
+      "types": "./src/workspace.d.ts",
+      "default": "./src/workspace.js"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {

@@ -1,12 +1,20 @@
 import type { IntentCandidate, IntentResolverHook } from './agent.js';
 
+export interface DialogResolverOptions {
+  /**
+   * Shows "Remember my choice", and answers with `remember: true` when it is ticked. Off by
+   * default: the agent keeps nothing, so offer it only when the hook is wrapped by something that
+   * does — the console workspace's `intentResolver`.
+   */
+  remember?: boolean;
+}
+
 /**
- * The built-in intent resolver: a modal `<dialog>` listing the candidates, with "Remember my
- * choice". Keyboard-usable as a dialog is — Tab between choices, Enter to pick, Escape to cancel —
- * and announced by its heading. It lives in a shadow root of its own, so the page's styles do not
- * reach it.
+ * The built-in intent resolver: a modal `<dialog>` listing the candidates. Keyboard-usable as a
+ * dialog is — Tab between choices, Enter to pick, Escape to cancel — and announced by its heading.
+ * It lives in a shadow root of its own, so the page's styles do not reach it.
  */
-export function dialogResolver(document: Document): IntentResolverHook {
+export function dialogResolver(document: Document, options: DialogResolverOptions = {}): IntentResolverHook {
   return ({ candidates, context }) =>
     new Promise((resolve) => {
       const host = document.createElement('braid-intent-resolver');
@@ -28,7 +36,7 @@ export function dialogResolver(document: Document): IntentResolverHook {
         img { width: 20px; height: 20px; }
         .note { margin-inline-start: auto; color: GrayText; font-size: 12px; }
         footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-        footer button { width: auto; }
+        footer button { width: auto; margin-inline-start: auto; }
       `;
 
       const title = document.createElement('h2');
@@ -73,7 +81,7 @@ export function dialogResolver(document: Document): IntentResolverHook {
       cancel.type = 'button';
       cancel.textContent = 'Cancel';
       cancel.dataset.cancel = '';
-      footer.append(label, cancel);
+      footer.append(...(options.remember ? [label] : []), cancel);
 
       dialog.append(title, detail, list, footer);
       root.append(style, dialog);
@@ -83,7 +91,7 @@ export function dialogResolver(document: Document): IntentResolverHook {
         const button = (event.target as Element).closest?.('button');
         if (!button) return;
         if (button.dataset.index !== undefined) {
-          answer = { candidate: candidates[Number(button.dataset.index)], remember: remember.checked };
+          answer = { candidate: candidates[Number(button.dataset.index)], ...(options.remember ? { remember: remember.checked } : {}) };
         }
         dialog.close();
       });

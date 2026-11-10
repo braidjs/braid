@@ -32,7 +32,6 @@ import {
   type IntentResolutionChoice,
 } from '@finos/fdc3-standard';
 import { dialogResolver } from './resolver.js';
-import { keySegment, localStorageStore, type PreferenceStore } from './store.js';
 
 /**
  * An FDC3 3.0 Desktop Agent for one Braid page.
@@ -53,6 +52,10 @@ import { keySegment, localStorageStore, type PreferenceStore } from './store.js'
  *   listeners stop receiving and `findInstances` no longer reports it.
  * - **Launching is mounting.** With a `container`, `fdc3.open` and intents for apps that are not
  *   running mount a `<fragment-slot>` there.
+ *
+ * That is all of it. What FDC3 does not standardize — remembered choices, preferences, per-app
+ * settings, saved layouts — is not here: it is the workspace in `@braidlabs/console/workspace`,
+ * which composes around this agent through `resolveIntent` and `realmGlobals`.
  */
 export interface BraidDesktopAgentOptions {
   /**
@@ -63,16 +66,14 @@ export interface BraidDesktopAgentOptions {
    */
   directory: readonly DirectoryApp[];
   /**
-   * Where the agent mounts fragments it launches — for `fdc3.open`, for an intent whose app is
-   * not running, and for a restored layout — and the `<fragment-slot>`s a saved layout records.
-   * Without one nothing is launched: `fdc3.open` rejects with `ErrorOnLaunch`, as before.
+   * Where the agent mounts fragments it launches — for `fdc3.open`, and for an intent whose app is
+   * not running. A `<fragment-slot>` the host places there itself counts as that app starting.
+   * Without one nothing is launched: `fdc3.open` rejects with `ErrorOnLaunch`.
+   *
+   * A function is asked each time, for a container a framework renders after the agent is
+   * created or replaces later; while it returns nothing, a launch is refused as if there were none.
    */
-  container?: Element;
-  /**
-   * Where the user's preferences, app settings and layouts are kept. Defaults to
-   * {@link localStorageStore}; {@link serverStore} keeps them on the gateway, per signed-in user.
-   */
-  store?: PreferenceStore;
+  container?: Element | (() => Element | null | undefined);
   /**
    * Chooses among the apps that can take an intent, when there is more than one. Defaults to a
    * built-in dialog in a browser; `false` refuses such a raise with `UserCancelledResolution`.
@@ -102,84 +103,20 @@ export interface IntentChoiceRequest {
 }
 
 /**
- * Chooses for a raise: one of the candidates, with `remember: true` to choose that app for this
- * intent and context type from now on, or undefined to cancel.
+ * Chooses for a raise: one of the candidates, or undefined to cancel. The agent keeps nothing, so
+ * `remember` is for whatever wraps the hook — the console workspace's `intentResolver` stores the
+ * choice and answers the next raise itself.
  */
 export type IntentResolverHook = (
   request: IntentChoiceRequest,
 ) => Promise<{ candidate: IntentCandidate; remember?: boolean } | undefined>;
 
-/** The user's preferences for the whole page. */
-export interface HostPreferences {
-  /** A user channel id (`fdc3.channel.1`…`8`) every fragment joins before its code runs. */
-  defaultUserChannel?: string;
-  /** App ids never offered as a choice when resolving an intent. */
-  hiddenApps?: string[];
-}
-
-/** What {@link BraidDesktopAgent.layouts} saves: the container's slots, in order. */
-export interface SavedLayout {
-  version: 1;
-  savedAt: string;
-  slots: SavedSlot[];
-}
-
-export interface SavedSlot {
-  appId: string;
-  src?: string;
-  props?: Record<string, unknown>;
-  /** The user channel the instance was on. */
-  channel?: string;
-  /** What the app returned from `braidDesktop.onSaveLayout`. */
-  state?: unknown;
-}
-
-/**
- * Braid's additions for one fragment, as `window.braidDesktop`, alongside its `fdc3`.
- */
-export interface BraidDesktopApi {
-  /** This app's settings for the signed-in user: shared by its instances, apart from other apps'. */
-  settings: {
-    get(key: string): Promise<unknown>;
-    set(key: string, value: unknown): Promise<void>;
-    delete(key: string): Promise<void>;
-    keys(): Promise<string[]>;
-  };
-  /**
-   * Supplies this instance's state when the page's layout is saved: JSON, within 2 seconds. The
-   * handler registered last is the one asked. Returns an unsubscribe.
-   */
-  onSaveLayout(handler: () => unknown): () => void;
-  /** The state this instance saved, when it was mounted by restoring a layout; otherwise undefined. */
-  readonly restoredState: unknown;
-}
-
 export interface BraidDesktopAgent {
   /**
-   * The hook for `initBraid({ realmGlobals })`: a fragment in the directory gets `{ fdc3,
-   * braidDesktop }`, bound to its id, before any of its code runs; its signal releases the instance.
+   * The hook for `initBraid({ realmGlobals })`: a fragment in the directory gets `{ fdc3 }`, bound
+   * to its id, before any of its code runs; its signal releases the instance.
    */
-  realmGlobals(fragment: {
-    fragmentId: string;
-    signal: AbortSignal;
-    slot?: Element;
-  }): Promise<{ fdc3: DesktopAgent; braidDesktop: BraidDesktopApi } | undefined>;
-  preferences: {
-    getHost(): Promise<HostPreferences>;
-    /** Replaces the page's preferences; fragments that connect from now on get them. */
-    setHost(preferences: HostPreferences): Promise<void>;
-    /** The app remembered for an intent and context type, if any. */
-    intentChoice(intent: string, contextType: string): Promise<string | undefined>;
-    forgetIntentChoice(intent: string, contextType: string): Promise<void>;
-  };
-  /** Saved layouts of the `container`. Each needs a `container`. */
-  layouts: {
-    save(name: string): Promise<SavedLayout>;
-    /** Replaces the container's slots with the saved ones. Rejects if there is no such layout. */
-    restore(name: string): Promise<void>;
-    list(): Promise<string[]>;
-    delete(name: string): Promise<void>;
-  };
+  realmGlobals(fragment: { fragmentId: string; signal: AbortSignal; slot?: Element }): Promise<{ fdc3: DesktopAgent } | undefined>;
 }
 
 /** The FDC3 version the agent implements; the directory drops records whose `fdc3Version` excludes it. */
@@ -188,10 +125,6 @@ const FDC3_VERSION = '3.0';
 const MESSAGE_TIMEOUT_MS = 10_000;
 /** How long a raised intent may take to be handled. */
 const INTENT_TIMEOUT_MS = 20_000;
-/** How long saving a layout waits for each app's state. */
-const SAVE_STATE_TIMEOUT_MS = 2_000;
-/** How long a fragment's connect waits to read the page's preferences before going without. */
-const HOST_READ_TIMEOUT_MS = 1_000;
 
 /** FDC3's eight recommended user channels, as `@finos/fdc3-standard` defines them. */
 const USER_CHANNELS: readonly [string, string][] = [
@@ -214,37 +147,25 @@ const NO_UI = {
   setChannelChangeCallback: () => undefined,
 };
 
-const HOST_KEY = 'host';
-const intentKey = (intent: string, contextType: string) => `intents/${keySegment(intent)}/${keySegment(contextType)}`;
-const layoutKey = (name: string) => `layouts/${keySegment(name)}`;
-const appPrefix = (appId: string) => `apps/${keySegment(appId)}/`;
-
 /** What FINOS's IntentHandler keeps for an intent it holds until an app starts: the parts read here. */
 interface HeldIntent {
   appId?: { appId: string; instanceId?: string };
   r?: { from?: { instanceId?: string }; intent?: unknown; context?: { type?: unknown }; newInstance?: unknown };
 }
 
-/** One connected fragment, as the agent's host side sees it. */
-interface Instance {
-  appId: string;
-  instanceId: string;
-  fdc3: DesktopAgent;
-  saveHandlers: Set<() => unknown>;
-}
-
 /** What a slot the agent mounted is for, until its fragment connects. */
 interface Launch {
   instanceId: string;
-  restore?: { channel?: string; state?: unknown };
 }
 
 export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): BraidDesktopAgent {
   // a directory that failed to load is an empty one, not a page that fails to compose
   const records = Array.isArray(options.directory) ? [...options.directory] : [];
   const directory = new BasicDirectory(records, FDC3_VERSION);
-  const { container } = options;
-  const store = options.store ?? localStorageStore();
+  /** The container now: the one given, or whatever the host's function finds at this moment. */
+  const containerNow = (): Element | undefined =>
+    (typeof options.container === 'function' ? options.container() : options.container) ?? undefined;
+  const canLaunch = options.container !== undefined;
   const resolveIntent =
     options.resolveIntent === false
       ? undefined
@@ -252,19 +173,21 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
 
   /** Slots the agent mounted, until their fragment connects. */
   const launches = new WeakMap<Element, Launch>();
-  /** Connected fragments, by the slot they boot in. */
-  const bySlot = new Map<Element, Instance>();
+  /** Connected fragments' instance ids, by the slot they boot in. */
+  const bySlot = new Map<Element, InstanceID>();
 
   const context: BraidServerContext = new BraidServerContext(taskQueue(), (appId: string): InstanceID | undefined => {
+    const container = containerNow();
     if (!container) return undefined;
     const instanceId = crypto.randomUUID();
-    mountSlot(container, { appId }, (slot) => launches.set(slot, { instanceId }));
+    mountSlot(container, appId, (slot) => launches.set(slot, { instanceId }));
     return instanceId;
   });
-  context.launchable = container !== undefined;
+  context.launchable = canLaunch;
   context.knows = (appId) => directory.retrieveAppsById(appId).length > 0;
   // a slot in the container that has not connected yet: launched by the agent, or placed by the host
   context.mounting = (appId) => {
+    const container = containerNow();
     if (!container) return undefined;
     for (const slot of slotsIn(container)) {
       if (slot.getAttribute('name') !== appId || bySlot.has(slot)) continue;
@@ -286,84 +209,38 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
   context.hasListener = (instanceId, intent, contextType) => intentHandler?.hasListener(instanceId, intent, contextType) ?? false;
   context.heldIntents = () => (intentHandler as unknown as { pendingIntents?: Set<HeldIntent> } | undefined)?.pendingIntents ?? new Set();
 
-  /**
-   * The page's preferences, read once and kept: every fragment's connect waits on them, so a slow
-   * store must not slow every boot. A read that fails or takes too long is no preferences — not a
-   * fragment that fails to connect — and is tried again next time.
-   */
-  let host: Promise<HostPreferences> | undefined;
-  function hostPreferences(): Promise<HostPreferences> {
-    host ??= withTimeout(store.get(HOST_KEY), HOST_READ_TIMEOUT_MS).then(
-      (stored) => (stored && typeof stored === 'object' ? (stored as HostPreferences) : {}),
-      () => {
-        host = undefined;
-        return {};
-      },
-    );
-    return host;
-  }
-
-  /** The candidates for a raise, as the resolver sees them; hidden apps left out. */
-  function candidatesOf(appIntents: AppIntent[], hidden: readonly string[]): IntentCandidate[] {
+  /** The candidates for a raise, as the resolver sees them. */
+  function candidatesOf(appIntents: AppIntent[]): IntentCandidate[] {
     return appIntents.flatMap((appIntent) =>
-      appIntent.apps
-        .filter((app) => !hidden.includes(app.appId))
-        .map((app) => {
-          const record = directory.retrieveAppsById(app.appId)[0];
-          const icon = record?.icons?.[0]?.src;
-          return {
-            intent: appIntent.intent.name,
-            appId: app.appId,
-            ...(app.instanceId
-              ? { instanceId: app.instanceId }
-              : (app.instanceMetadata as { braidStarting?: unknown } | undefined)?.braidStarting === true
-                ? { starting: true as const }
-                : {}),
-            title: record?.title ?? app.appId,
-            ...(icon ? { icon } : {}),
-          };
-        }),
+      appIntent.apps.map((app) => {
+        const record = directory.retrieveAppsById(app.appId)[0];
+        const icon = record?.icons?.[0]?.src;
+        return {
+          intent: appIntent.intent.name,
+          appId: app.appId,
+          ...(app.instanceId
+            ? { instanceId: app.instanceId }
+            : (app.instanceMetadata as { braidStarting?: unknown } | undefined)?.braidStarting === true
+              ? { starting: true as const }
+              : {}),
+          title: record?.title ?? app.appId,
+          ...(icon ? { icon } : {}),
+        };
+      }),
     );
   }
 
-  /**
-   * The remembered app's candidate: its one running instance, or the app itself when it is not
-   * running. Anything else — two instances, or the app no longer a candidate — is the user's call.
-   */
-  async function remembered(candidates: IntentCandidate[], contextType: string): Promise<IntentCandidate | undefined> {
-    const matches: IntentCandidate[] = [];
-    for (const intent of new Set(candidates.map((candidate) => candidate.intent))) {
-      let appId: unknown;
-      try {
-        appId = (await store.get(intentKey(intent, contextType)) as { appId?: unknown } | undefined)?.appId;
-      } catch {
-        continue;
-      }
-      const ofApp = candidates.filter((candidate) => candidate.intent === intent && candidate.appId === appId);
-      const running = ofApp.filter((candidate) => candidate.instanceId);
-      const pick = running.length === 1 ? running[0] : running.length === 0 && ofApp.length === 1 ? ofApp[0] : undefined;
-      if (pick) matches.push(pick);
-    }
-    return matches.length === 1 ? matches[0] : undefined;
-  }
-
-  /** The proxy's intent resolver for one instance: hidden apps, then a remembered choice, then the user. */
+  /** The proxy's intent resolver for one instance: the only candidate, or the host's choice among several. */
   async function choose(raisedBy: AppIdentifier, appIntents: AppIntent[], raised: Context): Promise<IntentResolutionChoice | undefined> {
-    const { hiddenApps = [] } = await hostPreferences();
-    const candidates = candidatesOf(appIntents, Array.isArray(hiddenApps) ? hiddenApps : []);
-    const contextType = typeof raised?.type === 'string' ? raised.type : 'fdc3.nothing';
-    let choice = candidates.length === 1 ? candidates[0] : await remembered(candidates, contextType);
+    const candidates = candidatesOf(appIntents);
+    let choice = candidates.length === 1 ? candidates[0] : undefined;
     if (!choice && candidates.length > 1 && resolveIntent) {
       // a resolver that throws has chosen nothing
       const answer = await resolveIntent({ context: raised, raisedBy, candidates: candidates.map((candidate) => ({ ...candidate })) }).catch(
         () => undefined,
       );
       // only one of what was offered: a resolver cannot route the intent anywhere else
-      const offered = answer && candidates.find((candidate) => sameCandidate(candidate, answer.candidate));
-      if (offered) {
-        choice = offered;
-        if (answer.remember) await store.set(intentKey(offered.intent, contextType), { appId: offered.appId }).catch(() => undefined);
-      }
+      choice = answer && candidates.find((candidate) => sameCandidate(candidate, answer.candidate));
     }
     if (!choice) return undefined;
     return {
@@ -372,29 +249,11 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     };
   }
 
-  function braidDesktopFor(appId: string, instance: Instance, restoredState: unknown): BraidDesktopApi {
-    const prefix = appPrefix(appId);
-    return Object.freeze({
-      settings: Object.freeze({
-        get: (key: string) => store.get(prefix + keySegment(String(key))),
-        set: (key: string, value: unknown) => store.set(prefix + keySegment(String(key)), value),
-        delete: (key: string) => store.delete(prefix + keySegment(String(key))),
-        keys: async () => decodedSegments(await store.list(prefix), prefix),
-      }),
-      onSaveLayout(handler: () => unknown) {
-        if (typeof handler !== 'function') throw new TypeError('braidDesktop.onSaveLayout takes a function');
-        instance.saveHandlers.add(handler);
-        return () => void instance.saveHandlers.delete(handler);
-      },
-      restoredState: restoredState === undefined ? undefined : structuredClone(restoredState),
-    });
-  }
-
   async function connect(
     appId: string,
     signal: AbortSignal,
     slot: Element | undefined,
-  ): Promise<{ fdc3: DesktopAgent; braidDesktop: BraidDesktopApi } | undefined> {
+  ): Promise<{ fdc3: DesktopAgent } | undefined> {
     // kept until the connect succeeds: a boot cut short and retried connects as the same launch
     const launch = slot ? launches.get(slot) : undefined;
     const instanceId = launch?.instanceId ?? context.createUUID();
@@ -407,7 +266,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       { appId, instanceId },
       (message) => server.receive(context.inspect(message, instanceId) as never, instanceId),
       () => open,
-      container !== undefined,
+      canLaunch,
     );
     context.setInstanceDetails(instanceId, { appId, instanceId, state: State.Connected });
     context.onMessage(instanceId, (message) => {
@@ -422,12 +281,11 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     const apps = new DefaultAppSupport(messaging, MESSAGE_TIMEOUT_MS, INTENT_TIMEOUT_MS);
     // the proxy logs every message at its default level; warnings and errors are what a host wants
     const agent = new DesktopAgentProxy(heartbeat, channels, intents, apps, [heartbeat, channels, NO_UI, NO_UI], LogLevel.WARN);
-    const instance: Instance = { appId, instanceId, fdc3: agent, saveHandlers: new Set() };
 
     const release = () => {
       if (!open) return;
       open = false;
-      if (slot && bySlot.get(slot) === instance) bySlot.delete(slot);
+      if (slot && bySlot.get(slot) === instanceId) bySlot.delete(slot);
       // terminates the instance and drops its listeners and channel membership on the agent side
       server.cleanup(instanceId);
       // the agent will not answer what was in flight, so answer it here
@@ -438,8 +296,6 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     try {
       // a teardown during connect refuses its requests at once (see `post`), so this settles promptly
       await agent.connect();
-      const channel = launch?.restore?.channel ?? (await hostPreferences()).defaultUserChannel;
-      if (typeof channel === 'string') await agent.joinUserChannel(channel).catch(() => undefined);
     } catch {
       release();
       return undefined;
@@ -450,46 +306,14 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
     // adds next finds FINOS ready to deliver the open's context to it.
     if (launch) await context.announce(server, instanceId);
     // held intents tied to an instance of this app that is gone are this one's now
+    const container = containerNow();
     if (container) context.adopt(appId, instanceId, (id) => slotsIn(container).some((other) => launches.get(other)?.instanceId === id));
     if (signal.aborted) return undefined;
     if (slot) {
       launches.delete(slot);
-      bySlot.set(slot, instance);
+      bySlot.set(slot, instanceId);
     }
-    return { fdc3: agent, braidDesktop: braidDesktopFor(appId, instance, launch?.restore?.state) };
-  }
-
-  function needContainer(): Element {
-    if (!container) throw new Error('braid-fdc3: layouts need a container (createBraidDesktopAgent({ container }))');
-    return container;
-  }
-
-  /** The state an instance gives for a layout: JSON, within the timeout, or nothing. */
-  async function stateOf(instance: Instance | undefined): Promise<unknown> {
-    const handler = instance && [...instance.saveHandlers].at(-1);
-    if (!handler) return undefined;
-    try {
-      const state = await withTimeout(Promise.resolve().then(handler), SAVE_STATE_TIMEOUT_MS);
-      return state === undefined ? undefined : JSON.parse(JSON.stringify(state));
-    } catch {
-      return undefined;
-    }
-  }
-
-  async function savedSlot(slot: Element): Promise<SavedSlot> {
-    const saved: SavedSlot = { appId: slot.getAttribute('name')! };
-    const instance = bySlot.get(slot);
-    const src = slot.getAttribute('src');
-    if (src !== null) saved.src = src;
-    const props = (slot as Element & { props?: Record<string, unknown> }).props;
-    if (props && typeof props === 'object' && Object.keys(props).length > 0) saved.props = JSON.parse(JSON.stringify(props));
-    const [channel, state] = await Promise.all([
-      instance ? withTimeout(instance.fdc3.getCurrentChannel(), SAVE_STATE_TIMEOUT_MS).catch(() => null) : null,
-      stateOf(instance),
-    ]);
-    if (channel?.type === 'user') saved.channel = channel.id;
-    if (state !== undefined) saved.state = state;
-    return saved;
+    return { fdc3: agent };
   }
 
   return {
@@ -497,80 +321,7 @@ export function createBraidDesktopAgent(options: BraidDesktopAgentOptions): Brai
       if (signal.aborted || directory.retrieveAppsById(fragmentId).length === 0) return undefined;
       return connect(fragmentId, signal, slot);
     },
-
-    preferences: {
-      getHost: hostPreferences,
-      async setHost(preferences) {
-        const value = JSON.parse(JSON.stringify(preferences ?? {})) as HostPreferences;
-        await store.set(HOST_KEY, value);
-        host = Promise.resolve(value);
-      },
-      async intentChoice(intent, contextType) {
-        const stored = (await store.get(intentKey(intent, contextType))) as { appId?: unknown } | undefined;
-        return typeof stored?.appId === 'string' ? stored.appId : undefined;
-      },
-      async forgetIntentChoice(intent, contextType) {
-        await store.delete(intentKey(intent, contextType));
-      },
-    },
-
-    layouts: {
-      async save(name) {
-        // every app at once: one that is slow to give its state does not hold up the rest
-        const named = slotsIn(needContainer()).filter((slot) => slot.getAttribute('name'));
-        const layout: SavedLayout = { version: 1, savedAt: new Date().toISOString(), slots: await Promise.all(named.map(savedSlot)) };
-        await store.set(layoutKey(name), layout);
-        return layout;
-      },
-
-      async restore(name) {
-        const target = needContainer();
-        const layout = (await store.get(layoutKey(name))) as SavedLayout | undefined;
-        if (!layout || layout.version !== 1 || !Array.isArray(layout.slots)) {
-          throw new Error(`braid-fdc3: no saved layout "${name}"`);
-        }
-        for (const slot of slotsIn(target)) slot.remove();
-        for (const saved of layout.slots) {
-          if (typeof saved?.appId !== 'string' || saved.appId === '') continue;
-          // every saved slot comes back; only an app the directory has gets FDC3, and with it its channel and state
-          const fdc3App = directory.retrieveAppsById(saved.appId).length > 0;
-          mountSlot(target, saved, (slot) => {
-            if (fdc3App) launches.set(slot, { instanceId: context.createUUID(), restore: { channel: saved.channel, state: saved.state } });
-          });
-        }
-      },
-
-      async list() {
-        return decodedSegments(await store.list('layouts/'), 'layouts/');
-      },
-
-      async delete(name) {
-        await store.delete(layoutKey(name));
-      },
-    },
   };
-}
-
-/** `promise`, or a rejection once `ms` have passed; the timer does not outlive it. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('timed out')), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-/** Keys under `prefix`, decoded back to the names they were made from; one that does not decode is skipped. */
-function decodedSegments(keys: string[], prefix: string): string[] {
-  return keys.flatMap((key) => {
-    try {
-      return [decodeURIComponent(key.slice(prefix.length))];
-    } catch {
-      return [];
-    }
-  });
 }
 
 /** The `<fragment-slot>` children of a container, in document order. */
@@ -582,15 +333,9 @@ function slotsIn(container: Element): Element[] {
  * Mounts a `<fragment-slot>` for an app at the end of `container`. `prepare` runs before the slot
  * connects — which is when it boots and its fragment asks for its globals.
  */
-function mountSlot(
-  container: Element,
-  app: { appId: string; src?: string; props?: Record<string, unknown> },
-  prepare?: (slot: Element) => void,
-): Element {
+function mountSlot(container: Element, appId: string, prepare?: (slot: Element) => void): Element {
   const slot = container.ownerDocument.createElement('fragment-slot');
-  slot.setAttribute('name', app.appId);
-  if (typeof app.src === 'string') slot.setAttribute('src', app.src);
-  if (app.props && typeof app.props === 'object') slot.setAttribute('props', JSON.stringify(app.props));
+  slot.setAttribute('name', appId);
   prepare?.(slot);
   container.append(slot);
   return slot;
@@ -880,7 +625,10 @@ class BraidServerContext implements ServerContext<AppRegistration> {
     const known = typeof appId === 'string' && this.knows(appId);
     if (!held) {
       if (!known) throw new Error(OpenError.AppNotFound);
-      return this.launch(appId) ?? this.createUUID();
+      // a container that is not on the page right now: refused, rather than an open that waits out its timeout
+      const launched = this.launch(appId);
+      if (!launched) throw new Error(OpenError.ErrorOnLaunch);
+      return launched;
     }
     if (!known) return this.createUUID();
     const request = held.r ?? {};

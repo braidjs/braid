@@ -570,6 +570,12 @@ function RouteEditor({
   const [area, setArea] = useState<string | null>(null);
   const current = area && parsed.areas.some((a) => a.name === area) ? area : (parsed.areas[0]?.name ?? null);
   const slots = route.slots ?? {};
+  // a workspace whose area the layout no longer has is shown nowhere; validation reports it
+  const workspaceArea = route.workspace && parsed.areas.some((a) => a.name === route.workspace?.area) ? route.workspace.area : undefined;
+  const apps = route.workspace?.apps ?? [];
+  const setApps = (next: string[]) => {
+    if (route.workspace) onChange({ workspace: { area: route.workspace.area, ...(next.length > 0 ? { apps: next } : {}) } });
+  };
   const byId = useMemo(() => new Map(manifests.map((manifest) => [manifest.id, manifest])), [manifests]);
   const setLayout = (patch: Partial<ShellRoute['layout']>) => onChange({ layout: { ...route.layout, ...patch } });
   const layoutId = `braid-layout-${route.path}`;
@@ -620,7 +626,7 @@ function RouteEditor({
         <div className="braid-console__preview">
           <div className="braid-console__previewhead">
             <span>Preview</span>
-            <span className="braid-console__desc">Pick an area, then the fragment that fills it.</span>
+            <span className="braid-console__desc">Pick an area, then the fragment that fills it — or make it the workspace, where users open apps.</span>
           </div>
           <div
             className="braid-console__gridpreview"
@@ -631,6 +637,24 @@ function RouteEditor({
             }}
           >
             {parsed.areas.map(({ name }) => {
+              if (name === workspaceArea) {
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className="braid-console__area is-workspace"
+                    style={{ gridArea: name }}
+                    aria-pressed={name === current}
+                    aria-label={`Area ${name}, workspace, ${apps.length > 0 ? `opens with ${apps.join(', ')}` : 'opens empty'}`}
+                    onClick={() => setArea(name)}
+                  >
+                    <span className="braid-console__areaname">{name} · workspace</span>
+                    <span className="braid-console__areaapps">
+                      {apps.length > 0 ? apps.map((app, index) => <span key={`${app}-${index}`}>{app}</span>) : <em>opens empty</em>}
+                    </span>
+                  </button>
+                );
+              }
               const fragment = slots[name];
               const tag = fragment ? byId.get(fragment)?.tags?.[0] : undefined;
               return (
@@ -651,6 +675,60 @@ function RouteEditor({
           </div>
 
           {current && (
+            <label className="braid-console__check">
+              <input
+                type="checkbox"
+                checked={current === workspaceArea}
+                disabled={readOnly}
+                onChange={(event) => {
+                  if (!event.target.checked) return onChange({ workspace: undefined });
+                  // one workspace a route: it moves here with its starting apps, and takes the area over
+                  const next = { ...slots };
+                  delete next[current];
+                  onChange({ slots: next, workspace: { area: current, ...(apps.length > 0 ? { apps } : {}) } });
+                }}
+              />
+              <span>
+                Workspace in <span className="braid-console__mono">{current}</span>
+                <span className="braid-console__desc"> — users open apps here, and save and restore them as layouts; the other areas stay as designed.</span>
+              </span>
+            </label>
+          )}
+
+          {current && current === workspaceArea && (
+            <div className="braid-console__field" role="group" aria-label="Starting apps">
+              <span className="braid-console__fieldlabel">Starting apps</span>
+              <span className="braid-console__desc">Open when the page first loads, in this order. A restored layout replaces them.</span>
+              {apps.length > 0 && (
+                <ol className="braid-console__applist">
+                  {apps.map((app, index) => (
+                    <li key={`${app}-${index}`}>
+                      <span className="braid-console__mono">{app}</span>
+                      {!readOnly && <RemoveButton label={`Remove ${app} from the workspace`} onClick={() => setApps(apps.filter((_, at) => at !== index))} />}
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <select
+                aria-label="Add a starting app"
+                value=""
+                disabled={readOnly}
+                onChange={(event) => {
+                  if (event.target.value) setApps([...apps, event.target.value]);
+                }}
+              >
+                <option value="">— add an app —</option>
+                {manifests.map((manifest) => (
+                  <option key={manifest.id} value={manifest.id}>
+                    {manifest.id}
+                    {manifest.title && manifest.title !== manifest.id ? ` — ${manifest.title}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {current && current !== workspaceArea && (
             <label className="braid-console__field">
               <span className="braid-console__fieldlabel">
                 Fragment in <span className="braid-console__mono">{current}</span>

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -9,6 +10,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   root: import.meta.dirname,
   cacheDir: '../node_modules/.vite/e2e',
+  resolve: {
+    // @braidlabs/registry imports the gateway by name; the tests run both from source
+    alias: [{ find: /^@braidlabs\/gateway$/, replacement: resolve(import.meta.dirname, '../libs/braid-gateway/src/index.ts') }],
+  },
   test: {
     environment: 'node',
     include: ['**/*.e2e.ts'],

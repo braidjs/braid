@@ -34,6 +34,24 @@ export interface ShellRoute {
   layout: ShellLayout;
   /** Area name → fragment id. One fragment per area; an area with no entry renders empty. */
   slots?: Record<string, string>;
+  /** The area of this route where apps are launched, saved and restored. At most one. */
+  workspace?: ShellWorkspace;
+}
+
+/**
+ * A workspace area: instead of one fixed fragment, the area holds whatever apps the user has
+ * open there. It renders as a `[data-braid-workspace]` element, which is where
+ * `createWorkspace()` from `@braidlabs/console/workspace` launches apps and what its layouts save
+ * and restore. The fixed areas around it are untouched by either.
+ */
+/** The most starting apps a workspace may list: each is a fragment fetched and booted on every page view. */
+export const MAX_WORKSPACE_APPS = 32;
+
+export interface ShellWorkspace {
+  /** An area of the route's layout that no slot fills. */
+  area: string;
+  /** Fragment ids open when the page first loads, in order, at most {@link MAX_WORKSPACE_APPS}. The same app may be listed twice. */
+  apps?: string[];
 }
 
 /**
@@ -280,6 +298,20 @@ export function validateShells(shells: readonly ShellManifest[], manifests: read
 
       if (parsed.errors.length > 0) continue;
       const areaNames = new Set(parsed.areas.map((area) => area.name));
+      if (route.workspace) {
+        const { area, apps = [] } = route.workspace;
+        if (!areaNames.has(area)) {
+          error('slot-unknown-area', id, `shell "${id}" route ${route.path} puts its workspace in area "${area}", which the layout does not have`, 'add the area to the layout or remove the workspace');
+        }
+        if (Object.hasOwn(route.slots ?? {}, area)) {
+          error('invalid-shell-layout', id, `shell "${id}" route ${route.path}: area "${area}" is both the workspace and a slot for "${route.slots?.[area]}"`, 'an area holds one fragment or the workspace, not both', [route.slots?.[area] ?? '']);
+        }
+        for (const fragmentId of new Set(apps)) {
+          if (!fragmentIds.has(fragmentId)) {
+            error('slot-unknown-fragment', id, `fragment "${fragmentId}" starts in the workspace of shell "${id}" (route ${route.path}) but is not registered`, 'register the fragment, or remove it from the workspace before deleting it', [fragmentId]);
+          }
+        }
+      }
       for (const [area, fragmentId] of Object.entries(route.slots ?? {})) {
         if (!areaNames.has(area)) {
           error('slot-unknown-area', id, `shell "${id}" route ${route.path} slots "${fragmentId}" into area "${area}", which the layout does not have`, 'add the area to the layout or remove the slot', [fragmentId]);
@@ -340,6 +372,12 @@ function shapeProblems(shell: ShellManifest): string[] {
       }
       if (route.slots !== undefined && (typeof route.slots !== 'object' || route.slots === null || Array.isArray(route.slots) || !Object.values(route.slots).every(isString))) {
         problems.push(`${at}.slots must map area names to fragment ids`);
+      }
+      const workspace = route.workspace;
+      if (workspace !== undefined) {
+        if (typeof workspace !== 'object' || workspace === null || !isString(workspace.area)) problems.push(`${at}.workspace.area must be a string`);
+        else if (workspace.apps !== undefined && !isStringList(workspace.apps)) problems.push(`${at}.workspace.apps must be a list of fragment ids`);
+        else if ((workspace.apps?.length ?? 0) > MAX_WORKSPACE_APPS) problems.push(`${at}.workspace.apps lists more than ${MAX_WORKSPACE_APPS} apps`);
       }
       return undefined;
     });
