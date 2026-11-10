@@ -222,6 +222,25 @@ A fragment that is a custom element lists its own DOM events in its manifest (`"
 | Durability | None |
 | Trust | Works for trusted and untrusted fragments. Treat `detail` from an untrusted one as input to validate |
 
+**From an unmodified app.** A compat fragment has no `env` to emit with. Braid delivers the events
+it dispatches on its `window` to its own shadow root, so an event marked `composed` crosses into
+the host's DOM and bubbles from the slot like any other; without `composed` it stops at the shadow
+root. It arrives as itself, not as `braid:event`, and its `detail` is the fragment's object, not a
+copy.
+
+```ts
+// fragment, compat mode
+window.dispatchEvent(new CustomEvent('invoice-paid', { detail: { id: 'INV-101' }, bubbles: true, composed: true }));
+
+// host
+slot.addEventListener('invoice-paid', (event) => showBanner(event.detail));
+// Angular: <braid-fragment name="billing" (invoice-paid)="onPaid($event)" />  — a name without a colon
+// React:   no prop for it; addEventListener on a ref to an element around <BraidFragment>
+```
+
+This is for trusted fragments only: an untrusted one runs in a frame and shares no DOM with the
+host. [Tutorial step 4](./tutorial/04-props-and-events.md) builds it.
+
 **Bidirectional, the simple way.** Props down and events up is a complete two-way conversation
 between a host and one fragment, and it is the right default for parent and child. Reach for
 [intents](#ask-and-get-an-answer-intents) only when you need the answer tied to the question.
@@ -911,6 +930,7 @@ The two can run on one page.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Slot props | host → fragment | state | one slot | latest value | yes | no | no | yes |
 | Slot events | fragment → host | event | one slot | at-most-once | no | no | no | yes |
+| Composed DOM event | compat fragment → host | event | the slot and its ancestors | at-most-once, synchronous | no | no | no | no |
 | Context bus | host → fragments | state | page | latest value | yes | no | yes | granted keys |
 | Channel state | any ↔ any | state | page or origin | latest value | yes, async | with `persist` | yes | no |
 | Channel events | any → any | event | page or origin | at-most-once | no | no | yes | no |
@@ -1046,4 +1066,4 @@ Real features use two or three together. The combinations that come up most:
 - [`@braidlabs/core`](./packages/core.md): slots, props, the context bus, the fragment `env`.
 - [Trust tiers](./braid-boundary.md): what the untrusted boundary enforces.
 - [`@braidlabs/fdc3`](./packages/fdc3.md): the desktop agent.
-- [Tutorial step 4](./tutorial/04-props-and-events.md): props and events, hands on.
+- [Tutorial step 4](./tutorial/04-props-and-events.md): a host and an unmodified app talking both ways, hands on.

@@ -90,7 +90,7 @@ export default defineConfig({
             link: '/tutorial/03-mounting-and-isolation',
           },
           {
-            text: '4 · Props, Events & Context',
+            text: '4 · Talking Across the Boundary',
             link: '/tutorial/04-props-and-events',
           },
           {

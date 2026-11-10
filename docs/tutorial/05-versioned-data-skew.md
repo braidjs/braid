@@ -7,8 +7,10 @@ In this step, you will introduce `@braidlabs/data` and `@braidlabs/skew` into th
 ## 1. Install Data & Skew Libraries
 
 ```bash
-npm install @braidlabs/data @braidlabs/skew
+npm install @braidlabs/skew
 ```
+
+`@braidlabs/data` is already installed from Step 4.
 
 ---
 
@@ -34,7 +36,7 @@ export const InvoiceSchema = versioned<InvoiceV1>('invoice');
 
 ## 3. Initialize the Record Store in React
 
-Update `apps/billing/src/app/app.tsx` to read from and write to `@braidlabs/data`:
+Update `apps/billing/src/app/app.tsx` to read from and write to `@braidlabs/data`. The listing leaves out Step 4's account subscription to stay short; keep those lines.
 
 ```tsx
 import React, { useEffect, useState } from 'react';
@@ -86,9 +88,10 @@ export function App() {
 
     // 3. Dispatch event to host
     window.dispatchEvent(
-      new CustomEvent('invoice:paid', {
+      new CustomEvent('invoice-paid', {
         detail: { invoiceId: invoice.id, amount: invoice.amount, timestamp: Date.now() },
         bubbles: true,
+        composed: true,
       })
     );
   };

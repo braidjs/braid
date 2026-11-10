@@ -87,10 +87,10 @@ Works seamlessly with TanStack Router, React Router, Next.js, and Remix.
 | :--- | :--- | :--- |
 | `name` | `string` (Required) | The fragment ID registered in Braid Gateway. |
 | `src` | `string` | Fixed sub-route to render. If omitted, fragment follows host URL. |
-| `props` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary. |
+| `props` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`, or set as properties on a `custom-element` fragment's element. A compat fragment has no `env` and does not see them. |
 | `onReady` | `({ fragmentId }) => void` | Triggered when fragment completes mounting and hydration. |
 | `onError` | `(error: BraidFragmentError) => void` | Triggered on load/mount error with failure stage & fix hint. |
-| `onFragmentEvent` | `({ type, detail }) => void` | Handles custom events dispatched by the fragment. |
+| `onFragmentEvent` | `({ type, detail }) => void` | Handles what the fragment sends with `env.emit(type, detail)`, or an event its `custom-element` manifest lists. A compat fragment's `window.dispatchEvent` does not arrive here. |
 | `children` | `ReactNode` | Content for the slot's named slots: a `slot="loading"` element shown while the fragment boots, and a `slot="fallback"` one shown if it fails. See `@braidlabs/core`, "Loading and fallback". |
 | `onStateChange` | `(state: FragmentSlotState) => void` | Observes slot lifecycle (`idle`, `loading`, `ready`, `error`). |
 | `ref` | `Ref<BraidFragmentHandle>` | Access to `.reload()` and `.state`. |

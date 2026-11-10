@@ -59,8 +59,8 @@ Follow the progressive steps below:
    Set up `@braidlabs/gateway` on port 3000, write the fragment manifest, and test parallel SSR piercing.
 3. **[Step 3: Mounting & Isolation](./03-mounting-and-isolation.md)**
    Embed the React remote into the Angular shell with `<braid-fragment>`, verifying Shadow DOM encapsulation and realm isolation.
-4. **[Step 4: Props, Events & Context Bus](./04-props-and-events.md)**
-   Establish decoupled bidirectional communication with typed props and custom events.
+4. **[Step 4: Talking Across the Boundary](./04-props-and-events.md)**
+   Establish decoupled bidirectional communication between the shell and an unmodified app: a page channel down, a DOM event up.
 5. **[Step 5: Versioned Data & Offline Outbox](./05-versioned-data-skew.md)**
    Layer in `@braidlabs/data` and `@braidlabs/skew` for local-first storage with optimistic updates.
 6. **[Step 6: Surviving Schema Evolution](./06-schema-migrations.md)**

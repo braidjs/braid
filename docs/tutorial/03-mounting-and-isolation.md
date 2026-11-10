@@ -43,12 +43,12 @@ Open `apps/shell/src/app/app.component.ts`:
 ```ts
 import { Component } from '@angular/core';
 import { RouterOutlet, RouterLink } from '@angular/router';
-import { BraidFragmentComponent } from '@braidlabs/angular';
+import { BraidFragment } from '@braidlabs/angular';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, BraidFragmentComponent],
+  imports: [RouterOutlet, RouterLink, BraidFragment],
   template: `
     <header style="background: #18181b; color: white; padding: 1rem; display: flex; gap: 1rem;">
       <h1 style="font-size: 1.25rem; margin: 0;">Acme Enterprise Portal</h1>
@@ -106,4 +106,4 @@ Look at the bottom of `<body>`:
 
 ## Next Step
 
-In **[Step 4: Props, Events & Context Bus](./04-props-and-events.md)**, we will add bidirectional communication: passing active tenant and user properties from Angular into the React fragment, and listening for payment completion events.
+In **[Step 4: Talking Across the Boundary](./04-props-and-events.md)**, we will add bidirectional communication: publishing the active account from Angular to the React fragment, and listening for payment completion events.

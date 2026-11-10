@@ -68,7 +68,6 @@ In the Angular Shell (`apps/shell/src/app/app.component.ts`), handle fallback st
 ```html
 <braid-fragment
   name="billing"
-  [props]="{ accountId: currentAccount() }"
   (failed)="onBillingFailed($event)"
 >
   <!-- Slot content rendered if billing upstream is down or times out -->
