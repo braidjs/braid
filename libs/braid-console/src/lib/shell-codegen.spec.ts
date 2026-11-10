@@ -3,6 +3,7 @@ import ts from 'typescript';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import type { ShellFramework, ShellManifest } from '@braidlabs/registry';
 import { angularPath, shellCode, SHELL_TARGETS } from './shell-codegen.js';
+import { createWorkspace, memoryStore, type Workspace } from '../workspace.js';
 
 const fragments: FragmentManifest[] = [
   { id: 'notifications', endpoint: 'https://n.internal', bound: false, src: '/inbox' },
@@ -218,6 +219,34 @@ describe('comment and template breakouts', () => {
           });
           expect(output.diagnostics?.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')) ?? [], file.name).toEqual([]);
         }
+      }
+    });
+
+    it('generates a workspace module that opens the starting apps once, where save and restore can see them', async () => {
+      // the generated workspace.ts itself, run against the area a framework layout renders: empty
+      const file = shellCode(desk, fragments, 'angular').find((f) => f.name === 'workspace.ts')!;
+      const compiled = ts.transpileModule(file.code, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+      const generated = {} as { workspace: Workspace; openStartingApps(apps: { id: string; src?: string }[]): void };
+      new Function('require', 'exports', compiled)(() => ({ createWorkspace: () => createWorkspace({ store: memoryStore() }) }), generated);
+
+      const area = document.createElement('div');
+      area.setAttribute('data-braid-workspace', '');
+      document.body.append(area);
+      try {
+        const names = () => [...area.children].map((child) => `${child.localName}:${child.getAttribute('name')}`);
+        generated.openStartingApps([{ id: 'billing' }, { id: 'notifications', src: '/inbox' }]);
+        expect(names()).toEqual(['fragment-slot:billing', 'fragment-slot:notifications']);
+        // a second render of the layout must not open them again
+        generated.openStartingApps([{ id: 'billing' }]);
+        expect(names()).toHaveLength(2);
+
+        expect((await generated.workspace.layouts.save('start')).slots).toEqual([{ appId: 'billing' }, { appId: 'notifications', src: '/inbox' }]);
+        generated.workspace.open('reviews');
+        await generated.workspace.layouts.save('one');
+        await generated.workspace.layouts.restore('start');
+        expect(names()).toEqual(['fragment-slot:billing', 'fragment-slot:notifications']);
+      } finally {
+        area.remove();
       }
     });
 
