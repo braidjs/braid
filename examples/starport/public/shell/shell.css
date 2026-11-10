@@ -1,0 +1,133 @@
+/* The desk's theme. Custom properties cross into each app's shadow root, so the apps pick the
+   palette up without sharing a stylesheet — and still look fine on their own without it. */
+:root {
+  color-scheme: dark;
+  --sp-bg: #070a1a;
+  --sp-panel: #101630;
+  --sp-panel-2: #172042;
+  --sp-line: rgba(148, 163, 255, 0.18);
+  --sp-text: #eef0fb;
+  --sp-dim: #99a1c4;
+  --sp-indigo: #818cf8;
+  --sp-teal: #2dd4bf;
+  --sp-amber: #fbbf24;
+  --sp-pink: #f472b6;
+  --sp-font: 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --sp-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font: 15px/1.45 var(--sp-font);
+  color: var(--sp-text);
+  background:
+    radial-gradient(1px 1px at 12% 18%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 78% 9%, #fff 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 64% 62%, #c7d2fe 50%, transparent 51%),
+    radial-gradient(1px 1px at 33% 81%, #fff 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 91% 44%, #99f6e4 50%, transparent 51%),
+    radial-gradient(1px 1px at 6% 57%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 47% 33%, #fde68a 50%, transparent 51%),
+    radial-gradient(900px 520px at 100% -10%, rgba(99, 102, 241, 0.32), transparent 62%),
+    radial-gradient(760px 520px at -10% 110%, rgba(45, 212, 191, 0.16), transparent 62%),
+    var(--sp-bg);
+  background-attachment: fixed;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+header {
+  display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--sp-line);
+  background: rgba(7, 10, 26, 0.72);
+  backdrop-filter: blur(10px);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand svg { width: 44px; height: 44px; }
+h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 800; }
+.brand p { margin: 0; color: var(--sp-dim); font-size: 13px; }
+
+#dock { display: flex; gap: 8px; margin-inline: auto; padding: 6px; border-radius: 16px; background: var(--sp-panel); border: 1px solid var(--sp-line); }
+#dock button {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; border-radius: 11px; border: 1px solid transparent; background: transparent;
+  font-weight: 600; transition: background 0.15s, transform 0.15s;
+}
+#dock button:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
+#dock button.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
+#dock button.running::after { content: ''; position: absolute; bottom: 3px; left: 50%; width: 14px; height: 3px; margin-left: -7px; border-radius: 3px; background: var(--sp-teal); }
+#dock .glyph { font-size: 18px; }
+#dock i { font: 600 11px var(--sp-mono); color: var(--sp-amber); }
+#dock i:empty { display: none; }
+
+.layouts { display: flex; align-items: center; gap: 12px; }
+#layouts { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; }
+#layouts li { display: flex; border: 1px solid var(--sp-line); border-radius: 999px; overflow: hidden; background: var(--sp-panel); }
+#layouts button { border: 0; background: transparent; padding: 6px 4px 6px 14px; font-weight: 600; }
+#layouts button:hover { color: var(--sp-teal); }
+#layouts .x { padding: 6px 11px 6px 5px; color: var(--sp-dim); }
+#layouts .x:hover { color: var(--sp-pink); }
+#save-layout { display: flex; gap: 6px; }
+#save-layout input { width: 168px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--sp-line); background: var(--sp-panel); }
+#save-layout input::placeholder { color: var(--sp-dim); }
+#save-layout button, #forget, dialog footer button {
+  padding: 8px 14px; border-radius: 10px; border: 0; font-weight: 700; color: #0b1020;
+  background: linear-gradient(135deg, var(--sp-indigo), var(--sp-teal));
+}
+:focus-visible { outline: 2px solid var(--sp-amber); outline-offset: 2px; }
+
+#remembered {
+  display: flex; align-items: center; gap: 12px; width: fit-content;
+  margin: 18px 28px -4px; padding: 6px 6px 6px 16px; border-radius: 999px;
+  background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.35); color: #fde68a; font-size: 14px;
+}
+#remembered[hidden], #empty[hidden], #close-tile[hidden] { display: none; }
+#forget { padding: 4px 12px; border-radius: 999px; background: var(--sp-amber); }
+
+/* The workspace: each app is a tile. The slots are the workspace's to add and remove. */
+[data-braid-workspace] {
+  display: grid; gap: 20px; padding: 24px 28px 40px;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  align-items: stretch;
+}
+[data-braid-workspace] > fragment-slot {
+  display: block; min-height: 380px; overflow: hidden;
+  border-radius: 20px; border: 1px solid var(--sp-line);
+  background: linear-gradient(180deg, var(--sp-panel-2), var(--sp-panel));
+  box-shadow: 0 18px 50px -24px #000, inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: dock-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes dock-in { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
+@media (prefers-reduced-motion: reduce) { [data-braid-workspace] > fragment-slot { animation: none; } }
+
+#close-tile {
+  position: absolute; z-index: 4; width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--sp-line); background: rgba(7, 10, 26, 0.8); color: var(--sp-dim); font-size: 17px; line-height: 1;
+}
+#close-tile:hover { color: #fff; background: var(--sp-pink); border-color: transparent; }
+#empty { margin: 12vh auto; text-align: center; color: var(--sp-dim); font-size: 17px; }
+
+dialog {
+  width: min(420px, calc(100vw - 32px)); padding: 24px; border-radius: 22px;
+  border: 1px solid var(--sp-line); color: var(--sp-text);
+  background: linear-gradient(180deg, var(--sp-panel-2), var(--sp-panel));
+  box-shadow: 0 40px 120px -20px #000;
+}
+dialog::backdrop { background: rgba(4, 6, 18, 0.66); backdrop-filter: blur(4px); }
+dialog h2 { margin: 0; font-size: 20px; }
+#chooser-what { margin: 4px 0 18px; color: var(--sp-dim); font: 13px var(--sp-mono); }
+#chooser-list { display: grid; gap: 10px; }
+#chooser-list button {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px; text-align: start;
+  border-radius: 14px; border: 1px solid var(--sp-line); background: rgba(255, 255, 255, 0.04); font-weight: 700; font-size: 16px;
+}
+#chooser-list button:hover { border-color: var(--sp-teal); background: rgba(45, 212, 191, 0.1); }
+#chooser-list .glyph { font-size: 24px; }
+#chooser-list .state { margin-inline-start: auto; font: 500 12px var(--sp-mono); color: var(--sp-dim); }
+dialog footer { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; color: var(--sp-dim); }
+dialog footer button { background: transparent; color: var(--sp-dim); border: 1px solid var(--sp-line); font-weight: 600; }
+dialog label { display: flex; gap: 8px; align-items: center; }
+dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; height: 16px; }

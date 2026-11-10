@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Star Map</title>
+    <style>
+/* The palette comes from the desk when there is one; the fallbacks are this app's own. */
+      :host, body { margin: 0; }
+      .app { font: 14px/1.45 var(--sp-font, system-ui, sans-serif); color: var(--sp-text, #eef0fb); padding: 18px 20px 20px; min-height: 380px; box-sizing: border-box; }
+      .app * { box-sizing: border-box; }
+      h2 { margin: 0 44px 2px 0; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+      h2::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 12px var(--dot); }
+      .sub { margin: 0 0 14px; color: var(--sp-dim, #99a1c4); font-size: 13px; min-height: 19px; }
+      button { font: inherit; color: inherit; cursor: pointer; border-radius: 9px; border: 1px solid var(--sp-line, #94a3ff2e); background: rgba(255, 255, 255, 0.05); padding: 5px 11px; font-weight: 600; }
+      button:hover { border-color: var(--dot); }
+      .mono { font-family: var(--sp-mono, ui-monospace, monospace); }
+      .app { --dot: var(--sp-indigo, #818cf8); }
+      .bar { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+      .bar span { margin-inline-end: auto; color: var(--sp-dim, #99a1c4); font-size: 12px; }
+      .sky { border-radius: 14px; overflow: hidden; border: 1px solid var(--sp-line, #94a3ff2e); background: radial-gradient(circle at 50% 50%, #1b2452, #080b1c); height: 250px; }
+      svg { width: 100%; height: 100%; transition: transform 0.4s; transform-origin: 50% 50%; }
+      .port { fill: #c7d2fe; } .port.on { fill: var(--sp-amber, #fbbf24); }
+      text { fill: #c9cde0; font: 11px var(--sp-font, system-ui); }
+      #route { stroke: var(--sp-teal, #2dd4bf); stroke-width: 2.5; stroke-dasharray: 7 6; fill: none; animation: fly 1s linear infinite; }
+      @keyframes fly { to { stroke-dashoffset: -13; } }
+      #ship { fill: var(--sp-amber, #fbbf24); }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <h2>Star Map</h2>
+      <p class="sub" id="status">Waiting for a course to plot.</p>
+      <div class="bar"><span id="zoom-label">Zoom 1×</span><button id="out" aria-label="Zoom out">−</button><button id="in" aria-label="Zoom in">+</button></div>
+      <div class="sky"><svg id="sky" viewBox="0 0 400 250"><path id="route" d="" /><g id="ports"></g><circle id="ship" r="0" /></svg></div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
