@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { createGateway, memoryPreferenceBackend, isPreferenceKey } from '@braidlabs/gateway';
 import { isStoreKey, keySegment, localStorageStore, memoryStore, serverStore, type PreferenceStore } from './store.js';
@@ -106,10 +107,10 @@ describe('localStorageStore()', () => {
   it('keeps its entries under a prefix, apart from the page', async () => {
     const storage = fakeStorage();
     storage.setItem('unrelated', 'x');
-    storage.setItem('braid.fdc3/broken', '{');
+    storage.setItem('braid.workspace/broken', '{');
     const store = localStorageStore({ storage });
     await store.set('k', 1);
-    expect(storage.getItem('braid.fdc3/k')).toBe('1');
+    expect(storage.getItem('braid.workspace/k')).toBe('1');
     expect(await store.list('')).toEqual(['broken', 'k']);
     expect(await store.get('broken')).toBeUndefined();
   });

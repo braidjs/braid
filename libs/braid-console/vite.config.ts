@@ -72,6 +72,11 @@ export default defineConfig({
         find: '@braidlabs/registry',
         replacement: resolve(import.meta.dirname, '../braid-registry/src/index.ts'),
       },
+      // tests only: the workspace is exercised around a real FDC3 agent, which it never imports
+      {
+        find: '@braidlabs/fdc3',
+        replacement: resolve(import.meta.dirname, '../braid-fdc3/src/index.ts'),
+      },
     ],
   },
   test: {

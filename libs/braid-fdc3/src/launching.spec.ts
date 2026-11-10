@@ -3,14 +3,12 @@ import type { Context } from '@finos/fdc3-context';
 import type { DesktopAgent } from '@finos/fdc3-standard';
 import type { FragmentManifest } from '@braidlabs/gateway';
 import { createRegistryApi, createSnapshot, memorySnapshotStore } from '@braidlabs/registry';
-import { createBraidDesktopAgent, type BraidDesktopApi, type BraidDesktopAgentOptions, type IntentResolverHook } from './agent.js';
-import { memoryStore, type PreferenceStore } from './store.js';
+import { createBraidDesktopAgent, type BraidDesktopAgentOptions, type IntentResolverHook } from './agent.js';
 
 /**
- * The workspace half of the agent — launching, resolving, preferences, settings and layouts —
- * against a container that boots slots the way `<fragment-slot>` does: each slot that connects
- * asks the agent for its globals with its name, its signal and itself. The real element is
- * exercised in Chromium by e2e/fdc3-workspace.e2e.ts.
+ * Launching and choosing, against a container that boots slots the way `<fragment-slot>` does:
+ * each slot that connects asks the agent for its globals with its name, its signal and itself.
+ * The real element is exercised in Chromium by e2e/workspace.e2e.ts.
  */
 
 const instrument: Context = { type: 'fdc3.instrument', id: { ticker: 'AAPL' } };
@@ -48,7 +46,7 @@ interface FakeSlot {
   setAttribute(name: string, value: string): void;
   remove(): void;
   /** Resolves with what the agent gave the fragment once it has booted. */
-  booted: Promise<{ fdc3: DesktopAgent; braidDesktop: BraidDesktopApi } | undefined>;
+  booted: Promise<{ fdc3: DesktopAgent } | undefined>;
   controller: AbortController;
 }
 
@@ -102,12 +100,10 @@ const teardown: AbortController[] = [];
 afterEach(() => teardown.splice(0).forEach((controller) => controller.abort()));
 
 async function setup(options: Partial<BraidDesktopAgentOptions> & { withContainer?: boolean } = {}) {
-  const store = options.store ?? memoryStore();
   // the container's slots boot later, against the agent created just below
   const container = fakeContainer(() => agent);
   const agent: Agent = createBraidDesktopAgent({
     directory: await registryDirectory(),
-    store,
     resolveIntent: false,
     ...(options.withContainer === false ? {} : { container: container as unknown as Element }),
     ...options,
@@ -117,7 +113,7 @@ async function setup(options: Partial<BraidDesktopAgentOptions> & { withContaine
     const controller = new AbortController();
     teardown.push(controller);
     const globals = await agent.realmGlobals({ fragmentId, signal: controller.signal });
-    return { fdc3: globals!.fdc3, braidDesktop: globals!.braidDesktop, unmount: () => controller.abort() };
+    return { fdc3: globals!.fdc3, unmount: () => controller.abort() };
   };
   /** Mounts into the container, as the host's own markup would, and waits for the boot. */
   const place = async (fragmentId: string, attributes: Record<string, string> = {}) => {
@@ -127,7 +123,7 @@ async function setup(options: Partial<BraidDesktopAgentOptions> & { withContaine
     container.append(slot);
     return { slot, ...(await slot.booted)! };
   };
-  return { agent, container, mount, place, store };
+  return { agent, container, mount, place };
 }
 
 const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -354,8 +350,7 @@ describe('launching, under the races review found', () => {
   });
 
   it('refuses a malformed or unknown fdc3.open without mounting anything', async () => {
-    const { agent, container, mount } = await setup();
-    void agent;
+    const { container, mount } = await setup();
     const blotter = (await mount('blotter')).fdc3;
     for (const app of ['billing', { appId: 7 }, {}, { appId: ['billing'] }, { appId: 'not-in-directory' }]) {
       await expect(blotter.open(app as never), JSON.stringify(app)).rejects.toThrow('AppNotFound');
@@ -387,20 +382,6 @@ describe('launching, under the races review found', () => {
     await vi.waitFor(() => expect(container.children).toHaveLength(1));
     container.children[0].remove(); // before it connected
     const { fdc3: replacement } = await place('research');
-    const handled = vi.fn(async () => undefined);
-    await replacement.addIntentListener('ViewResearch', handled);
-    expect((await raised).source.appId).toBe('research');
-    await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
-  });
-
-  it('hands an intent waiting on a slot to its replacement when a layout is restored', async () => {
-    const { agent, container, mount, store } = await setup();
-    await store.set('layouts/r', { version: 1, savedAt: '', slots: [{ appId: 'research' }] });
-    const blotter = (await mount('blotter')).fdc3;
-    const raised = blotter.raiseIntent('ViewResearch', instrument);
-    await vi.waitFor(() => expect(container.children).toHaveLength(1));
-    await agent.layouts.restore('r');
-    const replacement = (await container.children[0].booted)!.fdc3;
     const handled = vi.fn(async () => undefined);
     await replacement.addIntentListener('ViewResearch', handled);
     expect((await raised).source.appId).toBe('research');
@@ -462,25 +443,6 @@ describe('resolving intents', () => {
     await expect(rogue.blotter.raiseIntent('ViewInvoice', instrument)).rejects.toThrow('UserCancelledResolution');
   });
 
-  it('remembers a choice, goes straight to it next time, and asks again once forgotten', async () => {
-    const resolveIntent = vi.fn(async ({ candidates }) => ({
-      candidate: candidates.find((c: { appId: string }) => c.appId === 'billing')!,
-      remember: true,
-    }));
-    const { agent, blotter, billing } = await twoListeners({ resolveIntent });
-
-    await blotter.raiseIntent('ViewInvoice', instrument);
-    await blotter.raiseIntent('ViewInvoice', instrument);
-    await settle();
-    expect(resolveIntent).toHaveBeenCalledTimes(1);
-    expect(billing).toHaveBeenCalledTimes(2);
-    expect(await agent.preferences.intentChoice('ViewInvoice', 'fdc3.instrument')).toBe('billing');
-
-    await agent.preferences.forgetIntentChoice('ViewInvoice', 'fdc3.instrument');
-    await blotter.raiseIntent('ViewInvoice', instrument);
-    expect(resolveIntent).toHaveBeenCalledTimes(2);
-  });
-
   it('treats a resolver that throws as a cancel', async () => {
     const { blotter } = await twoListeners({
       resolveIntent: async () => {
@@ -488,29 +450,6 @@ describe('resolving intents', () => {
       },
     });
     await expect(blotter.raiseIntent('ViewInvoice', instrument)).rejects.toThrow('UserCancelledResolution');
-  });
-
-  it('asks again when the remembered app is no longer a candidate', async () => {
-    const store = memoryStore();
-    await store.set('intents/ViewInvoice/fdc3.instrument', { appId: 'gone' });
-    const resolveIntent = vi.fn(async ({ candidates }) => ({ candidate: candidates[0] }));
-    const { blotter } = await twoListeners({ resolveIntent, store });
-    await blotter.raiseIntent('ViewInvoice', instrument);
-    expect(resolveIntent).toHaveBeenCalledTimes(1);
-  });
-
-  it('never offers a hidden app, so one visible candidate is chosen without asking', async () => {
-    const store = memoryStore();
-    await store.set('host', { hiddenApps: ['billing'] });
-    const resolveIntent = vi.fn(async () => undefined);
-    const { blotter, research, billing } = await twoListeners({ resolveIntent, store });
-
-    const resolution = await blotter.raiseIntent('ViewInvoice', instrument);
-    await settle();
-    expect(resolution.source.appId).toBe('research');
-    expect(resolveIntent).not.toHaveBeenCalled();
-    expect(research).toHaveBeenCalledTimes(1);
-    expect(billing).not.toHaveBeenCalled();
   });
 
   it('offers running instances and launchable apps together when there is a container', async () => {
@@ -524,118 +463,5 @@ describe('resolving intents', () => {
     expect(offered).toEqual(expect.arrayContaining([['billing', true], ['research', false]]));
     // billing is already listening, so launching another is not offered
     expect(offered).toHaveLength(2);
-  });
-});
-
-describe('host preferences', () => {
-  it('joins every fragment to the default user channel before handing it over', async () => {
-    const { agent, mount } = await setup();
-    await agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.3' });
-    expect(await agent.preferences.getHost()).toEqual({ defaultUserChannel: 'fdc3.channel.3' });
-
-    const blotter = (await mount('blotter')).fdc3;
-    const billing = (await mount('billing')).fdc3;
-    expect((await blotter.getCurrentChannel())?.id).toBe('fdc3.channel.3');
-    const received = vi.fn();
-    await billing.addContextListener('fdc3.instrument', received);
-    await blotter.broadcast(instrument);
-    await vi.waitFor(() => expect(received).toHaveBeenCalledWith(instrument, expect.anything()));
-  });
-
-  it('reads the page preferences once, and connects without them when the store stalls', async () => {
-    const backing = memoryStore();
-    await backing.set('host', { defaultUserChannel: 'fdc3.channel.5' });
-    const get = vi.fn((key: string) => backing.get(key));
-    const { mount } = await setup({ store: { ...backing, get } });
-    await mount('blotter');
-    await mount('billing');
-    expect(get.mock.calls.filter(([key]) => key === 'host')).toHaveLength(1);
-
-    const stalled = await setup({ store: { ...memoryStore(), get: () => new Promise(() => undefined) } });
-    const started = Date.now();
-    expect(await (await stalled.mount('blotter')).fdc3.getCurrentChannel()).toBeNull();
-    expect(Date.now() - started).toBeLessThan(2_000);
-  });
-
-  it('connects fragments with no preferences when the store fails', async () => {
-    const broken: PreferenceStore = { ...memoryStore(), get: () => Promise.reject(new Error('down')) };
-    const { mount } = await setup({ store: broken });
-    expect(await (await mount('blotter')).fdc3.getCurrentChannel()).toBeNull();
-  });
-});
-
-describe('app settings', () => {
-  it("keeps each app's settings apart, and shares them between its instances", async () => {
-    const { mount } = await setup();
-    const billing = (await mount('billing')).braidDesktop;
-    const research = (await mount('research')).braidDesktop;
-    const otherBilling = (await mount('billing')).braidDesktop;
-
-    await billing.settings.set('theme', 'dark');
-    await billing.settings.set('a/b', 1);
-    expect(await research.settings.get('theme')).toBeUndefined();
-    expect(await research.settings.keys()).toEqual([]);
-    expect(await otherBilling.settings.get('theme')).toBe('dark');
-    expect((await billing.settings.keys()).sort()).toEqual(['a/b', 'theme']);
-    await billing.settings.delete('theme');
-    expect(await otherBilling.settings.get('theme')).toBeUndefined();
-  });
-
-  it('cannot reach another app by naming its key', async () => {
-    const { mount, store } = await setup();
-    await (await mount('billing')).braidDesktop.settings.set('../research/theme', 'x');
-    expect(await store.list('apps/research/')).toEqual([]);
-  });
-});
-
-describe('layouts', () => {
-  it('saves the container in order — app, src, props, channel, state — and restores it', async () => {
-    const { agent, container, place } = await setup();
-    const billing = await place('billing', { src: '/billing/42', props: '{"compact":true}' });
-    const research = await place('research');
-    await billing.fdc3.joinUserChannel('fdc3.channel.2');
-    billing.braidDesktop.onSaveLayout(() => ({ tab: 'overdue' }));
-    research.braidDesktop.onSaveLayout(() => () => 'not json');
-
-    const saved = await agent.layouts.save('morning');
-    expect(saved.slots).toEqual([
-      { appId: 'billing', src: '/billing/42', props: { compact: true }, channel: 'fdc3.channel.2', state: { tab: 'overdue' } },
-      { appId: 'research' },
-    ]);
-    expect(await agent.layouts.list()).toEqual(['morning']);
-
-    // a different page: one unrelated slot, then the restore replaces it
-    for (const slot of [...container.children]) slot.remove();
-    await place('blotter');
-    await agent.layouts.restore('morning');
-
-    expect(container.children.map((slot) => slot.getAttribute('name'))).toEqual(['billing', 'research']);
-    const [restoredBilling, restoredResearch] = await Promise.all(container.children.map((slot) => slot.booted));
-    expect(container.children[0].getAttribute('src')).toBe('/billing/42');
-    expect(container.children[0].props).toEqual({ compact: true });
-    expect((await restoredBilling!.fdc3.getCurrentChannel())?.id).toBe('fdc3.channel.2');
-    expect(restoredBilling!.braidDesktop.restoredState).toEqual({ tab: 'overdue' });
-    expect(restoredResearch!.braidDesktop.restoredState).toBeUndefined();
-
-    await agent.layouts.delete('morning');
-    expect(await agent.layouts.list()).toEqual([]);
-    await expect(agent.layouts.restore('morning')).rejects.toThrow('no saved layout');
-  });
-
-  it('keeps any layout name, and restores slots for apps outside the directory without FDC3', async () => {
-    const { agent, container, store } = await setup();
-    await store.set('layouts/old', { version: 1, savedAt: '', slots: [{ appId: 'plain-widget', state: 1 }, { appId: 'billing' }] });
-    await agent.layouts.restore('old');
-    expect(container.children.map((slot) => slot.getAttribute('name'))).toEqual(['plain-widget', 'billing']);
-    expect(await container.children[0].booted).toBeUndefined();
-    expect((await container.children[1].booted)?.fdc3).toBeDefined();
-
-    await agent.layouts.save("Jeff's desk / 2");
-    expect(await agent.layouts.list()).toContain("Jeff's desk / 2");
-  });
-
-  it('needs a container', async () => {
-    const { agent } = await setup({ withContainer: false });
-    await expect(agent.layouts.save('x')).rejects.toThrow('container');
   });
 });
