@@ -20,6 +20,7 @@ npm install @braidlabs/gateway
 4. **Data-Driven Manifest Registry:** Configured via JSON manifests, local files, URLs, or dynamic KV/database loaders. Deploying a new fragment requires zero gateway redeployments.
 5. **FDC3 App Directory Projection:** Can serve the manifest registry in standard FDC3 App Directory (AppD v2) format at `/__braid/registry/appd/v2/apps`.
 6. **Federation:** A team's gateway can join this one as a subgraph. Its fragments are composed into this registry and pierced directly, with no shell within a shell. See [Federating gateways](/braid-federation).
+7. **Per-user preferences (opt-in):** Stores each signed-in user's JSON entries at `/__braid/preferences/*`, same-origin only and within quotas, for `@braidlabs/fdc3`'s `serverStore()`. See [Per-user preferences](#per-user-preferences-opt-in).
 
 ---
 
@@ -30,6 +31,7 @@ npm install @braidlabs/gateway
 | `/__braid/frag/:id/*` | Assets & API traffic | Forwards directly to fragment endpoint with prefix stripped. |
 | `/__braid/realm/:id/*` | Realm boot stubs | Serves minimal HTML stub to initialize hidden iframe runtimes. |
 | `/__braid/doc/:id/*` | Prepared DOM payload | Serves rewritten, script-inert HTML for dynamic injection. |
+| `/__braid/preferences/*` | The signed-in user's JSON entries (opt-in) | Reads and writes per-user preferences; see [below](#per-user-preferences-opt-in). |
 
 A host mounted under a path it shares a domain with sets `createGateway({ basePath: '/manage' })`
 and `initBraid({ basePath: '/manage' })`; the namespaces then live at `/manage/__braid/…` and the
