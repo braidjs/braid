@@ -263,7 +263,7 @@ You can pass reactive properties and environment data across the boundary:
 </braid-fragment>
 ```
 
-Braid safely passes this data across realms using structured cloning.
+Braid safely passes this data across realms using structured cloning. A fragment reads it as `env.props`, which it has when it opts in with `defineFragment`; an unmodified app in compat mode does not see props, and uses a [page channel](../events-and-data.md#fragment-to-fragment-what-is-true-channel-state) instead.
 
 ---
 
@@ -345,10 +345,7 @@ In your host template (Angular, React, or plain HTML):
   <h1>Account & Invoicing</h1>
   
   <!-- Braid fragment slot -->
-  <braid-fragment 
-    name="billing"
-    [props]="{ plan: 'enterprise', currency: 'USD' }">
-  </braid-fragment>
+  <braid-fragment name="billing"></braid-fragment>
 </div>
 ```
 

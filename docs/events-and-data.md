@@ -1046,4 +1046,4 @@ Real features use two or three together. The combinations that come up most:
 - [`@braidlabs/core`](./packages/core.md): slots, props, the context bus, the fragment `env`.
 - [Trust tiers](./braid-boundary.md): what the untrusted boundary enforces.
 - [`@braidlabs/fdc3`](./packages/fdc3.md): the desktop agent.
-- [Tutorial step 4](./tutorial/04-props-and-events.md): props and events, hands on.
+- [Tutorial step 4](./tutorial/04-props-and-events.md): a host and an unmodified app talking both ways, hands on.

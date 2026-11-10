@@ -36,16 +36,16 @@ export const appConfig: ApplicationConfig = {
 
 ## Component Usage
 
-Import the standalone `BraidFragmentComponent` into your Angular components:
+Import the standalone `BraidFragment` into your Angular components:
 
 ```ts
 import { Component, signal } from '@angular/core';
-import { BraidFragmentComponent } from '@braidlabs/angular';
+import { BraidFragment } from '@braidlabs/angular';
 
 @Component({
   selector: 'app-checkout-page',
   standalone: true,
-  imports: [BraidFragmentComponent],
+  imports: [BraidFragment],
   template: `
     <div class="checkout-container">
       <h2>Host Checkout Shell</h2>
@@ -114,10 +114,10 @@ The guard runs before the URL changes, so declining leaves the router and the ad
 | :--- | :--- | :--- |
 | `[name]` | `string` (Required) | The fragment ID registered in the gateway manifest. |
 | `[src]` | `string` | Fixed sub-route to render. If omitted, fragment follows host URL. |
-| `[props]` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary. |
+| `[props]` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`. A compat fragment has no `env` and does not see them. |
 | `(ready)` | `EventEmitter<{ fragmentId: string }>` | Emitted when fragment completes mounting and hydration. |
 | `(failed)` | `EventEmitter<BraidFragmentError>` | Emitted on load/mount error with failure stage & fix hint. |
-| `(fragmentEvent)` | `EventEmitter<{ type: string; detail: unknown }>` | Emitted when fragment dispatches a custom event. |
+| `(fragmentEvent)` | `EventEmitter<{ type: string; detail: unknown }>` | Emitted when the fragment calls `env.emit(type, detail)`, or raises an event its `custom-element` manifest lists. A compat fragment's `window.dispatchEvent` does not arrive here. |
 | content | projected | `<div slot="loading">` and `<p slot="fallback">` children reach the slot: shown while the fragment boots, and if it fails. See `@braidlabs/core`, "Loading and fallback". |
 | `state()` | `Signal<'idle' \| 'loading' \| 'ready' \| 'error'>` | Signal reflecting current slot lifecycle state. |
 | `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
