@@ -47,7 +47,7 @@ registry therefore controls this, so review manifest changes to `sharedGlobals` 
 host config. The untrusted tier ignores it, because there is nothing same-origin to share.
 
 **Realm globals are per-fragment values, not host ones.** `initBraid({ realmGlobals })` is a hook
-called once per trusted fragment boot with `{ fragmentId, signal }`; what it returns is defined on
+called once per trusted fragment boot with `{ fragmentId, signal, slot }`; what it returns is defined on
 that fragment's realm window before its code runs. It is how `@braidlabs/fdc3` gives each fragment a
 `window.fdc3` bound to its own app identity. Nothing is shared or written back: the host decides the
 value per fragment, and the signal says when to release it. Contract and untrusted fragments ignore

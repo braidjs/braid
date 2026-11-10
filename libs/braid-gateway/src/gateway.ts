@@ -28,6 +28,7 @@ import {
   ResolvedFragmentManifest,
 } from './registry.js';
 import { createDiscoveryHandler, DiscoveryOptions } from './discovery.js';
+import { createPreferencesHandler, type PreferencesOptions } from './preferences.js';
 import { speculationRulesFor } from './speculation.js';
 import { createBreaker, type BreakerOptions } from './breaker.js';
 import { createSingleFlight, singleFlightKey } from './single-flight.js';
@@ -170,6 +171,13 @@ export interface GatewayOptions {
    * See {@link DiscoveryOptions}.
    */
   discovery?: DiscoveryOptions;
+  /**
+   * Serves each signed-in user's preferences at `/__braid/preferences/*`, for `@braidlabs/fdc3`'s
+   * `serverStore`: remembered intent choices, app settings and saved layouts. Entries are keyed by
+   * the `subject` your `principal` resolver returns; a request without one is refused with 401.
+   * Off unless configured. See {@link PreferencesOptions}.
+   */
+  preferences?: PreferencesOptions;
   /**
    * Resolves who is asking, for manifests that declare `access` rules.
    *
@@ -587,6 +595,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     const unsupported = [
       serviceWorker && 'serviceWorker',
       options.discovery && 'discovery',
+      options.preferences && 'preferences',
       vitalsEnabled && 'telemetry.webVitals',
       options.speculationRules && 'speculationRules',
     ].filter(Boolean);
@@ -696,6 +705,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     options.principal ? ((await options.principal(request)) ?? undefined) : undefined;
 
   const discovery = createDiscoveryHandler(registry, options.discovery, mode, resolvePrincipal);
+  const preferences = createPreferencesHandler(options.preferences, resolvePrincipal);
 
   return {
     refreshRegistry,
@@ -721,6 +731,10 @@ export function createGateway(options: GatewayOptions): BraidGateway {
 
       if (discovery?.owns(requestUrl.pathname)) {
         return discovery.handle(request, requestUrl);
+      }
+
+      if (preferences?.owns(requestUrl.pathname)) {
+        return preferences.handle(request, requestUrl);
       }
 
       if (serviceWorker && requestUrl.pathname === BRAID_SERVICE_WORKER_PATH) {

@@ -25,6 +25,27 @@ export function bundleCore(): Promise<string> {
   return coreBundle;
 }
 
+const modules = new Map<string, Promise<string>>();
+
+/** A library from source, as one ES module, for a host page to import (see {@link HostOptions.modules}). */
+export function bundleModule(entry: string): Promise<string> {
+  let bundled = modules.get(entry);
+  if (!bundled) {
+    bundled = build({
+      entryPoints: [`${root}${entry}`],
+      bundle: true,
+      format: 'esm',
+      platform: 'browser',
+      target: 'es2022',
+      write: false,
+      tsconfig: `${root}tsconfig.base.json`,
+      logLevel: 'silent',
+    }).then((result) => result.outputFiles[0].text);
+    modules.set(entry, bundled);
+  }
+  return bundled;
+}
+
 export interface HostOptions {
   /** Gateway options; `registry` carries the fragments, usually with function endpoints. */
   gateway: GatewayOptions;
@@ -40,6 +61,8 @@ export interface HostOptions {
   pageHeaders?: Record<string, string>;
   /** Other paths that serve the same host page, for routes the gateway pierces. */
   pages?: string[];
+  /** Extra JavaScript modules the page can import, by path — e.g. `{ '/fdc3.js': bundleModule('libs/braid-fdc3/src/index.ts') }`. */
+  modules?: Record<string, Promise<string> | string>;
 }
 
 export interface Host {
@@ -59,6 +82,11 @@ export async function startHost(options: HostOptions): Promise<Host> {
   const server: Server = createServer((req, res) => {
     if (req.url === '/core.js') {
       res.writeHead(200, { 'content-type': 'text/javascript' }).end(core);
+      return;
+    }
+    const module = req.url ? options.modules?.[req.url] : undefined;
+    if (module !== undefined) {
+      void Promise.resolve(module).then((source) => res.writeHead(200, { 'content-type': 'text/javascript' }).end(source));
       return;
     }
     middleware(req, res, () => {

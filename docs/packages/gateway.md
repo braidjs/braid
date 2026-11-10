@@ -33,7 +33,7 @@ npm install @braidlabs/gateway
 
 A host mounted under a path it shares a domain with sets `createGateway({ basePath: '/manage' })`
 and `initBraid({ basePath: '/manage' })`; the namespaces then live at `/manage/__braid/…` and the
-root is left alone. Not yet combinable with `serviceWorker`, `discovery`, or `telemetry.webVitals`.
+root is left alone. Not yet combinable with `serviceWorker`, `discovery`, `preferences`, or `telemetry.webVitals`.
 
 ---
 
@@ -349,3 +349,55 @@ createGateway({
 - **Coalescing.** Two fetches with different baggage are never coalesced, so an endpoint that
   routes on a member answers each caller for its own.
 - **Tracing.** For OpenTelemetry tracing of fragment fetches, see [@braidlabs/otel](./otel.md).
+
+---
+
+## Per-user preferences (opt-in)
+
+`preferences` serves each signed-in user's own JSON entries at `/__braid/preferences/*`. It is what
+`serverStore()` from [@braidlabs/fdc3](./fdc3.md) talks to, so remembered intent choices, app
+settings and saved layouts follow the user to any browser.
+
+```ts
+import { createGateway } from '@braidlabs/gateway';
+import { filePreferenceBackend } from '@braidlabs/gateway/node';
+
+createGateway({
+  registry,
+  principal: async (request) => {
+    const session = await sessions.read(request);
+    return session && { subject: session.userId, roles: session.roles };
+  },
+  preferences: { backend: filePreferenceBackend({ directory: '/var/lib/braid/preferences' }) },
+});
+```
+
+| Request | Answer |
+| :--- | :--- |
+| `GET /__braid/preferences/{key}` | 200 with the value, or 404 |
+| `PUT /__braid/preferences/{key}` with an `application/json` body | 204 |
+| `DELETE /__braid/preferences/{key}` | 204 |
+| `GET /__braid/preferences?prefix={prefix}` | 200 `{ "keys": [...] }` |
+
+- **Keyed by `subject`.** Entries belong to the `subject` your `principal` resolver returns. It
+  must be globally unique and come from your session, never from anything the client sends. An
+  OIDC `sub` is unique only per issuer, so with several identity providers use `${iss}|${sub}`.
+  A request without a subject is refused with 401. Nothing in a request can name another subject,
+  so one user can't read or write another's entries.
+- **Same-origin only.** Any request that `Sec-Fetch-Site` marks as cross-site or same-site, or
+  that has an `Origin` from another origin when that header is absent, gets 403. That covers reads
+  too. PUT and DELETE also need a CORS preflight, which this endpoint never grants, and a PUT must
+  be `application/json` (415 otherwise), which an HTML form can't send.
+- **Bounded.** A value is limited to 64 KiB (`maxValueBytes`), and a user to 1000 entries
+  (`maxEntries`) and 1 MiB in all (`maxTotalBytes`); past any of these, 413. The backend enforces
+  the quotas together with the write, so concurrent requests can't exceed them. A key is up to
+  eight `/`-separated segments of `A-Z a-z 0-9 . _ ~ % -`, each percent-encoded in the URL;
+  anything else gets 400. A slow body is bounded only by your server's own timeouts
+  (`server.requestTimeout` in Node).
+- **Never cached.** Every answer is `private, no-store`.
+- **Backends.** `memoryPreferenceBackend()` for tests. `filePreferenceBackend({ directory })`, from
+  `@braidlabs/gateway/node`, keeps one file per user (mode 0600, named by a hash of the subject),
+  written atomically. Behind several gateway instances, implement `PreferenceBackend` (`get`,
+  `set`, `delete`, `list`) over your database. Its `set(subject, key, json, limits)` must check
+  `limits` in the same transaction as the write. `withinLimits()` does the arithmetic. Reject with
+  `PreferenceQuotaError` to have the gateway answer 413.
