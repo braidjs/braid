@@ -63,7 +63,7 @@ beforeAll(async () => {
     if (pathname.startsWith('/__braid/')) {
       leaked.push(pathname);
       res.writeHead(404).end();
-    } else if (scripts[pathname]) {
+    } else if (Object.hasOwn(scripts, pathname)) {
       void scripts[pathname].then((source) => res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-cache' }).end(source));
     } else if (pathname === '/attacker.html') {
       // another site's page: a form needs no CORS, and text/plain lets it shape a JSON body
