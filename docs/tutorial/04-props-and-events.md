@@ -4,12 +4,12 @@ In this step, you will implement decoupled, bidirectional communication between 
 
 The billing app is still an unmodified app: it runs in Braid's default compat mode and contains no Braid code. That decides which mechanisms it can use.
 
-| Direction | For this tutorial's unmodified app | For a fragment that opts in with `defineFragment` |
+| Direction | For this tutorial's unmodified app | For a fragment that is given an `env` |
 | :--- | :--- | :--- |
 | Host to fragment | a page channel from `@braidlabs/data` | `[props]`, read as `env.props` |
 | Fragment to host | a composed DOM event | `env.emit(...)`, heard as `(fragmentEvent)` |
 
-`[props]` and `(fragmentEvent)` travel through the `env` object Braid hands to a fragment's `mount(env)`. A compat fragment has no `env`, so props set on its slot are never seen by its code, and nothing it dispatches arrives as `(fragmentEvent)`. The [events and data guide](../events-and-data.md) covers both columns, with the tradeoffs.
+`[props]` and `(fragmentEvent)` travel through the `env` object Braid hands to a fragment's `mount(env)`. A fragment gets an `env` by opting in with `defineFragment`. (A fragment that is a custom element gets the same two things with no Braid code: props as element properties, and the events its manifest lists.) A compat fragment has no `env`, so props set on its slot are never seen by its code, and nothing it dispatches arrives as `(fragmentEvent)`. The [events and data guide](../events-and-data.md) covers every mechanism here, with the tradeoffs.
 
 ---
 

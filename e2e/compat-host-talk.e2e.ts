@@ -5,7 +5,9 @@ import { bundleModule, endpoint, html, launch, readySlots, startHost, type Host 
 /**
  * How a compat fragment — an unmodified app, with no `env` — talks to the host that placed it.
  * The tutorial (docs/tutorial/04-props-and-events.md) teaches exactly this, so it is pinned here:
- * slot props and `braid:event` do not reach compat code; a composed DOM event and a page channel do.
+ * a plain `window.dispatchEvent` stops at the fragment's shadow root and is never a `braid:event`;
+ * a composed DOM event and a page channel get through. (Slot props are set below only so the
+ * fragment has every chance; compat code has no `env` to read them from.)
  */
 
 interface Heard {
@@ -80,7 +82,14 @@ const heard = (page: Page) => page.evaluate(() => (window as unknown as { __hear
 describe('a compat fragment and its host', () => {
   it('does not reach the host with a plain window.dispatchEvent: not as braid:event, not as itself', async () => {
     const page = await open();
+    // it is dispatched, and gets as far as the fragment's own shadow root
+    await page.evaluate(() => {
+      const root = document.querySelector('fragment-slot')!.shadowRoot!;
+      root.addEventListener('invoice:paid', (event) => ((window as unknown as { __atRoot: unknown }).__atRoot = (event as CustomEvent).detail));
+    });
     await page.click('#plain');
+    await page.waitForFunction(() => (window as unknown as { __atRoot: unknown }).__atRoot !== undefined);
+    expect(await page.evaluate(() => (window as unknown as { __atRoot: unknown }).__atRoot)).toEqual({ invoiceId: 'INV-101' });
     await page.waitForTimeout(200);
     expect(await heard(page)).toEqual([]);
     await page.close();

@@ -114,7 +114,7 @@ The guard runs before the URL changes, so declining leaves the router and the ad
 | :--- | :--- | :--- |
 | `[name]` | `string` (Required) | The fragment ID registered in the gateway manifest. |
 | `[src]` | `string` | Fixed sub-route to render. If omitted, fragment follows host URL. |
-| `[props]` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`. A compat fragment has no `env` and does not see them. |
+| `[props]` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`, or set as properties on a `custom-element` fragment's element. A compat fragment has no `env` and does not see them. |
 | `(ready)` | `EventEmitter<{ fragmentId: string }>` | Emitted when fragment completes mounting and hydration. |
 | `(failed)` | `EventEmitter<BraidFragmentError>` | Emitted on load/mount error with failure stage & fix hint. |
 | `(fragmentEvent)` | `EventEmitter<{ type: string; detail: unknown }>` | Emitted when the fragment calls `env.emit(type, detail)`, or raises an event its `custom-element` manifest lists. A compat fragment's `window.dispatchEvent` does not arrive here. |

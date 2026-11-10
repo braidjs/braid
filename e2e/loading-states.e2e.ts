@@ -7,10 +7,11 @@ import { endpoint, html, launch, startHost, type Host } from './harness.js';
  * cannot evaluate. Shown while a fragment boots with nothing of it on screen yet, after a delay;
  * gone at first paint, on error, and never for a pierced fragment.
  *
- * Nothing here races the wall clock. A fragment that must still be loading is held until the test
- * lets it go, and the delay is measured by the page's own clock, between the slot turning
- * `loading` and the first frame the skeleton is visible in — so a busy machine makes a run slower,
- * never wrong.
+ * No check here needs something to have happened by a wall-clock time. A fragment that must still
+ * be loading is held until the test lets it go, and the delay is measured by the page's own clock,
+ * between the slot turning `loading` and the first frame the skeleton is visible in — so a busy
+ * machine makes a run slower, never wrong. The waits that remain only give something that must
+ * not happen the time to happen.
  */
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

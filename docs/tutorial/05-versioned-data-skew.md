@@ -36,7 +36,7 @@ export const InvoiceSchema = versioned<InvoiceV1>('invoice');
 
 ## 3. Initialize the Record Store in React
 
-Update `apps/billing/src/app/app.tsx` to read from and write to `@braidlabs/data`:
+Update `apps/billing/src/app/app.tsx` to read from and write to `@braidlabs/data`. The listing leaves out Step 4's account subscription to stay short; keep those lines.
 
 ```tsx
 import React, { useEffect, useState } from 'react';
