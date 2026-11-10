@@ -32,13 +32,16 @@ export function shellCode(shell: ShellManifest, fragments: readonly FragmentMani
   const used = new Set<string>();
   const routes = shell.routes.map((route, index) => describeRoute(shell, route, uniqueStem(shell, route, index, used), byId));
 
+  // one module for the page's workspace, when any route has one: the framework files import it
+  const workspace = routes.some((route) => route.workspace) ? [workspaceModule(shell)] : [];
+
   switch (target) {
     case 'react':
-      return [reactRoutes(shell, routes), layoutCss(routes), indexHtml(shell, '<div id="root"></div>')];
+      return [reactRoutes(shell, routes), ...workspace, layoutCss(routes), indexHtml(shell, '<div id="root"></div>')];
     case 'angular':
-      return [...angularFiles(shell, routes), indexHtml(shell, '<app-root></app-root>')];
+      return [...angularFiles(shell, routes), ...workspace, indexHtml(shell, '<app-root></app-root>')];
     case 'angular-ssr':
-      return [...angularFiles(shell, routes), angularServer(shell), indexHtml(shell, '<app-root></app-root>')];
+      return [...angularFiles(shell, routes), ...workspace, angularServer(shell), indexHtml(shell, '<app-root></app-root>')];
     case 'vanilla':
       return routes.map((route) => vanillaPage(shell, route));
   }
@@ -54,6 +57,8 @@ interface RouteView {
   rows?: string;
   gap?: string;
   slots: { area: string; fragment: string; src?: string }[];
+  /** The area where apps are launched, with the ones open at first. */
+  workspace?: { area: string; apps: { fragment: string; src?: string }[] };
   /** Areas the layout has but nothing fills. */
   empty: string[];
 }
@@ -70,14 +75,21 @@ function uniqueStem(shell: ShellManifest, route: ShellRoute, index: number, used
 function describeRoute(shell: ShellManifest, route: ShellRoute, stem: string, byId: Map<string, FragmentManifest>): RouteView {
   const parsed = parseAreas(route.layout.areas);
   const names = parsed.areas.map((area) => area.name);
+  // Only widgets (bound: false) take a src; a screen follows the host's own location.
+  const placed = (fragment: string) => {
+    const manifest = byId.get(fragment);
+    const src = manifest?.bound === false ? manifest.src : undefined;
+    return { fragment, ...(src ? { src } : {}) };
+  };
+  // one area, one occupant: the workspace wins, as it does in a served shell
+  const workspaceArea = route.workspace && names.includes(route.workspace.area) ? route.workspace.area : undefined;
   const slots = Object.entries(route.slots ?? {})
-    .filter(([area]) => names.includes(area))
-    .map(([area, fragment]) => {
-      const manifest = byId.get(fragment);
-      // Only widgets (bound: false) take a src; a screen follows the host's own location.
-      const src = manifest?.bound === false ? manifest.src : undefined;
-      return { area, fragment, ...(src ? { src } : {}) };
-    });
+    .filter(([area]) => names.includes(area) && area !== workspaceArea)
+    .map(([area, fragment]) => ({ area, ...placed(fragment) }));
+  const workspace =
+    workspaceArea === undefined
+      ? undefined
+      : { area: workspaceArea, apps: (route.workspace?.apps ?? []).filter((app) => typeof app === 'string' && app !== '').map(placed) };
   return {
     path: route.path,
     stem,
@@ -85,7 +97,8 @@ function describeRoute(shell: ShellManifest, route: ShellRoute, stem: string, by
     areaRows: parsed.errors.length > 0 ? [] : formatAreas(parsed.cells),
     ...trackProps(route.layout),
     slots,
-    empty: names.filter((name) => !slots.some((slot) => slot.area === name)),
+    ...(workspace ? { workspace } : {}),
+    empty: names.filter((name) => name !== workspaceArea && !slots.some((slot) => slot.area === name)),
   };
 }
 
@@ -111,7 +124,48 @@ function cssRule(route: RouteView, selector: string): string[] {
     `  grid-template-areas:`,
     ...route.areaRows.map((row, index) => `    ${row}${index === route.areaRows.length - 1 ? ';' : ''}`),
     `}`,
+    // apps the user opens sit side by side and share the area
+    ...(route.workspace
+      ? [
+          `${selector} > [data-braid-workspace] {`,
+          `  display: flex;`,
+          `  min-width: 0;`,
+          ...(route.gap ? [`  gap: ${route.gap};`] : []),
+          `}`,
+          `${selector} > [data-braid-workspace] > * {`,
+          `  flex: 1 1 0;`,
+          `  min-width: 0;`,
+          `}`,
+        ]
+      : []),
   ];
+}
+
+/**
+ * The page's workspace, as a module of its own: the framework files import it, and so can a
+ * launcher, a "save layout" button or an FDC3 agent.
+ */
+function workspaceModule(shell: ShellManifest): GeneratedFile {
+  return {
+    name: 'workspace.ts',
+    language: 'typescript',
+    code: [
+      ...header(shell, js),
+      js(`The workspace area is the layout's [data-braid-workspace] element. Apps opened there, each`),
+      js(`app's settings (window.braidDesktop) and named layouts are kept per browser; pass`),
+      js(`{ store: serverStore() } to keep them per signed-in user on the gateway instead.`),
+      `import { createWorkspace } from '@braidlabs/console/workspace';`,
+      ``,
+      `export const workspace = createWorkspace();`,
+      ``,
+      js(`The hook for Braid's realmGlobals option. With @braidlabs/fdc3, wrap the agent's hook:`),
+      js(`workspace.realmGlobals(agent.realmGlobals).`),
+      `export const realmGlobals = workspace.realmGlobals();`,
+      ``,
+      js(`workspace.open('fragment-id') launches an app; workspace.layouts.save('name') and`),
+      js(`workspace.layouts.restore('name') keep and bring back what is open.`),
+    ].join('\n'),
+  };
 }
 
 function layoutCss(routes: RouteView[]): GeneratedFile {
@@ -192,6 +246,13 @@ function reactRoutes(shell: ShellManifest, routes: RouteView[]): GeneratedFile {
       (slot) =>
         `      <BraidFragment name={${jsString(slot.fragment)}}${slot.src ? ` src={${jsString(slot.src)}}` : ''} style={{ gridArea: ${jsString(slot.area)} }} />`,
     ),
+    ...(route.workspace
+      ? [
+          `      <div data-braid-workspace="" style={{ gridArea: ${jsString(route.workspace.area)} }}>`,
+          ...route.workspace.apps.map((app) => `        <BraidFragment name={${jsString(app.fragment)}}${app.src ? ` src={${jsString(app.src)}}` : ''} />`),
+          `      </div>`,
+        ]
+      : []),
     ...(route.empty.length ? [`      {/* empty areas: ${commentSafe(route.empty.join(', '))} */}`] : []),
     `    </div>`,
     `  );`,
@@ -204,7 +265,12 @@ function reactRoutes(shell: ShellManifest, routes: RouteView[]): GeneratedFile {
     language: 'tsx',
     code: [
       ...header(shell, js),
-      js(`Call initBraidReact() once before rendering, and route each path below to its layout.`),
+      ...(routes.some((route) => route.workspace)
+        ? [
+            js(`Call initBraidReact({ realmGlobals }) once before rendering, with realmGlobals from`),
+            js(`./workspace, and route each path below to its layout.`),
+          ]
+        : [js(`Call initBraidReact() once before rendering, and route each path below to its layout.`)]),
       `import { BraidFragment } from '@braidlabs/react';`,
       `import './shell-layout.css';`,
       ``,
@@ -228,6 +294,15 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
         (slot) =>
           `  <braid-fragment name="${escapeAngular(slot.fragment)}"${slot.src ? ` src="${escapeAngular(slot.src)}"` : ''} style="grid-area: ${escapeAngular(slot.area)}" />`,
       ),
+      ...(route.workspace
+        ? [
+            `  <div data-braid-workspace style="grid-area: ${escapeAngular(route.workspace.area)}">`,
+            ...route.workspace.apps.map(
+              (app) => `    <braid-fragment name="${escapeAngular(app.fragment)}"${app.src ? ` src="${escapeAngular(app.src)}"` : ''} />`,
+            ),
+            `  </div>`,
+          ]
+        : []),
       `</div>`,
     ];
     return [
@@ -253,7 +328,9 @@ function angularFiles(shell: ShellManifest, routes: RouteView[]): GeneratedFile[
       language: 'typescript',
       code: [
         ...header(shell, js),
-        js(`Add provideBraid() to the application's providers once.`),
+        ...(routes.some((route) => route.workspace)
+          ? [js(`Add provideBraid({ realmGlobals }) to the application's providers once, with realmGlobals`), js(`from ./workspace.`)]
+          : [js(`Add provideBraid() to the application's providers once.`)]),
         `import { Component } from '@angular/core';`,
         `import type { Routes } from '@angular/router';`,
         `import { BraidFragment } from '@braidlabs/angular';`,
@@ -320,7 +397,15 @@ function vanillaPage(shell: ShellManifest, route: RouteView): GeneratedFile {
       `  <script type="module">`,
       `    // A bare specifier: serve this page through your bundler, or map it with an import map.`,
       `    import { initBraid } from '@braidlabs/core';`,
-      `    initBraid();`,
+      ...(route.workspace
+        ? [
+            `    import { createWorkspace } from '@braidlabs/console/workspace';`,
+            `    // The workspace area is the [data-braid-workspace] element below. window.workspace is for`,
+            `    // the page's own launcher and layout buttons: workspace.open(id), workspace.layouts.save(name).`,
+            `    const workspace = (window.workspace = createWorkspace());`,
+            `    initBraid({ realmGlobals: workspace.realmGlobals() });`,
+          ]
+        : [`    initBraid();`]),
       `  </script>`,
       `</head>`,
       `<body>`,
@@ -329,6 +414,15 @@ function vanillaPage(shell: ShellManifest, route: RouteView): GeneratedFile {
         (slot) =>
           `    <fragment-slot name="${escapeHtml(slot.fragment)}"${slot.src ? ` src="${escapeHtml(slot.src)}"` : ''} style="grid-area: ${escapeHtml(slot.area)}"></fragment-slot>`,
       ),
+      ...(route.workspace
+        ? [
+            `    <div data-braid-workspace style="grid-area: ${escapeHtml(route.workspace.area)}">`,
+            ...route.workspace.apps.map(
+              (app) => `      <fragment-slot name="${escapeHtml(app.fragment)}"${app.src ? ` src="${escapeHtml(app.src)}"` : ''}></fragment-slot>`,
+            ),
+            `    </div>`,
+          ]
+        : []),
       `  </div>`,
       `</body>`,
       `</html>`,

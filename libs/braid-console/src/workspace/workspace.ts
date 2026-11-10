@@ -23,8 +23,9 @@ export interface WorkspaceOptions {
   /**
    * The workspace area: launched apps are mounted here, and a layout is its `<fragment-slot>`
    * children. Defaults to the page's `[data-braid-workspace]` element, which is what a shell
-   * designed in the console with a workspace area renders. Without one, preferences and app
-   * settings still work; launching and layouts reject.
+   * designed in the console with a workspace area renders — looked up when first needed, so a
+   * framework may render it after the workspace is created. `null` is no area. Without one,
+   * preferences and app settings still work; launching and layouts reject.
    */
   container?: Element | null;
   /**
@@ -164,8 +165,13 @@ interface Instance {
 }
 
 export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
-  const container =
-    options.container ?? (typeof document === 'undefined' ? undefined : document.querySelector('[data-braid-workspace]')) ?? undefined;
+  let found: Element | undefined;
+  /** The area: the one given, or the page's, once it is there. */
+  const area = (): Element | undefined => {
+    if (options.container !== undefined) return options.container ?? undefined;
+    if (!found?.isConnected) found = (typeof document === 'undefined' ? null : document.querySelector('[data-braid-workspace]')) ?? undefined;
+    return found;
+  };
   const store = options.store ?? localStorageStore();
 
   /** What a slot mounted by a restore gives its fragment when it boots. */
@@ -230,6 +236,7 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
   }
 
   function needContainer(): Element {
+    const container = area();
     if (!container) {
       throw new Error('braid-workspace: the page has no workspace area (createWorkspace({ container }), or a [data-braid-workspace] element)');
     }
@@ -266,7 +273,9 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
   }
 
   return {
-    container,
+    get container() {
+      return area();
+    },
 
     realmGlobals(inner) {
       return async (fragment) => {

@@ -37,6 +37,7 @@ export type {
   ShellManifest,
   ShellFramework,
   ShellRoute,
+  ShellWorkspace,
   ShellLayout,
   ShellHead,
   ShellMeta,

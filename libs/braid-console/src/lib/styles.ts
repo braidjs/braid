@@ -489,6 +489,16 @@ export const CONSOLE_STYLES = `
 .braid-console__area:focus-visible { outline: 2px solid var(--bc-accent); outline-offset: 1px; }
 .braid-console__areaname { font-family: var(--bc-mono); font-size: 11px; opacity: 0.85; }
 .braid-console__areafragment { font-family: var(--bc-mono); font-size: 13px; font-weight: 600; }
+.braid-console__area.is-workspace {
+  border: 1px solid var(--bc-accent); color: var(--bc-text);
+  background: repeating-linear-gradient(135deg, var(--bc-surface) 0 10px, var(--bc-surface-alt) 10px 20px);
+}
+.braid-console__areaapps { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--bc-mono); font-size: 12px; }
+.braid-console__areaapps > span { padding: 1px 6px; border: 1px solid var(--bc-border-strong); border-radius: 999px; background: var(--bc-bg); }
+.braid-console__areaapps > em { color: var(--bc-muted); }
+.braid-console__applist { list-style: decimal inside; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.braid-console__applist > li { display: flex; align-items: center; gap: 6px; }
+.braid-console__preview > .braid-console__check { align-items: baseline; padding-bottom: 0; }
 .braid-console__head { border: 1px solid var(--bc-border); border-radius: var(--bc-radius); margin: 0; }
 .braid-console__head .braid-console__notice, .braid-console__subhead, .braid-console__head > .braid-console__desc, .braid-console__add { grid-column: 1 / -1; }
 .braid-console__subhead { margin: 6px 0 0; font-size: 13px; font-weight: 600; }

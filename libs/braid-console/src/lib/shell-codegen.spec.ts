@@ -164,4 +164,66 @@ describe('comment and template breakouts', () => {
 
     expect(new Set(names).size).toBe(names.length);
   });
+
+  describe('with a workspace area', () => {
+    const desk: ShellManifest = {
+      ...shell,
+      routes: [
+        {
+          path: '/desk',
+          layout: { areas: 'nav desk', columns: '220px 1fr', gap: '8px' },
+          slots: { nav: 'reviews', desk: 'billing' },
+          workspace: { area: 'desk', apps: ['billing', 'notifications', '"}<x>{{y}}`${z}'] },
+        },
+      ],
+    };
+
+    it.each(SHELL_TARGETS.map((t) => t.id))('%s: renders the area as [data-braid-workspace] with its starting apps, and wires the workspace', (target) => {
+      const code = all(target, desk);
+
+      expect(code).toMatch(/data-braid-workspace(="")? style=(\{\{ gridArea: "desk" \}\}|"grid-area: desk")/);
+      // starting apps carry no grid area: they share the workspace's
+      expect(code).toMatch(/<(BraidFragment|braid-fragment|fragment-slot) name=\{?"billing"\}?( \/)?>/);
+      expect(code).toMatch(/notifications.{0,4} src=.{0,2}\/inbox/);
+      // the workspace took the area a slot also named
+      expect(code).not.toMatch(/billing.{0,6}(grid-area: desk|gridArea: "desk")/);
+      expect(code).toContain("from '@braidlabs/console/workspace'");
+      expect(code).toContain('createWorkspace()');
+      expect(code).toMatch(/realmGlobals/);
+      expect(code).toContain('[data-braid-workspace] {');
+      // a hostile app id stays inside its attribute or string
+      if (target === 'react') {
+        // a JS expression, which is the only safe place for it in JSX
+        expect(code).toContain(`name={${JSON.stringify('"}<x>{{y}}`${z}')}}`);
+      } else {
+        expect(code).not.toContain('<x>');
+        expect(code).toContain('&lt;x&gt;');
+      }
+    });
+
+    it('produces code that parses, with a hostile app id', () => {
+      for (const target of ['react', 'angular', 'angular-ssr'] as const) {
+        for (const file of shellCode(desk, fragments, target).filter((f) => f.language === 'tsx' || f.language === 'typescript')) {
+          const output = ts.transpileModule(file.code, {
+            reportDiagnostics: true,
+            fileName: file.name,
+            compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, experimentalDecorators: true },
+          });
+          expect(output.diagnostics?.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')) ?? [], file.name).toEqual([]);
+        }
+      }
+    });
+
+    it('emits no workspace module or wiring for a shell without one', () => {
+      for (const target of SHELL_TARGETS.map((t) => t.id)) {
+        expect(shellCode(shell, fragments, target).map((file) => file.name)).not.toContain('workspace.ts');
+        expect(all(target)).not.toContain('workspace');
+      }
+    });
+
+    it('does not count the workspace area as empty', () => {
+      const code = all('react', { ...desk, routes: [{ ...desk.routes[0], slots: { nav: 'reviews' } }] });
+      expect(code).not.toContain('empty areas');
+    });
+  });
 });

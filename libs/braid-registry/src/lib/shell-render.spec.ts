@@ -85,6 +85,31 @@ describe('renderShellDocument()', () => {
     expect(page).toContain('<link rel="stylesheet" href="/assets/site.css">');
   });
 
+  it('renders a workspace area as a [data-braid-workspace] element holding its starting apps', () => {
+    const route = { ...storefront.routes[0], slots: { header: 'rating' }, workspace: { area: 'main', apps: ['billing', 'rating', 'billing'] } };
+    const page = renderShellDocument(storefront, route, manifests, { runtimeSrc: RUNTIME });
+    expect(page).toContain(
+      '<div data-braid-workspace data-braid-area="main">' +
+        '<fragment-slot name="billing"></fragment-slot><fragment-slot name="rating" src="/widget"></fragment-slot><fragment-slot name="billing"></fragment-slot>' +
+        '</div>',
+    );
+    expect(page).toContain('[data-braid-workspace]{display:flex;min-width:0;gap:12px}');
+    // the fixed slot beside it is unchanged
+    expect(page).toContain('<fragment-slot name="rating" data-braid-area="header" src="/widget"></fragment-slot>');
+    // no workspace, no rule
+    expect(html()).not.toContain('data-braid-workspace');
+  });
+
+  it('gives a workspace its area even when a stored snapshot also slotted it, and ignores one in an unknown area', () => {
+    const both = { ...storefront.routes[0], workspace: { area: 'main', apps: ['<img onerror=x>'] } };
+    const page = renderShellDocument(storefront, both, manifests, { runtimeSrc: RUNTIME });
+    expect(page).not.toContain('<fragment-slot name="billing" data-braid-area="main">');
+    expect(page).toContain('<fragment-slot name="&lt;img onerror=x&gt;"></fragment-slot>');
+
+    const nowhere = { ...storefront.routes[0], workspace: { area: 'nope"><script>', apps: 7 as never } };
+    expect(renderShellDocument(storefront, nowhere, manifests, { runtimeSrc: RUNTIME })).not.toContain('data-braid-workspace');
+  });
+
   it("drops an unbound fragment's src unless it is a path on its own endpoint", () => {
     const hostile = [manifests[0]!, { ...manifests[1]!, src: '//evil.example/x' }];
 
