@@ -1,5 +1,5 @@
 // Cargo shows the selected ship's manifest. Which columns it shows is a setting: kept for this
-// user and this app by the desk, so it is the same in every Cargo, and after a reload.
+// user and this app by the desk, so a Cargo opened later, or after a reload, starts with it.
 const table = document.getElementById('manifest');
 const boxes = { mass: document.getElementById('col-mass'), hazard: document.getElementById('col-hazard') };
 

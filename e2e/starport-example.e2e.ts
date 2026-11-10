@@ -99,6 +99,11 @@ describe('the Starport example', () => {
     await chooser.waitFor({ state: 'visible' });
     await chooser.locator('button[data-app="star-map"]').click();
     await expect.poll(() => app(page, 'star-map').locator('#status').textContent()).toBe('Course plotted for Slow Comet: Titan → Mars');
+    // that choice was not ticked, so it was not remembered: the next raise asks again
+    await app(page, 'flights').locator('#plot').click();
+    await chooser.waitFor({ state: 'visible' });
+    expect(await page.locator('#remembered').isVisible()).toBe(false);
+    await chooser.locator('#chooser-cancel').click();
 
     // only Comms takes HailShip, so nothing is asked: it is launched
     await app(page, 'flights').locator('#hail').click();

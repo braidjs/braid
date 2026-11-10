@@ -24,13 +24,14 @@ panel. Each is a plain static app that knows nothing about the others. The desk 
 
 ## Files
 
-- `server.mjs` — a Braid gateway in front of static files. Its `registry` is all the desk knows
-  about the apps: where each one is, and which intents it raises and takes.
+- `server.mjs` — a Braid gateway in front of static files. Its `registry` says where each app is,
+  and which intents it raises and takes.
 - `src/main.js` — the desk's runtime: the workspace, the agent, the dock, layouts and the chooser.
+  The dock's entries (title and icon per app) are listed here.
 - `public/shell` — the desk's page and its theme. The palette is CSS custom properties, which
   cross into each app's shadow root.
-- `public/apps/*` — the five apps. Each uses `fdc3` and `braidDesktop`, which exist before its
-  first script runs, and nothing from Braid.
+- `public/apps/*` — the five apps. They use `fdc3` and, for settings and layout state,
+  `braidDesktop`. Both exist before an app's first script runs; none imports anything from Braid.
 
 ## Running it
 
@@ -41,7 +42,8 @@ npm start
 
 Open `http://127.0.0.1:3000/`.
 
-From a Braid checkout, run it against the sources instead:
+That needs the 0.8.0 packages, the first with `@braidlabs/console/workspace`. From a Braid checkout,
+or before 0.8.0 is published, run it against the sources instead:
 
 ```bash
 BRAID_TSCONFIG=../../tsconfig.base.json node server.mjs

@@ -38,14 +38,13 @@ function plot(ship) {
   document.getElementById('status').textContent = `Course plotted for ${ship.name}: ${ship.from} → ${ship.to}`;
 }
 
+// A plotted course stays until another is plotted: a restored layout keeps its course whichever
+// ship the desk has selected now.
 fdc3.addContextListener('starport.ship', (ship) => {
-  highlight(ship);
   if (plotted?.name === ship.name) return;
-  // another ship: the old course goes
-  plotted = undefined;
-  document.getElementById('route').setAttribute('d', '');
-  document.getElementById('ship').setAttribute('r', 0);
-  document.getElementById('status').textContent = `${ship.name} is between ${ship.from} and ${ship.to}.`;
+  if (!plotted) highlight(ship);
+  const where = `${ship.name} is between ${ship.from} and ${ship.to}.`;
+  document.getElementById('status').textContent = plotted ? `${where} Course shown: ${plotted.name}.` : where;
 });
 fdc3.addIntentListener('PlotRoute', (ship) => plot(ship));
 
