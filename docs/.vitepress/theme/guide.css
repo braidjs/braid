@@ -1,0 +1,59 @@
+/* Mock browser windows, fragments and small UI pieces for the scenario guides. */
+.bm { margin: 20px 0; }
+.bm figcaption { margin-top: 8px; font-size: 13px; color: var(--vp-c-text-2); text-align: center; }
+.bm-window { border: 1px solid var(--vp-c-divider); border-radius: 10px; overflow: hidden; background: var(--vp-c-bg); box-shadow: 0 6px 24px rgb(0 0 0 / 8%); }
+.bm-chrome { display: flex; align-items: flex-end; gap: 4px; padding: 8px 10px 0; background: var(--vp-c-bg-alt); }
+.bm-dots { display: inline-flex; gap: 6px; padding: 0 10px 9px 2px; }
+.bm-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--vp-c-divider); }
+.bm-tab { padding: 5px 14px; font-size: 12px; color: var(--vp-c-text-2); border-radius: 8px 8px 0 0; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-tab.is-active { background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); font-weight: 600; }
+.bm-address { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--vp-c-bg-soft); border-bottom: 1px solid var(--vp-c-divider); }
+.bm-nav { font-size: 13px; letter-spacing: 4px; color: var(--vp-c-text-3); }
+.bm-url { flex: 1; padding: 3px 12px; font: 12px var(--vp-font-family-mono); color: var(--vp-c-text-2); background: var(--vp-c-bg); border-radius: 999px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-lock { font-size: 10px; margin-right: 6px; opacity: 0.7; }
+.bm-page { padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; line-height: 1.45; }
+.bm-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.bm-row > * { flex: 1 1 200px; min-width: 0; }
+.bm-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.bm-pair .bm { margin: 8px 0; }
+
+.mfe { border: 1.5px dashed var(--vp-c-brand-1); border-radius: 8px; background: var(--vp-c-bg); min-width: 0; }
+.mfe--host { border: 1.5px solid var(--vp-c-text-3); background: var(--vp-c-bg-soft); }
+.mfe--untrusted { border: 4px double var(--vp-c-warning-1); }
+.mfe.is-absent { opacity: 0.55; border-color: var(--vp-c-text-3); }
+.mfe-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--vp-c-divider); }
+.mfe-tag { padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--vp-c-text-2); background: var(--vp-c-default-soft); }
+.mfe-tag--team { color: var(--vp-c-brand-1); background: var(--vp-c-brand-soft); }
+.mfe-tag--warn { color: var(--vp-c-warning-1); background: var(--vp-c-warning-soft); }
+.mfe-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mfe-body > .bm-row { margin: 0; }
+
+/* numbered step markers: the same numbers appear in the flow diagram under each mock */
+.step { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 4px; border-radius: 50%; font-size: 11px; font-weight: 700; color: var(--vp-c-white); background: var(--vp-c-brand-1); vertical-align: text-bottom; }
+.msg { display: inline; padding: 2px 6px; border-radius: 6px; font: 11.5px/1.9 var(--vp-font-family-mono); box-decoration-break: clone; -webkit-box-decoration-break: clone; color: var(--vp-c-brand-1); background: var(--vp-c-brand-soft); max-width: 100%; overflow-wrap: anywhere; }
+.msg--warn { color: var(--vp-c-warning-1); background: var(--vp-c-warning-soft); }
+.msg--ok { color: var(--vp-c-success-1); background: var(--vp-c-success-soft); }
+.msg--off { color: var(--vp-c-text-3); background: var(--vp-c-default-soft); text-decoration: line-through; }
+.ui-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 6px; background: var(--vp-c-bg-soft); }
+.ui-line.is-on { outline: 2px solid var(--vp-c-brand-1); background: var(--vp-c-brand-soft); }
+.ui-btn { display: inline-block; padding: 1px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--vp-c-white); background: var(--vp-c-brand-1); }
+.ui-btn--ghost { color: var(--vp-c-text-1); background: var(--vp-c-default-soft); }
+.ui-banner { padding: 6px 10px; border-radius: 6px; color: var(--vp-c-success-1); background: var(--vp-c-success-soft); }
+.ui-banner--warn { color: var(--vp-c-warning-1); background: var(--vp-c-warning-soft); }
+.ui-muted { color: var(--vp-c-text-2); }
+.ui-disk { padding: 6px 10px; border: 1px solid var(--vp-c-divider); border-radius: 6px; font: 12px var(--vp-font-family-mono); background: var(--vp-c-bg-alt); }
+
+.chooser { margin: 20px 0; padding: 16px; border: 1px solid var(--vp-c-divider); border-radius: 10px; background: var(--vp-c-bg-soft); }
+.chooser-q { border: 0; margin: 0 0 12px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chooser-q legend { float: left; width: 100%; margin-bottom: 6px; padding: 0; font-size: 13px; font-weight: 600; color: var(--vp-c-text-1); }
+.chooser-pill { padding: 3px 12px; border: 1px solid var(--vp-c-divider); border-radius: 999px; font-size: 13px; color: var(--vp-c-text-1); background: var(--vp-c-bg); cursor: pointer; }
+.chooser-pill:hover { border-color: var(--vp-c-brand-1); }
+.chooser-pill[aria-pressed='true'] { color: var(--vp-c-white); background: var(--vp-c-brand-1); border-color: var(--vp-c-brand-1); }
+.chooser-pill:focus-visible, .chooser-reset:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
+.chooser-results { border-top: 1px solid var(--vp-c-divider); padding-top: 10px; }
+.chooser-count { margin: 0 0 8px; font-size: 13px; color: var(--vp-c-text-2); }
+.chooser-reset { margin-left: 10px; font-size: 13px; color: var(--vp-c-brand-1); text-decoration: underline; cursor: pointer; }
+.chooser-results ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.chooser-results li { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--vp-c-bg); display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; font-size: 13px; min-width: 0; }
+.chooser-results li code { font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.chooser-results li span { flex-basis: 100%; color: var(--vp-c-text-2); }

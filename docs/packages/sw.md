@@ -133,6 +133,10 @@ if (!navigator.serviceWorker.controller) {
 initBraid();
 ```
 
+The registry console can run against this too, including its editing views, with the registry
+API composed into the worker: see
+[the console behind the service-worker gateway](./console.md#behind-the-service-worker-gateway).
+
 This is a proof of concept ([`examples/sw-gateway`](https://github.com/braidjs/braid/tree/main/examples/sw-gateway)). Before relying on it:
 
 - **The first visit's first paint isn't composed.** Fragments boot client-side, and every later navigation is pierced by the worker.
@@ -142,4 +146,4 @@ This is a proof of concept ([`examples/sw-gateway`](https://github.com/braidjs/b
 - **Everything in the options is public.** The registry and `additionalHeaders` ship in `sw.js`, so they must hold no secrets.
 - **Fragment redirects can't be followed.** A browser's `fetch` returns a manual redirect as an opaque response, so `redirect: 'navigate'` fails closed: a pierced slot falls back to its placeholder. A shell that redirects is handed back to the browser untouched.
 - **The shell should refuse cross-site framing** (`X-Frame-Options` or `frame-ancestors`).
-- **There's no fallback yet for browsers with service workers disabled**, and the registry is baked into the worker rather than loaded from a pinned snapshot.
+- **There's no fallback yet for browsers with service workers disabled.** The registry is baked into the worker unless you give it a `snapshotRegistry` over `cacheSnapshotStore()`, which is per browser.

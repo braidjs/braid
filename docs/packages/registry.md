@@ -134,8 +134,15 @@ await createSnapshot({
 
 - layouts by the browser's rules (rectangular areas, equal-width rows);
 - that every slotted fragment is registered;
+- that a route's `workspace`, if it has one, names an area of the layout that no slot fills, and
+  registered starting apps;
 - route syntax, and that no two shells claim the same route;
 - that scripts and stylesheets load over `https:` or a root-relative path.
+
+A route may give one area to a workspace instead of a fixed fragment: `workspace: { area: 'main',
+apps: ['billing'] }`. It renders as a `[data-braid-workspace]` element holding the starting apps,
+which is where the [console workspace](./console.md#the-workspace) launches, saves and restores
+apps.
 
 A snapshot without shells keeps the id it always had.
 
@@ -203,6 +210,23 @@ Today the framework selects the host code the console generates. The gateway sti
 your shell app returns; serving shells from the definition is planned.
 
 ---
+
+### Snapshots in the browser
+
+`cacheSnapshotStore()` keeps snapshots in the browser's Cache Storage, for a registry that runs
+where there is no server: in a service worker, beside the in-worker gateway.
+
+```ts
+import { cacheSnapshotStore, createRegistryApi, snapshotRegistry } from '@braidlabs/registry';
+
+const store = cacheSnapshotStore();          // { cacheName: 'braid-registry' } by default
+const registry = snapshotRegistry({ store }); // for the gateway
+const api = createRegistryApi({ store, authorize: () => true }); // for the console
+```
+
+It is as durable as the browser's storage for that origin and profile, and no further: a place to
+design and preview, not a system of record. It tracks HEAD and has no environments. See
+[the console behind the service-worker gateway](./console.md#behind-the-service-worker-gateway).
 
 ## The write API
 

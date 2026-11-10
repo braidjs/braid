@@ -8,8 +8,31 @@ React components, and a standalone deployable app with optional OIDC (Okta) sign
 discovery endpoint the gateway already serves. Shells, history and editing need the registry write
 API from [`@braidlabs/registry`](../braid-registry); without it those views say what to mount.
 
-The full guide — the layout designer, query syntax, Okta setup, and how an enterprise runs it — is
-[docs/packages/console.md](../../docs/packages/console.md).
+The full guide — the layout designer, the workspace, query syntax, Okta setup, and how an
+enterprise runs it — is [docs/packages/console.md](../../docs/packages/console.md).
+
+## The workspace
+
+A shell route can give one area to a **workspace**: users launch apps there and save and restore
+layouts, while the areas around it stay as designed. The designer marks the area; this package's
+second entry runs it, with no React in it:
+
+```ts
+import { initBraid } from '@braidlabs/core';
+import { createWorkspace, serverStore } from '@braidlabs/console/workspace';
+
+const workspace = createWorkspace({ store: serverStore() }); // the page's [data-braid-workspace]
+initBraid({ realmGlobals: workspace.realmGlobals() });
+
+workspace.open('chart');
+await workspace.layouts.save('morning');
+await workspace.layouts.restore('morning');
+```
+
+Every fragment gets `window.braidDesktop` (its own settings, `onSaveLayout`, `restoredState`).
+Preferences, settings and layouts are kept in `localStorage` by default, or per signed-in user on
+the gateway with `serverStore()`. It needs no FDC3 agent; beside `@braidlabs/fdc3` it wraps the
+agent's `resolveIntent` and `realmGlobals` to remember choices and restore channels.
 
 ## As a library
 

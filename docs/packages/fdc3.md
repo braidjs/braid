@@ -112,18 +112,17 @@ platform:
 
 ---
 
-## The workspace: launching, choosing, preferences, layouts
+## Launching and choosing
 
-FDC3 standardizes the App Directory but not layouts or user preferences. Those are features each
-desktop agent provides itself, and these are Braid's. Give the agent a `container` and a `store`:
+FDC3 says what `fdc3.open` and a raised intent mean, and leaves how an app is started, and how the
+user chooses between apps, to the desktop agent. Give the agent a `container` to launch into:
 
 ```ts
-import { createBraidDesktopAgent, serverStore } from '@braidlabs/fdc3';
+import { createBraidDesktopAgent } from '@braidlabs/fdc3';
 
 const agent = createBraidDesktopAgent({
   directory: applications,
-  container: document.getElementById('desk')!, // where launched apps mount; what layouts save
-  store: serverStore(), // or localStorageStore(), the default
+  container: document.getElementById('desk')!, // where launched apps mount
 });
 ```
 
@@ -142,7 +141,7 @@ of it:
 - An intent for an app that is already open but not listening yet (still booting, or mounted in
   the container and not yet connected) waits for that instance instead of launching another. So two
   quick raises for an app that isn't running mount it once. If that slot is removed before the app
-  listens, as a layout restore does, the intent goes to the instance that replaces it.
+  listens, as a workspace layout restore does, the intent goes to the instance that replaces it.
 - A held intent goes to the instance it was launched for or is waiting on, never to another
   instance of the app that happens to add a listener first.
 
@@ -165,9 +164,7 @@ built-in modal dialog. Each choice is marked:
 
 A `newInstance: true` raise is offered only **new** entries, one for each app that declares the
 intent. Tab moves between choices, Enter picks one and Escape cancels, which rejects the raise with
-`UserCancelledResolution`. Ticking **Remember my choice** saves the app for that intent and context
-type, and the next raise goes straight to it. If that app is no longer a candidate, the dialog comes
-back.
+`UserCancelledResolution`.
 
 To use your own UI, pass `resolveIntent`. Pass `false` to refuse such raises:
 
@@ -176,85 +173,42 @@ createBraidDesktopAgent({
   directory,
   resolveIntent: async ({ context, raisedBy, candidates }) => {
     const candidate = await myPicker(candidates); // { intent, appId, instanceId?, starting?, title, icon? }
-    return candidate && { candidate, remember: true };
+    return candidate && { candidate };
   },
 });
 ```
 
 A resolver can only pick one of the candidates it was given. Anything else cancels the raise.
 
-### Preferences
+The agent keeps nothing between raises. Remembering a choice, hiding apps from the list, and
+everything else that outlives the page belongs to the workspace, below.
+
+---
+
+## Preferences, app settings and layouts: the workspace
+
+FDC3 standardizes none of these, so they are not part of this package. They are the workspace in
+[`@braidlabs/console/workspace`](./console.md#the-workspace), which works on any Braid page, with
+or without FDC3. Beside an agent it composes through the agent's two hooks:
 
 ```ts
-await agent.preferences.setHost({ defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] }); // replaces, does not merge
-await agent.preferences.getHost(); // { defaultUserChannel: 'fdc3.channel.1', hiddenApps: ['legacy-chart'] }
-await agent.preferences.intentChoice('ViewChart', 'fdc3.instrument'); // 'chart', or undefined
-await agent.preferences.forgetIntentChoice('ViewChart', 'fdc3.instrument');
+import { createBraidDesktopAgent, dialogResolver } from '@braidlabs/fdc3';
+import { createWorkspace, serverStore } from '@braidlabs/console/workspace';
+
+const workspace = createWorkspace({ store: serverStore() }); // the page's [data-braid-workspace]
+const agent = createBraidDesktopAgent({
+  directory: applications,
+  container: workspace.container,
+  // hidden apps are never offered, a remembered choice answers without asking,
+  // and ticking "Remember my choice" in the dialog is kept
+  resolveIntent: workspace.intentResolver(dialogResolver(document, { remember: true })),
+});
+// each fragment joins its saved or default user channel before its code runs, and gets braidDesktop
+initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
 ```
 
-- `defaultUserChannel` is joined for every fragment before its code runs.
-- The agent reads these once, when the first fragment connects, and keeps them; `setHost` updates
-  the kept copy. A store that takes longer than a second to answer is skipped. Fragments connect
-  without the preferences rather than waiting, and the next connect tries the store again.
-- `hiddenApps` are never offered as a choice. When hiding apps leaves one candidate, the raise goes
-  to it without asking; when it leaves none, the raise rejects with `UserCancelledResolution`.
-  Hiding governs the choice, not delivery: an app that is the only one able to take an intent
-  still gets it.
-
-### App settings: `window.braidDesktop`
-
-Each fragment gets `braidDesktop` alongside `fdc3`:
-
-```ts
-// inside the billing fragment
-await braidDesktop.settings.set('columns', ['due', 'amount']);
-await braidDesktop.settings.get('columns'); // ['due', 'amount'], after a reload too
-await braidDesktop.settings.keys();
-await braidDesktop.settings.delete('columns');
-```
-
-Settings belong to the app and the user, and every instance of the app shares them. One app can't
-name another app's keys through `braidDesktop`. That keeps apps' settings apart, but it is not a
-security boundary: trusted fragments share the page's origin, so code that wants to can reach the
-store directly. With `serverStore`, separation *between users* is enforced by the gateway.
-
-### Layouts
-
-A layout is the container's `<fragment-slot>`s, in order: each one's app, `src` and `props`, the
-user channel its instance is on, and whatever state the app gives when the layout is saved.
-
-```ts
-await agent.layouts.save('morning');
-await agent.layouts.list(); // ['morning']
-await agent.layouts.restore('morning'); // replaces the container's slots
-await agent.layouts.delete('morning');
-```
-
-```ts
-// inside a fragment
-braidDesktop.onSaveLayout(() => ({ tab: currentTab })); // must be JSON; 2 seconds at most
-if (braidDesktop.restoredState) showTab(braidDesktop.restoredState.tab);
-```
-
-Restoring mounts fresh slots, rejoins each to its saved channel, and hands each app its saved state
-as `braidDesktop.restoredState`. A saved slot for an app the directory doesn't have (or no longer
-has) comes back as a plain slot, without FDC3, channel or state. Slots outside the
-container aren't saved or touched.
-
-### Where it is all kept
-
-All of it lives in the `store`, under keys like `host`, `intents/{intent}/{contextType}`,
-`apps/{appId}/{key}` and `layouts/{name}`:
-
-| Store | Kept | Per |
-| :--- | :--- | :--- |
-| `localStorageStore()` (default) | in `localStorage`, under `braid.fdc3/` | origin and browser profile |
-| `serverStore({ url })` | on the gateway, `createGateway({ preferences })` | signed-in user, in any browser |
-| `memoryStore()` | in memory, until reload | page |
-
-Any object with `get`, `set`, `delete` and `list` is a `PreferenceStore`. If the store can't be
-read, fragments still connect, just without preferences. Setting up the gateway side is described
-under [Per-user preferences](./gateway.md#per-user-preferences-opt-in).
+`dialogResolver(document, { remember: true })` is the built-in dialog with its **Remember my
+choice** box. Without the option the box is not shown, because nothing would keep the choice.
 
 ---
 
@@ -269,5 +223,3 @@ under [Per-user preferences](./gateway.md#per-user-preferences-opt-in).
 - **Bounded state.** The agent keeps the last context of each type on each channel, and every app
   channel that was ever created, for the life of the page. That is FINOS's behaviour, and it means
   a fragment that broadcasts many distinct context types grows the agent's memory.
-- **Shared layouts and window geometry.** A layout belongs to one user, and records slots in order,
-  not sizes or positions.
