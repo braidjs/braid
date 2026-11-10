@@ -690,7 +690,7 @@ function RouteEditor({
               />
               <span>
                 Workspace in <span className="braid-console__mono">{current}</span>
-                <span className="braid-console__desc"> — users open, arrange, save and restore apps here; the other areas stay as designed.</span>
+                <span className="braid-console__desc"> — users open apps here, and save and restore them as layouts; the other areas stay as designed.</span>
               </span>
             </label>
           )}
