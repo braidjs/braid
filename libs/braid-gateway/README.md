@@ -303,6 +303,34 @@ It only works end to end once the fragment can see the user: `forwardCredentials
 header via `additionalHeaders`. The gateway warns when a fragment opts in and neither is set — at startup for an inline registry, on the
 first redirect for a URL or loader registry.
 
+## Per-user preferences (opt-in)
+
+`preferences` serves each signed-in user's own JSON entries at `/__braid/preferences/*`. It is what
+`serverStore()` from `@braidlabs/fdc3` talks to, so remembered intent choices, app settings and
+saved layouts follow the user to any browser.
+
+```ts
+import { filePreferenceBackend } from '@braidlabs/gateway/node';
+
+createGateway({
+  registry,
+  principal: async (request) => {
+    const session = await sessions.read(request);
+    return session && { subject: session.userId, roles: session.roles };
+  },
+  preferences: { backend: filePreferenceBackend({ directory: '/var/lib/braid/preferences' }) },
+});
+```
+
+- Entries are keyed by the principal's `subject`, which must come from your session and be
+  globally unique (`${iss}|${sub}` across identity providers). No subject, 401.
+- Same-origin only: a cross-site `Sec-Fetch-Site`, or a foreign `Origin` when that is absent, gets
+  403, reads included.
+- Bounded: 64 KiB a value, 1000 entries and 1 MiB a user, enforced by the backend in the same
+  write (413 past any of them). Every answer is `private, no-store`.
+- Backends: `memoryPreferenceBackend()` for tests, `filePreferenceBackend()` for one Node process,
+  or your own `PreferenceBackend` over a database behind several instances. Full details: [gateway docs](../../docs/packages/gateway.md#per-user-preferences-opt-in).
+
 ## Discovery endpoint (optional)
 
 For shells that build their UI from the registry rather than hard-coding slot names — a launcher,
