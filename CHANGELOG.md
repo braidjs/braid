@@ -1,3 +1,25 @@
+## 0.8.1 (2026-11-11)
+
+### 🚀 Features
+
+- **examples:** Starport, a workspace of five apps with intents and layouts ([c179426](https://github.com/braidjs/braid/commit/c179426))
+- **examples:** Starport as static files, with the gateway in a service worker ([7669723](https://github.com/braidjs/braid/commit/7669723))
+
+### 🩹 Fixes
+
+- **examples:** review findings — a malformed request no longer stops Starport; close from the dock ([df99c5a](https://github.com/braidjs/braid/commit/df99c5a))
+- **examples:** Starport keeps a restored course, and its README says what runs today ([f931120](https://github.com/braidjs/braid/commit/f931120))
+- **examples:** review findings — Starport's build clears only its own output; real boundary checks; shared departures ([c1559d5](https://github.com/braidjs/braid/commit/c1559d5))
+- **examples:** a malformed request no longer stops the sw-gateway server ([be73d1b](https://github.com/braidjs/braid/commit/be73d1b))
+- **examples:** Starport fits a phone ([a33c6e6](https://github.com/braidjs/braid/commit/a33c6e6))
+- **fdc3:** declare uuid, which the FINOS agent proxy imports and does not declare ([e1998bb](https://github.com/braidjs/braid/commit/e1998bb))
+- **gateway:** refuse a path separator or dot segment hidden by percent-encoding ([87857d0](https://github.com/braidjs/braid/commit/87857d0))
+- **gateway:** close the rest of the hidden-separator family; function endpoints too ([4becf05](https://github.com/braidjs/braid/commit/4becf05))
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.8.0 (2026-11-11)
 
 ### 🚀 Features
