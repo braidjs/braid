@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Starport — a Braid workspace</title>
+    <link rel="stylesheet" href="shell.css" />
+    <script type="module" src="main.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="9" fill="url(#planet)" />
+          <ellipse cx="20" cy="20" rx="18" ry="6" fill="none" stroke="#fbbf24" stroke-width="2.4" transform="rotate(-20 20 20)" />
+          <defs>
+            <linearGradient id="planet" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#818cf8" />
+              <stop offset="1" stop-color="#2dd4bf" />
+            </linearGradient>
+          </defs>
+        </svg>
+        <div>
+          <h1>Starport</h1>
+          <p>Deck 8 traffic control · five apps, one desk</p>
+        </div>
+      </div>
+
+      <nav id="dock" aria-label="Launch an app"></nav>
+
+      <div class="panels">
+        <button type="button" id="open-boundaries">Boundaries</button>
+        <button type="button" id="open-preferences">Preferences</button>
+      </div>
+
+      <div class="layouts">
+        <ul id="layouts" aria-label="Saved layouts"></ul>
+        <form id="save-layout">
+          <input id="layout-name" placeholder="Name this layout" aria-label="Layout name" maxlength="24" />
+          <button type="submit">Save layout</button>
+        </form>
+      </div>
+    </header>
+
+    <p id="ticker" role="status">
+      <span class="tag">Tower</span>
+      <span id="ticker-event">No departures yet</span>
+      <span id="ticker-count">0 departures today</span>
+    </p>
+
+    <p id="remembered" hidden>
+      <span>Plot Route always opens in <b id="remembered-app"></b></span>
+      <button type="button" id="forget">Forget</button>
+    </p>
+
+    <!-- The workspace: the apps open at first load. The user launches more, closes them, and
+         saves the lot as a layout. -->
+    <main data-braid-workspace>
+      <fragment-slot name="flights"></fragment-slot>
+      <fragment-slot name="star-map"></fragment-slot>
+      <fragment-slot name="cargo"></fragment-slot>
+    </main>
+    <p id="empty" role="status" hidden>The desk is clear. Launch an app from the dock, or restore a layout.</p>
+
+    <dialog id="chooser" aria-labelledby="chooser-title">
+      <h2 id="chooser-title">Which app should take this?</h2>
+      <p id="chooser-what"></p>
+      <div id="chooser-list"></div>
+      <footer>
+        <label><input type="checkbox" id="chooser-remember" /> Remember my choice</label>
+        <button type="button" id="chooser-cancel">Cancel</button>
+      </footer>
+    </dialog>
+
+    <dialog id="boundaries" aria-labelledby="boundaries-title">
+      <h2 id="boundaries-title">What the desk and the apps do not share</h2>
+      <p class="lede">Checked just now, against this page.</p>
+      <ul id="boundary-facts" aria-labelledby="boundaries-title"></ul>
+      <p class="note">
+        This is namespace isolation: it keeps well-meaning apps out of each other's way. It is not a security boundary.
+      </p>
+      <footer><span></span><button type="button" class="done">Done</button></footer>
+    </dialog>
+
+    <dialog id="preferences" aria-labelledby="preferences-title">
+      <h2 id="preferences-title">Preferences</h2>
+      <p class="lede">Kept for you in this browser, with your layouts and each app's settings.</p>
+      <fieldset>
+        <legend>Never offer these apps for Plot route</legend>
+        <div id="hidden-apps" class="choices"></div>
+      </fieldset>
+      <footer><span></span><button type="button" class="done">Done</button></footer>
+    </dialog>
+  </body>
+</html>

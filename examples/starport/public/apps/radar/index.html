@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Radar</title>
+    <style>
+/* The palette comes from the desk when there is one; the fallbacks are this app's own. */
+      :host, body { margin: 0; }
+      .app { font: 14px/1.45 var(--sp-font, system-ui, sans-serif); color: var(--sp-text, #eef0fb); padding: 18px 20px 20px; min-height: 380px; box-sizing: border-box; }
+      .app * { box-sizing: border-box; }
+      h2 { margin: 0 44px 2px 0; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+      h2::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 12px var(--dot); }
+      .sub { margin: 0 0 14px; color: var(--sp-dim, #99a1c4); font-size: 13px; min-height: 19px; }
+      button { font: inherit; color: inherit; cursor: pointer; border-radius: 9px; border: 1px solid var(--sp-line, #94a3ff2e); background: rgba(255, 255, 255, 0.05); padding: 5px 11px; font-weight: 600; }
+      button:hover { border-color: var(--dot); }
+      .mono { font-family: var(--sp-mono, ui-monospace, monospace); }
+      .app { --dot: var(--sp-teal, #2dd4bf); }
+      .scope { position: relative; width: 250px; height: 250px; margin: 6px auto 0; border-radius: 50%; border: 1px solid var(--sp-teal, #2dd4bf); background: repeating-radial-gradient(circle, transparent 0 40px, rgba(45, 212, 191, 0.22) 40px 41px), radial-gradient(circle, #0d2a2c, #06121a); overflow: hidden; }
+      .sweep { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, rgba(45, 212, 191, 0.55), transparent 22%); animation: sweep 3s linear infinite; }
+      @keyframes sweep { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .sweep { animation: none; } }
+      #blip { position: absolute; width: 12px; height: 12px; margin: -6px; border-radius: 50%; background: var(--sp-amber, #fbbf24); box-shadow: 0 0 14px var(--sp-amber, #fbbf24); transition: left 0.5s, top 0.5s; display: none; }
+      #blip.locked { outline: 2px solid var(--sp-pink, #f472b6); outline-offset: 5px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <h2>Radar</h2>
+      <p class="sub" id="status">Scanning.</p>
+      <div class="scope"><div class="sweep"></div><div id="blip"></div></div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

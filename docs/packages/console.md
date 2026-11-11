@@ -174,6 +174,12 @@ app joins its channel before its own code runs, but just after `fdc3.open` has r
 opener, so an opener should pass context to `open` rather than broadcast straight after it. See
 [`@braidlabs/fdc3`](./fdc3.md#preferences-app-settings-and-layouts-the-workspace).
 
+**A worked example.** [Starport](https://braidjs.github.io/braid/starport/) is a workspace of five
+static apps, with the gateway in a service worker: a ship picked in one is followed by the others, an
+intent two of them can take is asked about and remembered, and a saved layout brings each app's
+state back. Its source is in
+[`examples/starport`](https://github.com/braidjs/braid/tree/main/examples/starport).
+
 Not supported: sizes and positions within the area (a layout is an order, laid out by your CSS),
 and layouts shared between users.
 

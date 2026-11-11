@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cargo</title>
+    <style>
+/* The palette comes from the desk when there is one; the fallbacks are this app's own. */
+      :host, body { margin: 0; }
+      .app { font: 14px/1.45 var(--sp-font, system-ui, sans-serif); color: var(--sp-text, #eef0fb); padding: 18px 20px 20px; min-height: 380px; box-sizing: border-box; }
+      .app * { box-sizing: border-box; }
+      h2 { margin: 0 44px 2px 0; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+      h2::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 12px var(--dot); }
+      .sub { margin: 0 0 14px; color: var(--sp-dim, #99a1c4); font-size: 13px; min-height: 19px; }
+      button { font: inherit; color: inherit; cursor: pointer; border-radius: 9px; border: 1px solid var(--sp-line, #94a3ff2e); background: rgba(255, 255, 255, 0.05); padding: 5px 11px; font-weight: 600; }
+      button:hover { border-color: var(--dot); }
+      .mono { font-family: var(--sp-mono, ui-monospace, monospace); }
+      .app { --dot: var(--sp-pink, #f472b6); }
+      .cols { display: flex; gap: 14px; margin-bottom: 10px; color: var(--sp-dim, #99a1c4); font-size: 13px; }
+      .cols label { display: flex; gap: 6px; align-items: center; }
+      input { accent-color: var(--sp-pink, #f472b6); }
+      table { width: 100%; border-collapse: collapse; }
+      th { text-align: start; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sp-dim, #99a1c4); padding: 0 8px 6px; font-weight: 600; }
+      td { padding: 9px 8px; border-top: 1px solid var(--sp-line, #94a3ff2e); }
+      .hide-mass .mass, .hide-hazard .hazard { display: none; }
+      .empty { color: var(--sp-dim, #99a1c4); padding: 40px 0; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <h2>Cargo</h2>
+      <p class="sub" id="title">No ship selected.</p>
+      <div class="cols">Columns
+        <label><input type="checkbox" id="col-mass" checked /> Mass</label>
+        <label><input type="checkbox" id="col-hazard" checked /> Hazard</label>
+      </div>
+      <table id="manifest">
+        <thead><tr><th>Item</th><th>Qty</th><th class="mass">Mass</th><th class="hazard">Hazard</th></tr></thead>
+        <tbody id="items"><tr><td colspan="4" class="empty">Pick a ship in Flights to see what it carries.</td></tr></tbody>
+      </table>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
