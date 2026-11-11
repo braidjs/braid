@@ -170,10 +170,52 @@ describe('arrange', () => {
     expect(closed).toEqual(['map', 'cargo']);
   });
 
-  it('marks a one-column grid, where spans mean nothing', () => {
+  it('marks a one-column grid, where spans mean nothing, and resizes nothing there from the keyboard', () => {
     columns = 1;
     tiles = arrange(workspace);
     expect(area.hasAttribute('data-braid-tiles-single')).toBe(true);
+    key(part('map', '.braid-tile-grip'), { key: 'ArrowDown', altKey: true, shiftKey: true });
+    expect(workspace.placementOf(slotOf('map'))).toEqual({});
+  });
+
+  it('moves between the grip menu\'s items with the arrow keys, and closes it when focus leaves', () => {
+    tiles = arrange(workspace);
+    const grip = part('map', '.braid-tile-grip');
+    grip.click();
+    const [earlier, later] = part('map', '.braid-tile-menu').querySelectorAll('button');
+    expect(document.activeElement).toBe(earlier);
+    key(earlier as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(later);
+    key(later as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(earlier);
+    key(earlier as HTMLElement, { key: 'End' });
+    expect(document.activeElement).toBe(later);
+    later.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: part('cargo', '.braid-tile-grip') }));
+    expect(part('map', '.braid-tile-menu').hidden).toBe(true);
+    expect(grip.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps an unsized tile no taller than maxRows', () => {
+    tiles = arrange(workspace, { defaultRows: 4, maxRows: 3 });
+    expect(part('map', '.braid-tile-taller').textContent).toBe('⇕ 3');
+  });
+
+  it('refuses to arrange an area twice', () => {
+    tiles = arrange(workspace);
+    expect(() => arrange(workspace)).toThrow(/arranged already/);
+  });
+
+  it('ends a resize in progress when it is destroyed, leaving no outline and no size taken', () => {
+    tiles = arrange(workspace);
+    const corner = part('map', '.braid-tile-edge[data-edge="corner"]');
+    corner.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 3, clientX: 10, clientY: 10 }));
+    expect(document.querySelector('.braid-tile-outline')).not.toBeNull();
+    tiles.destroy();
+    tiles = undefined;
+    expect(document.querySelector('.braid-tile-outline')).toBeNull();
+    expect(document.documentElement.hasAttribute('data-braid-tiles-sizing')).toBe(false);
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 3 }));
+    expect(workspace.placementOf(slotOf('map'))).toEqual({});
   });
 
   it('takes its headers and edges away again', () => {
@@ -199,6 +241,8 @@ describe('popping out', () => {
     });
   });
   const handoffOf = (href: string) => new URL(href, location.href).searchParams.get('handoff')!;
+  /** The secret a window reads from its handoff entry, and answers the desk with. */
+  const secretOf = (handoff: string) => JSON.parse(localStorage.getItem(`${KEY}handoff/${handoff}`)!).secret as string;
 
   /** A second page's workspace: the window an app is popped out to. */
   function windowWorkspace() {
@@ -210,7 +254,7 @@ describe('popping out', () => {
   it('links each tile to its window, and a modified click is left to the browser', () => {
     tiles = arrange(workspace, { popOut: { key: KEY, url } });
     const pop = part('map', '.braid-tile-pop') as HTMLAnchorElement;
-    expect(pop.getAttribute('href')).toBe('/desk/?app=map');
+    expect(pop.getAttribute('href')).toBe(new URL('/desk/?app=map', location.href).href);
     expect(pop.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }))).toBe(true);
     expect(opened).toEqual([]);
     expect(names()).toEqual(['flights', 'map', 'cargo']);
@@ -227,8 +271,9 @@ describe('popping out', () => {
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'map', 'cargo']));
     expect(events).toEqual(['out:radar']);
     const handoff = handoffOf(opened[0]);
-    expect(opened[0]).toBe(`/desk/?app=radar&handoff=${handoff}`);
+    expect(opened[0]).toBe(new URL(`/desk/?app=radar&handoff=${handoff}`, location.href).href);
 
+    const secret = secretOf(handoff);
     // in the window: the app, with what it left with, but not its span
     const popped = windowWorkspace();
     const accepted = await acceptPopOut(popped.workspace, { key: KEY, appId: 'radar', handoff });
@@ -239,7 +284,7 @@ describe('popping out', () => {
 
     // the window closes with a newer state; the desk waits out the reload grace, then takes it back
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'radar', snapshot: { state: { zoom: 1 } } });
+    window.postMessage({ handoff, appId: 'radar', secret, snapshot: { state: { zoom: 1 } } });
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'radar', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
     window.close();
     expect(events).toEqual(['out:radar', 'back:radar']);
@@ -251,14 +296,18 @@ describe('popping out', () => {
     part('map', '.braid-tile-pop').click();
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'cargo']));
     const handoff = handoffOf(opened[0]);
+    const secret = secretOf(handoff);
     const forger = new BroadcastChannel(`${KEY}dock`);
-    forger.postMessage({ handoff: 'made-up', appId: 'map', snapshot: {} });
-    forger.postMessage({ handoff, appId: 'cargo', snapshot: {} });
+    forger.postMessage({ handoff: 'made-up', appId: 'map', secret, snapshot: {} });
+    forger.postMessage({ handoff, appId: 'cargo', secret, snapshot: {} });
+    // the handoff id is in the window's URL and on the channel; the secret is not
+    forger.postMessage({ handoff, appId: 'map', snapshot: {} });
+    forger.postMessage({ handoff, appId: 'map', secret: 'guessed', snapshot: {} });
     await tick(RELOAD_GRACE_MS + 200);
     expect(names()).toEqual(['flights', 'cargo']);
-    forger.postMessage({ handoff, appId: 'map', snapshot: {} });
+    forger.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
-    forger.postMessage({ handoff, appId: 'map', snapshot: {} });
+    forger.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
     await tick(RELOAD_GRACE_MS + 200);
     forger.close();
     expect(names()).toEqual(['flights', 'map', 'cargo']);
@@ -269,12 +318,13 @@ describe('popping out', () => {
     part('map', '.braid-tile-pop').click();
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'cargo']));
     const handoff = handoffOf(opened[0]);
+    const secret = secretOf(handoff);
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'map', taken: true });
+    window.postMessage({ handoff, appId: 'map', secret, taken: true });
     await tick(50);
-    window.postMessage({ handoff, appId: 'map', snapshot: {} });
+    window.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
     await tick(RELOAD_GRACE_MS / 3);
-    window.postMessage({ handoff, appId: 'map', taken: true });
+    window.postMessage({ handoff, appId: 'map', secret, taken: true });
     await tick(RELOAD_GRACE_MS + 200);
     window.close();
     expect(names()).toEqual(['flights', 'cargo']);
@@ -293,13 +343,24 @@ describe('popping out', () => {
     tiles = arrange(workspace, { popOut: { key: KEY, url } });
     await tiles.popOut(slotOf('cargo'));
     const handoff = handoffOf(opened[0]);
+    const secret = secretOf(handoff);
     // the desk reloads: a new arrange reads what this tab kept
     tiles.destroy();
     tiles = arrange(workspace, { popOut: { key: KEY, url } });
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'cargo', snapshot: {} });
+    window.postMessage({ handoff, appId: 'cargo', secret, snapshot: {} });
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
     window.close();
+  });
+
+  it('opens one window for a tile clicked twice, and none for a slot not in the area', async () => {
+    tiles = arrange(workspace, { popOut: { key: KEY, url } });
+    await Promise.all([tiles.popOut(slotOf('map')), tiles.popOut(slotOf('map'))]);
+    expect(opened).toHaveLength(1);
+    const stray = document.createElement('fragment-slot');
+    stray.setAttribute('name', 'stray');
+    await expect(tiles.popOut(stray)).rejects.toThrow(/workspace area/);
+    expect(opened).toHaveLength(1);
   });
 
   it('says so when the browser blocks the window, and keeps the app', async () => {
@@ -309,6 +370,50 @@ describe('popping out', () => {
     await tiles.popOut(slotOf('map'));
     expect(blocked).toEqual(['map']);
     expect(names()).toEqual(['flights', 'map', 'cargo']);
+  });
+
+  it('keeps the state it sent when a return carries one that is not JSON', async () => {
+    workspace.open('radar', { state: { zoom: 3 } });
+    tiles = arrange(workspace, { popOut: { key: KEY, url } });
+    await tiles.popOut(slotOf('radar'));
+    const handoff = handoffOf(opened[0]);
+    const window = new BroadcastChannel(`${KEY}dock`);
+    window.postMessage({ handoff, appId: 'radar', secret: secretOf(handoff), snapshot: { state: 1n } });
+    await vi.waitFor(() => expect(names()).toContain('radar'), { timeout: RELOAD_GRACE_MS + 1000 });
+    window.close();
+    expect((await workspace.snapshot(slotOf('radar'))).state).toEqual({ zoom: 3 });
+  });
+
+  it('takes back, after a reload, only apps the host accepts, and no more than it could have sent', async () => {
+    const kept = Array.from({ length: 40 }, (_, index) => [`id-${index}`, { appId: index === 0 ? 'evil' : 'map', secret: 's', snapshot: {}, index: -1 }]);
+    sessionStorage.setItem(`${KEY}out`, JSON.stringify(kept));
+    tiles = arrange(workspace, { popOut: { key: KEY, url, accepts: (id) => id !== 'evil' } });
+    expect(JSON.parse(sessionStorage.getItem(`${KEY}out`)!).map(([id]: [string]) => id)).toEqual(kept.slice(1, 32).map(([id]) => id));
+  });
+
+  it('clears handoff entries no window read, once they are old, and leaves a fresh one alone', () => {
+    localStorage.setItem(`${KEY}handoff/old`, JSON.stringify({ appId: 'map', at: Date.now() - 120_000 }));
+    localStorage.setItem(`${KEY}handoff/fresh`, JSON.stringify({ appId: 'map', at: Date.now() }));
+    localStorage.setItem('elsewhere/handoff/old', '{}');
+    tiles = arrange(workspace, { popOut: { key: KEY, url } });
+    expect(localStorage.getItem(`${KEY}handoff/old`)).toBeNull();
+    expect(localStorage.getItem(`${KEY}handoff/fresh`)).not.toBeNull();
+    expect(localStorage.getItem('elsewhere/handoff/old')).toBe('{}');
+  });
+
+  it('pops out only to a page of this origin', async () => {
+    tiles = arrange(workspace, { popOut: { key: KEY, url: () => 'javascript:alert(1)' } });
+    expect(part('map', '.braid-tile-pop').hasAttribute('href')).toBe(false);
+    await expect(tiles.popOut(slotOf('map'))).rejects.toThrow(/this origin/);
+    expect(opened).toEqual([]);
+    expect(names()).toEqual(['flights', 'map', 'cargo']);
+  });
+
+  it('leaves what the desk popped out to the desk, in the window its sessionStorage was copied to', async () => {
+    sessionStorage.setItem(`${KEY}out`, '[["x",{"appId":"map","secret":"s","snapshot":{},"index":0}]]');
+    const popped = windowWorkspace();
+    await acceptPopOut(popped.workspace, { key: KEY, appId: 'map', handoff: null });
+    expect(sessionStorage.getItem(`${KEY}out`)).toBeNull();
   });
 
   it('opens a copy fresh in a window the desk did not open', async () => {

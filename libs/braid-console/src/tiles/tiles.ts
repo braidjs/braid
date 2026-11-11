@@ -1,5 +1,5 @@
 import type { Placement, Workspace } from '../workspace/workspace.js';
-import { popOutDesk, type PopOutDesk, type PopOutOptions } from './pop-out.js';
+import { popOutDesk, sameOrigin, type PopOutDesk, type PopOutOptions } from './pop-out.js';
 import { installTilesCss } from './styles.js';
 
 /**
@@ -55,11 +55,13 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
   const document = container.ownerDocument;
   const view = document.defaultView!;
   if (options.styles !== false) installTilesCss(document);
+  if (container.hasAttribute('data-braid-tiles')) throw new Error('braid-tiles: this area is arranged already (destroy() the other first)');
   container.setAttribute('data-braid-tiles', '');
 
   const maxColumns = whole(options.maxColumns, 12);
   const maxRows = whole(options.maxRows, 6);
-  const defaultRows = whole(options.defaultRows, 1);
+  // a tile with no span is no taller than the tallest a tile may be
+  const defaultRows = Math.min(whole(options.defaultRows, 1), maxRows);
   const titleOf = (slot: Element) => {
     const id = slot.getAttribute('name') ?? '';
     return options.title?.(id) ?? id;
@@ -68,6 +70,8 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
   const headOf = (slot: Element) => slot.querySelector<HTMLElement>(':scope > .braid-tile-head');
   const desk: PopOutDesk | undefined = options.popOut ? popOutDesk(workspace, options.popOut, tiles) : undefined;
   const cleanups: (() => void)[] = [];
+  /** Drags in progress, each ended by its function: destroy() ends them too. */
+  const drags = new Set<() => void>();
 
   // ── The grid ───────────────────────────────────────────────────────────────────────────────
   /** The area's grid as laid out now: its column count, track sizes and gaps. */
@@ -149,14 +153,17 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
       // a link, so Cmd-click or a long press opens a copy in a tab as any link would; a plain click
       // moves the app itself into a window of its own
       const pop = make('a', 'braid-tile-pop', '↗');
-      pop.href = options.popOut.url(appId);
+      // only a page of this origin: a link elsewhere (or a javascript: one) is not a pop-out
+      const href = sameOrigin(options.popOut.url(appId));
+      if (href) pop.href = href;
       pop.target = '_blank';
+      pop.rel = 'noopener';
       pop.setAttribute('aria-label', `Pop ${title} out into its own window`);
       pop.title = 'Pop out (Cmd-click for a copy in a tab)';
       pop.addEventListener('click', (event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey) return;
         event.preventDefault();
-        void desk!.popOut(slot);
+        desk!.popOut(slot).catch((error) => console.warn('braid-tiles: could not pop the app out', error));
       });
       head.append(pop);
     }
@@ -178,8 +185,16 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
     slot.prepend(head, frame);
     sizes?.observe(slot);
 
-    grip.addEventListener('pointerdown', (event) => dragToMove(slot, grip, event));
-    grip.addEventListener('keydown', (event) => byKey(slot, grip, event));
+    grip.addEventListener('pointerdown', (event) => {
+      // a flag a drag left without its click (let go elsewhere, or ended unheard) is stale by now
+      delete grip.dataset.dragged;
+      dragToMove(slot, grip, event);
+    });
+    grip.addEventListener('keydown', (event) => {
+      // a click from the keyboard (Enter, Space) is never the end of a drag
+      delete grip.dataset.dragged;
+      byKey(slot, grip, event);
+    });
     grip.addEventListener('click', () => {
       // a drag that moved the tile ends in a click too; that one is not a request for the menu
       if (grip.dataset.dragged !== undefined) return void delete grip.dataset.dragged;
@@ -187,9 +202,21 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
       else closeMenu(grip, menu);
     });
     menu.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      closeMenu(grip, menu);
-      grip.focus();
+      const items = [...menu.querySelectorAll<HTMLElement>('button')];
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[event.key];
+      if (to !== undefined) {
+        event.preventDefault();
+        items[(to + items.length) % items.length].focus();
+      } else if (event.key === 'Escape') {
+        closeMenu(grip, menu);
+        grip.focus();
+      }
+    });
+    // focus moving on out of the menu (Tab, say) closes it
+    menu.addEventListener('focusout', (event) => {
+      const to = (event as FocusEvent).relatedTarget as Node | null;
+      if (to && !menu.contains(to) && to !== grip) closeMenu(grip, menu);
     });
     wider.addEventListener('click', () => cycle(slot, 'columns'));
     taller.addEventListener('click', () => cycle(slot, 'rows'));
@@ -244,7 +271,7 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
   /** Alt and an arrow moves the tile; Shift, Alt and an arrow resizes it. */
   function byKey(slot: Element, grip: HTMLElement, event: KeyboardEvent) {
     if (!event.altKey || event.ctrlKey || event.metaKey) return;
-    const step = ({ ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 } as Record<string, number>)[event.key];
+    const step = ARROWS.get(event.key);
     if (!step) return;
     event.preventDefault();
     if (!event.shiftKey) {
@@ -252,6 +279,8 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
       grip.focus();
       return;
     }
+    // one column: spans mean nothing there, and the size controls are hidden
+    if (container!.hasAttribute('data-braid-tiles-single')) return;
     const key = event.key === 'ArrowLeft' || event.key === 'ArrowRight' ? 'columns' : 'rows';
     const limit = key === 'columns' ? columnLimit() : maxRows;
     const now = spanOf(slot)[key];
@@ -267,15 +296,24 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
     const away = (event: Event) => {
       if (menu.contains(event.target as Node) || event.target === grip) return;
       closeMenu(grip, menu);
-      view.removeEventListener('pointerdown', away, true);
     };
     view.addEventListener('pointerdown', away, true);
+    menuAway.set(menu, away);
   }
 
+  /** The listener an open menu closes by, so closing it takes the listener away too. */
+  const menuAway = new Map<HTMLElement, (event: Event) => void>();
   function closeMenu(grip: HTMLElement, menu: HTMLElement) {
     menu.hidden = true;
     grip.setAttribute('aria-expanded', 'false');
+    const away = menuAway.get(menu);
+    if (away) view.removeEventListener('pointerdown', away, true);
+    menuAway.delete(menu);
   }
+  cleanups.push(() => {
+    for (const away of menuAway.values()) view.removeEventListener('pointerdown', away, true);
+    menuAway.clear();
+  });
 
   /**
    * Follows the pointer and moves the tile into the place of whichever tile it is over, as it goes.
@@ -309,7 +347,11 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
     const end = track(event, follow, () => {
       slot.classList.remove('braid-tile-dragging');
       document.body.classList.remove('braid-tiles-moving');
-      if (moved) grip.dataset.dragged = '';
+      if (moved) {
+        grip.dataset.dragged = '';
+        // the click a drag ends in comes at once, if it comes at all
+        view.setTimeout(() => delete grip.dataset.dragged, 0);
+      }
       if (slot.isConnected) grip.focus({ preventScroll: true });
     });
   }
@@ -397,13 +439,16 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
       view.removeEventListener('pointerup', stop);
       view.removeEventListener('pointercancel', stop);
       view.removeEventListener('blur', blur);
+      drags.delete(cancel);
       done(up);
     }
+    const cancel = () => finish(false);
+    drags.add(cancel);
     view.addEventListener('pointermove', follow);
     view.addEventListener('pointerup', stop);
     view.addEventListener('pointercancel', stop);
     view.addEventListener('blur', blur);
-    return () => finish(false);
+    return cancel;
   }
 
   function announceSize(slot: Element) {
@@ -466,9 +511,13 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
       await desk.popOut(slot);
     },
     destroy() {
+      for (const end of [...drags]) end();
       for (const cleanup of cleanups) cleanup();
       desk?.close();
-      for (const slot of tiles()) for (const part of slot.querySelectorAll(':scope > .braid-tile-head, :scope > .braid-tile-frame')) part.remove();
+      for (const slot of tiles()) {
+        for (const part of slot.querySelectorAll(':scope > .braid-tile-head, :scope > .braid-tile-frame')) part.remove();
+        (slot as HTMLElement).style.removeProperty('--braid-tile-height');
+      }
       container.removeAttribute('data-braid-tiles');
       container.removeAttribute('data-braid-tiles-single');
     },
@@ -489,6 +538,12 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
   }
 }
 
+const ARROWS = new Map([
+  ['ArrowLeft', -1],
+  ['ArrowUp', -1],
+  ['ArrowRight', 1],
+  ['ArrowDown', 1],
+]);
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const plural = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
 /** A whole number from 1 to 12, or `fallback`. */

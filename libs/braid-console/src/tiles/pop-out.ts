@@ -7,8 +7,12 @@ import type { Placement, SavedSlot, Workspace } from '../workspace/workspace.js'
  * state it left with ({@link acceptPopOut}).
  *
  * - The state crosses in `localStorage`, under a one-time handoff id the desk makes up: in the
- *   clear, to any page of the origin. Fine for a layout's state; worth knowing before carrying
- *   anything private this way.
+ *   clear, readable **and writable** by any page of the origin. Fine for a layout's state; worth
+ *   knowing before carrying anything private this way. What the window opens with (state, channel,
+ *   src, props) is as trustworthy as every page of the origin: an app should treat its
+ *   `restoredState` as input, as it would a layout's.
+ * - The window answers with a secret it read from that entry, never sent on the channel, so a page
+ *   that only listens on the channel cannot take an app back early or keep it away.
  * - Only what the desk popped out comes back, once each, with the src, props, span and place the
  *   desk kept. The window returns only the app's state and channel, and anything else that arrives
  *   on the channel is ignored.
@@ -38,6 +42,18 @@ export interface PopOutOptions {
   onBlocked?(appId: string): void;
   /** The app is back in the workspace, in `slot`. */
   onReturned?(slot: Element, appId: string): void;
+  /**
+   * Whether `appId` is one of the host's apps. A desk that reloads takes back only those of what
+   * its tab kept, as any page of the origin in that tab could have written it. Default: all.
+   */
+  accepts?(appId: string): boolean;
+  /**
+   * How long the desk waits, after a window gives its app back, for it to take the app again: a
+   * window that reloads does both. Make it longer than your page takes to call `acceptPopOut` on a
+   * slow reload, or a reloading window and the desk both end up with the app. Default
+   * {@link RELOAD_GRACE_MS}.
+   */
+  reloadGraceMs?: number;
 }
 
 export interface AcceptPopOutOptions {
@@ -56,6 +72,8 @@ export interface AcceptedPopOut {
   fromDesk: boolean;
   /** Gives the app back to the desk now, with its latest state, and closes the window. */
   dockBack(): Promise<void>;
+  /** Stops listening and asking the app for its state; the app stays, and is not given back. */
+  dispose(): void;
 }
 
 /** How long a popped-out window has to take its app before the desk takes it back. */
@@ -66,6 +84,10 @@ export const RELOAD_GRACE_MS = 1_500;
 const HANDOFF_READ_MS = 3_000;
 /** How often a window asks its app for its state, besides after each thing the user does. */
 const REFRESH_MS = 3_000;
+/** The most popped-out apps a desk keeps track of; more kept than this is not the desk's doing. */
+const MAX_OUT = 32;
+/** A handoff entry older than this, that no desk in this tab is waiting on, is left over: removed. */
+const STALE_HANDOFF_MS = 60_000;
 
 const handoffKey = (key: string, id: string) => `${key}handoff/${id}`;
 const channelName = (key: string) => `${key}dock`;
@@ -73,6 +95,8 @@ const channelName = (key: string) => `${key}dock`;
 /** What the desk keeps of an app it popped out. */
 interface Sent {
   appId: string;
+  /** What the window read from the handoff entry, and answers with. */
+  secret: string;
   snapshot: Omit<SavedSlot, 'appId'>;
   index: number;
   taken?: boolean;
@@ -84,6 +108,7 @@ interface Sent {
 interface DockMessage {
   handoff: string;
   appId: string;
+  secret?: unknown;
   taken?: boolean;
   snapshot?: { state?: unknown; channel?: unknown };
 }
@@ -98,11 +123,17 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
   const { key } = options;
   const outKey = `${key}out`;
   const out = new Map<string, Sent>();
+  /** Slots on their way out: a second click while the first is opening a window does nothing. */
+  const leaving = new WeakSet<Element>();
+  const grace = Number.isFinite(options.reloadGraceMs) && options.reloadGraceMs! >= 0 ? options.reloadGraceMs! : RELOAD_GRACE_MS;
   const dock = new BroadcastChannel(channelName(key));
 
   // the timers are this page's; everything else is kept
   const keep = () =>
-    sessionStorage.setItem(outKey, JSON.stringify([...out].map(([id, { appId, snapshot, index, taken }]) => [id, { appId, snapshot, index, taken }])));
+    sessionStorage.setItem(
+      outKey,
+      JSON.stringify([...out].map(([id, { appId, secret, snapshot, index, taken }]) => [id, { appId, secret, snapshot, index, taken }])),
+    );
 
   /** Gives the window `id` its time to take its app; a window that has taken it gets none. */
   function waitForTaking(id: string) {
@@ -113,16 +144,37 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
 
   try {
     const kept: unknown = JSON.parse(sessionStorage.getItem(outKey) ?? '[]');
-    for (const entry of Array.isArray(kept) ? kept : []) {
+    for (const entry of Array.isArray(kept) ? kept.slice(0, MAX_OUT) : []) {
       const [id, sent] = Array.isArray(entry) ? entry : [];
-      if (typeof id === 'string' && typeof sent?.appId === 'string' && sent.snapshot && typeof sent.snapshot === 'object') {
-        out.set(id, { appId: sent.appId, snapshot: sent.snapshot, index: Number.isInteger(sent.index) ? sent.index : -1, taken: sent.taken === true });
-      }
+      if (typeof id !== 'string' || typeof sent?.appId !== 'string' || typeof sent.secret !== 'string') continue;
+      if (!sent.snapshot || typeof sent.snapshot !== 'object' || options.accepts?.(sent.appId) === false) continue;
+      out.set(id, {
+        appId: sent.appId,
+        secret: sent.secret,
+        snapshot: sent.snapshot,
+        index: Number.isInteger(sent.index) ? sent.index : -1,
+        taken: sent.taken === true,
+      });
     }
   } catch {
     // nothing kept, or not ours to read
   }
   for (const id of out.keys()) waitForTaking(id);
+  keep();
+
+  // entries no window ever read (the desk closed before its window started, say), once they are
+  // old enough not to be another desk tab's handoff in flight
+  for (let index = localStorage.length - 1; index >= 0; index--) {
+    const name = localStorage.key(index);
+    if (!name?.startsWith(handoffKey(key, '')) || out.has(name.slice(handoffKey(key, '').length))) continue;
+    let at: unknown;
+    try {
+      at = JSON.parse(localStorage.getItem(name) ?? 'null')?.at;
+    } catch {
+      at = undefined;
+    }
+    if (typeof at !== 'number' || Date.now() - at > STALE_HANDOFF_MS) localStorage.removeItem(name);
+  }
 
   function takeBack(id: string, change: DockMessage['snapshot'] = {}) {
     const sent = out.get(id);
@@ -133,7 +185,9 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
     clearTimeout(sent.returning);
     localStorage.removeItem(handoffKey(key, id));
     const snapshot: Omit<SavedSlot, 'appId'> = { ...sent.snapshot };
-    if (change.state !== undefined) snapshot.state = change.state;
+    // what the channel carries is any structured-clone value; only JSON is a state
+    const state = asJson(change.state);
+    if (state !== undefined) snapshot.state = state;
     if (typeof change.channel === 'string') snapshot.channel = change.channel;
     const slot = workspace.open(sent.appId, snapshot as { placement?: Placement; state?: unknown; channel?: string });
     // back where it was, and the size it was
@@ -144,7 +198,7 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
   dock.addEventListener('message', ({ data }: MessageEvent<DockMessage>) => {
     if (typeof data?.handoff !== 'string') return;
     const sent = out.get(data.handoff);
-    if (!sent || sent.appId !== data.appId) return;
+    if (!sent || sent.appId !== data.appId || data.secret !== sent.secret) return;
     clearTimeout(sent.returning);
     // taken: the window has the app now, and gives it back when it closes
     if (data.taken === true) {
@@ -154,23 +208,49 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
       return;
     }
     const snapshot = data.snapshot && typeof data.snapshot === 'object' ? data.snapshot : {};
-    sent.returning = setTimeout(() => takeBack(data.handoff, snapshot), RELOAD_GRACE_MS);
+    sent.returning = setTimeout(() => takeBack(data.handoff, snapshot), grace);
   });
 
   return {
     async popOut(slot) {
+      // one of the area's apps, before any window opens for it
+      if (!slots().includes(slot)) throw new Error('braid-tiles: can only pop out an app in the workspace area');
+      if (leaving.has(slot)) return;
       const appId = slot.getAttribute('name')!;
       const id = crypto.randomUUID();
+      const secret = crypto.randomUUID();
+      // the handoff is this origin's storage: a window anywhere else could never take the app
+      const href = sameOrigin(options.url(appId, id));
+      if (!href) throw new Error('braid-tiles: popOut.url must give a URL of this origin');
       // opened straight from the click, so a popup blocker lets it through; filled in a moment later
-      const popup = window.open(options.url(appId, id), `braid-tile-${id}`, options.features ?? 'popup,width=760,height=720');
+      const popup = window.open(href, `braid-tile-${id}`, options.features ?? 'popup,width=760,height=720');
       if (!popup) return options.onBlocked?.(appId);
-      const { appId: _appId, ...snapshot } = await workspace.snapshot(slot);
-      const index = slots().indexOf(slot);
-      localStorage.setItem(handoffKey(key, id), JSON.stringify({ appId, snapshot }));
-      out.set(id, { appId, snapshot, index });
+      leaving.add(slot);
+      // the window needs nothing of the desk's but what crosses in storage
+      try {
+        popup.opener = null;
+      } catch {
+        // not ours to change
+      }
+      try {
+        const { appId: _appId, ...snapshot } = await workspace.snapshot(slot);
+        const index = slots().indexOf(slot);
+        // storage full or off: the window gets nothing, so it is closed and the app stays
+        localStorage.setItem(handoffKey(key, id), JSON.stringify({ appId, secret, snapshot, at: Date.now() }));
+        out.set(id, { appId, secret, snapshot, index });
+      } catch (error) {
+        popup.close();
+        leaving.delete(slot);
+        throw error;
+      }
       waitForTaking(id);
-      keep();
+      try {
+        keep();
+      } catch {
+        // a desk that reloads will not take this one back; this page still will
+      }
       slot.remove();
+      leaving.delete(slot);
       options.onPoppedOut?.(appId);
     },
     close() {
@@ -195,7 +275,10 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
   const { key, appId, handoff } = options;
   // what this window held when it last unloaded: a reload takes it up again
   const soloKey = `${key}solo`;
-  let given: { appId?: unknown; snapshot?: Omit<SavedSlot, 'appId'> } | undefined;
+  let given: { appId?: unknown; secret?: unknown; snapshot?: Omit<SavedSlot, 'appId'> } | undefined;
+  // `window.open` gave this tab a copy of the desk's sessionStorage: what the desk popped out is the
+  // desk's to take back, not this window's, should this page arrange its tiles with popOut too
+  sessionStorage.removeItem(`${key}out`);
   try {
     const kept = JSON.parse(sessionStorage.getItem(soloKey) ?? 'null');
     if (handoff && kept?.handoff === handoff && kept.appId === appId) given = kept;
@@ -217,13 +300,14 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
       given = undefined;
     }
   }
-  const fromDesk = Boolean(handoff) && given?.appId === appId;
+  const fromDesk = Boolean(handoff) && given?.appId === appId && typeof given?.secret === 'string';
+  const secret = given?.secret;
   const { placement: _placement, ...snapshot } = (fromDesk && given?.snapshot && typeof given.snapshot === 'object' ? given.snapshot : {}) as Omit<SavedSlot, 'appId'>;
   const slot = workspace.open(appId, snapshot as { state?: unknown; channel?: string });
-  if (!fromDesk) return { slot, fromDesk, dockBack: async () => window.close() };
+  if (!fromDesk) return { slot, fromDesk, dockBack: async () => window.close(), dispose: () => undefined };
 
   const dock = new BroadcastChannel(channelName(key));
-  dock.postMessage({ handoff, appId, taken: true });
+  dock.postMessage({ handoff, appId, secret, taken: true });
   // kept fresh, because a window that is closing has no time to ask its app for its state
   const latest: { state?: unknown; channel?: string } = snapshot.state !== undefined ? { state: snapshot.state } : {};
   let asking: Promise<void> | undefined;
@@ -242,22 +326,25 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
     })());
   // after anything the user does in the app (once the app has handled it), and every few seconds
   // besides, for state the app changes by itself
-  for (const type of ['click', 'keyup', 'change', 'input']) document.addEventListener(type, () => setTimeout(refresh), true);
-  setInterval(refresh, REFRESH_MS);
+  const soon = () => setTimeout(refresh);
+  const types = ['click', 'keyup', 'change', 'input'];
+  for (const type of types) document.addEventListener(type, soon, true);
+  const ticking = setInterval(refresh, REFRESH_MS);
   let returned = false;
   const giveBack = () => {
     if (returned) return;
     returned = true;
-    dock.postMessage({ handoff, appId, snapshot: latest });
+    dock.postMessage({ handoff, appId, secret, snapshot: latest });
   };
   // A page kept in the back-forward cache may come back; it has not closed. One that is reloading
   // gives its app back too (pagehide cannot tell), but keeps it here, and takes it up again in
   // time for the desk to leave it be.
-  addEventListener('pagehide', (event) => {
+  const hide = (event: PageTransitionEvent) => {
     if (event.persisted) return;
-    sessionStorage.setItem(soloKey, JSON.stringify({ handoff, appId, snapshot: { ...snapshot, ...latest } }));
+    sessionStorage.setItem(soloKey, JSON.stringify({ handoff, appId, secret, snapshot: { ...snapshot, ...latest } }));
     giveBack();
-  });
+  };
+  addEventListener('pagehide', hide);
   return {
     slot,
     fromDesk,
@@ -267,5 +354,32 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
       sessionStorage.removeItem(soloKey);
       window.close();
     },
+    dispose() {
+      for (const type of types) document.removeEventListener(type, soon, true);
+      clearInterval(ticking);
+      removeEventListener('pagehide', hide);
+      dock.close();
+    },
   };
+}
+
+/** `value` as JSON would keep it, or undefined when it is none (a BigInt, say, or a cycle). */
+function asJson(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
+
+/** `url` resolved against this page, when it is of this page's origin; otherwise undefined. */
+export function sameOrigin(url: string): string | undefined {
+  try {
+    const resolved = new URL(url, location.href);
+    return resolved.origin === location.origin ? resolved.href : undefined;
+  } catch {
+    return undefined;
+  }
 }

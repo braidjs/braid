@@ -10,4 +10,4 @@ export { arrange } from './tiles/tiles.js';
 export type { ArrangeOptions, Tiles } from './tiles/tiles.js';
 export { acceptPopOut, HANDOFF_TIMEOUT_MS, RELOAD_GRACE_MS } from './tiles/pop-out.js';
 export type { PopOutOptions, AcceptPopOutOptions, AcceptedPopOut } from './tiles/pop-out.js';
-export { TILES_CSS } from './tiles/styles.js';
+export { TILES_BASE_CSS, TILES_CSS } from './tiles/styles.js';

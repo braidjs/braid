@@ -174,7 +174,11 @@ const tiles = arrange(workspace, {
   maxColumns: 3,
   maxRows: 3,
   defaultRows: 2, // what your CSS gives a tile with no span: var(--braid-rows, 2)
-  popOut: { key: `desk${location.pathname}`, url: (appId, handoff) => `?app=${appId}${handoff ? `&handoff=${handoff}` : ''}` },
+  popOut: {
+    key: `desk${location.pathname}`,
+    url: (appId, handoff) => `?app=${encodeURIComponent(appId)}${handoff ? `&handoff=${handoff}` : ''}`,
+    accepts: (appId) => appId in directory, // what a reloaded desk may take back
+  },
 });
 ```
 
@@ -197,25 +201,45 @@ Each tile gets:
 
   ```ts
   const params = new URLSearchParams(location.search);
-  const { fromDesk, dockBack } = await acceptPopOut(workspace, {
-    key: `desk${location.pathname}`, appId: params.get('app'), handoff: params.get('handoff'),
-  });
-  backButton.onclick = dockBack; // closing the window docks it back too
+  const appId = params.get('app');
+  if (appId && appId in directory) {
+    // this page arranges its tiles without popOut: nothing pops out of a popped-out window
+    const { fromDesk, dockBack } = await acceptPopOut(workspace, {
+      key: `desk${location.pathname}`, appId, handoff: params.get('handoff'),
+    });
+    backButton.onclick = dockBack; // closing the window docks it back too
+  }
   ```
 
   The app opens in the window with its state and channel, and returns to its place and span on
   the desk, with its latest state, when the window closes. The desk takes back only what it sent:
   once each, and only the state and channel come from the window. A window that never takes its
-  app gives it back after 10 seconds. One that reloads keeps it. A desk that reloads still takes
-  back what it popped out. The state crosses in `localStorage`, readable by any page of the origin.
+  app gives it back after 10 seconds. One that reloads keeps it, if it calls `acceptPopOut` within
+  `reloadGraceMs` (1.5 seconds by default; raise it if your page boots slower). A desk that
+  reloads still takes back what it popped out, of the apps `accepts` allows. `url` must give a
+  page of this origin.
 
-Screen readers hear every keyboard move and resize. Mouse users and touch users get the same
-pointer events. The default look sits in the `braid-tiles` cascade layer and uses system colours.
-Any unlayered rule of yours overrides it, with no `!important`. `styles: false` leaves it out, and
-`TILES_CSS` is the stylesheet. The parts are classed `braid-tile-head`, `braid-tile-grip`,
+  **Trust.** The handoff crosses in `localStorage`, in the clear: readable **and writable** by any
+  page of the origin. So what the window opens the app with (its state, channel, `src` and
+  `props`) is only as trustworthy as every page of your origin, and an app should treat its
+  `restoredState` as input, as it would a saved layout's. The window answers the desk with a
+  secret from that entry, never sent on the channel, so a page that only listens on the channel
+  can't take an app back early or keep it away.
+
+Screen readers hear every keyboard move and resize, and the grip's menu takes the arrow keys.
+Mouse users and touch users get the same pointer events.
+
+**Styling.** The default look (`TILES_CSS`) sits in the `braid-tiles` cascade layer and uses system
+colours. Any unlayered rule of yours overrides it, with no `!important`, and `styles: false` leaves
+it out. It makes each slot a scrolling flex column (`display: flex; flex-direction: column;
+overflow: auto`), which keeps the header at the top and the edges at the tile's edges as the app
+scrolls: keep that if you style your slots yourself. What the tiles need to work (edge and outline
+positions, the hidden announcer, a closed menu) is `TILES_BASE_CSS`. It is unlayered and always
+installed, so restyling can't break it by accident. The parts are classed `braid-tile-head`, `braid-tile-grip`,
 `braid-tile-wider`, `braid-tile-taller`, `braid-tile-pop`, `braid-tile-close`, `braid-tile-edge`
 (`data-edge="right|bottom|corner"`) and `braid-tile-outline`. `tiles.destroy()` takes them all
-away.
+away, and ends a drag in progress. An area can be arranged once at a time. In the window,
+`dispose()` stops `acceptPopOut` listening.
 
 A reload shows the shell as designed, with its starting apps; restoring a
 layout is the page's call, so a "restore my last layout on load" is one line in the host.

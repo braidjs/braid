@@ -208,6 +208,8 @@ const tiles = arrange(workspace, {
     ? undefined
     : {
         key: POP_KEY,
+        // a desk that reloads takes back only Starport's apps of what its tab kept
+        accepts: (id) => Boolean(app(id)),
         url: (id, handoff) => `${base}?app=${encodeURIComponent(id)}${handoff ? `&handoff=${handoff}` : ''}`,
         onPoppedOut: (id) => notice(`${app(id).title} is in its own window. Close that window to bring it back.`),
         onBlocked: (id) => notice(`The browser kept ${app(id).title} from opening a window, so it stays on the desk.`),

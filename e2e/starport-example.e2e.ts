@@ -363,6 +363,11 @@ describe('the Starport example', () => {
     // the same app, not a new one: its zoom is where it was, and it booted nothing again
     expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
     expect(await stillMarked()).toBe(true);
+    // the drag let go over another tile, so its click (if any) was not the grip's: the next one is
+    await app(page, 'star-map').locator('.braid-tile-grip').press('Enter');
+    expect(await app(page, 'star-map').locator('.braid-tile-grip').getAttribute('aria-expanded')).toBe('true');
+    await page.keyboard.press('Escape');
+    expect(await app(page, 'star-map').locator('.braid-tile-grip').getAttribute('aria-expanded')).toBe('false');
 
     // A touch drag arrives as the same pointer events, which is what this sends: it checks the
     // handlers with pointerType touch, not a finger on a screen. The grip opts out of scrolling.
