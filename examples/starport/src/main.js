@@ -210,21 +210,48 @@ $('#seams-toggle').addEventListener('click', () => {
 // agent's channel. A broadcast does not come back to the one who sent it, and the last ship relayed
 // is not relayed again, so nothing echoes.
 const handoffKey = (id) => `starport${base}handoff/${id}`;
-const deskId = crypto.randomUUID();
 const dock = new BroadcastChannel(`starport${base}dock`);
+/** How long a popped-out window has to take its app before the desk takes it back. */
+const HANDOFF_TIMEOUT_MS = 10_000;
+
+/** A ship as Flights sends it; anything else on the relay is not passed on to the apps. */
+const isShip = (ship) => ship?.type === 'starport.ship' && typeof ship.name === 'string' && typeof ship.id?.registry === 'string';
 
 async function relayShips() {
   const controller = new AbortController();
   const hostFdc3 = (await agent.realmGlobals({ fragmentId: DESK.id, signal: controller.signal }))?.fdc3;
   if (!hostFdc3) return;
   await hostFdc3.joinUserChannel(preferences.defaultUserChannel ?? 'fdc3.channel.1').catch(() => undefined);
-  const between = createEventBus({ consumer: solo ? `window:${solo}` : 'desk' }).channel('starport.ship', { scope: 'origin' });
+  // partitioned by the desk's folder, so another deployment on this origin is not on the same channel
+  const between = createEventBus({ consumer: solo ? `window:${solo}` : 'desk', partition: () => `starport${base}` }).channel('starport.ship', {
+    scope: 'origin',
+  });
   let relayed;
-  const seen = (ship) => (ship?.id?.registry === relayed ? false : ((relayed = ship?.id?.registry), true));
-  await hostFdc3.addContextListener('starport.ship', (ship) => seen(ship) && between.broadcast(ship));
-  between.subscribe((ship) => ship?.type === 'starport.ship' && seen(ship) && hostFdc3.broadcast(ship));
+  const seen = (ship) => (ship.id.registry === relayed ? false : ((relayed = ship.id.registry), true));
+  await hostFdc3.addContextListener('starport.ship', (ship) => isShip(ship) && seen(ship) && between.broadcast(ship));
+  between.subscribe((ship) => isShip(ship) && seen(ship) && hostFdc3.broadcast(ship));
 }
 void relayShips();
+
+/**
+ * Apps this desk has popped out, by handoff id: what it needs to take each one back. Only these
+ * come back, once each, and with the src and props the desk sent; the window returns only the
+ * app's state and channel.
+ */
+const out = new Map();
+
+function takeBack(id, change = {}) {
+  const sent = out.get(id);
+  if (!sent) return;
+  out.delete(id);
+  clearTimeout(sent.timer);
+  localStorage.removeItem(handoffKey(id));
+  const snapshot = { ...sent.snapshot };
+  if ('state' in change) snapshot.state = change.state;
+  if (typeof change.channel === 'string') snapshot.channel = change.channel;
+  workspace.open(sent.appId, snapshot).scrollIntoView({ block: 'nearest' });
+  notice(`${app(sent.appId).title} is back on the desk.`);
+}
 
 async function popOut(slot) {
   const appId = slot.getAttribute('name');
@@ -236,17 +263,20 @@ async function popOut(slot) {
     return;
   }
   const snapshot = without(await workspace.snapshot(slot), 'appId');
-  localStorage.setItem(handoffKey(id), JSON.stringify({ desk: deskId, appId, snapshot }));
+  // The state crosses in localStorage: in the clear, to any page of this origin, which is fine
+  // for Starport and is worth knowing before carrying anything private this way.
+  localStorage.setItem(handoffKey(id), JSON.stringify({ appId, snapshot }));
+  // a window that never takes its app (closed at once, or never started) gives it back
+  out.set(id, { appId, snapshot, timer: setTimeout(() => takeBack(id), HANDOFF_TIMEOUT_MS) });
   slot.remove();
   notice(`${app(appId).title} is in its own window. Close that window to bring it back.`);
 }
 
-// an app this desk popped out comes back when its window closes
 dock.addEventListener('message', ({ data }) => {
-  if (solo || data?.desk !== deskId || !app(data.appId)) return;
-  const snapshot = without(data.snapshot, 'appId');
-  workspace.open(data.appId, snapshot).scrollIntoView({ block: 'nearest' });
-  notice(`${app(data.appId).title} is back on the desk.`);
+  if (solo || typeof data?.handoff !== 'string' || out.get(data.handoff)?.appId !== data.appId) return;
+  // taken: the window has the app now, and will give it back when it closes
+  if (data.taken) return void clearTimeout(out.get(data.handoff).timer);
+  takeBack(data.handoff, data.snapshot ?? {});
 });
 
 /** In a popped-out window: the app, with the state it left the desk with. */
@@ -267,18 +297,27 @@ async function openSolo() {
       given = undefined;
     }
   }
+  const mine = given?.appId === solo;
   // the app fills this window, so the span it had on the desk is left behind
-  const snapshot = without(given?.appId === solo ? given.snapshot : {}, 'placement');
-  const slot = workspace.open(solo, snapshot);
-  if (!given?.desk) {
+  const slot = workspace.open(solo, without(mine ? given.snapshot : {}, 'placement'));
+  if (!mine) {
     // a copy opened in a tab: nothing to return to
     $('#back').hidden = true;
     return;
   }
+  dock.postMessage({ handoff, appId: solo, taken: true });
   // kept fresh, because a window that is closing has no time to ask its app for its state
-  let latest = { appId: solo, snapshot };
+  let latest = {};
+  let asking = false;
   const refresh = async () => {
-    if (slot.isConnected) latest = { appId: solo, snapshot: await workspace.snapshot(slot) };
+    if (asking || !slot.isConnected) return;
+    asking = true;
+    try {
+      const { state, channel } = await workspace.snapshot(slot);
+      latest = { state, channel };
+    } finally {
+      asking = false;
+    }
   };
   // after anything the user does in the app (a click, a key, a change), and every few seconds
   // besides, for state the app changes by itself
@@ -288,7 +327,7 @@ async function openSolo() {
   const giveBack = () => {
     if (returned) return;
     returned = true;
-    dock.postMessage({ desk: given.desk, ...latest });
+    dock.postMessage({ handoff, appId: solo, snapshot: latest });
   };
   addEventListener('pagehide', giveBack);
   $('#back').addEventListener('click', async () => {

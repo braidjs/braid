@@ -483,4 +483,30 @@ describe('the Starport example', () => {
     expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
     await page.context().close();
   });
+
+  it('takes back only what it popped out: a forged return is ignored, and an app whose window never takes it comes back', async () => {
+    const page = await desk();
+    // a window that opens and never runs the desk: as if the user closed it at once
+    await page.evaluate(() => {
+      window.open = () => ({ closed: false }) as unknown as Window;
+    });
+    await app(page, 'cargo').locator('.pop').click();
+    await expect.poll(() => open(page)).toEqual(['flights', 'star-map']);
+
+    // another page of this origin posts a return for an app this desk did not pop out, and one
+    // for Cargo under a handoff it made up
+    await page.evaluate((base) => {
+      const dock = new BroadcastChannel(`starport${base}dock`);
+      dock.postMessage({ handoff: 'made-up', appId: 'radar', snapshot: {} });
+      dock.postMessage({ handoff: 'made-up', appId: 'cargo', snapshot: { state: 'forged' } });
+      dock.close();
+    }, new URL(server.url).pathname);
+    await page.waitForTimeout(300);
+    expect(await open(page)).toEqual(['flights', 'star-map']);
+
+    // ten seconds on, the desk takes Cargo back itself, and clears what it left in storage
+    await expect.poll(() => open(page), { timeout: 15_000 }).toEqual(['flights', 'star-map', 'cargo']);
+    expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes('handoff/')))).toEqual([]);
+    await page.context().close();
+  }, 30_000);
 });

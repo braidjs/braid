@@ -149,6 +149,18 @@ describe('ensureHeaderSlot()', () => {
     expect(shadowRoot.querySelectorAll('slot[name="header"]')).toHaveLength(1);
   });
 
+  it("is the host's even when the fragment's own markup has a slot of that name", () => {
+    const slot = document.createElement('fragment-slot');
+    const shadowRoot = slot.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    const content = document.createElement('braid-document');
+    content.innerHTML = '<div hidden><slot name="header"></slot></div>';
+    shadowRoot.append(style, content);
+    ensureFallbackSlot(shadowRoot);
+    expect(shadowRoot.children[1].localName).toBe('slot');
+    expect((shadowRoot.children[1] as HTMLSlotElement).name).toBe('header');
+  });
+
   it('comes first in a root with no styles yet, as an untrusted frame starts', () => {
     const slot = document.createElement('fragment-slot');
     const shadowRoot = slot.attachShadow({ mode: 'open' });

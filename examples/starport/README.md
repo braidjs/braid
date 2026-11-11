@@ -125,6 +125,10 @@ desk keeps its entries under its own folder's name, which stops accidents, not a
 - A popped-out window has its own FDC3 agent. The desk relays the selected ship to it over a
   `@braidlabs/data` channel scoped to the origin; the Tower's departures stay on the desk's page.
   A saved layout holds the desk, not apps that are out in windows.
+- A popped-out app's state crosses between windows through `localStorage` and a
+  `BroadcastChannel`, in the clear, to any page of this origin. Fine for Starport; think before
+  carrying anything private that way. A window that does not take its app within ten seconds gives
+  it back to the desk.
 - A popped-out app comes back with its state from a moment after its last change: an app that
   changes by itself is caught up every few seconds, so a window closed straight after such a change
   can miss it.

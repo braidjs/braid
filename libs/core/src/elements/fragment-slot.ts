@@ -162,7 +162,8 @@ export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
  * ```
  */
 export function ensureHeaderSlot(shadowRoot: ShadowRoot): void {
-  if (shadowRoot.querySelector('slot[name="header"]')) return;
+  // the root's own children only: a fragment's markup could carry a slot of that name deeper down
+  if ([...shadowRoot.children].some((child) => child.localName === 'slot' && (child as HTMLSlotElement).name === 'header')) return;
   const header = document.createElement('slot');
   header.name = 'header';
   let after: Element | null = null;
