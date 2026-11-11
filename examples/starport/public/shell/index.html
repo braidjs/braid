@@ -48,7 +48,7 @@
 
       <div class="panels">
         <button type="button" id="seams-toggle" aria-pressed="false">Show seams</button>
-        <button type="button" id="traffic-toggle" aria-pressed="false" aria-controls="traffic">Traffic</button>
+        <button type="button" id="traffic-toggle" aria-expanded="false" aria-controls="traffic">Traffic</button>
         <button type="button" id="open-boundaries">Boundaries</button>
         <button type="button" id="open-preferences">Preferences</button>
       </div>
@@ -75,11 +75,11 @@
     <section id="traffic" aria-labelledby="traffic-title" hidden>
       <header>
         <h2 id="traffic-title">Traffic across the boundaries</h2>
-        <p>Every write to and read from a bus channel, by the app that did it and where it runs: here on the desk, or in a window it was popped out to.</p>
-        <button type="button" id="traffic-clear">Clear</button>
+        <p>Every write to and read from the <code>tower</code> bus and the <code>starport.ship</code> relay, by whoever did it and where it runs: here on the desk, or in a window an app was popped out to.</p>
+        <button type="button" id="traffic-clear" aria-label="Clear the traffic log">Clear</button>
       </header>
       <p id="traffic-empty">Nothing has crossed yet. Pick a ship in Flights, or mark one departed.</p>
-      <ol id="traffic-lines" aria-label="Crossings, newest first"></ol>
+      <ol id="traffic-lines" aria-label="Crossings, newest first" tabindex="0"></ol>
     </section>
 
     <p id="remembered" hidden>

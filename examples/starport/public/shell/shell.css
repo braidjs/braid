@@ -204,7 +204,7 @@ dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; heigh
 .panels { display: flex; gap: 6px; }
 .panels button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--sp-line); background: var(--sp-panel); font-weight: 600; }
 .panels button:hover { border-color: var(--sp-indigo); }
-.panels button[aria-pressed='true'] { border-color: var(--sp-teal); color: var(--sp-teal); background: rgba(45, 212, 191, 0.1); }
+.panels button[aria-expanded='true'] { border-color: var(--sp-teal); color: var(--sp-teal); background: rgba(45, 212, 191, 0.1); }
 
 #ticker {
   display: flex; align-items: center; gap: 12px; width: fit-content; float: right;
@@ -221,6 +221,7 @@ dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; heigh
 #traffic[hidden], #traffic-empty[hidden] { display: none; }
 #traffic header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; position: static; padding: 0; background: none; border: 0; backdrop-filter: none; z-index: auto; }
 #traffic h2 { margin: 0; font-size: 15px; }
+#traffic code { font: 12px var(--sp-mono); color: #c7d2fe; }
 #traffic header p { margin: 0; flex: 1 1 320px; color: var(--sp-dim); font-size: 13px; }
 #traffic-clear { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--sp-line); background: transparent; color: var(--sp-dim); font-weight: 600; }
 #traffic-empty { margin: 12px 0 2px; color: var(--sp-dim); font-size: 14px; }
@@ -255,7 +256,7 @@ legend { padding: 0 6px; color: var(--sp-dim); font-size: 13px; }
   h1 { font-size: 20px; }
   #dock { margin-inline: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .panels, .layouts { width: 100%; flex-wrap: wrap; }
-  .panels button { flex: 1; }
+  .panels button { flex: 1 1 40%; }
   #layouts { flex-wrap: wrap; }
   #save-layout { flex: 1 1 100%; }
   #save-layout input { flex: 1; width: auto; min-width: 0; }

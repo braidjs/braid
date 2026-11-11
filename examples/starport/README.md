@@ -32,11 +32,13 @@ gateway runs in the page's service worker.
   every window of the origin, so an app popped out to a window hears departures, and a Flights out
   in a window can mark them.
 - **Traffic across the boundaries.** *Traffic* opens a live log of what crosses: every write to and
-  read from a bus channel, by the app that did it, and where it runs — on the desk, or in the
-  window it was popped out to. Pop out Comms, mark a ship departed, and watch Flights write on the
+  read from the `tower` bus and the `starport.ship` relay, by whoever did it (an app, the desk, or
+  the relay), and where it runs — on the desk, or in the window an app was popped out to. FDC3
+  broadcasts and intents within a page are not logged. Pop out Comms, mark a ship departed, and watch Flights write on the
   desk and Comms read in its window. Open a Comms afterwards and it logs a state read and no
   event: state is replayed to a late reader, events are not. The apps report their own traffic to a
-  `starport.traffic` channel ([`src/traffic.js`](./src/traffic.js)); the bus itself has no tap.
+  `starport.traffic` channel ([`src/traffic.js`](./src/traffic.js)); the bus itself has no tap, so
+  the log is what each page says it did, and any page of this origin could add to it.
 - **Seams.** *Show seams* outlines every tile and labels it with its `<fragment-slot>` tag, its
   state, and the URL the worker served it from, as the Braid site's "Show the seams" does for its
   sections.
@@ -133,8 +135,9 @@ desk keeps its entries under its own folder's name, which stops accidents, not a
   worker" in the [`@braidlabs/sw` README](../../libs/braid-sw/README.md).
 - The tiles are a grid: an app has a place in an order and a span, not an x and y of its own.
 - A popped-out window has its own FDC3 agent. The desk relays the selected ship to it over a
-  `@braidlabs/data` channel scoped to the origin. The Tower is scoped to the origin too, so two desks
-  open in two tabs share one departures board.
+  `@braidlabs/data` channel scoped to the origin. The Tower and the traffic log are scoped to the
+  origin too, so two desks open in two tabs share one departures board, and each desk's Traffic
+  panel shows the other's traffic as well, labelled only `desk` or `<app> window`.
   A saved layout holds the desk, not apps that are out in windows.
 - A popped-out app's state crosses between windows through `localStorage` and a
   `BroadcastChannel`, in the clear, to any page of this origin. Fine for Starport; think before

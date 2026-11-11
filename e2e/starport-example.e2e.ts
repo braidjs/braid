@@ -649,9 +649,17 @@ describe('the Starport example', () => {
     await expect.poll(() => line('write', 'desk', 'event: ship.departed (Marigold)').count()).toBe(1);
     await expect.poll(() => line('write', 'desk', 'state: 1 departed (NX-204)').count()).toBe(1);
     await expect.poll(() => line('read', 'comms window', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
-    await expect.poll(() => line('read', 'comms window', 'state: 1 departed').count()).toBeGreaterThan(0);
+    await expect.poll(() => line('read', 'comms window', 'state: 1 departed').count()).toBe(1);
     await expect.poll(() => line('read', 'desk', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
     expect(await page.locator('#traffic-empty').isVisible()).toBe(false);
+    // newest first, by when each was sent: the desk's read of the event sits above the write it followed
+    const order = await lines.evaluateAll((items) => items.map((item) => `${item.dataset.kind} ${item.dataset.where} ${item.querySelector('.what')?.textContent}`));
+    const wroteAt = order.indexOf('write desk event: ship.departed (Marigold)');
+    const readAt = order.indexOf('read desk event: ship.departed (Marigold, from flights)');
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(wroteAt).toBeGreaterThan(readAt);
+    // Flights does not log its own write as a read
+    expect(await lines.filter({ hasText: 'flights · desk' }).and(page.locator('[data-kind="read"]')).count()).toBe(0);
     // the ship picked on the desk crossed to the window's own agent through the relay
     await expect.poll(() => line('write', 'desk', 'ship: Marigold').count()).toBe(1);
     await expect.poll(() => line('read', 'comms window', 'ship: Marigold').count()).toBe(1);
@@ -673,13 +681,15 @@ describe('the Starport example', () => {
     await expect.poll(() => line('read', 'desk', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
     await expect.poll(() => line('read', 'comms window', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
 
-    // Clear empties it; it fills again with what crosses next
+    // Clear empties it, once the last of what was in flight has landed
+    await expect.poll(() => line('read', 'comms window', 'ship: Slow Comet').count()).toBe(1);
+    await expect.poll(() => line('read', 'desk', 'ship: Slow Comet').count()).toBe(1);
     await page.locator('#traffic-clear').click();
-    expect(await lines.count()).toBe(0);
+    await expect.poll(() => lines.count()).toBe(0);
     expect(await page.locator('#traffic-empty').isVisible()).toBe(true);
     await page.locator('#traffic-toggle').click();
     expect(await page.locator('#traffic').isVisible()).toBe(false);
-    expect(await page.locator('#traffic-toggle').getAttribute('aria-pressed')).toBe('false');
+    expect(await page.locator('#traffic-toggle').getAttribute('aria-expanded')).toBe('false');
     // a popped-out window has no Traffic panel of its own: the desk shows the log
     expect(await commsWindow.locator('#traffic-toggle').isVisible()).toBe(false);
     await page.context().close();
@@ -696,7 +706,7 @@ describe('the Starport example', () => {
     await page.locator('#dock [data-app="comms"] .launch').click();
     await expect.poll(() => app(page, 'comms').locator('#tower').textContent()).toBe('1 departure today');
     const comms = page.locator('#traffic-lines li[data-kind="read"][data-where="desk"]').filter({ hasText: 'comms' });
-    await expect.poll(() => comms.filter({ hasText: 'state: 1 departed' }).count()).toBeGreaterThan(0);
+    await expect.poll(() => comms.filter({ hasText: 'state: 1 departed' }).count()).toBe(1);
     // give a replayed event every chance to show up: none does
     await page.waitForTimeout(500);
     expect(await comms.filter({ hasText: 'event:' }).count()).toBe(0);

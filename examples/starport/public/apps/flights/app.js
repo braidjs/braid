@@ -1,4 +1,4 @@
-import { departedText, starportBus } from '../../../src/traffic.js';
+import { departedOf, departedText, starportBus } from '../../../src/traffic.js';
 
 // Flights knows the ships. It knows nothing about the other apps: it broadcasts the ship the user
 // picks, raises intents for whoever can take them, and announces departures to whoever listens.
@@ -71,11 +71,12 @@ document.getElementById('hail').addEventListener('click', () => raise('HailShip'
 // shares the board with the desk. Each write and each read it takes in is reported to the traffic
 // log, which the desk shows.
 const { tower, report } = starportBus('flights');
-let wrote;
+let writing = false;
 tower.subscribe((state) => {
-  // its own write comes back to it too; that is not a read from anyone else
-  if (state !== undefined && JSON.stringify(state) !== wrote) report('read', 'tower', departedText(state));
-  departed = new Set(state?.departed ?? []);
+  // its own write comes back to it at once (a broadcast reaches this context's subscribers
+  // synchronously); that is not a read from anyone else
+  if (state !== undefined && !writing) report('read', 'tower', departedText(state));
+  departed = new Set(departedOf(state));
   for (const row of rows.rows) {
     if (!departed.has(row.dataset.ship)) continue;
     const pill = row.querySelector('.pill');
@@ -88,11 +89,16 @@ document.getElementById('depart').addEventListener('click', async () => {
   const ship = selected;
   // Last write wins: two Flights marking different ships in the same instant could lose one.
   const state = { departed: [...departed, ship.id.registry] };
-  wrote = JSON.stringify(state);
-  tower.broadcast(state);
+  // each write is reported before it is made, so its line is stamped before any read of it
   report('write', 'tower', departedText(state));
-  await tower.emit('ship.departed', { name: ship.name, to: ship.to });
+  writing = true;
+  try {
+    tower.broadcast(state);
+  } finally {
+    writing = false;
+  }
   report('write', 'tower', `event: ship.departed (${ship.name})`);
+  await tower.emit('ship.departed', { name: ship.name, to: ship.to });
   // the button has just disabled itself; keep the keyboard on the board
   rows.querySelector(`tr[data-ship="${ship.id.registry}"]`).focus();
 });

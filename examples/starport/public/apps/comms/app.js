@@ -1,4 +1,4 @@
-import { departedText, starportBus } from '../../../src/traffic.js';
+import { departedOf, departedText, starportBus } from '../../../src/traffic.js';
 
 // Comms takes HailShip. It need not be open: the desk launches it for the raise. It also listens
 // to the tower's bus, and logs departures as they happen.
@@ -40,6 +40,6 @@ tower.addEventListener('ship.departed', ({ payload, source }) => {
 });
 tower.subscribe((state) => {
   if (state !== undefined) report('read', 'tower', departedText(state));
-  const departures = state?.departed?.length ?? 0;
+  const departures = departedOf(state).length;
   document.getElementById('tower').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
 });

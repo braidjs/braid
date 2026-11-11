@@ -4,7 +4,7 @@ import { createWorkspace, localStorageStore } from '@braidlabs/console/workspace
 import { createEventBus } from '@braidlabs/data';
 import { APPS, baseOf, basePathOf } from './registry.js';
 import { setupTiles } from './tiles.js';
-import { starportBus } from './traffic.js';
+import { departedOf, starportBus } from './traffic.js';
 
 /**
  * The desk's whole runtime. The workspace is the `[data-braid-workspace]` element in index.html;
@@ -235,8 +235,8 @@ async function relayShips() {
   const { report } = starportBus('relay');
   await hostFdc3.addContextListener('starport.ship', (ship) => {
     if (!isShip(ship) || !seen(ship)) return;
-    between.broadcast(ship);
     report('write', 'starport.ship', `ship: ${ship.name}`);
+    between.broadcast(ship);
   });
   between.subscribe((ship) => {
     if (!isShip(ship) || !seen(ship)) return;
@@ -507,28 +507,37 @@ if (!solo) {
     $('#ticker-event').textContent = `${payload.name} departed for ${payload.to}`;
   });
   tower.subscribe((state) => {
-    const departures = state?.departed?.length ?? 0;
+    const departures = departedOf(state).length;
     if (state !== undefined) report('read', 'tower', `state: ${departures} departed`);
     $('#ticker-count').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
   });
 
   const MAX_LINES = 60;
+  // what any page of this origin may send: kept short, so a flood of long lines stays cheap
+  const clip = (value) => String(value).slice(0, 160);
   const lines = $('#traffic-lines');
   traffic.addEventListener('crossing', ({ payload, at }) => {
     if (!['write', 'read'].includes(payload?.kind)) return;
     const line = document.createElement('li');
     line.className = payload.kind;
     line.dataset.kind = payload.kind;
-    line.dataset.where = String(payload.where);
-    const time = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    line.dataset.where = clip(payload.where);
+    const when = new Date(at);
+    if (Number.isNaN(when.getTime())) return;
+    line.dataset.at = String(when.getTime());
+    const time = element('time', 'at', when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    time.dateTime = when.toISOString();
     line.append(
-      element('time', 'at', time),
+      time,
       element('span', 'kind', payload.kind),
-      element('span', 'who', `${payload.app} · ${payload.where}`),
-      element('span', 'channel', String(payload.channel)),
-      element('span', 'what', String(payload.what)),
+      element('span', 'who', clip(`${payload.app} · ${payload.where}`)),
+      element('span', 'channel', clip(payload.channel)),
+      element('span', 'what', clip(payload.what)),
     );
-    lines.prepend(line);
+    // newest first, by when each was sent: reports travel on their own channel, so a read can
+    // arrive before the write it followed
+    const later = [...lines.children].find((other) => Number(other.dataset.at) <= when.getTime());
+    lines.insertBefore(line, later ?? null);
     while (lines.children.length > MAX_LINES) lines.lastElementChild.remove();
     $('#traffic-empty').hidden = true;
   });
@@ -539,7 +548,7 @@ if (!solo) {
   $('#traffic-toggle').addEventListener('click', () => {
     const on = $('#traffic').hidden;
     $('#traffic').hidden = !on;
-    $('#traffic-toggle').setAttribute('aria-pressed', String(on));
+    $('#traffic-toggle').setAttribute('aria-expanded', String(on));
   });
 }
 
