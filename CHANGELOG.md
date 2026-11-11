@@ -1,3 +1,20 @@
+## 0.9.0 (2026-11-11)
+
+### 🚀 Features
+
+- **core,console:** a header slot for host chrome; spans, moves and snapshots in workspace layouts ([0925d43](https://github.com/braidjs/braid/commit/0925d43))
+- **examples:** Starport tiles you can move, resize and pop out, and a seams view ([3478e44](https://github.com/braidjs/braid/commit/3478e44))
+
+### 🩹 Fixes
+
+- code review — keep popped-out apps across a desk reload; robust drags; a move without dragging ([c4966ca](https://github.com/braidjs/braid/commit/c4966ca))
+- **examples:** goal check — tests that can fail, and a popped-out window that reloads keeps its app ([62549d4](https://github.com/braidjs/braid/commit/62549d4))
+- **examples,core:** security review — a popped-out app comes back only to the desk that sent it ([93ba9be](https://github.com/braidjs/braid/commit/93ba9be))
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.8.1 (2026-11-11)
 
 ### 🚀 Features
