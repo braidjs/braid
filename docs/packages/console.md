@@ -33,6 +33,9 @@ what to mount instead of failing.
 
 The package has a second entry, `@braidlabs/console/workspace`: the runtime for a
 [workspace](#the-workspace) area designed into a shell. It has no React in it.
+A third, `@braidlabs/console/tiles`, is [the hands-on half](#tiles-move-resize-pop-out) of that
+area: a header on every app, drag and keyboard moves, edge resizing and popping out. A host that
+arranges its area itself loads none of it.
 
 ---
 
@@ -155,6 +158,93 @@ const { appId, ...rest } = await workspace.snapshot(slot); // in the desk
 other.open(appId, rest);                                  // in a window of its own
 ```
 
+### Tiles: move, resize, pop out
+
+`arrange(workspace, options)` turns each app in the area into a tile the user handles, and keeps
+doing so for apps launched, restored or opened by an agent later. Everything goes through the
+workspace (`move`, `place`, `snapshot`, `open`), so a saved layout keeps it all.
+
+```ts
+import { createWorkspace } from '@braidlabs/console/workspace';
+import { acceptPopOut, arrange } from '@braidlabs/console/tiles';
+
+const workspace = createWorkspace();
+const tiles = arrange(workspace, {
+  title: (appId) => directory[appId].title,
+  maxColumns: 3,
+  maxRows: 3,
+  defaultRows: 2, // what your CSS gives a tile with no span: var(--braid-rows, 2)
+  popOut: {
+    key: `desk${location.pathname}`,
+    url: (appId, handoff) => `?app=${encodeURIComponent(appId)}${handoff ? `&handoff=${handoff}` : ''}`,
+    accepts: (appId) => appId in directory, // what a reloaded desk may take back
+  },
+});
+```
+
+Each tile gets:
+
+- **A header**: a `slot="header"` child with a grip, ⇔ and ⇕ size buttons, a pop-out link and a
+  close button. `describe(slot, head)` is called as a tile is set up, and again when its span or
+  `state` changes. It is the place to add your own parts.
+- **Moving**: drag the grip by mouse or touch, or press Alt and an arrow on it. A click on the grip
+  opens *Move earlier / later*. The app keeps running.
+- **Resizing**: drag the right edge to change columns, the bottom edge to change rows, or the corner
+  for both. An outline shows the size it will snap to, in whole tracks of the area's grid. The tile
+  takes that size when you let go, so the grid doesn't reflow under the pointer, and Escape cancels.
+  Shift, Alt and an arrow on the grip resize from the keyboard. Spans never go past the grid's
+  columns, `maxColumns` or `maxRows`. On a one-column grid the area gets
+  `data-braid-tiles-single` and the size controls hide.
+- **Popping out**, given `popOut`: a plain click on ↗ moves the app into a window of its own, and a
+  modified click opens a copy in a tab, as any link would. The window is your page again, under the
+  `url` you gave. There it calls `acceptPopOut`:
+
+  ```ts
+  const params = new URLSearchParams(location.search);
+  const appId = params.get('app');
+  if (appId && appId in directory) {
+    // this page arranges its tiles without popOut: nothing pops out of a popped-out window
+    const { fromDesk, dockBack } = await acceptPopOut(workspace, {
+      key: `desk${location.pathname}`, appId, handoff: params.get('handoff'),
+    });
+    backButton.onclick = dockBack; // closing the window docks it back too
+  }
+  ```
+
+  The app opens in the window with its state and channel, and returns to its place and span on
+  the desk, with its latest state, when the window closes. The desk takes back only what it sent:
+  once each, and only the state and channel come from the window. A window that never takes its
+  app gives it back after 10 seconds. One that reloads keeps it, if it calls `acceptPopOut` within
+  `reloadGraceMs` (1.5 seconds by default; raise it if your page boots slower). A desk that
+  reloads still takes back what it popped out, of the apps `accepts` allows. `url` must give a
+  page of this origin.
+
+  **Trust.** The handoff crosses in `localStorage`, in the clear: readable **and writable** by any
+  page of the origin. So what the window opens the app with (its state, channel, `src` and
+  `props`) is only as trustworthy as every page of your origin, and an app should treat its
+  `restoredState` as input, as it would a saved layout's. The window signs each message it sends
+  the desk: an HMAC, keyed by a secret it read from that entry, over the whole message and a number
+  that only goes up. The desk takes no message it can't verify or has seen the number of, and the
+  secret never crosses the channel. So a page that only listens on the channel can't forge, alter
+  or replay a message: it can't take an app back early, keep it away, or change the state it comes
+  back with. A page that reads storage in time can. Signing needs Web Crypto, so popping out needs
+  a secure context (https, or localhost). Without one, tiles have no pop-out link.
+
+Screen readers hear every keyboard move and resize, and the grip's menu takes the arrow keys.
+Mouse users and touch users get the same pointer events.
+
+**Styling.** The default look (`TILES_CSS`) sits in the `braid-tiles` cascade layer and uses system
+colours. Any unlayered rule of yours overrides it, with no `!important`, and `styles: false` leaves
+it out. It makes each slot a scrolling flex column (`display: flex; flex-direction: column;
+overflow: auto`), which keeps the header at the top and the edges at the tile's edges as the app
+scrolls: keep that if you style your slots yourself. What the tiles need to work (edge and outline
+positions, the hidden announcer, a closed menu) is `TILES_BASE_CSS`. It is unlayered and always
+installed, so restyling can't break it by accident. The parts are classed `braid-tile-head`, `braid-tile-grip`,
+`braid-tile-wider`, `braid-tile-taller`, `braid-tile-pop`, `braid-tile-close`, `braid-tile-edge`
+(`data-edge="right|bottom|corner"`) and `braid-tile-outline`. `tiles.destroy()` takes them all
+away, and ends a drag in progress. An area can be arranged once at a time. In the window,
+`dispose()` stops `acceptPopOut` listening.
+
 A reload shows the shell as designed, with its starting apps; restoring a
 layout is the page's call, so a "restore my last layout on load" is one line in the host.
 
@@ -210,11 +300,11 @@ opener, so an opener should pass context to `open` rather than broadcast straigh
 **A worked example.** [Starport](https://braidjs.github.io/braid/starport/) is a workspace of five
 static apps, with the gateway in a service worker: a ship picked in one is followed by the others, an
 intent two of them can take is asked about and remembered, and a saved layout brings each app's
-state back. Its source is in
+state back. Its tiles are `arrange`'s. Its source is in
 [`examples/starport`](https://github.com/braidjs/braid/tree/main/examples/starport).
 
-Not supported: sizes and positions within the area (a layout is an order, laid out by your CSS),
-and layouts shared between users.
+Not supported: free positions within the area (a layout is an order and spans, laid out by your
+CSS), right-to-left edge resizing, and layouts shared between users.
 
 ---
 

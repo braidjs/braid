@@ -43,8 +43,12 @@ gateway runs in the page's service worker.
   state, and the URL the worker served it from, as the Braid site's "Show the seams" does for its
   sections.
 - **Tiles you arrange.** Drag a tile by its grip (⠿) to move it, by mouse or touch, or press Alt and
-  an arrow key on the grip. The app keeps running while it moves. Drag a tile's corner, or use its
-  ⇔ and ⇕ buttons, to span up to three columns and three rows. On a phone every tile is full width.
+  an arrow key on the grip. The app keeps running while it moves. Drag a tile's right edge, bottom
+  edge or corner to span up to three columns and three rows: an outline shows the size it snaps to,
+  and Escape cancels. The ⇔ and ⇕ buttons and Shift+Alt+arrows do the same. On a phone every tile
+  is full width. All of this, and popping out, is
+  [`@braidlabs/console/tiles`](../../docs/packages/console.md#tiles-move-resize-pop-out): the
+  desk adds only its seam line and its look.
 - **Pop out.** ↗ moves an app into a window of its own, with its state. It still follows the ship
   picked on the desk, and closing the window puts it back on the desk as it was left. Cmd-click
   (Ctrl-click) opens a copy in a tab instead, and leaves the desk alone.
@@ -72,10 +76,8 @@ Which to use when — a channel, an intent, or an event — is the subject of th
   worker and the desk both read it.
 - `src/sw.js` — the whole worker: `setupBraidGateway` with that registry.
 - `src/main.js` — the desk's runtime: it registers the worker, then the workspace, the agent, the
-  dock, layouts, the chooser, the ticker, the two panels, and popping apps out.
-- `src/tiles.js` — each tile's header (a `slot="header"` child of its `<fragment-slot>`): moving,
-  resizing, popping out and the seams. The workspace's `move` and `place` do the work, and a saved
-  layout keeps both.
+  dock, the tiles (`arrange` from `@braidlabs/console/tiles`), layouts, the chooser, the ticker,
+  the two panels, and the window an app is popped out to (`acceptPopOut`).
 - `public/shell` — the desk's page and its theme. The palette is CSS custom properties, which
   cross into each app's shadow root.
 - `public/apps/*` — the five apps. They use `fdc3` and, for settings and layout state,

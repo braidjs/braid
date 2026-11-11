@@ -23,6 +23,10 @@
       "types": "./src/workspace.d.ts",
       "default": "./src/workspace.js"
     },
+    "./tiles": {
+      "types": "./src/tiles.d.ts",
+      "default": "./src/tiles.js"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {

@@ -23,6 +23,7 @@
       "@braidlabs/cli": ["./libs/braid-cli/src/index.ts"],
       "@braidlabs/console": ["./libs/braid-console/src/index.ts"],
       "@braidlabs/console/workspace": ["./libs/braid-console/src/workspace.ts"],
+      "@braidlabs/console/tiles": ["./libs/braid-console/src/tiles.ts"],
       "@braidlabs/react": ["./libs/braid-react/src/index.ts"],
       "@braidlabs/registry": ["./libs/braid-registry/src/index.ts"],
       "@braidlabs/registry/node": ["./libs/braid-registry/src/node.ts"],

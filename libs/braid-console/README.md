@@ -29,6 +29,10 @@ await workspace.layouts.save('morning');
 await workspace.layouts.restore('morning');
 ```
 
+`@braidlabs/console/tiles` makes each app in the area a tile the user handles: a header to move,
+size, pop out and close it, edges that drag-resize it snapped to the grid, and the keyboard for all
+of it. `arrange(workspace, options)` sets it up, and `acceptPopOut` runs in the popped-out window.
+
 Every fragment gets `window.braidDesktop` (its own settings, `onSaveLayout`, `restoredState`).
 Preferences, settings and layouts are kept in `localStorage` by default, or per signed-in user on
 the gateway with `serverStore()`. It needs no FDC3 agent; beside `@braidlabs/fdc3`,
