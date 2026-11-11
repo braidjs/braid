@@ -313,4 +313,174 @@ describe('the Starport example', () => {
     expect(await rawGet(server.url, '//')).toBe('HTTP/1.1 400 Bad Request');
     expect((await fetch(server.url)).status).toBe(200);
   });
+
+  it('shows the seams: every tile outlined and labelled with its slot, its state and where the worker served it', async () => {
+    const page = await desk();
+    const seam = app(page, 'star-map').locator('.tile-head .seam');
+    expect(await seam.isVisible()).toBe(false);
+    await page.locator('#seams-toggle').click();
+    expect(await page.locator('#seams-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(await seam.isVisible()).toBe(true);
+    expect(await seam.textContent()).toBe('<fragment-slot name="star-map">  ·  healthy  ·  own realm  ·  /starport/__braid/frag/star-map/');
+    expect(await page.locator('main > fragment-slot .tile-head .seam:visible').count()).toBe(3);
+    expect(await app(page, 'flights').evaluate((slot) => getComputedStyle(slot).outlineStyle)).toBe('dashed');
+    await page.locator('#seams-toggle').click();
+    expect(await seam.isVisible()).toBe(false);
+    expect(await app(page, 'flights').evaluate((slot) => getComputedStyle(slot).outlineStyle)).toBe('none');
+    await page.context().close();
+  });
+
+  it('moves a tile by dragging its grip, by touch, or with Alt and an arrow key, and the app keeps running', async () => {
+    const page = await desk();
+    await app(page, 'star-map').locator('#in').click();
+    expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
+    const realm = () => app(page, 'star-map').evaluate((slot) => slot.getAttribute('data-braid-realm') ?? [...document.querySelectorAll('iframe')].length);
+    const before = await realm();
+
+    // a mouse drag onto Flights puts Star Map in its place
+    const grip = await app(page, 'star-map').locator('.grip').boundingBox();
+    const flights = await app(page, 'flights').boundingBox();
+    await page.mouse.move(grip!.x + 5, grip!.y + 5);
+    await page.mouse.down();
+    await page.mouse.move(flights!.x + 80, flights!.y + 160, { steps: 8 });
+    await page.mouse.up();
+    expect(await open(page)).toEqual(['star-map', 'flights', 'cargo']);
+    // the same app, not a new one: its zoom is where it was, and it booted nothing again
+    expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
+    expect(await realm()).toBe(before);
+
+    // a touch drag goes through the same pointer events; the grip opts out of scrolling for it
+    expect(await app(page, 'cargo').locator('.grip').evaluate((el) => getComputedStyle(el).touchAction)).toBe('none');
+    const cargoGrip = await app(page, 'cargo').locator('.grip').boundingBox();
+    const target = await app(page, 'star-map').boundingBox();
+    await app(page, 'cargo').locator('.grip').dispatchEvent('pointerdown', { pointerType: 'touch', button: 0, clientX: cargoGrip!.x + 5, clientY: cargoGrip!.y + 5, bubbles: true });
+    await page.evaluate(([x, y]) => {
+      dispatchEvent(new PointerEvent('pointermove', { pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+      dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+    }, [target!.x + 80, target!.y + 160]);
+    expect(await open(page)).toEqual(['cargo', 'star-map', 'flights']);
+
+    // from the keyboard: Alt and an arrow on the grip, and a screen reader hears where it went
+    await app(page, 'flights').locator('.grip').focus();
+    await page.keyboard.press('Alt+ArrowLeft');
+    await page.keyboard.press('Alt+ArrowLeft');
+    expect(await open(page)).toEqual(['flights', 'cargo', 'star-map']);
+    expect(await page.locator('#tile-announcer').textContent()).toBe('Flights moved to position 1 of 3');
+    expect(await page.evaluate(() => document.activeElement?.closest('fragment-slot')?.getAttribute('name'))).toBe('flights');
+    await page.context().close();
+  });
+
+  it('resizes a tile across columns and rows, by its buttons or its corner, and every tile is one column on a phone', async () => {
+    const page = await desk();
+    const map = app(page, 'star-map');
+    const width = async () => (await map.boundingBox())!.width;
+    const one = await width();
+
+    await map.locator('.wider').click();
+    expect(await map.getAttribute('data-braid-columns')).toBe('2');
+    expect(await width()).toBeGreaterThan(one * 1.9);
+    await map.locator('.wider').click();
+    expect(await map.getAttribute('data-braid-columns')).toBe('3');
+    await map.locator('.wider').click();
+    // back to one column, which is no span at all
+    expect(await map.getAttribute('data-braid-columns')).toBeNull();
+    expect(Math.abs((await width()) - one)).toBeLessThan(12);
+    expect(await map.locator('.wider').getAttribute('aria-label')).toBe('Star Map is 1 column wide. Change width');
+
+    const tall = (await map.boundingBox())!.height;
+    await map.locator('.taller').click();
+    expect(await map.getAttribute('data-braid-rows')).toBe('3');
+    expect((await map.boundingBox())!.height).toBeGreaterThan(tall * 1.4);
+
+    // the corner snaps to whole columns and rows
+    await map.locator('.taller').click(); // 3 → 1
+    const corner = await map.locator('.resize').boundingBox();
+    const box = await map.boundingBox();
+    await page.mouse.move(corner!.x + 9, corner!.y + 9);
+    await page.mouse.down();
+    await page.mouse.move(corner!.x + 9 + box!.width + 20, corner!.y + 9 + box!.height + 40, { steps: 6 });
+    await page.mouse.up();
+    expect(await map.evaluate((slot) => [slot.getAttribute('data-braid-columns'), slot.getAttribute('data-braid-rows')])).toEqual(['2', null]);
+
+    // on a phone the grid is one column, whatever span a tile has
+    await page.setViewportSize({ width: 390, height: 800 });
+    const boxes = await page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => Math.round(slot.getBoundingClientRect().width)));
+    expect(new Set(boxes).size).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+    await page.context().close();
+  });
+
+  it('saves order and spans in a layout, and restores both, after a reload too', async () => {
+    const page = await desk();
+    await app(page, 'cargo').locator('.grip').focus();
+    await page.keyboard.press('Alt+ArrowUp');
+    await page.keyboard.press('Alt+ArrowUp');
+    await app(page, 'flights').locator('.wider').click();
+    await app(page, 'star-map').locator('.taller').click();
+    const arranged = async () =>
+      page.locator('main > fragment-slot').evaluateAll((slots) =>
+        slots.map((slot) => [slot.getAttribute('name'), slot.getAttribute('data-braid-columns'), slot.getAttribute('data-braid-rows')]),
+      );
+    const wanted = [
+      ['cargo', null, null],
+      ['flights', '2', null],
+      ['star-map', null, '3'],
+    ];
+    expect(await arranged()).toEqual(wanted);
+    await page.locator('#layout-name').fill('ops');
+    await page.locator('#save-layout button').click();
+    await page.locator('#layouts button[data-restore="ops"]').waitFor();
+
+    await page.reload();
+    await ready(page);
+    expect(await arranged()).toEqual([
+      ['flights', null, null],
+      ['star-map', null, null],
+      ['cargo', null, null],
+    ]);
+    await page.locator('#layouts button[data-restore="ops"]').click();
+    await expect.poll(arranged).toEqual(wanted);
+    // a restored tile has its header like any other
+    expect(await page.locator('main > fragment-slot > .tile-head').count()).toBe(3);
+    await page.context().close();
+  });
+
+  it('pops an app out into a window with its state, follows the desk from there, and brings it back when it closes', async () => {
+    const page = await desk();
+    await pick(page, 'NX-204');
+    await app(page, 'star-map').locator('#in').click();
+    await app(page, 'star-map').locator('#in').click();
+
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), app(page, 'star-map').locator('.pop').click()]);
+    await popup.waitForLoadState();
+    const inWindow = popup.locator('main fragment-slot[name="star-map"]');
+    // its state went with it
+    await expect.poll(() => inWindow.locator('#zoom-label').textContent(), { timeout: 15_000 }).toBe('Zoom 3×');
+    expect(new URL(popup.url()).searchParams.get('app')).toBe('star-map');
+    await expect.poll(() => open(page)).toEqual(['flights', 'cargo']);
+
+    // a ship picked on the desk reaches the app in its window, another page with its own agent
+    await expect.poll(() => inWindow.locator('#status').textContent()).toBe('Marigold is between Ceres and Europa.');
+    await pick(page, 'KT-077');
+    await expect.poll(() => inWindow.locator('#status').textContent()).toBe('Slow Comet is between Titan and Mars.');
+
+    // zoomed out in its window, then the window is closed: it is back on the desk, as it was left
+    await inWindow.locator('#out').click();
+    // the window keeps its app's latest state from a moment after each change
+    await popup.waitForTimeout(300);
+    await popup.close({ runBeforeUnload: true });
+    await expect.poll(() => open(page)).toEqual(['flights', 'cargo', 'star-map']);
+    await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
+    await page.context().close();
+  });
+
+  it('opens a copy in a tab for a modified click, and leaves the desk as it was', async () => {
+    const page = await desk();
+    const [tab] = await Promise.all([page.context().waitForEvent('page'), app(page, 'cargo').locator('.pop').click({ modifiers: ['ControlOrMeta'] })]);
+    await tab.waitForLoadState();
+    await tab.locator('main fragment-slot[name="cargo"] #manifest[data-loaded]').waitFor({ timeout: 15_000 });
+    expect(await tab.locator('#back').isVisible()).toBe(false);
+    expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
+    await page.context().close();
+  });
 });

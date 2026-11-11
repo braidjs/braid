@@ -88,20 +88,79 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 #remembered[hidden], #empty[hidden] { display: none; }
 #forget { padding: 4px 12px; border-radius: 999px; background: var(--sp-amber); }
 
-/* The workspace: each app is a tile. The slots are the workspace's to add and remove. */
+/* The workspace: each app is a tile, on a grid of three columns and rows of a fixed height. A tile
+   spans what the workspace's placement says (--braid-columns / --braid-rows, set by `place`): one
+   column and two rows unless the user has resized it. The slots are the workspace's to add, move
+   and remove. */
 [data-braid-workspace] {
+  --desk-row: 270px;
   display: grid; gap: 20px; padding: 24px 28px 40px;
-  /* a tile is never wider than the screen it is on */
-  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
-  align-items: stretch;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: var(--desk-row);
 }
 [data-braid-workspace] > fragment-slot {
-  display: block; min-width: 0; min-height: 380px; overflow: hidden;
+  position: relative; display: flex; flex-direction: column; min-width: 0; overflow: auto;
+  grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 2);
   border-radius: 20px; border: 1px solid var(--sp-line);
   background: linear-gradient(180deg, var(--sp-panel-2), var(--sp-panel));
   box-shadow: 0 18px 50px -24px #000, inset 0 1px 0 rgba(255, 255, 255, 0.05);
   animation: dock-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  transition: box-shadow 0.15s, outline-color 0.15s;
 }
+/* two columns: a three-column span is two */
+@media (max-width: 1180px) {
+  [data-braid-workspace] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  [data-braid-workspace] > fragment-slot[data-braid-columns="3"] { grid-column: span 2; }
+}
+[data-braid-workspace] > fragment-slot.dragging { opacity: 0.85; box-shadow: 0 0 0 2px var(--sp-teal), 0 30px 70px -20px #000; z-index: 2; }
+[data-braid-workspace] > fragment-slot.resizing { box-shadow: 0 0 0 2px var(--sp-amber); }
+body.moving, body.moving * { cursor: grabbing !important; user-select: none; }
+
+/* A tile's header: the desk's own markup, projected above the app through slot="header". */
+.tile-head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 10px 8px 6px; border-bottom: 1px solid var(--sp-line);
+  background: rgba(16, 22, 48, 0.92); backdrop-filter: blur(6px); font-size: 13px;
+}
+.tile-head button, .tile-head a {
+  display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 8px;
+  border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--sp-dim);
+  font: 600 12px var(--sp-mono); text-decoration: none;
+}
+.tile-head button:hover, .tile-head a:hover { color: var(--sp-text); border-color: var(--sp-line); background: rgba(255, 255, 255, 0.05); }
+.tile-head .grip { cursor: grab; touch-action: none; font-size: 16px; }
+.tile-head .tile-title { font-weight: 700; margin-inline-end: auto; }
+.tile-head .close:hover { color: #fff; background: var(--sp-pink); border-color: transparent; }
+.tile-head .seam { display: none; }
+.resize {
+  position: sticky; align-self: flex-end; margin-top: auto; margin-inline-end: 4px; bottom: 4px; order: 99; z-index: 3; flex: none; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--sp-dim) 50%, var(--sp-dim) 58%, transparent 58%, transparent 70%, var(--sp-dim) 70%, var(--sp-dim) 78%, transparent 78%);
+  opacity: 0.6;
+}
+.resize:hover { opacity: 1; }
+
+/* Seams: every tile shows where it begins and ends, and what it is, as the site's "Show the seams" does. */
+body[data-seams] [data-braid-workspace] > fragment-slot { outline: 1.5px dashed var(--sp-amber); outline-offset: 4px; }
+body[data-seams] .tile-head .seam {
+  display: block; flex: 1 1 100%; order: 10; margin: 4px 0 0 6px; padding: 6px 10px; border-radius: 8px;
+  border: 1.5px dashed var(--sp-amber); background: rgba(251, 191, 36, 0.08);
+  color: #fde68a; font: 11.5px/1.4 var(--sp-mono); white-space: pre-wrap; word-break: break-all;
+}
+#seams-toggle[aria-pressed="true"] { border-color: var(--sp-amber); color: #fde68a; background: rgba(251, 191, 36, 0.1); }
+
+#notice { margin: 10px 28px 0; min-height: 1.4em; color: var(--sp-teal); font-size: 14px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* A popped-out window: the same page, holding one app that fills it. */
+.back { display: none; }
+body[data-solo] #dock, body[data-solo] .layouts, body[data-solo] #open-boundaries, body[data-solo] #open-preferences,
+body[data-solo] #remembered, body[data-solo] #ticker, body[data-solo] .brand p, body[data-solo] .tile-head .pop,
+body[data-solo] .tile-head .size, body[data-solo] .tile-head .grip, body[data-solo] .resize, body[data-solo] #empty { display: none !important; }
+body[data-solo] .back { display: inline-block; margin-inline-start: auto; padding: 8px 14px; border-radius: 10px; border: 0; font-weight: 700; color: #0b1020; background: linear-gradient(135deg, var(--sp-indigo), var(--sp-teal)); }
+body[data-solo] .back[hidden] { display: none; }
+body[data-solo] [data-braid-workspace] { grid-template-columns: 1fr; grid-auto-rows: calc(100dvh - 140px); padding: 16px; }
+body[data-solo] [data-braid-workspace] > fragment-slot { grid-column: auto; grid-row: auto; }
+
 @keyframes dock-in { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
 @media (prefers-reduced-motion: reduce) { [data-braid-workspace] > fragment-slot { animation: none; } }
 
@@ -175,8 +234,11 @@ legend { padding: 0 6px; color: var(--sp-dim); font-size: 13px; }
   #save-layout { flex: 1 1 100%; }
   #save-layout input { flex: 1; width: auto; min-width: 0; }
   #ticker, #remembered { float: none; width: auto; margin: 14px 16px 0; flex-wrap: wrap; border-radius: 16px; }
-  [data-braid-workspace] { padding: 16px 16px 32px; gap: 14px; }
-  [data-braid-workspace] > fragment-slot { min-height: 0; border-radius: 16px; }
+  /* one column: every tile is full width and as tall as its app, whatever span it was given */
+  [data-braid-workspace] { padding: 16px 16px 32px; gap: 14px; grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
+  [data-braid-workspace] > fragment-slot, [data-braid-workspace] > fragment-slot[data-braid-columns] { grid-column: auto; grid-row: auto; min-height: 0; overflow: visible; border-radius: 16px; }
+  .tile-head .size, .resize { display: none; }
+  #notice { margin: 10px 16px 0; }
   dialog { padding: 18px; border-radius: 18px; }
   dialog h2 { font-size: 18px; }
   #boundary-facts span, .lede { font-size: 13px; }

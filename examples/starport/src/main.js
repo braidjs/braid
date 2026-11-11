@@ -3,6 +3,7 @@ import { createBraidDesktopAgent } from '@braidlabs/fdc3';
 import { createWorkspace, localStorageStore } from '@braidlabs/console/workspace';
 import { createEventBus } from '@braidlabs/data';
 import { APPS, baseOf, basePathOf } from './registry.js';
+import { setupTiles } from './tiles.js';
 
 /**
  * The desk's whole runtime. The workspace is the `[data-braid-workspace]` element in index.html;
@@ -11,12 +12,34 @@ import { APPS, baseOf, basePathOf } from './registry.js';
 
 const $ = (selector) => document.querySelector(selector);
 const app = (id) => APPS.find((known) => known.id === id);
+/** `object` without `key`. */
+const without = (object, key) => Object.fromEntries(Object.entries(object ?? {}).filter(([name]) => name !== key));
 function element(tag, className, text = '') {
   const node = document.createElement(tag);
   node.className = className;
   node.textContent = text;
   return node;
 }
+/** Says something passing in the desk's notice line, for a few seconds. */
+let noticeTimer;
+function notice(message) {
+  $('#notice').textContent = message;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => ($('#notice').textContent = ''), 6000);
+}
+
+// ── One desk, or one app in a window of its own ──────────────────────────────────────────────
+// `?app=star-map` is the same page holding one app: what a tile becomes when it is popped out.
+const query = new URLSearchParams(location.search);
+const solo = APPS.some(({ id }) => id === query.get('app')) ? query.get('app') : undefined;
+const handoff = solo ? query.get('handoff') : null;
+if (solo) {
+  document.body.dataset.solo = '';
+  document.title = `${APPS.find(({ id }) => id === solo).title} — Starport`;
+  // the desk's starting apps are not this window's; removed before Braid starts, they never boot
+  for (const slot of document.querySelectorAll('[data-braid-workspace] > fragment-slot')) slot.remove();
+}
+
 /** Says what went wrong, in the desk's status line. It stays until the page is reloaded. */
 let failed = false;
 function report(message) {
@@ -86,7 +109,10 @@ $('#chooser-cancel').onclick = () => $('#chooser').close();
 // its registry (`discovery: { appd: true }`), but not yet under a basePath, so the desk writes
 // the records itself from the same registry the worker uses. These are the members the agent
 // reads; a gateway's own records carry more.
-const directory = APPS.map(({ id, title, fdc3 }) => ({
+// The desk itself is in the directory too, though nothing ever mounts it: it is how the desk gets an
+// fdc3 of its own, to carry the selected ship between windows (see "Between windows" below).
+const DESK = { id: 'desk', title: 'Desk', fdc3: { userChannels: { broadcasts: ['starport.ship'], listensFor: ['starport.ship'] } } };
+const directory = [...APPS, DESK].map(({ id, title, fdc3 }) => ({
   appId: id,
   title,
   type: 'web',
@@ -116,6 +142,7 @@ if (!preferences.defaultUserChannel) {
 controlled().then(
   () => {
     initBraid({ basePath: basePathOf(base), realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
+    if (solo) void openSolo();
     // the desk is wired and Braid has started; each app is ready when its own content says so
     document.documentElement.dataset.ready = '';
   },
@@ -164,6 +191,112 @@ function showOpen() {
 }
 new MutationObserver(showOpen).observe(desk, { childList: true });
 showOpen();
+
+// ── Tiles: move, resize, pop out, and show the seams ─────────────────────────────────────────
+const tiles = setupTiles({ workspace, desk, app, base, onPopOut: popOut });
+$('#seams-toggle').addEventListener('click', () => {
+  const on = !document.body.hasAttribute('data-seams');
+  tiles.setSeams(on);
+  $('#seams-toggle').setAttribute('aria-pressed', String(on));
+});
+
+// ── Between windows ──────────────────────────────────────────────────────────────────────────
+// A popped-out app takes its state with it (`workspace.snapshot`), follows the ship picked on the
+// desk, and comes back with its latest state when its window closes.
+//
+// Each window has its own FDC3 agent, so a channel does not reach across them by itself. The desk
+// asks its agent for an fdc3 of its own (the `desk` record above) and relays the selected ship to
+// every other window of this origin over a @braidlabs/data channel, which each relays into its own
+// agent's channel. A broadcast does not come back to the one who sent it, and the last ship relayed
+// is not relayed again, so nothing echoes.
+const handoffKey = (id) => `starport${base}handoff/${id}`;
+const deskId = crypto.randomUUID();
+const dock = new BroadcastChannel(`starport${base}dock`);
+
+async function relayShips() {
+  const controller = new AbortController();
+  const hostFdc3 = (await agent.realmGlobals({ fragmentId: DESK.id, signal: controller.signal }))?.fdc3;
+  if (!hostFdc3) return;
+  await hostFdc3.joinUserChannel(preferences.defaultUserChannel ?? 'fdc3.channel.1').catch(() => undefined);
+  const between = createEventBus({ consumer: solo ? `window:${solo}` : 'desk' }).channel('starport.ship', { scope: 'origin' });
+  let relayed;
+  const seen = (ship) => (ship?.id?.registry === relayed ? false : ((relayed = ship?.id?.registry), true));
+  await hostFdc3.addContextListener('starport.ship', (ship) => seen(ship) && between.broadcast(ship));
+  between.subscribe((ship) => ship?.type === 'starport.ship' && seen(ship) && hostFdc3.broadcast(ship));
+}
+void relayShips();
+
+async function popOut(slot) {
+  const appId = slot.getAttribute('name');
+  const id = crypto.randomUUID();
+  // opened straight from the click, so a popup blocker lets it through; filled in a moment later
+  const popup = window.open(`${base}?app=${encodeURIComponent(appId)}&handoff=${id}`, `starport-${id}`, 'popup,width=760,height=720');
+  if (!popup) {
+    notice(`The browser kept ${app(appId).title} from opening a window, so it stays on the desk.`);
+    return;
+  }
+  const snapshot = without(await workspace.snapshot(slot), 'appId');
+  localStorage.setItem(handoffKey(id), JSON.stringify({ desk: deskId, appId, snapshot }));
+  slot.remove();
+  notice(`${app(appId).title} is in its own window. Close that window to bring it back.`);
+}
+
+// an app this desk popped out comes back when its window closes
+dock.addEventListener('message', ({ data }) => {
+  if (solo || data?.desk !== deskId || !app(data.appId)) return;
+  const snapshot = without(data.snapshot, 'appId');
+  workspace.open(data.appId, snapshot).scrollIntoView({ block: 'nearest' });
+  notice(`${app(data.appId).title} is back on the desk.`);
+});
+
+/** In a popped-out window: the app, with the state it left the desk with. */
+async function openSolo() {
+  let given;
+  if (handoff) {
+    const read = () => localStorage.getItem(handoffKey(handoff));
+    let raw = read();
+    // the desk writes it a moment after opening this window
+    for (let waited = 0; !raw && waited < 3000; waited += 100) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      raw = read();
+    }
+    localStorage.removeItem(handoffKey(handoff));
+    try {
+      given = raw ? JSON.parse(raw) : undefined;
+    } catch {
+      given = undefined;
+    }
+  }
+  // the app fills this window, so the span it had on the desk is left behind
+  const snapshot = without(given?.appId === solo ? given.snapshot : {}, 'placement');
+  const slot = workspace.open(solo, snapshot);
+  if (!given?.desk) {
+    // a copy opened in a tab: nothing to return to
+    $('#back').hidden = true;
+    return;
+  }
+  // kept fresh, because a window that is closing has no time to ask its app for its state
+  let latest = { appId: solo, snapshot };
+  const refresh = async () => {
+    if (slot.isConnected) latest = { appId: solo, snapshot: await workspace.snapshot(slot) };
+  };
+  // after anything the user does in the app (a click, a key, a change), and every few seconds
+  // besides, for state the app changes by itself
+  for (const type of ['pointerup', 'keyup', 'change']) document.addEventListener(type, () => setTimeout(refresh, 50), true);
+  setInterval(refresh, 3000);
+  let returned = false;
+  const giveBack = () => {
+    if (returned) return;
+    returned = true;
+    dock.postMessage({ desk: given.desk, ...latest });
+  };
+  addEventListener('pagehide', giveBack);
+  $('#back').addEventListener('click', async () => {
+    await refresh();
+    giveBack();
+    window.close();
+  });
+}
 
 // ── Layouts ──────────────────────────────────────────────────────────────────────────────────
 async function showLayouts() {

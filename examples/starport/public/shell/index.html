@@ -29,9 +29,12 @@
       <nav id="dock" aria-label="Launch an app"></nav>
 
       <div class="panels">
+        <button type="button" id="seams-toggle" aria-pressed="false">Show seams</button>
         <button type="button" id="open-boundaries">Boundaries</button>
         <button type="button" id="open-preferences">Preferences</button>
       </div>
+
+      <button type="button" id="back" class="back">Back to the desk</button>
 
       <div class="layouts">
         <ul id="layouts" aria-label="Saved layouts"></ul>
@@ -60,6 +63,7 @@
       <fragment-slot name="star-map"></fragment-slot>
       <fragment-slot name="cargo"></fragment-slot>
     </main>
+    <p id="notice" role="status" aria-live="polite"></p>
     <p id="empty" role="status" hidden>The desk is clear. Launch an app from the dock, or restore a layout.</p>
 
     <dialog id="chooser" aria-labelledby="chooser-title">
