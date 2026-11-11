@@ -471,7 +471,8 @@ describe('the Starport example', () => {
     const outline = () =>
       page.evaluate(() => {
         const shown = document.querySelector<HTMLElement>('.braid-tile-outline');
-        return shown ? { columns: shown.dataset.columns, rows: shown.dataset.rows, text: shown.textContent, width: shown.getBoundingClientRect().width } : null;
+        const box = shown?.getBoundingClientRect();
+        return shown ? { columns: shown.dataset.columns, rows: shown.dataset.rows, text: shown.textContent, width: box!.width, height: box!.height } : null;
       });
     const gap = 20;
     /** Drags from the middle of `edge` by (dx, dy), and says what the outline showed before letting go. */
@@ -508,6 +509,10 @@ describe('the Starport example', () => {
     const bottom = await drag('bottom', -320, row + gap - 30);
     expect(bottom.shown).toMatchObject({ columns: '2', rows: '3' });
     expect(await span()).toEqual(['2', '3']);
+    // the outline was the size the tile then took
+    const taken = (await map.boundingBox())!;
+    expect(Math.abs(bottom.shown!.height - taken.height)).toBeLessThan(3);
+    expect(Math.abs(bottom.shown!.width - taken.width)).toBeLessThan(3);
 
     // the corner: both, back to one column and the default two rows, which is no span at all
     await map.locator('.braid-tile-edge[data-edge="corner"]').scrollIntoViewIfNeeded();
@@ -671,6 +676,21 @@ describe('the Starport example', () => {
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 3×');
     expect(await page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => slot.getAttribute('data-braid-columns') ?? slot.getAttribute('data-braid-rows')))).toEqual([null, null, null]);
     expect(await page.locator('main > fragment-slot > .braid-tile-head').count()).toBe(3);
+    await page.context().close();
+  });
+
+  it('docks an app back from its window with Back to the desk, with its latest state', async () => {
+    const page = await desk();
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), app(page, 'star-map').locator('.braid-tile-pop').click()]);
+    const inWindow = popup.locator('main fragment-slot[name="star-map"]');
+    await expect.poll(() => inWindow.locator('#zoom-label').textContent(), { timeout: 15_000 }).toBe('Zoom 1×');
+    await inWindow.locator('#in').click();
+    await expect.poll(() => open(page)).toEqual(['flights', 'cargo']);
+    const closed = popup.waitForEvent('close');
+    await popup.locator('#back').click();
+    await closed;
+    await expect.poll(() => open(page), { timeout: 5000 }).toEqual(['flights', 'star-map', 'cargo']);
+    await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
     await page.context().close();
   });
 

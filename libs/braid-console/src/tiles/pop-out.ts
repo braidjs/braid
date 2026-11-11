@@ -11,8 +11,13 @@ import type { Placement, SavedSlot, Workspace } from '../workspace/workspace.js'
  *   knowing before carrying anything private this way. What the window opens with (state, channel,
  *   src, props) is as trustworthy as every page of the origin: an app should treat its
  *   `restoredState` as input, as it would a layout's.
- * - The window answers with a secret it read from that entry, never sent on the channel, so a page
- *   that only listens on the channel cannot take an app back early or keep it away.
+ * - The window signs each message it sends the desk (an HMAC keyed by a secret it read from that
+ *   entry, over the whole message and a number that only goes up), and the desk takes no message
+ *   it cannot verify or has seen the number of. The secret itself never crosses the channel, so a
+ *   page that only listens there cannot forge, alter or replay a message: it cannot take an app
+ *   back early, keep it away, or change the state it returns with. A page that also reads storage
+ *   in time can. Signing needs Web Crypto, so popping out needs a secure context (https, or
+ *   localhost); without one, tiles have no pop-out link.
  * - Only what the desk popped out comes back, once each, with the src, props, span and place the
  *   desk kept. The window returns only the app's state and channel, and anything else that arrives
  *   on the channel is ignored.
@@ -95,8 +100,10 @@ const channelName = (key: string) => `${key}dock`;
 /** What the desk keeps of an app it popped out. */
 interface Sent {
   appId: string;
-  /** What the window read from the handoff entry, and answers with. */
+  /** What the window read from the handoff entry, and signs its messages with. */
   secret: string;
+  /** The number of the last message taken from the window: a message must carry a higher one. */
+  seq: number;
   snapshot: Omit<SavedSlot, 'appId'>;
   index: number;
   taken?: boolean;
@@ -108,9 +115,24 @@ interface Sent {
 interface DockMessage {
   handoff: string;
   appId: string;
-  secret?: unknown;
-  taken?: boolean;
+  /** `taken`: the window has the app. `back`: the window gives it back. */
+  kind: 'taken' | 'back';
+  seq: number;
   snapshot?: { state?: unknown; channel?: unknown };
+  /** HMAC-SHA-256 of the rest, keyed by the handoff's secret, in base64. */
+  proof: string;
+}
+
+/** Whether this page can pop tiles out: it needs Web Crypto to sign the handoff's messages. */
+export const popOutAvailable = () => typeof globalThis.crypto?.subtle?.importKey === 'function';
+
+/** The HMAC of a message's fields, keyed by the handoff's secret: what the desk checks. */
+export async function proofOf(secret: string, message: Omit<DockMessage, 'proof'>): Promise<string> {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  const hmac = await crypto.subtle.importKey('raw', encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signed = JSON.stringify([message.handoff, message.appId, message.kind, message.seq, message.snapshot ?? null]);
+  const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', hmac, encode(signed)));
+  return btoa(String.fromCharCode(...bytes));
 }
 
 /** The desk's half: pops tiles out, and takes them back. */
@@ -132,7 +154,7 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
   const keep = () =>
     sessionStorage.setItem(
       outKey,
-      JSON.stringify([...out].map(([id, { appId, secret, snapshot, index, taken }]) => [id, { appId, secret, snapshot, index, taken }])),
+      JSON.stringify([...out].map(([id, { appId, secret, seq, snapshot, index, taken }]) => [id, { appId, secret, seq, snapshot, index, taken }])),
     );
 
   /** Gives the window `id` its time to take its app; a window that has taken it gets none. */
@@ -151,6 +173,7 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
       out.set(id, {
         appId: sent.appId,
         secret: sent.secret,
+        seq: Number.isFinite(sent.seq) ? sent.seq : 0,
         snapshot: sent.snapshot,
         index: Number.isInteger(sent.index) ? sent.index : -1,
         taken: sent.taken === true,
@@ -195,27 +218,53 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
     options.onReturned?.(slot, sent.appId);
   }
 
-  dock.addEventListener('message', ({ data }: MessageEvent<DockMessage>) => {
-    if (typeof data?.handoff !== 'string') return;
+  /** Checks a message from a window: one the desk sent an app to, signed with its secret, and new. */
+  async function verified(data: DockMessage): Promise<Sent | undefined> {
+    if (typeof data?.handoff !== 'string' || typeof data.proof !== 'string' || !Number.isFinite(data.seq)) return undefined;
+    if (data.kind !== 'taken' && data.kind !== 'back') return undefined;
     const sent = out.get(data.handoff);
-    if (!sent || sent.appId !== data.appId || data.secret !== sent.secret) return;
+    if (!sent || sent.appId !== data.appId || data.seq <= sent.seq) return undefined;
+    const snapshot = data.snapshot && typeof data.snapshot === 'object' ? data.snapshot : undefined;
+    let expected: string;
+    try {
+      expected = await proofOf(sent.secret, { handoff: data.handoff, appId: data.appId, kind: data.kind, seq: data.seq, snapshot });
+    } catch {
+      return undefined;
+    }
+    // still out, and still newer than any message taken while this one was being checked
+    if (expected !== data.proof || out.get(data.handoff) !== sent || data.seq <= sent.seq) return undefined;
+    sent.seq = data.seq;
+    return sent;
+  }
+
+  // one message at a time, in the order they came: checking each is asynchronous
+  let checking = Promise.resolve();
+  dock.addEventListener('message', ({ data }: MessageEvent<DockMessage>) => {
+    checking = checking.then(() => receive(data)).catch(() => undefined);
+  });
+
+  async function receive(data: DockMessage) {
+    const sent = await verified(data);
+    if (!sent) return;
     clearTimeout(sent.returning);
     // taken: the window has the app now, and gives it back when it closes
-    if (data.taken === true) {
+    if (data.kind === 'taken') {
       sent.taken = true;
       waitForTaking(data.handoff);
       keep();
       return;
     }
+    keep();
     const snapshot = data.snapshot && typeof data.snapshot === 'object' ? data.snapshot : {};
     sent.returning = setTimeout(() => takeBack(data.handoff, snapshot), grace);
-  });
+  }
 
   return {
     async popOut(slot) {
       // one of the area's apps, before any window opens for it
       if (!slots().includes(slot)) throw new Error('braid-tiles: can only pop out an app in the workspace area');
       if (leaving.has(slot)) return;
+      if (!popOutAvailable()) throw new Error('braid-tiles: popping out needs Web Crypto, which a page has only in a secure context');
       const appId = slot.getAttribute('name')!;
       const id = crypto.randomUUID();
       const secret = crypto.randomUUID();
@@ -237,7 +286,7 @@ export function popOutDesk(workspace: Workspace, options: PopOutOptions, slots: 
         const index = slots().indexOf(slot);
         // storage full or off: the window gets nothing, so it is closed and the app stays
         localStorage.setItem(handoffKey(key, id), JSON.stringify({ appId, secret, snapshot, at: Date.now() }));
-        out.set(id, { appId, secret, snapshot, index });
+        out.set(id, { appId, secret, seq: 0, snapshot, index });
       } catch (error) {
         popup.close();
         leaving.delete(slot);
@@ -300,14 +349,20 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
       given = undefined;
     }
   }
-  const fromDesk = Boolean(handoff) && given?.appId === appId && typeof given?.secret === 'string';
-  const secret = given?.secret;
+  const fromDesk = Boolean(handoff) && given?.appId === appId && typeof given?.secret === 'string' && popOutAvailable();
+  const secret = given?.secret as string;
   const { placement: _placement, ...snapshot } = (fromDesk && given?.snapshot && typeof given.snapshot === 'object' ? given.snapshot : {}) as Omit<SavedSlot, 'appId'>;
   const slot = workspace.open(appId, snapshot as { state?: unknown; channel?: string });
   if (!fromDesk) return { slot, fromDesk, dockBack: async () => window.close(), dispose: () => undefined };
 
   const dock = new BroadcastChannel(channelName(key));
-  dock.postMessage({ handoff, appId, secret, taken: true });
+  // numbers that only go up, across a reload of this window too: the desk takes each once
+  let count = 0;
+  const signed = async (kind: DockMessage['kind'], snapshot?: DockMessage['snapshot']): Promise<DockMessage> => {
+    const message = { handoff: handoff!, appId, kind, seq: Date.now() * 1000 + (count++ % 1000), ...(snapshot ? { snapshot } : {}) };
+    return { ...message, proof: await proofOf(secret, message) };
+  };
+  void signed('taken').then((message) => dock.postMessage(message));
   // kept fresh, because a window that is closing has no time to ask its app for its state
   const latest: { state?: unknown; channel?: string } = snapshot.state !== undefined ? { state: snapshot.state } : {};
   let asking: Promise<void> | undefined;
@@ -320,6 +375,7 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
         // no answer (still booting, or slow) is not "no state": keep what there was
         if (state !== undefined) latest.state = state;
         if (channel !== undefined) latest.channel = channel;
+        await prepare();
       } finally {
         asking = undefined;
       }
@@ -330,11 +386,21 @@ export async function acceptPopOut(workspace: Workspace, options: AcceptPopOutOp
   const types = ['click', 'keyup', 'change', 'input'];
   for (const type of types) document.addEventListener(type, soon, true);
   const ticking = setInterval(refresh, REFRESH_MS);
+  /**
+   * The give-back, signed ahead of time with the latest state: a window that is closing has no
+   * time to wait for a signature, so `pagehide` posts what is ready.
+   */
+  let ready: DockMessage | undefined;
+  async function prepare() {
+    const message = await signed('back', JSON.parse(JSON.stringify(latest)));
+    if (!ready || message.seq > ready.seq) ready = message;
+  }
+  await prepare();
   let returned = false;
   const giveBack = () => {
-    if (returned) return;
+    if (returned || !ready) return;
     returned = true;
-    dock.postMessage({ handoff, appId, secret, snapshot: latest });
+    dock.postMessage(ready);
   };
   // A page kept in the back-forward cache may come back; it has not closed. One that is reloading
   // gives its app back too (pagehide cannot tell), but keeps it here, and takes it up again in

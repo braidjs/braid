@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryStore } from '../workspace/store.js';
 import { createWorkspace, type Workspace } from '../workspace/workspace.js';
-import { acceptPopOut, HANDOFF_TIMEOUT_MS, RELOAD_GRACE_MS } from './pop-out.js';
+import { acceptPopOut, HANDOFF_TIMEOUT_MS, proofOf, RELOAD_GRACE_MS } from './pop-out.js';
+import { installTilesCss } from './styles.js';
 import { arrange, type Tiles } from './tiles.js';
 
 /**
@@ -55,6 +56,12 @@ afterEach(() => {
 const titles: Record<string, string> = { flights: 'Flights', map: 'Star Map', cargo: 'Cargo' };
 
 describe('arrange', () => {
+  // first in the file, before any arrange has put a stylesheet in this document
+  it('puts what the tiles need to work in the page with styles: false, and not the look', () => {
+    tiles = arrange(workspace, { styles: false });
+    expect([...document.querySelectorAll('style[data-braid-tiles]')].map((style) => (style as HTMLElement).dataset.braidTiles)).toEqual(['base']);
+  });
+
   it('gives every app a header and edges: those there already, those launched later, and those a layout restores', async () => {
     tiles = arrange(workspace, { title: (id) => titles[id] ?? id, glyph: (id) => (id === 'map' ? '🗺️' : undefined) });
     for (const name of ['flights', 'map', 'cargo']) {
@@ -200,6 +207,17 @@ describe('arrange', () => {
     expect(part('map', '.braid-tile-taller').textContent).toBe('⇕ 3');
   });
 
+  it('installs what the tiles need to work even without the default look, and the look only when asked', () => {
+    const fresh = document.implementation.createHTMLDocument();
+    installTilesCss(fresh, false);
+    expect([...fresh.querySelectorAll('style')].map((style) => style.dataset.braidTiles)).toEqual(['base']);
+    expect(fresh.querySelector('style')!.textContent).toContain('.braid-tiles-announcer');
+    expect(fresh.querySelector('style')!.textContent).not.toContain('@layer');
+    installTilesCss(fresh);
+    installTilesCss(fresh);
+    expect([...fresh.querySelectorAll('style')].map((style) => style.dataset.braidTiles)).toEqual(['base', 'look']);
+  });
+
   it('refuses to arrange an area twice', () => {
     tiles = arrange(workspace);
     expect(() => arrange(workspace)).toThrow(/arranged already/);
@@ -241,7 +259,14 @@ describe('popping out', () => {
     });
   });
   const handoffOf = (href: string) => new URL(href, location.href).searchParams.get('handoff')!;
-  /** The secret a window reads from its handoff entry, and answers the desk with. */
+  /** A message as a window sends it: signed with the handoff's secret, numbered above the last. */
+  // numbered as a window numbers them, from the clock, and a little ahead of any real window here
+  let seq = (Date.now() + 60_000) * 1000;
+  async function signed(secret: string, handoff: string, appId: string, kind: 'taken' | 'back', snapshot?: object) {
+    const message = { handoff, appId, kind, seq: seq++, ...(snapshot ? { snapshot } : {}) } as const;
+    return { ...message, proof: await proofOf(secret, message) };
+  }
+  /** The secret a window reads from its handoff entry, and signs with. */
   const secretOf = (handoff: string) => JSON.parse(localStorage.getItem(`${KEY}handoff/${handoff}`)!).secret as string;
 
   /** A second page's workspace: the window an app is popped out to. */
@@ -284,7 +309,7 @@ describe('popping out', () => {
 
     // the window closes with a newer state; the desk waits out the reload grace, then takes it back
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'radar', secret, snapshot: { state: { zoom: 1 } } });
+    window.postMessage(await signed(secret, handoff, 'radar', 'back', { state: { zoom: 1 } }));
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'radar', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
     window.close();
     expect(events).toEqual(['out:radar', 'back:radar']);
@@ -298,16 +323,17 @@ describe('popping out', () => {
     const handoff = handoffOf(opened[0]);
     const secret = secretOf(handoff);
     const forger = new BroadcastChannel(`${KEY}dock`);
-    forger.postMessage({ handoff: 'made-up', appId: 'map', secret, snapshot: {} });
-    forger.postMessage({ handoff, appId: 'cargo', secret, snapshot: {} });
-    // the handoff id is in the window's URL and on the channel; the secret is not
-    forger.postMessage({ handoff, appId: 'map', snapshot: {} });
-    forger.postMessage({ handoff, appId: 'map', secret: 'guessed', snapshot: {} });
+    forger.postMessage(await signed(secret, 'made-up', 'map', 'back', {}));
+    forger.postMessage(await signed(secret, handoff, 'cargo', 'back', {}));
+    // the handoff id is in the window's URL and on the channel; the secret is not, so neither an
+    // unsigned message nor one signed with a guess is taken
+    forger.postMessage({ handoff, appId: 'map', kind: 'back', seq: 1e15, snapshot: {} });
+    forger.postMessage(await signed('guessed', handoff, 'map', 'back', {}));
     await tick(RELOAD_GRACE_MS + 200);
     expect(names()).toEqual(['flights', 'cargo']);
-    forger.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
+    forger.postMessage(await signed(secret, handoff, 'map', 'back', {}));
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
-    forger.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
+    forger.postMessage(await signed(secret, handoff, 'map', 'back', {}));
     await tick(RELOAD_GRACE_MS + 200);
     forger.close();
     expect(names()).toEqual(['flights', 'map', 'cargo']);
@@ -320,11 +346,11 @@ describe('popping out', () => {
     const handoff = handoffOf(opened[0]);
     const secret = secretOf(handoff);
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'map', secret, taken: true });
+    window.postMessage(await signed(secret, handoff, 'map', 'taken'));
     await tick(50);
-    window.postMessage({ handoff, appId: 'map', secret, snapshot: {} });
+    window.postMessage(await signed(secret, handoff, 'map', 'back', {}));
     await tick(RELOAD_GRACE_MS / 3);
-    window.postMessage({ handoff, appId: 'map', secret, taken: true });
+    window.postMessage(await signed(secret, handoff, 'map', 'taken'));
     await tick(RELOAD_GRACE_MS + 200);
     window.close();
     expect(names()).toEqual(['flights', 'cargo']);
@@ -348,7 +374,7 @@ describe('popping out', () => {
     tiles.destroy();
     tiles = arrange(workspace, { popOut: { key: KEY, url } });
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'cargo', secret, snapshot: {} });
+    window.postMessage(await signed(secret, handoff, 'cargo', 'back', {}));
     await vi.waitFor(() => expect(names()).toEqual(['flights', 'map', 'cargo']), { timeout: RELOAD_GRACE_MS + 1000 });
     window.close();
   });
@@ -372,17 +398,35 @@ describe('popping out', () => {
     expect(names()).toEqual(['flights', 'map', 'cargo']);
   });
 
-  it('keeps the state it sent when a return carries one that is not JSON', async () => {
+  it('takes nothing from a page that only listens on the channel: no replay, no altered state, no stolen kind', async () => {
     workspace.open('radar', { state: { zoom: 3 } });
     tiles = arrange(workspace, { popOut: { key: KEY, url } });
     await tiles.popOut(slotOf('radar'));
     const handoff = handoffOf(opened[0]);
+    const secret = secretOf(handoff);
+    const heard: Array<Record<string, unknown>> = [];
+    const eavesdropper = new BroadcastChannel(`${KEY}dock`);
+    eavesdropper.onmessage = ({ data }) => heard.push(data);
     const window = new BroadcastChannel(`${KEY}dock`);
-    window.postMessage({ handoff, appId: 'radar', secret: secretOf(handoff), snapshot: { state: 1n } });
+    window.postMessage(await signed(secret, handoff, 'radar', 'taken'));
+    await vi.waitFor(() => expect(heard).toHaveLength(1));
+    expect(JSON.stringify(heard)).not.toContain(secret);
+    // what it heard, as a give-back, or with another state: the signature no longer fits
+    eavesdropper.postMessage({ ...heard[0], kind: 'back' });
+    eavesdropper.postMessage({ ...heard[0], seq: (heard[0].seq as number) + 1 });
+    await tick(RELOAD_GRACE_MS + 200);
+    expect(names()).not.toContain('radar');
+
+    // the window closes; the eavesdropper answers with what it heard, to keep the app away
+    window.postMessage(await signed(secret, handoff, 'radar', 'back', { state: { zoom: 1 } }));
+    await vi.waitFor(() => expect(heard).toHaveLength(2));
+    eavesdropper.postMessage(heard[0]);
+    eavesdropper.postMessage({ ...heard[1], snapshot: { state: { zoom: 99 } } });
     await vi.waitFor(() => expect(names()).toContain('radar'), { timeout: RELOAD_GRACE_MS + 1000 });
+    expect((await workspace.snapshot(slotOf('radar'))).state).toEqual({ zoom: 1 });
+    eavesdropper.close();
     window.close();
-    expect((await workspace.snapshot(slotOf('radar'))).state).toEqual({ zoom: 3 });
-  });
+  }, 15_000);
 
   it('takes back, after a reload, only apps the host accepts, and no more than it could have sent', async () => {
     const kept = Array.from({ length: 40 }, (_, index) => [`id-${index}`, { appId: index === 0 ? 'evil' : 'map', secret: 's', snapshot: {}, index: -1 }]);
@@ -414,6 +458,20 @@ describe('popping out', () => {
     const popped = windowWorkspace();
     await acceptPopOut(popped.workspace, { key: KEY, appId: 'map', handoff: null });
     expect(sessionStorage.getItem(`${KEY}out`)).toBeNull();
+  });
+
+  it('gives the app back from a window as it closes, with the state it last had, signed', async () => {
+    workspace.open('radar', { state: { zoom: 3 } });
+    tiles = arrange(workspace, { popOut: { key: KEY, url } });
+    await tiles.popOut(slotOf('radar'));
+    const handoff = handoffOf(opened[0]);
+    const popped = windowWorkspace();
+    const accepted = await acceptPopOut(popped.workspace, { key: KEY, appId: 'radar', handoff });
+    // the window closes: pagehide posts the give-back it has ready, at once
+    window.dispatchEvent(new Event('pagehide'));
+    await vi.waitFor(() => expect(names()).toContain('radar'), { timeout: RELOAD_GRACE_MS + 1000 });
+    expect((await workspace.snapshot(slotOf('radar'))).state).toEqual({ zoom: 3 });
+    accepted.dispose();
   });
 
   it('opens a copy fresh in a window the desk did not open', async () => {

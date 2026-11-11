@@ -1,5 +1,5 @@
 import type { Placement, Workspace } from '../workspace/workspace.js';
-import { popOutDesk, sameOrigin, type PopOutDesk, type PopOutOptions } from './pop-out.js';
+import { popOutAvailable, popOutDesk, sameOrigin, type PopOutDesk, type PopOutOptions } from './pop-out.js';
 import { installTilesCss } from './styles.js';
 
 /**
@@ -54,7 +54,7 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
   if (!container) throw new Error('braid-tiles: the workspace has no area to arrange');
   const document = container.ownerDocument;
   const view = document.defaultView!;
-  if (options.styles !== false) installTilesCss(document);
+  installTilesCss(document, options.styles !== false);
   if (container.hasAttribute('data-braid-tiles')) throw new Error('braid-tiles: this area is arranged already (destroy() the other first)');
   container.setAttribute('data-braid-tiles', '');
 
@@ -149,7 +149,8 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
     const close = button('braid-tile-close', '×', `Close ${title}`);
     head.append(grip, menu, name, wider, taller);
 
-    if (options.popOut) {
+    // signing the handoff's messages needs Web Crypto, which a page has only in a secure context
+    if (options.popOut && popOutAvailable()) {
       // a link, so Cmd-click or a long press opens a copy in a tab as any link would; a plain click
       // moves the app itself into a window of its own
       const pop = make('a', 'braid-tile-pop', '↗');

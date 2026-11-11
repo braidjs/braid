@@ -222,9 +222,13 @@ Each tile gets:
   **Trust.** The handoff crosses in `localStorage`, in the clear: readable **and writable** by any
   page of the origin. So what the window opens the app with (its state, channel, `src` and
   `props`) is only as trustworthy as every page of your origin, and an app should treat its
-  `restoredState` as input, as it would a saved layout's. The window answers the desk with a
-  secret from that entry, never sent on the channel, so a page that only listens on the channel
-  can't take an app back early or keep it away.
+  `restoredState` as input, as it would a saved layout's. The window signs each message it sends
+  the desk: an HMAC, keyed by a secret it read from that entry, over the whole message and a number
+  that only goes up. The desk takes no message it can't verify or has seen the number of, and the
+  secret never crosses the channel. So a page that only listens on the channel can't forge, alter
+  or replay a message: it can't take an app back early, keep it away, or change the state it comes
+  back with. A page that reads storage in time can. Signing needs Web Crypto, so popping out needs
+  a secure context (https, or localhost). Without one, tiles have no pop-out link.
 
 Screen readers hear every keyboard move and resize, and the grip's menu takes the arrow keys.
 Mouse users and touch users get the same pointer events.
