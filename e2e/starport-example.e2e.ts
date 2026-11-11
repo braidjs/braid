@@ -36,7 +36,8 @@ afterAll(async () => {
 
 /** A fresh profile, so nothing is remembered from another test. */
 async function desk(): Promise<Page> {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // reduced motion: a tile animates in at 97% of its size, which a measurement could catch
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
   const page = await context.newPage();
   page.on('pageerror', (error) => console.error('page error:', error.message));
   await page.goto(server.url);
@@ -324,6 +325,18 @@ describe('the Starport example', () => {
     expect(await seam.textContent()).toBe('<fragment-slot name="star-map">  ·  healthy  ·  own realm  ·  /starport/__braid/frag/star-map/');
     expect(await page.locator('main > fragment-slot .tile-head .seam:visible').count()).toBe(3);
     expect(await app(page, 'flights').evaluate((slot) => getComputedStyle(slot).outlineStyle)).toBe('dashed');
+    // the header is above the app's own content, not after it
+    const headerBottom = (await app(page, 'star-map').locator('.tile-head').boundingBox())!;
+    const appTop = (await app(page, 'star-map').locator('h2').boundingBox())!;
+    expect(headerBottom.y + headerBottom.height).toBeLessThanOrEqual(appTop.y);
+
+    // the label follows Braid's state for the slot as it changes
+    await app(page, 'star-map').evaluate((slot) => slot.setAttribute('state', 'suspect'));
+    await expect.poll(() => seam.textContent()).toContain('·  suspect  ·');
+    // and a tile that arrives later is labelled through its boot
+    await page.locator('#dock [data-app="radar"] .launch').click();
+    await expect.poll(() => app(page, 'radar').locator('.tile-head .seam').textContent()).toBe('<fragment-slot name="radar">  ·  healthy  ·  own realm  ·  /starport/__braid/frag/radar/');
+
     await page.locator('#seams-toggle').click();
     expect(await seam.isVisible()).toBe(false);
     expect(await app(page, 'flights').evaluate((slot) => getComputedStyle(slot).outlineStyle)).toBe('none');
@@ -420,10 +433,28 @@ describe('the Starport example', () => {
     await page.mouse.up();
     expect(await map.evaluate((slot) => [slot.getAttribute('data-braid-columns'), slot.getAttribute('data-braid-rows')])).toEqual(['2', null]);
 
-    // on a phone the grid is one column, whatever span a tile has
+    // at tablet width the grid is two columns: a three-column span fills the row, and is no wider
+    await map.locator('.wider').click(); // 2 → 3
+    expect(await map.getAttribute('data-braid-columns')).toBe('3');
+    await page.setViewportSize({ width: 1000, height: 900 });
+    const row = await page.locator('main').evaluate((desk) => {
+      const style = getComputedStyle(desk);
+      return desk.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    expect(Math.abs((await width()) - row)).toBeLessThan(2);
+    // and its width button goes no further than the grid does: from two columns, to one
+    await map.locator('.wider').click();
+    expect(await map.getAttribute('data-braid-columns')).toBeNull();
+
+    // on a phone the grid is one column: every tile is as wide as that column, whatever its span
+    await map.locator('.wider').click();
     await page.setViewportSize({ width: 390, height: 800 });
-    const boxes = await page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => Math.round(slot.getBoundingClientRect().width)));
-    expect(new Set(boxes).size).toBe(1);
+    const column = await page.locator('main').evaluate((desk) => {
+      const style = getComputedStyle(desk);
+      return desk.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    const widths = await page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => slot.getBoundingClientRect().width));
+    for (const tile of widths) expect(Math.abs(tile - column)).toBeLessThan(2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
     await page.context().close();
   });
@@ -484,11 +515,12 @@ describe('the Starport example', () => {
 
     // zoomed out in its window, then the window is closed: it is back on the desk, as it was left
     await inWindow.locator('#out').click();
-    // the window keeps its app's latest state from a moment after each change
+    // the window has its app's state from a moment after each change
     await popup.waitForTimeout(300);
     await popup.close({ runBeforeUnload: true });
-    // back in the place it left, at the zoom it was left at
-    await expect.poll(() => open(page)).toEqual(['flights', 'star-map', 'cargo']);
+    // back in the place it left, at the zoom it was left at, once the desk has given the window
+    // its moment to take the app again (as a reloading window would)
+    await expect.poll(() => open(page), { timeout: 5000 }).toEqual(['flights', 'star-map', 'cargo']);
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
     await page.context().close();
   });
@@ -503,7 +535,7 @@ describe('the Starport example', () => {
     await page.reload();
     await ready(page);
     await popup.close({ runBeforeUnload: true });
-    await expect.poll(() => open(page)).toEqual(['flights', 'star-map', 'cargo', 'cargo']);
+    await expect.poll(() => open(page), { timeout: 5000 }).toEqual(['flights', 'star-map', 'cargo', 'cargo']);
     await page.context().close();
   });
 
@@ -542,4 +574,54 @@ describe('the Starport example', () => {
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes('handoff/')))).toEqual([]);
     await page.context().close();
   }, 30_000);
+
+  it('restores a layout saved before tiles had spans', async () => {
+    const page = await desk();
+    // as the 0.8.1 desk wrote it: no placement on any slot
+    await page.evaluate((key) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          version: 1,
+          savedAt: '2026-11-10T22:00:00.000Z',
+          slots: [
+            { appId: 'star-map', channel: 'fdc3.channel.1', state: { zoom: 3 } },
+            { appId: 'cargo', channel: 'fdc3.channel.1' },
+            { appId: 'radar', channel: 'fdc3.channel.1' },
+          ],
+        }),
+      );
+    }, `braid.workspace${new URL(server.url).pathname}layouts/before`);
+    await page.reload();
+    await ready(page);
+    await page.locator('#layouts button[data-restore="before"]').click();
+    await expect.poll(() => open(page)).toEqual(['star-map', 'cargo', 'radar']);
+    await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 3×');
+    expect(await page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => slot.getAttribute('data-braid-columns') ?? slot.getAttribute('data-braid-rows')))).toEqual([null, null, null]);
+    expect(await page.locator('main > fragment-slot > .tile-head').count()).toBe(3);
+    await page.context().close();
+  });
+
+  it('keeps a popped-out app in its window when the window reloads', async () => {
+    const page = await desk();
+    await app(page, 'star-map').locator('#in').click();
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), app(page, 'star-map').locator('.pop').click()]);
+    const inWindow = popup.locator('main fragment-slot[name="star-map"]');
+    await expect.poll(() => inWindow.locator('#zoom-label').textContent(), { timeout: 15_000 }).toBe('Zoom 2×');
+    await inWindow.locator('#in').click();
+    await popup.waitForTimeout(300);
+
+    await popup.reload();
+    await expect.poll(() => inWindow.locator('#zoom-label').textContent(), { timeout: 15_000 }).toBe('Zoom 3×');
+    expect(await popup.locator('#back').isVisible()).toBe(true);
+    // the desk left it there: give it time to have taken it back, if it were going to
+    await page.waitForTimeout(2500);
+    expect(await open(page)).toEqual(['flights', 'cargo']);
+
+    // and it still comes back when the window really closes
+    await popup.close({ runBeforeUnload: true });
+    await expect.poll(() => open(page), { timeout: 5000 }).toEqual(['flights', 'star-map', 'cargo']);
+    await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 3×');
+    await page.context().close();
+  });
 });

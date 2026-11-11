@@ -142,9 +142,13 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
   }
 
   function cycle(slot, key, fallback, max) {
-    const current = workspace.placementOf(slot)[key] ?? fallback;
-    resize(slot, { [key]: (current % max) + 1 });
+    // no wider than the grid is now: at two columns, a three-column span would look like two
+    const limit = key === 'columns' ? Math.min(max, gridColumns()) : max;
+    const current = Math.min(workspace.placementOf(slot)[key] ?? fallback, limit);
+    resize(slot, { [key]: (current % limit) + 1 });
   }
+
+  const gridColumns = () => getComputedStyle(desk).gridTemplateColumns.split(' ').filter(Boolean).length;
 
   /** A span of one column, or of the default height, is no span: the tile goes back to the default. */
   function resize(slot, change) {
@@ -240,7 +244,7 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
     if (event.button !== 0) return;
     event.preventDefault();
     const grid = getComputedStyle(desk);
-    const columns = grid.gridTemplateColumns.split(' ').filter(Boolean).length;
+    const columns = gridColumns();
     if (columns < 2) return; // one column: nothing to span
     const gap = parseFloat(grid.columnGap) || 0;
     const rowGap = parseFloat(grid.rowGap) || 0;
@@ -289,6 +293,8 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
     for (const record of records) if (record.type === 'attributes') describe(record.target);
   }).observe(desk, { childList: true, subtree: true, attributes: true, attributeFilter: ['state', 'data-braid-columns', 'data-braid-rows'] });
   ensure();
+  // there before the first move, so a screen reader is already listening when it speaks
+  announce('');
 
   return {
     /** Outlines every tile and shows what it is, or stops. */

@@ -244,7 +244,8 @@ relayShips().catch((error) => console.warn('starport: the ship relay between win
 const OUT_KEY = `starport${base}out`;
 const out = new Map();
 // the timer is this page's; everything else is kept
-const keepOut = () => sessionStorage.setItem(OUT_KEY, JSON.stringify([...out].map(([id, sent]) => [id, without(sent, 'timer')])));
+const keepOut = () =>
+  sessionStorage.setItem(OUT_KEY, JSON.stringify([...out].map(([id, sent]) => [id, without(without(sent, 'timer'), 'returning')])));
 
 /** Gives the window `id` its time to take its app; a window that has taken it gets none. */
 function waitForTaking(id) {
@@ -270,6 +271,7 @@ function takeBack(id, change = {}) {
   out.delete(id);
   keepOut();
   clearTimeout(sent.timer);
+  clearTimeout(sent.returning);
   localStorage.removeItem(handoffKey(id));
   const snapshot = { ...sent.snapshot };
   if (change.state !== undefined) snapshot.state = change.state;
@@ -303,22 +305,36 @@ async function popOut(slot) {
   notice(`${app(appId).title} is in its own window. Close that window to bring it back.`);
 }
 
+/** A window that gives its app back may only be reloading: if it takes it again this soon, it keeps it. */
+const RELOAD_GRACE_MS = 1500;
+
 dock.addEventListener('message', ({ data }) => {
   if (solo || typeof data?.handoff !== 'string' || out.get(data.handoff)?.appId !== data.appId) return;
+  const sent = out.get(data.handoff);
   // taken: the window has the app now, and will give it back when it closes
   if (data.taken) {
-    out.get(data.handoff).taken = true;
+    clearTimeout(sent.returning);
+    sent.taken = true;
     waitForTaking(data.handoff);
     keepOut();
     return;
   }
-  takeBack(data.handoff, data.snapshot ?? {});
+  clearTimeout(sent.returning);
+  sent.returning = setTimeout(() => takeBack(data.handoff, data.snapshot ?? {}), RELOAD_GRACE_MS);
 });
 
 /** In a popped-out window: the app, with the state it left the desk with. */
 async function openSolo() {
+  // what this window held when it last unloaded: a reload takes it up again
+  const SOLO_KEY = `starport${base}solo`;
   let given;
-  if (handoff) {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(SOLO_KEY) ?? 'null');
+    if (kept?.handoff === handoff && kept.appId === solo) given = kept;
+  } catch {
+    given = undefined;
+  }
+  if (handoff && !given) {
     const read = () => localStorage.getItem(handoffKey(handoff));
     let raw = read();
     // the desk writes it a moment after opening this window
@@ -343,7 +359,7 @@ async function openSolo() {
   }
   dock.postMessage({ handoff, appId: solo, taken: true });
   // kept fresh, because a window that is closing has no time to ask its app for its state
-  const latest = {};
+  const latest = { ...(given.snapshot?.state !== undefined ? { state: given.snapshot.state } : {}) };
   let asking;
   /** Asks the app for its state; a second ask while one is out waits for that one. */
   const refresh = () =>
@@ -358,9 +374,9 @@ async function openSolo() {
         asking = undefined;
       }
     })());
-  // after anything the user does in the app (a click, a key, a change), and every few seconds
+  // after anything the user does in the app (once the app has handled it), and every few seconds
   // besides, for state the app changes by itself
-  for (const type of ['pointerup', 'keyup', 'change']) document.addEventListener(type, () => setTimeout(refresh, 50), true);
+  for (const type of ['click', 'keyup', 'change', 'input']) document.addEventListener(type, () => setTimeout(refresh), true);
   setInterval(refresh, 3000);
   let returned = false;
   const giveBack = () => {
@@ -368,11 +384,18 @@ async function openSolo() {
     returned = true;
     dock.postMessage({ handoff, appId: solo, snapshot: latest });
   };
-  // a page kept in the back-forward cache may come back; it has not closed
-  addEventListener('pagehide', (event) => event.persisted || giveBack());
+  // A page kept in the back-forward cache may come back; it has not closed. One that is reloading
+  // gives its app back too (pagehide cannot tell), but keeps it here, and takes it up again in
+  // time for the desk to leave it be.
+  addEventListener('pagehide', (event) => {
+    if (event.persisted) return;
+    sessionStorage.setItem(SOLO_KEY, JSON.stringify({ handoff, appId: solo, snapshot: { ...given.snapshot, ...latest } }));
+    giveBack();
+  });
   $('#back').addEventListener('click', async () => {
     await refresh();
     giveBack();
+    sessionStorage.removeItem(SOLO_KEY);
     window.close();
   });
 }
