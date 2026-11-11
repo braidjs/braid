@@ -1878,8 +1878,32 @@ function normalizeBasePath(basePath: string | undefined): string {
  * ones (`%2e%2e`), are already normalized when the incoming request URL is parsed, which takes
  * such a request out of the fragment namespace entirely before it ever reaches here. The check
  * costs nothing and does not assume every runtime normalizes identically.
+ *
+ * What URL parsing does not normalize is a separator hidden inside a segment. `..%2f..%2fadmin`
+ * is one segment to the parser, so it is still under the endpoint's path as a string — and
+ * `../../admin` to an upstream that decodes `%2F` before resolving, which many static hosts and
+ * proxies do. So a segment that decodes to a dot segment, or to anything containing a slash or a
+ * backslash, is refused before it is forwarded, as is one that does not decode at all.
  */
 export function resolveEndpointUrl(endpoint: string, strippedUrl: URL, fragmentId: string): URL {
+  for (const segment of strippedUrl.pathname.split('/')) {
+    if (!segment.includes('%')) continue;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      throw new EndpointScopeError(
+        `braid-gateway: a request for fragment "${fragmentId}" has a path segment that is not valid percent-encoding — refusing to forward it`,
+      );
+    }
+    if (decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) {
+      throw new EndpointScopeError(
+        `braid-gateway: a request for fragment "${fragmentId}" has an encoded path separator or dot segment, which could resolve ` +
+          `outside its endpoint path upstream — refusing to forward it`,
+      );
+    }
+  }
+
   const endpointUrl = new URL(endpoint);
   const basePath = endpointUrl.pathname.endsWith('/') ? endpointUrl.pathname.slice(0, -1) : endpointUrl.pathname;
 

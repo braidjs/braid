@@ -178,6 +178,48 @@ describe('gateway namespace routing', () => {
       );
     });
 
+    it('refuses a separator or dot segment hidden by percent-encoding, which an upstream might decode', async () => {
+      const endpoint = 'https://internal.example/apps/billing/';
+      // each of these is one segment to a URL parser, so it stays under the endpoint's path as a
+      // string; an upstream that decodes before resolving would walk out of it
+      for (const path of ['/..%2f..%2fadmin/users', '/..%2F..%2Fadmin', '/a/..%5c..%5cadmin', '/%2e%2e%2fadmin', '/x%2f..%2f..%2f..%2fadmin', '/a/%2E%2E%2Fb']) {
+        const url = new URL('https://example.com/');
+        Object.defineProperty(url, 'pathname', { value: path });
+        expect(() => resolveEndpointUrl(endpoint, url, 'billing'), path).toThrow(/encoded path separator or dot segment/);
+      }
+      const malformed = new URL('https://example.com/');
+      Object.defineProperty(malformed, 'pathname', { value: '/a/%E0%A4%A/b' });
+      expect(() => resolveEndpointUrl(endpoint, malformed, 'billing')).toThrow(/not valid percent-encoding/);
+
+      // encoding that hides nothing is forwarded as it came
+      for (const path of ['/assets/main%20v2.js', '/files/r%C3%A9sum%C3%A9.pdf', '/v1%2E2/app.js', '/a%3Fb']) {
+        expect(resolveEndpointUrl(endpoint, new URL(`https://example.com${path}`), 'billing').pathname).toBe(`/apps/billing${path}`);
+      }
+
+      // through the gateway: nothing is fetched, for an asset or for a document
+      const fetched: string[] = [];
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        fetched.push(String(input instanceof Request ? input.url : input));
+        return new Response('upstream', { headers: { 'content-type': 'text/plain' } });
+      }) as typeof fetch;
+      try {
+        const gateway = createGateway({ registry: [{ id: 'billing', endpoint }] });
+        for (const path of ['/__braid/frag/billing/..%2f..%2fadmin/users', '/__braid/doc/billing/..%2f..%2fadmin']) {
+          const response = await gateway.handle(new Request(`https://shell.example${path}`));
+          expect(response?.status, path).toBeGreaterThanOrEqual(400);
+          expect(await response?.text()).not.toContain('upstream');
+        }
+        expect(fetched).toEqual([]);
+        // and an honest request still goes through
+        const ok = await gateway.handle(new Request('https://shell.example/__braid/frag/billing/assets/main.js'));
+        expect(ok?.status).toBe(200);
+        expect(fetched).toEqual(['https://internal.example/apps/billing/assets/main.js']);
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
     it("never leaves the endpoint's origin for a path that starts with //", async () => {
       // `//host/x` is a protocol-relative URL to a parser: joined onto a pathless endpoint as a
       // string, it would name another host entirely (169.254.169.254 being the classic one)
