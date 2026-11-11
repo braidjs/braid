@@ -138,9 +138,9 @@ A slot can carry host content for two moments: while its fragment boots, and if 
 
 ### A header of the host's own
 
-A `slot="header"` child shows above the fragment, in every state: loading, ready, failed. It is
-the host's markup in the host's document, styled by the host's CSS, so it is the place for a
-tile's title and controls in a workspace.
+A `slot="header"` child shows above the fragment: while it loads, once it is ready, and if it fails.
+It is the host's markup in the host's document, so it is the place for a tile's title and controls
+in a workspace.
 
 ```html
 <fragment-slot name="chart">
@@ -150,8 +150,13 @@ tile's title and controls in a workspace.
 
 - **It moves with the slot.** Reorder the slot and its header goes along; the fragment keeps
   running (see [Moving a slot](#moving-a-slot)).
-- **The fragment cannot reach it.** It is outside the fragment's shadow root content, and a
-  fragment's styles don't apply to it.
+- **The host styles it, mostly.** The header is light DOM, so the host's CSS applies. But the slot
+  it shows through is in the fragment's shadow root, beside the fragment's own styles, so a
+  fragment's broad rules (`slot { … }`, `* { color: … }`) can reach it. That is the trusted tier's
+  namespace isolation, not a boundary: style the header explicitly rather than relying on inherited
+  defaults.
+- **Server-rendered slots have it from the first paint**, because the gateway writes it into the
+  declarative shadow root, and it stays while a slot is idle or reloading.
 - **Untrusted fragments too.** It sits above their frame.
 
 ### Booting on intent

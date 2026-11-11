@@ -188,7 +188,8 @@ export function ensureHeaderSlot(shadowRoot: ShadowRoot): void {
  * their first paint matters.
  */
 export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
-  if (shadowRoot.querySelector('slot[name="fallback"]')) {
+  // the root's own children only, as for the header: a fragment's markup may carry its own
+  if ([...shadowRoot.children].some((child) => child.localName === 'slot' && (child as HTMLSlotElement).name === 'fallback')) {
     ensureHeaderSlot(shadowRoot);
     return;
   }
@@ -631,6 +632,13 @@ export class FragmentSlot extends HTMLElement {
    *
    * Resolves once the instance is fully gone, so `reload()` and the next `#boot()` can wait on it.
    */
+  /** Empties the shadow root of the fragment, and keeps the host's header showing. */
+  #clearKeepingHeader(): void {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.replaceChildren();
+    ensureHeaderSlot(this.shadowRoot);
+  }
+
   #teardown(reason: CloseReason): Promise<void> {
     const channel = this.#channel;
     const abortController = this.#abortController;
@@ -644,7 +652,7 @@ export class FragmentSlot extends HTMLElement {
     // Nothing mounted: the pre-Weave synchronous path, still the right one for an idle slot.
     if (!channel || !abortController) {
       abortController?.abort();
-      this.shadowRoot?.replaceChildren();
+      this.#clearKeepingHeader();
       this.#setState('idle');
       return Promise.resolve();
     }
@@ -679,7 +687,7 @@ export class FragmentSlot extends HTMLElement {
       // close has already rendered into the shadow root, and wiping it here would blank a fragment
       // that had just successfully mounted.
       if (this.#closingToken === token) {
-        this.shadowRoot?.replaceChildren();
+        this.#clearKeepingHeader();
         this.#setState('idle');
         this.#closing = undefined;
         this.#closingToken = undefined;

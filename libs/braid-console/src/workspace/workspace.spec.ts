@@ -455,6 +455,26 @@ describe('placement, order and handing an app over', () => {
     expect(other.workspace.placementOf(other.container.children[0] as unknown as Element)).toEqual({ columns: 3 });
     expect(other.container.children[0].props).toEqual({ symbol: 'AAPL' });
   });
+
+  it('snapshots an app still booting with the state it was opened with, and leaves a slot in place where it is', async () => {
+    const { workspace, container } = await setup({ fdc3: false });
+    const chart = workspace.open('chart', { state: { zoom: 3 }, channel: 'fdc3.channel.2' });
+    // asked before the fragment has booted: nothing to ask it yet, so what it was given
+    expect(await workspace.snapshot(chart)).toEqual({ appId: 'chart', state: { zoom: 3 }, channel: 'fdc3.channel.2' });
+
+    let moves = 0;
+    const insertBefore = container.insertBefore.bind(container);
+    container.insertBefore = (slot, before) => (moves++, insertBefore(slot, before));
+    workspace.open('notes');
+    workspace.move(chart, 0);
+    workspace.move(chart, -3);
+    expect(moves).toBe(0);
+    workspace.move(chart, 1);
+    expect(moves).toBe(1);
+
+    // a state that is not JSON is no state, rather than an error
+    expect(() => workspace.open('odd', { state: () => 1 })).not.toThrow();
+  });
 });
 
 describe('without an FDC3 agent', () => {

@@ -334,8 +334,10 @@ describe('the Starport example', () => {
     const page = await desk();
     await app(page, 'star-map').locator('#in').click();
     expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
-    const realm = () => app(page, 'star-map').evaluate((slot) => slot.getAttribute('data-braid-realm') ?? [...document.querySelectorAll('iframe')].length);
-    const before = await realm();
+    // a mark left in Star Map's own realm: a remount would be a new realm, without it
+    const realmOf = () => page.frames().find((frame) => frame.name() === 'braid:star-map');
+    await realmOf()!.evaluate(() => ((window as unknown as { marked: boolean }).marked = true));
+    const stillMarked = async () => realmOf()?.evaluate(() => (window as unknown as { marked?: boolean }).marked === true) ?? false;
 
     // a mouse drag onto Flights puts Star Map in its place
     const grip = await app(page, 'star-map').locator('.grip').boundingBox();
@@ -347,16 +349,17 @@ describe('the Starport example', () => {
     expect(await open(page)).toEqual(['star-map', 'flights', 'cargo']);
     // the same app, not a new one: its zoom is where it was, and it booted nothing again
     expect(await app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
-    expect(await realm()).toBe(before);
+    expect(await stillMarked()).toBe(true);
 
-    // a touch drag goes through the same pointer events; the grip opts out of scrolling for it
+    // A touch drag arrives as the same pointer events, which is what this sends: it checks the
+    // handlers with pointerType touch, not a finger on a screen. The grip opts out of scrolling.
     expect(await app(page, 'cargo').locator('.grip').evaluate((el) => getComputedStyle(el).touchAction)).toBe('none');
     const cargoGrip = await app(page, 'cargo').locator('.grip').boundingBox();
     const target = await app(page, 'star-map').boundingBox();
-    await app(page, 'cargo').locator('.grip').dispatchEvent('pointerdown', { pointerType: 'touch', button: 0, clientX: cargoGrip!.x + 5, clientY: cargoGrip!.y + 5, bubbles: true });
+    await app(page, 'cargo').locator('.grip').dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 7, button: 0, buttons: 1, clientX: cargoGrip!.x + 5, clientY: cargoGrip!.y + 5, bubbles: true });
     await page.evaluate(([x, y]) => {
-      dispatchEvent(new PointerEvent('pointermove', { pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
-      dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+      dispatchEvent(new PointerEvent('pointermove', { pointerType: 'touch', pointerId: 7, buttons: 1, clientX: x, clientY: y, bubbles: true }));
+      dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', pointerId: 7, clientX: x, clientY: y, bubbles: true }));
     }, [target!.x + 80, target!.y + 160]);
     expect(await open(page)).toEqual(['cargo', 'star-map', 'flights']);
 
@@ -367,6 +370,21 @@ describe('the Starport example', () => {
     expect(await open(page)).toEqual(['flights', 'cargo', 'star-map']);
     expect(await page.locator('#tile-announcer').textContent()).toBe('Flights moved to position 1 of 3');
     expect(await page.evaluate(() => document.activeElement?.closest('fragment-slot')?.getAttribute('name'))).toBe('flights');
+
+    // with one pointer and no drag: a click on the grip offers the same moves as buttons
+    await app(page, 'flights').locator('.grip').click();
+    expect(await app(page, 'flights').locator('.grip').getAttribute('aria-expanded')).toBe('true');
+    await app(page, 'flights').locator('.move-menu button[data-step="1"]').click();
+    expect(await open(page)).toEqual(['cargo', 'flights', 'star-map']);
+    expect(await app(page, 'flights').locator('.move-menu').isVisible()).toBe(false);
+
+    // a button let go where the page did not hear it ends the drag: moving on moves nothing
+    const loose = await app(page, 'star-map').locator('.grip').boundingBox();
+    await app(page, 'star-map').locator('.grip').dispatchEvent('pointerdown', { pointerId: 9, button: 0, buttons: 1, clientX: loose!.x + 5, clientY: loose!.y + 5, bubbles: true });
+    const cargoBox = await app(page, 'cargo').boundingBox();
+    await page.evaluate(([x, y]) => dispatchEvent(new PointerEvent('pointermove', { pointerId: 9, buttons: 0, clientX: x, clientY: y, bubbles: true })), [cargoBox!.x + 60, cargoBox!.y + 120]);
+    expect(await open(page)).toEqual(['cargo', 'flights', 'star-map']);
+    expect(await page.evaluate(() => document.body.classList.contains('moving'))).toBe(false);
     await page.context().close();
   });
 
@@ -469,8 +487,23 @@ describe('the Starport example', () => {
     // the window keeps its app's latest state from a moment after each change
     await popup.waitForTimeout(300);
     await popup.close({ runBeforeUnload: true });
-    await expect.poll(() => open(page)).toEqual(['flights', 'cargo', 'star-map']);
+    // back in the place it left, at the zoom it was left at
+    await expect.poll(() => open(page)).toEqual(['flights', 'star-map', 'cargo']);
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
+    await page.context().close();
+  });
+
+  it('takes back an app popped out before the desk reloaded', async () => {
+    const page = await desk();
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), app(page, 'cargo').locator('.pop').click()]);
+    await popup.locator('main fragment-slot[name="cargo"] #manifest[data-loaded]').waitFor({ timeout: 15_000 });
+    await expect.poll(() => open(page)).toEqual(['flights', 'star-map']);
+
+    // the desk reloads (its starting apps come back), and only then is the window closed
+    await page.reload();
+    await ready(page);
+    await popup.close({ runBeforeUnload: true });
+    await expect.poll(() => open(page)).toEqual(['flights', 'star-map', 'cargo', 'cargo']);
     await page.context().close();
   });
 

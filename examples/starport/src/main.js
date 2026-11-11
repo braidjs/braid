@@ -218,8 +218,10 @@ const HANDOFF_TIMEOUT_MS = 10_000;
 const isShip = (ship) => ship?.type === 'starport.ship' && typeof ship.name === 'string' && typeof ship.id?.registry === 'string';
 
 async function relayShips() {
-  const controller = new AbortController();
-  const hostFdc3 = (await agent.realmGlobals({ fragmentId: DESK.id, signal: controller.signal }))?.fdc3;
+  // A workaround, until @braidlabs/fdc3 gives a host page an fdc3 of its own: the agent's hook for
+  // a fragment, called for a directory record no slot will ever mount. Its signal never aborts,
+  // because the desk lives as long as the page.
+  const hostFdc3 = (await agent.realmGlobals({ fragmentId: DESK.id, signal: new AbortController().signal }))?.fdc3;
   if (!hostFdc3) return;
   await hostFdc3.joinUserChannel(preferences.defaultUserChannel ?? 'fdc3.channel.1').catch(() => undefined);
   // partitioned by the desk's folder, so another deployment on this origin is not on the same channel
@@ -231,25 +233,51 @@ async function relayShips() {
   await hostFdc3.addContextListener('starport.ship', (ship) => isShip(ship) && seen(ship) && between.broadcast(ship));
   between.subscribe((ship) => isShip(ship) && seen(ship) && hostFdc3.broadcast(ship));
 }
-void relayShips();
+relayShips().catch((error) => console.warn('starport: the ship relay between windows did not start', error));
 
 /**
  * Apps this desk has popped out, by handoff id: what it needs to take each one back. Only these
- * come back, once each, and with the src and props the desk sent; the window returns only the
- * app's state and channel.
+ * come back, once each, and with the src, props, span and place the desk sent; the window returns
+ * only the app's state and channel. Kept in this tab's sessionStorage too, so a desk that reloads
+ * still takes back what it popped out before.
  */
+const OUT_KEY = `starport${base}out`;
 const out = new Map();
+// the timer is this page's; everything else is kept
+const keepOut = () => sessionStorage.setItem(OUT_KEY, JSON.stringify([...out].map(([id, sent]) => [id, without(sent, 'timer')])));
+
+/** Gives the window `id` its time to take its app; a window that has taken it gets none. */
+function waitForTaking(id) {
+  const sent = out.get(id);
+  clearTimeout(sent.timer);
+  if (!sent.taken) sent.timer = setTimeout(() => takeBack(id), HANDOFF_TIMEOUT_MS);
+}
+
+if (!solo) {
+  try {
+    for (const [id, sent] of JSON.parse(sessionStorage.getItem(OUT_KEY) ?? '[]')) {
+      if (app(sent?.appId)) out.set(id, sent);
+    }
+  } catch {
+    // nothing kept, or not ours to read
+  }
+  for (const id of out.keys()) waitForTaking(id);
+}
 
 function takeBack(id, change = {}) {
   const sent = out.get(id);
   if (!sent) return;
   out.delete(id);
+  keepOut();
   clearTimeout(sent.timer);
   localStorage.removeItem(handoffKey(id));
   const snapshot = { ...sent.snapshot };
-  if ('state' in change) snapshot.state = change.state;
+  if (change.state !== undefined) snapshot.state = change.state;
   if (typeof change.channel === 'string') snapshot.channel = change.channel;
-  workspace.open(sent.appId, snapshot).scrollIntoView({ block: 'nearest' });
+  const slot = workspace.open(sent.appId, snapshot);
+  // back where it was, and the size it was
+  if (Number.isInteger(sent.index)) workspace.move(slot, sent.index);
+  slot.scrollIntoView({ block: 'nearest' });
   notice(`${app(sent.appId).title} is back on the desk.`);
 }
 
@@ -263,11 +291,14 @@ async function popOut(slot) {
     return;
   }
   const snapshot = without(await workspace.snapshot(slot), 'appId');
+  const index = [...desk.querySelectorAll(':scope > fragment-slot')].indexOf(slot);
   // The state crosses in localStorage: in the clear, to any page of this origin, which is fine
   // for Starport and is worth knowing before carrying anything private this way.
   localStorage.setItem(handoffKey(id), JSON.stringify({ appId, snapshot }));
   // a window that never takes its app (closed at once, or never started) gives it back
-  out.set(id, { appId, snapshot, timer: setTimeout(() => takeBack(id), HANDOFF_TIMEOUT_MS) });
+  out.set(id, { appId, snapshot, index });
+  waitForTaking(id);
+  keepOut();
   slot.remove();
   notice(`${app(appId).title} is in its own window. Close that window to bring it back.`);
 }
@@ -275,7 +306,12 @@ async function popOut(slot) {
 dock.addEventListener('message', ({ data }) => {
   if (solo || typeof data?.handoff !== 'string' || out.get(data.handoff)?.appId !== data.appId) return;
   // taken: the window has the app now, and will give it back when it closes
-  if (data.taken) return void clearTimeout(out.get(data.handoff).timer);
+  if (data.taken) {
+    out.get(data.handoff).taken = true;
+    waitForTaking(data.handoff);
+    keepOut();
+    return;
+  }
   takeBack(data.handoff, data.snapshot ?? {});
 });
 
@@ -307,18 +343,21 @@ async function openSolo() {
   }
   dock.postMessage({ handoff, appId: solo, taken: true });
   // kept fresh, because a window that is closing has no time to ask its app for its state
-  let latest = {};
-  let asking = false;
-  const refresh = async () => {
-    if (asking || !slot.isConnected) return;
-    asking = true;
-    try {
-      const { state, channel } = await workspace.snapshot(slot);
-      latest = { state, channel };
-    } finally {
-      asking = false;
-    }
-  };
+  const latest = {};
+  let asking;
+  /** Asks the app for its state; a second ask while one is out waits for that one. */
+  const refresh = () =>
+    (asking ??= (async () => {
+      try {
+        if (!slot.isConnected) return;
+        const { state, channel } = await workspace.snapshot(slot);
+        // no answer (still booting, or slow) is not "no state": keep what there was
+        if (state !== undefined) latest.state = state;
+        if (channel !== undefined) latest.channel = channel;
+      } finally {
+        asking = undefined;
+      }
+    })());
   // after anything the user does in the app (a click, a key, a change), and every few seconds
   // besides, for state the app changes by itself
   for (const type of ['pointerup', 'keyup', 'change']) document.addEventListener(type, () => setTimeout(refresh, 50), true);
@@ -329,7 +368,8 @@ async function openSolo() {
     returned = true;
     dock.postMessage({ handoff, appId: solo, snapshot: latest });
   };
-  addEventListener('pagehide', giveBack);
+  // a page kept in the back-forward cache may come back; it has not closed
+  addEventListener('pagehide', (event) => event.persisted || giveBack());
   $('#back').addEventListener('click', async () => {
     await refresh();
     giveBack();

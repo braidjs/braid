@@ -598,6 +598,8 @@ export function pierceShellHtml(options: PierceOptions): ReadableStream<Uint8Arr
   const shadowRoot = (target: PierceTarget): Injection[] => [
     '<template shadowrootmode="open">',
     BRAID_FRAGMENT_STYLES,
+    // the host's slot="header" child shows from the first paint, before the client has booted
+    '<slot name="header"></slot>',
     '<braid-document>',
     target.content ?? '',
     '</braid-document>',

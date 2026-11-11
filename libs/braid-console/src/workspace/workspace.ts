@@ -55,7 +55,7 @@ export interface SavedLayout {
  * `--braid-columns` / `--braid-rows`, so the host's CSS decides what a span means:
  *
  * ```css
- * [data-braid-workspace] > fragment-slot { grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 1); }
+ * [data-braid-workspace] > fragment-slot { grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 2); }
  * ```
  */
 export interface Placement {
@@ -165,8 +165,10 @@ export interface Workspace {
   /** The span an app in the area has, as {@link Workspace.place} set it. */
   placementOf(slot: Element): Placement;
   /**
-   * Moves an app to `index` among the area's apps (clamped). The fragment keeps running — same
-   * realm, same state — as any `<fragment-slot>` does when it moves within the page.
+   * Moves an app to `index` among the area's apps (clamped; other children of the area are not
+   * counted). The fragment keeps running — same realm, same state — as any `<fragment-slot>` does
+   * when it moves within the page; in a browser without `moveBefore`, an untrusted (framed) app
+   * reloads.
    */
   move(slot: Element, index: number): void;
   /** One app as a layout would save it — app, src, props, channel, state, placement — without saving anything. */
@@ -321,6 +323,10 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
     ]);
     if (channel?.type === 'user' && typeof channel.id === 'string') saved.channel = channel.id;
     if (state !== undefined) saved.state = state;
+    // a slot still booting has not been asked yet: it still holds what it was opened with
+    const pending = instance ? undefined : restores.get(slot);
+    if (pending?.state !== undefined && saved.state === undefined) saved.state = pending.state;
+    if (typeof pending?.channel === 'string' && saved.channel === undefined) saved.channel = pending.channel;
     const placement = readPlacement(slot);
     if (placement.columns !== undefined || placement.rows !== undefined) saved.placement = placement;
     return saved;
@@ -396,13 +402,15 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
     open(appId, app = {}) {
       if (typeof appId !== 'string' || appId === '') throw new TypeError('braid-workspace: open takes an app id');
       const { placement, state, channel, ...rest } = app;
-      const handover = state !== undefined || typeof channel === 'string';
-      return mountSlot(needContainer(), { appId, ...rest }, (slot) => {
+      // JSON, as a layout keeps it: what does not survive that (a function, say) is no state
+      const json = state === undefined ? undefined : JSON.stringify(state);
+      const handover = json !== undefined || typeof channel === 'string';
+      return mountSlot(needContainer(), { ...rest, appId }, (slot) => {
         if (placement) writePlacement(slot, cleanPlacement(placement));
         if (handover) {
           restores.set(slot, {
             ...(typeof channel === 'string' ? { channel } : {}),
-            ...(state !== undefined ? { state: JSON.parse(JSON.stringify(state)) } : {}),
+            ...(json !== undefined ? { state: JSON.parse(json) } : {}),
           });
         }
       });
@@ -419,10 +427,12 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
     move(slot, index) {
       const container = needContainer();
       ownSlot(slot, 'move');
-      const others = slotsIn(container).filter((other) => other !== slot);
+      const slots = slotsIn(container);
+      const others = slots.filter((other) => other !== slot);
       const at = Math.max(0, Math.min(others.length, Math.trunc(Number(index)) || 0));
+      // already there: a move that does nothing must not take the slot out and put it back
+      if (slots.indexOf(slot) === at) return;
       const before = others[at] ?? others.at(-1)?.nextSibling ?? null;
-      if (before === slot) return;
       // moveBefore, where there is one, keeps even focus and running animations inside the slot
       const parent = container as Element & { moveBefore?: (node: Node, child: Node | null) => void };
       if (typeof parent.moveBefore === 'function') parent.moveBefore(slot, before);

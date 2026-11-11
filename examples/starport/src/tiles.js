@@ -34,8 +34,30 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
 
     const grip = make('button', 'grip', '⠿');
     grip.type = 'button';
-    grip.setAttribute('aria-label', `Move ${title}. Drag, or Alt and an arrow key`);
-    grip.title = 'Drag to move (Alt + arrow keys)';
+    grip.setAttribute('aria-label', `Move ${title}`);
+    grip.setAttribute('aria-haspopup', 'menu');
+    grip.setAttribute('aria-expanded', 'false');
+    grip.title = 'Drag to move, or click for Move earlier / later (Alt + arrow keys)';
+
+    // A click on the grip, for anyone who can't or won't drag: the same moves, as buttons.
+    const menu = make('div', 'move-menu');
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    for (const [label, step] of [
+      ['Move earlier', -1],
+      ['Move later', 1],
+    ]) {
+      const item = make('button', '', label);
+      item.type = 'button';
+      item.setAttribute('role', 'menuitem');
+      item.dataset.step = String(step);
+      item.addEventListener('click', () => {
+        moveBy(slot, step);
+        closeMenu(grip, menu);
+        grip.focus();
+      });
+      menu.append(item);
+    }
 
     const name = make('span', 'tile-title');
     const icon = make('span', 'glyph', glyph);
@@ -68,24 +90,36 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
     corner.setAttribute('aria-hidden', 'true');
     corner.title = 'Drag to resize';
 
-    head.append(grip, name, seam, wider, taller, pop, close);
+    head.append(grip, menu, name, seam, wider, taller, pop, close);
     slot.prepend(head, corner);
 
     grip.addEventListener('pointerdown', (event) => dragToMove(slot, grip, event));
     grip.addEventListener('keydown', (event) => moveByKey(slot, grip, event));
+    grip.addEventListener('click', () => {
+      // a drag that moved the tile ends in a click too; that one is not a request for the menu
+      if (grip.dataset.dragged) return void delete grip.dataset.dragged;
+      if (menu.hidden) openMenu(grip, menu);
+      else closeMenu(grip, menu);
+    });
+    menu.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      closeMenu(grip, menu);
+      grip.focus();
+    });
     corner.addEventListener('pointerdown', (event) => dragToResize(slot, event));
     wider.addEventListener('click', () => cycle(slot, 'columns', 1, MAX_COLUMNS));
     taller.addEventListener('click', () => cycle(slot, 'rows', DEFAULT_ROWS, MAX_ROWS));
     pop.addEventListener('click', (event) => {
       // a modified click is the browser's: a copy, in a tab
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
       event.preventDefault();
       onPopOut(slot);
     });
     close.addEventListener('click', () => {
       const next = tiles()[tiles().indexOf(slot) + 1] ?? tiles()[tiles().indexOf(slot) - 1];
       slot.remove();
-      next?.querySelector('.grip')?.focus();
+      // the next tile, or with none left, the dock, where the user can open one again
+      (next?.querySelector('.grip') ?? document.querySelector(`#dock [data-app="${id}"] .launch`))?.focus();
     });
     describe(slot);
   }
@@ -122,15 +156,36 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
   }
 
   // ── Moving ─────────────────────────────────────────────────────────────────────────────────
+  function moveBy(slot, step) {
+    workspace.move(slot, tiles().indexOf(slot) + step);
+    const title = app(slot.getAttribute('name'))?.title ?? slot.getAttribute('name');
+    announce(`${title} moved to position ${tiles().indexOf(slot) + 1} of ${tiles().length}`);
+  }
+
   function moveByKey(slot, grip, event) {
     if (!event.altKey) return;
     const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (!step) return;
     event.preventDefault();
-    const at = tiles().indexOf(slot);
-    workspace.move(slot, at + step);
+    moveBy(slot, step);
     grip.focus();
-    announce(`${app(slot.getAttribute('name'))?.title} moved to position ${tiles().indexOf(slot) + 1} of ${tiles().length}`);
+  }
+
+  function openMenu(grip, menu) {
+    menu.hidden = false;
+    grip.setAttribute('aria-expanded', 'true');
+    menu.querySelector('button').focus();
+    const away = (event) => {
+      if (menu.contains(event.target) || event.target === grip) return;
+      closeMenu(grip, menu);
+      removeEventListener('pointerdown', away, true);
+    };
+    addEventListener('pointerdown', away, true);
+  }
+
+  function closeMenu(grip, menu) {
+    menu.hidden = true;
+    grip.setAttribute('aria-expanded', 'false');
   }
 
   /**
@@ -141,24 +196,42 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
   function dragToMove(slot, grip, event) {
     if (event.button !== 0) return;
     event.preventDefault();
-    slot.classList.add('dragging');
-    document.body.classList.add('moving');
+    const start = { x: event.clientX, y: event.clientY };
+    // the tile last swapped with, until the pointer leaves it: tiles of different sizes would
+    // otherwise swap back and forth under a pointer that has stopped moving
+    let swappedWith;
+    let moved = false;
     const follow = (move) => {
+      if (move.pointerId !== event.pointerId) return;
+      // a button let go where this page did not hear it (over a frame, or in another window)
+      if (move.buttons === 0 || !slot.isConnected) return end();
+      if (!moved && Math.hypot(move.clientX - start.x, move.clientY - start.y) < 4) return;
+      if (!moved) {
+        moved = true;
+        slot.classList.add('dragging');
+        document.body.classList.add('moving');
+      }
       const under = document.elementFromPoint(move.clientX, move.clientY)?.closest?.('fragment-slot');
-      if (!under || under === slot || under.parentElement !== desk) return;
+      if (under !== swappedWith) swappedWith = undefined;
+      if (!under || under === slot || under === swappedWith || under.parentElement !== desk) return;
+      swappedWith = under;
       workspace.move(slot, tiles().indexOf(under));
     };
-    const end = () => {
+    const stop = (up) => up.pointerId === event.pointerId && end();
+    function end() {
       slot.classList.remove('dragging');
       document.body.classList.remove('moving');
       removeEventListener('pointermove', follow);
-      removeEventListener('pointerup', end);
-      removeEventListener('pointercancel', end);
-      grip.focus({ preventScroll: true });
-    };
+      removeEventListener('pointerup', stop);
+      removeEventListener('pointercancel', stop);
+      removeEventListener('blur', end);
+      if (moved) grip.dataset.dragged = '';
+      if (slot.isConnected) grip.focus({ preventScroll: true });
+    }
     addEventListener('pointermove', follow);
-    addEventListener('pointerup', end);
-    addEventListener('pointercancel', end);
+    addEventListener('pointerup', stop);
+    addEventListener('pointercancel', stop);
+    addEventListener('blur', end);
   }
 
   // ── Resizing ───────────────────────────────────────────────────────────────────────────────
@@ -175,23 +248,33 @@ export function setupTiles({ workspace, desk, app, base, onPopOut }) {
     const rowHeight = parseFloat(grid.gridAutoRows) || 240;
     const box = slot.getBoundingClientRect();
     slot.classList.add('resizing');
+    let last = '';
     const follow = (move) => {
+      if (move.pointerId !== event.pointerId) return;
+      if (move.buttons === 0 || !slot.isConnected) return end();
       const width = box.width + (move.clientX - event.clientX);
       const height = box.height + (move.clientY - event.clientY);
-      resize(slot, {
+      const next = {
         columns: clamp(Math.round((width + gap) / (columnWidth + gap)), 1, Math.min(MAX_COLUMNS, columns)),
         rows: clamp(Math.round((height + rowGap) / (rowHeight + rowGap)), 1, MAX_ROWS),
-      });
+      };
+      // only when the snapped size changes, not on every pixel
+      if (`${next.columns}x${next.rows}` === last) return;
+      last = `${next.columns}x${next.rows}`;
+      resize(slot, next);
     };
-    const end = () => {
+    const stop = (up) => up.pointerId === event.pointerId && end();
+    function end() {
       slot.classList.remove('resizing');
       removeEventListener('pointermove', follow);
-      removeEventListener('pointerup', end);
-      removeEventListener('pointercancel', end);
-    };
+      removeEventListener('pointerup', stop);
+      removeEventListener('pointercancel', stop);
+      removeEventListener('blur', end);
+    }
     addEventListener('pointermove', follow);
-    addEventListener('pointerup', end);
-    addEventListener('pointercancel', end);
+    addEventListener('pointerup', stop);
+    addEventListener('pointercancel', stop);
+    addEventListener('blur', end);
   }
 
   // ── Keeping every tile's header up to date ─────────────────────────────────────────────────
