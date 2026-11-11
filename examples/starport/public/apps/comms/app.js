@@ -1,4 +1,4 @@
-import { createEventBus } from '@braidlabs/data';
+import { departedOf, departedText, starportBus } from '../../../src/traffic.js';
 
 // Comms takes HailShip. It need not be open: the desk launches it for the raise. It also listens
 // to the tower's bus, and logs departures as they happen.
@@ -32,9 +32,14 @@ document.getElementById('send').addEventListener('submit', (event) => {
 
 // Events are not replayed: a Comms opened after a departure does not log it. The count is state,
 // so it is right from the start.
-const tower = createEventBus({ consumer: 'comms' }).channel('tower');
-tower.addEventListener('ship.departed', ({ payload }) => say(`Tower: ${payload.name} departed for ${payload.to}.`, 'sys'));
+// The channel reaches every window of this origin: a Comms popped out hears departures too.
+const { tower, report } = starportBus('comms');
+tower.addEventListener('ship.departed', ({ payload, source }) => {
+  report('read', 'tower', `event: ship.departed (${payload.name}, from ${source})`);
+  say(`Tower: ${payload.name} departed for ${payload.to}.`, 'sys');
+});
 tower.subscribe((state) => {
-  const departures = state?.departed?.length ?? 0;
+  if (state !== undefined) report('read', 'tower', departedText(state));
+  const departures = departedOf(state).length;
   document.getElementById('tower').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
 });

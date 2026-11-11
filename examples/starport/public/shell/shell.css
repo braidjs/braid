@@ -162,7 +162,7 @@ body[data-seams] .tile-head .seam {
 /* A popped-out window: the same page, holding one app that fills it. */
 .back { display: none; }
 body[data-solo] #dock, body[data-solo] .layouts, body[data-solo] #open-boundaries, body[data-solo] #open-preferences,
-body[data-solo] #remembered, body[data-solo] #ticker, body[data-solo] .brand p, body[data-solo] .tile-head .pop,
+body[data-solo] #remembered, body[data-solo] #ticker, body[data-solo] #traffic, body[data-solo] #traffic-toggle, body[data-solo] .brand p, body[data-solo] .tile-head .pop,
 body[data-solo] .tile-head .size, body[data-solo] .tile-head .grip, body[data-solo] .tile-head .close, body[data-solo] .resize, body[data-solo] #empty { display: none !important; }
 body[data-solo] .back { display: inline-block; margin-inline-start: auto; padding: 8px 14px; border-radius: 10px; border: 0; font-weight: 700; color: #0b1020; background: linear-gradient(135deg, var(--sp-indigo), var(--sp-teal)); }
 body[data-solo] .back[hidden] { display: none; }
@@ -204,6 +204,7 @@ dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; heigh
 .panels { display: flex; gap: 6px; }
 .panels button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--sp-line); background: var(--sp-panel); font-weight: 600; }
 .panels button:hover { border-color: var(--sp-indigo); }
+.panels button[aria-expanded='true'] { border-color: var(--sp-teal); color: var(--sp-teal); background: rgba(45, 212, 191, 0.1); }
 
 #ticker {
   display: flex; align-items: center; gap: 12px; width: fit-content; float: right;
@@ -214,6 +215,24 @@ dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; heigh
 #ticker-count { color: var(--sp-dim); font: 12px var(--sp-mono); }
 #ticker-count:empty { display: none; }
 [data-braid-workspace] { clear: both; }
+
+/* The Traffic panel: newest first, a write in amber and a read in teal. */
+#traffic { clear: both; margin: 18px 28px 0; padding: 14px 16px; border-radius: 18px; border: 1px solid var(--sp-line); background: var(--sp-panel); }
+#traffic[hidden], #traffic-empty[hidden] { display: none; }
+#traffic header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; position: static; padding: 0; background: none; border: 0; backdrop-filter: none; z-index: auto; }
+#traffic h2 { margin: 0; font-size: 15px; }
+#traffic code { font: 12px var(--sp-mono); color: #c7d2fe; }
+#traffic header p { margin: 0; flex: 1 1 320px; color: var(--sp-dim); font-size: 13px; }
+#traffic-clear { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--sp-line); background: transparent; color: var(--sp-dim); font-weight: 600; }
+#traffic-empty { margin: 12px 0 2px; color: var(--sp-dim); font-size: 14px; }
+#traffic-lines { list-style: none; margin: 10px 0 0; padding: 0; max-height: 220px; overflow: auto; display: grid; gap: 4px; font: 12px var(--sp-mono); }
+#traffic-lines li { display: grid; grid-template-columns: 7.5em 4.5em 17em 8.5em 1fr; gap: 10px; align-items: baseline; padding: 4px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+#traffic-lines .at { color: var(--sp-dim); }
+#traffic-lines .kind { font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
+#traffic-lines .write .kind { color: var(--sp-amber); }
+#traffic-lines .read .kind { color: var(--sp-teal); }
+#traffic-lines .channel { color: #c7d2fe; }
+#traffic-lines .what { overflow-wrap: anywhere; }
 
 .lede { margin: 4px 0 16px; color: var(--sp-dim); }
 .note { margin: 16px 0 0; color: var(--sp-dim); font-size: 13px; }
@@ -237,10 +256,13 @@ legend { padding: 0 6px; color: var(--sp-dim); font-size: 13px; }
   h1 { font-size: 20px; }
   #dock { margin-inline: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .panels, .layouts { width: 100%; flex-wrap: wrap; }
-  .panels button { flex: 1; }
+  .panels button { flex: 1 1 40%; }
   #layouts { flex-wrap: wrap; }
   #save-layout { flex: 1 1 100%; }
   #save-layout input { flex: 1; width: auto; min-width: 0; }
+  #traffic { margin: 14px 16px 0; padding: 12px; }
+  #traffic-lines li { grid-template-columns: auto auto 1fr; }
+  #traffic-lines .channel, #traffic-lines .what { grid-column: 1 / -1; }
   #ticker, #remembered { float: none; width: auto; margin: 14px 16px 0; flex-wrap: wrap; border-radius: 16px; }
   /* one column: every tile is full width and as tall as its app, whatever span it was given */
   [data-braid-workspace] { padding: 16px 16px 32px; gap: 14px; grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }

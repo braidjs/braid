@@ -4,6 +4,7 @@ import { createWorkspace, localStorageStore } from '@braidlabs/console/workspace
 import { createEventBus } from '@braidlabs/data';
 import { APPS, baseOf, basePathOf } from './registry.js';
 import { setupTiles } from './tiles.js';
+import { departedOf, starportBus } from './traffic.js';
 
 /**
  * The desk's whole runtime. The workspace is the `[data-braid-workspace]` element in index.html;
@@ -230,8 +231,18 @@ async function relayShips() {
   });
   let relayed;
   const seen = (ship) => (ship.id.registry === relayed ? false : ((relayed = ship.id.registry), true));
-  await hostFdc3.addContextListener('starport.ship', (ship) => isShip(ship) && seen(ship) && between.broadcast(ship));
-  between.subscribe((ship) => isShip(ship) && seen(ship) && hostFdc3.broadcast(ship));
+  // the relay says what it passes on, for the desk's Traffic panel
+  const { report } = starportBus('relay');
+  await hostFdc3.addContextListener('starport.ship', (ship) => {
+    if (!isShip(ship) || !seen(ship)) return;
+    report('write', 'starport.ship', `ship: ${ship.name}`);
+    between.broadcast(ship);
+  });
+  between.subscribe((ship) => {
+    if (!isShip(ship) || !seen(ship)) return;
+    report('read', 'starport.ship', `ship: ${ship.name}`);
+    hostFdc3.broadcast(ship);
+  });
 }
 relayShips().catch((error) => console.warn('starport: the ship relay between windows did not start', error));
 
@@ -484,15 +495,62 @@ keepOneTaker();
 // Not everything is a selection or a request. "A ship departed" is an event: whoever is listening
 // hears it once, and nobody is asked to act. Flights emits it on a @braidlabs/data channel; the
 // desk and Comms listen. The channel's state half carries the running count, which a late
-// listener does get.
-const tower = createEventBus({ consumer: 'desk' }).channel('tower');
-tower.addEventListener('ship.departed', ({ payload }) => {
-  $('#ticker-event').textContent = `${payload.name} departed for ${payload.to}`;
-});
-tower.subscribe((state) => {
-  const departures = state?.departed?.length ?? 0;
-  $('#ticker-count').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
-});
+// listener does get. It reaches every window of this origin, so a popped-out app is on it too.
+//
+// The Traffic panel shows what crosses: everyone on the bus reports what it writes and reads to
+// `starport.traffic`, from the desk, its apps, and every popped-out window. A popped-out window
+// reports; only the desk shows the log.
+if (!solo) {
+  const { tower, traffic, report } = starportBus('desk');
+  tower.addEventListener('ship.departed', ({ payload, source }) => {
+    report('read', 'tower', `event: ship.departed (${payload.name}, from ${source})`);
+    $('#ticker-event').textContent = `${payload.name} departed for ${payload.to}`;
+  });
+  tower.subscribe((state) => {
+    const departures = departedOf(state).length;
+    if (state !== undefined) report('read', 'tower', `state: ${departures} departed`);
+    $('#ticker-count').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
+  });
+
+  const MAX_LINES = 60;
+  // what any page of this origin may send: kept short, so a flood of long lines stays cheap
+  const clip = (value) => String(value).slice(0, 160);
+  const lines = $('#traffic-lines');
+  traffic.addEventListener('crossing', ({ payload, at }) => {
+    if (!['write', 'read'].includes(payload?.kind)) return;
+    const line = document.createElement('li');
+    line.className = payload.kind;
+    line.dataset.kind = payload.kind;
+    line.dataset.where = clip(payload.where);
+    const when = new Date(at);
+    if (Number.isNaN(when.getTime())) return;
+    line.dataset.at = String(when.getTime());
+    const time = element('time', 'at', when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    time.dateTime = when.toISOString();
+    line.append(
+      time,
+      element('span', 'kind', payload.kind),
+      element('span', 'who', clip(`${payload.app} · ${payload.where}`)),
+      element('span', 'channel', clip(payload.channel)),
+      element('span', 'what', clip(payload.what)),
+    );
+    // newest first, by when each was sent: reports travel on their own channel, so a read can
+    // arrive before the write it followed
+    const later = [...lines.children].find((other) => Number(other.dataset.at) <= when.getTime());
+    lines.insertBefore(line, later ?? null);
+    while (lines.children.length > MAX_LINES) lines.lastElementChild.remove();
+    $('#traffic-empty').hidden = true;
+  });
+  $('#traffic-clear').addEventListener('click', () => {
+    lines.replaceChildren();
+    $('#traffic-empty').hidden = false;
+  });
+  $('#traffic-toggle').addEventListener('click', () => {
+    const on = $('#traffic').hidden;
+    $('#traffic').hidden = !on;
+    $('#traffic-toggle').setAttribute('aria-expanded', String(on));
+  });
+}
 
 // ── Boundaries: what the desk and the apps do not share ──────────────────────────────────────
 // Checked when the panel opens, against the page as it is, not asserted.

@@ -4,6 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Starport — a Braid workspace</title>
+    <!-- For search and link previews. Absolute URLs: a crawler does not resolve them against the page. -->
+    <meta name="description" content="Five independently built apps on one desk, composed with Braid: a service-worker gateway, isolated boundaries, an event bus you can watch across windows, and tiles you can drag, resize and pop out." />
+    <link rel="canonical" href="https://braidjs.github.io/braid/starport/" />
+    <meta name="theme-color" content="#070a1a" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Braid" />
+    <meta property="og:title" content="Starport — a Braid workspace demo" />
+    <meta property="og:description" content="Five apps, one desk, no shared code at runtime. Drag, resize and pop out tiles, watch events cross every boundary, and see the seams. Static files only: the gateway runs in a service worker." />
+    <meta property="og:url" content="https://braidjs.github.io/braid/starport/" />
+    <meta property="og:image" content="https://braidjs.github.io/braid/starport/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Starport desk: Flights, Star Map and Cargo tiles, with the Traffic panel logging reads and writes across apps and windows" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Starport — a Braid workspace demo" />
+    <meta name="twitter:description" content="Five apps, one desk. Drag, resize, pop out, and watch events cross every boundary." />
+    <meta name="twitter:image" content="https://braidjs.github.io/braid/starport/og.png" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='9' fill='%2360a5fa'/%3E%3Cellipse cx='20' cy='20' rx='18' ry='6' fill='none' stroke='%23fbbf24' stroke-width='2.4' transform='rotate(-20 20 20)'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="shell.css" />
     <script type="module" src="main.js"></script>
   </head>
@@ -30,6 +48,7 @@
 
       <div class="panels">
         <button type="button" id="seams-toggle" aria-pressed="false">Show seams</button>
+        <button type="button" id="traffic-toggle" aria-expanded="false" aria-controls="traffic">Traffic</button>
         <button type="button" id="open-boundaries">Boundaries</button>
         <button type="button" id="open-preferences">Preferences</button>
       </div>
@@ -50,6 +69,18 @@
       <span id="ticker-event">No departures yet</span>
       <span id="ticker-count">0 departures today</span>
     </p>
+
+    <!-- What crosses between the apps and windows: every write to and read from a bus channel,
+         reported by whoever did it. -->
+    <section id="traffic" aria-labelledby="traffic-title" hidden>
+      <header>
+        <h2 id="traffic-title">Traffic across the boundaries</h2>
+        <p>Every write to and read from the <code>tower</code> bus and the <code>starport.ship</code> relay, by whoever did it and where it runs: here on the desk, or in a window an app was popped out to.</p>
+        <button type="button" id="traffic-clear" aria-label="Clear the traffic log">Clear</button>
+      </header>
+      <p id="traffic-empty">Nothing has crossed yet. Pick a ship in Flights, or mark one departed.</p>
+      <ol id="traffic-lines" aria-label="Crossings, newest first" tabindex="0"></ol>
+    </section>
 
     <p id="remembered" hidden>
       <span>Plot Route always opens in <b id="remembered-app"></b></span>

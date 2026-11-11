@@ -624,4 +624,126 @@ describe('the Starport example', () => {
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 3×');
     await page.context().close();
   });
+  it('sends departures to apps popped out into windows, and back, and logs every crossing in the Traffic panel', async () => {
+    const page = await desk();
+    await page.locator('#traffic-toggle').click();
+    expect(await page.locator('#traffic').isVisible()).toBe(true);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(true);
+    const lines = page.locator('#traffic-lines li');
+    // a line matched on all of it: write or read, who and where, which channel, and what crossed
+    const line = (kind: string, who: string, channel: string, what: string) => ({
+      count: () =>
+        lines.evaluateAll(
+          (items, [k, w, c, t]) =>
+            items.filter((item) => {
+              const text = (selector: string) => item.querySelector(selector)?.textContent;
+              return (item as HTMLElement).dataset.kind === k && text('.who') === w && text('.channel') === c && text('.what') === t;
+            }).length,
+          [kind, who, channel, what],
+        ),
+    });
+
+    // Comms, out in a window of its own
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    await app(page, 'comms').locator('#send').waitFor();
+    const [commsWindow] = await Promise.all([page.context().waitForEvent('page'), app(page, 'comms').locator('.pop').click()]);
+    const comms = commsWindow.locator('main fragment-slot[name="comms"]');
+    await comms.locator('#send').waitFor({ timeout: 15_000 });
+
+    // a departure marked on the desk reaches it there
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => comms.locator('#log').textContent(), { timeout: 5000 }).toContain('Tower: Marigold departed for Europa.');
+    await expect.poll(() => comms.locator('#tower').textContent()).toBe('1 departure today');
+
+    // and the desk's log shows it: who wrote it on the desk, and who read it, in which window
+    await expect.poll(() => line('write', 'flights · desk', 'tower', 'event: ship.departed (Marigold)').count()).toBe(1);
+    await expect.poll(() => line('write', 'flights · desk', 'tower', 'state: 1 departed (NX-204)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms · comms window', 'tower', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms · comms window', 'tower', 'state: 1 departed (NX-204)').count()).toBe(1);
+    await expect.poll(() => line('read', 'desk · desk', 'tower', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(false);
+    // newest first, by when each was sent: the desk's read of the event sits above the write it followed
+    const order = await lines.evaluateAll((items) => items.map((item) => `${item.dataset.kind} ${item.dataset.where} ${item.querySelector('.what')?.textContent}`));
+    const wroteAt = order.indexOf('write desk event: ship.departed (Marigold)');
+    const readAt = order.indexOf('read desk event: ship.departed (Marigold, from flights)');
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(wroteAt).toBeGreaterThan(readAt);
+    // Flights does not log its own write as a read
+    expect(await lines.filter({ hasText: 'flights · desk' }).and(page.locator('[data-kind="read"]')).count()).toBe(0);
+    // the ship picked on the desk crossed to the window's own agent through the relay
+    await expect.poll(() => line('write', 'relay · desk', 'starport.ship', 'ship: Marigold').count()).toBe(1);
+    await expect.poll(() => line('read', 'relay · comms window', 'starport.ship', 'ship: Marigold').count()).toBe(1);
+
+    // Flights, out in a window too: a departure marked there reaches the desk, and Comms in its window
+    const [flightsWindow] = await Promise.all([page.context().waitForEvent('page'), app(page, 'flights').locator('.pop').click()]);
+    const flights = flightsWindow.locator('main fragment-slot[name="flights"]');
+    await flights.locator('tr[data-ship="KT-077"]').waitFor({ timeout: 15_000 });
+    // the board it took with it: Marigold has left
+    await expect.poll(() => flights.locator('tr[data-ship="NX-204"] .pill').textContent()).toBe('Departed');
+    await flights.locator('tr[data-ship="KT-077"]').click();
+    await flights.locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-event').textContent()).toBe('Slow Comet departed for Mars');
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('2 departures today');
+    await expect.poll(() => comms.locator('#log').textContent()).toContain('Tower: Slow Comet departed for Mars.');
+    await expect.poll(() => line('write', 'flights · flights window', 'tower', 'event: ship.departed (Slow Comet)').count()).toBe(1);
+    await expect.poll(() => line('write', 'flights · flights window', 'tower', 'state: 2 departed (NX-204, KT-077)').count()).toBe(1);
+    await expect.poll(() => line('write', 'relay · flights window', 'starport.ship', 'ship: Slow Comet').count()).toBe(1);
+    await expect.poll(() => line('read', 'desk · desk', 'tower', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms · comms window', 'tower', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
+
+    // Clear empties it, once the last of what was in flight has landed
+    await expect.poll(() => line('read', 'relay · comms window', 'starport.ship', 'ship: Slow Comet').count()).toBe(1);
+    await expect.poll(() => line('read', 'relay · desk', 'starport.ship', 'ship: Slow Comet').count()).toBe(1);
+    await page.locator('#traffic-clear').click();
+    await expect.poll(() => lines.count()).toBe(0);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(true);
+    await page.locator('#traffic-toggle').click();
+    expect(await page.locator('#traffic').isVisible()).toBe(false);
+    expect(await page.locator('#traffic-toggle').getAttribute('aria-expanded')).toBe('false');
+    // a popped-out window has no Traffic panel of its own: the desk shows the log
+    expect(await commsWindow.locator('#traffic-toggle').isVisible()).toBe(false);
+    await page.context().close();
+  });
+
+  it('logs a state read and no event for an app that comes after a departure', async () => {
+    const page = await desk();
+    await page.locator('#traffic-toggle').click();
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('1 departure today');
+    await page.locator('#traffic-clear').click();
+
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    await expect.poll(() => app(page, 'comms').locator('#tower').textContent()).toBe('1 departure today');
+    const comms = page.locator('#traffic-lines li[data-kind="read"][data-where="desk"]').filter({ hasText: 'comms' });
+    await expect.poll(() => comms.filter({ hasText: 'state: 1 departed' }).count()).toBe(1);
+    // give a replayed event every chance to show up: none does
+    await page.waitForTimeout(500);
+    expect(await comms.filter({ hasText: 'event:' }).count()).toBe(0);
+    expect(await app(page, 'comms').locator('#log').textContent()).not.toContain('Marigold');
+    await page.context().close();
+  });
+  it('gives a shared link a title, a description and a preview image', async () => {
+    const page = await desk();
+    const meta = (selector: string) => page.locator(selector).getAttribute('content');
+    expect(await meta('meta[name="description"]')).toContain('Braid');
+    expect(await meta('meta[property="og:title"]')).toBe('Starport — a Braid workspace demo');
+    expect(await meta('meta[name="twitter:card"]')).toBe('summary_large_image');
+    expect(await meta('meta[name="twitter:title"]')).toBe('Starport — a Braid workspace demo');
+    const image = await meta('meta[property="og:image"]');
+    expect(image).toBe('https://braidjs.github.io/braid/starport/og.png');
+    expect(await meta('meta[name="twitter:image"]')).toBe(image);
+    expect(await meta('meta[property="og:image:width"]')).toBe('1200');
+    expect(await meta('meta[property="og:image:height"]')).toBe('630');
+    // the image is in the build, where that URL points once deployed
+    const served = await fetch(new URL('og.png', server.url));
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toContain('image/png');
+    // and is the size the tags say: a PNG's width and height are bytes 16-23 of its IHDR
+    const png = new DataView(await served.arrayBuffer());
+    expect([png.getUint32(16), png.getUint32(20)]).toEqual([1200, 630]);
+    await page.context().close();
+  });
 });
+
