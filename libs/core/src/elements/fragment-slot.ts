@@ -152,6 +152,29 @@ export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
 }
 
 /**
+ * Adds the slot a host's `slot="header"` child projects into: host-owned content shown above the
+ * fragment in every state — a title bar, a tile's controls. Placed right after the slot's own
+ * styles, so it comes before the fragment's content whichever path built the root (client,
+ * pierced, or an untrusted frame appended later).
+ *
+ * ```html
+ * <fragment-slot name="chart"><div slot="header">Chart <button>Pop out</button></div></fragment-slot>
+ * ```
+ */
+export function ensureHeaderSlot(shadowRoot: ShadowRoot): void {
+  if (shadowRoot.querySelector('slot[name="header"]')) return;
+  const header = document.createElement('slot');
+  header.name = 'header';
+  let after: Element | null = null;
+  for (const child of shadowRoot.children) {
+    if (child.localName !== 'style') break;
+    after = child;
+  }
+  if (after) after.after(header);
+  else shadowRoot.prepend(header);
+}
+
+/**
  * Ensures the shadow root can present host-provided fallback content:
  *
  * ```html
@@ -164,7 +187,10 @@ export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
  * their first paint matters.
  */
 export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
-  if (shadowRoot.querySelector('slot[name="fallback"]')) return;
+  if (shadowRoot.querySelector('slot[name="fallback"]')) {
+    ensureHeaderSlot(shadowRoot);
+    return;
+  }
 
   if (!shadowRoot.querySelector('style')) {
     const styleSheet = document.createElement('style');
@@ -175,6 +201,8 @@ export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
   const fallback = document.createElement('slot');
   fallback.name = 'fallback';
   shadowRoot.append(fallback);
+  // every root that can show a fallback is one a host may give a header to
+  ensureHeaderSlot(shadowRoot);
 }
 
 /**

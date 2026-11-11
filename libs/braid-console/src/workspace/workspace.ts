@@ -49,6 +49,20 @@ export interface SavedLayout {
   slots: SavedSlot[];
 }
 
+/**
+ * How much of the workspace area an app takes: columns and rows to span, each 1 to 12. Kept on
+ * its slot as `data-braid-columns` / `data-braid-rows` and as the custom properties
+ * `--braid-columns` / `--braid-rows`, so the host's CSS decides what a span means:
+ *
+ * ```css
+ * [data-braid-workspace] > fragment-slot { grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 1); }
+ * ```
+ */
+export interface Placement {
+  columns?: number;
+  rows?: number;
+}
+
 export interface SavedSlot {
   appId: string;
   src?: string;
@@ -57,6 +71,8 @@ export interface SavedSlot {
   channel?: string;
   /** What the app returned from `braidDesktop.onSaveLayout`. */
   state?: unknown;
+  /** The app's span in the area, when it was given one. */
+  placement?: Placement;
 }
 
 /** The workspace's additions for one fragment, as `window.braidDesktop`. */
@@ -134,8 +150,27 @@ export interface Workspace {
     container: () => Element | undefined;
     resolveIntent: WorkspaceIntentResolver<C, R>;
   };
-  /** Mounts an app at the end of the workspace area, and returns its `<fragment-slot>`. */
-  open(appId: string, options?: { src?: string; props?: Record<string, unknown> }): Element;
+  /**
+   * Mounts an app at the end of the workspace area, and returns its `<fragment-slot>`. `state`
+   * and `channel` are what the app finds as `braidDesktop.restoredState` and joins, as if it were
+   * restored from a layout: pass a {@link Workspace.snapshot} to carry an app from one page to
+   * another — into a window of its own, say.
+   */
+  open(
+    appId: string,
+    options?: { src?: string; props?: Record<string, unknown>; placement?: Placement; state?: unknown; channel?: string },
+  ): Element;
+  /** Gives an app in the area a span (see {@link Placement}); an absent member goes back to the host's default. */
+  place(slot: Element, placement: Placement): void;
+  /** The span an app in the area has, as {@link Workspace.place} set it. */
+  placementOf(slot: Element): Placement;
+  /**
+   * Moves an app to `index` among the area's apps (clamped). The fragment keeps running — same
+   * realm, same state — as any `<fragment-slot>` does when it moves within the page.
+   */
+  move(slot: Element, index: number): void;
+  /** One app as a layout would save it — app, src, props, channel, state, placement — without saving anything. */
+  snapshot(slot: Element): Promise<SavedSlot>;
   preferences: {
     getHost(): Promise<HostPreferences>;
     /** Replaces the page's preferences; fragments that boot from now on get them. */
@@ -160,6 +195,9 @@ const SAVE_STATE_TIMEOUT_MS = 2_000;
 const HOST_READ_TIMEOUT_MS = 1_000;
 /** How long a fragment's boot waits to join its channel. */
 const JOIN_TIMEOUT_MS = 2_000;
+
+/** The most columns or rows an app may span. */
+const MAX_SPAN = 12;
 
 const HOST_KEY = 'host';
 const intentKey = (intent: string, contextType: string) => `intents/${keySegment(intent)}/${keySegment(contextType)}`;
@@ -283,7 +321,16 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
     ]);
     if (channel?.type === 'user' && typeof channel.id === 'string') saved.channel = channel.id;
     if (state !== undefined) saved.state = state;
+    const placement = readPlacement(slot);
+    if (placement.columns !== undefined || placement.rows !== undefined) saved.placement = placement;
     return saved;
+  }
+
+  /** A slot of this area: the one given, refused when it is not one of the area's apps. */
+  function ownSlot(slot: Element, verb: string): Element {
+    const container = needContainer();
+    if (!slotsIn(container).includes(slot)) throw new Error(`braid-workspace: can only ${verb} an app in the workspace area`);
+    return slot;
   }
 
   /** The candidates left once the user's hidden apps are taken out. */
@@ -348,7 +395,42 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
 
     open(appId, app = {}) {
       if (typeof appId !== 'string' || appId === '') throw new TypeError('braid-workspace: open takes an app id');
-      return mountSlot(needContainer(), { appId, ...app });
+      const { placement, state, channel, ...rest } = app;
+      const handover = state !== undefined || typeof channel === 'string';
+      return mountSlot(needContainer(), { appId, ...rest }, (slot) => {
+        if (placement) writePlacement(slot, cleanPlacement(placement));
+        if (handover) {
+          restores.set(slot, {
+            ...(typeof channel === 'string' ? { channel } : {}),
+            ...(state !== undefined ? { state: JSON.parse(JSON.stringify(state)) } : {}),
+          });
+        }
+      });
+    },
+
+    place(slot, placement) {
+      writePlacement(ownSlot(slot, 'place'), cleanPlacement(placement ?? {}));
+    },
+
+    placementOf(slot) {
+      return readPlacement(slot);
+    },
+
+    move(slot, index) {
+      const container = needContainer();
+      ownSlot(slot, 'move');
+      const others = slotsIn(container).filter((other) => other !== slot);
+      const at = Math.max(0, Math.min(others.length, Math.trunc(Number(index)) || 0));
+      const before = others[at] ?? others.at(-1)?.nextSibling ?? null;
+      if (before === slot) return;
+      // moveBefore, where there is one, keeps even focus and running animations inside the slot
+      const parent = container as Element & { moveBefore?: (node: Node, child: Node | null) => void };
+      if (typeof parent.moveBefore === 'function') parent.moveBefore(slot, before);
+      else container.insertBefore(slot, before);
+    },
+
+    snapshot(slot) {
+      return savedSlot(ownSlot(slot, 'snapshot'));
     },
 
     preferences: {
@@ -385,7 +467,10 @@ export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
         for (const slot of slotsIn(target)) slot.remove();
         for (const saved of layout.slots) {
           if (typeof saved?.appId !== 'string' || saved.appId === '') continue;
-          mountSlot(target, saved, (slot) => restores.set(slot, { channel: saved.channel, state: saved.state }));
+          mountSlot(target, saved, (slot) => {
+            writePlacement(slot, cleanPlacement(saved.placement ?? {}));
+            restores.set(slot, { channel: saved.channel, state: saved.state });
+          });
         }
       },
 
@@ -426,6 +511,43 @@ function decodedSegments(keys: string[], prefix: string): string[] {
       return [];
     }
   });
+}
+
+/** A placement with only whole spans from 1 to {@link MAX_SPAN}; anything else is left out. */
+function cleanPlacement(placement: unknown): Placement {
+  const clean: Placement = {};
+  if (!placement || typeof placement !== 'object') return clean;
+  for (const key of ['columns', 'rows'] as const) {
+    const value = (placement as Record<string, unknown>)[key];
+    if (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= MAX_SPAN) clean[key] = value as number;
+  }
+  return clean;
+}
+
+const PLACEMENT_ATTRIBUTES = { columns: 'data-braid-columns', rows: 'data-braid-rows' } as const;
+
+function readPlacement(slot: Element): Placement {
+  const read: Record<string, number> = {};
+  for (const [key, attribute] of Object.entries(PLACEMENT_ATTRIBUTES)) {
+    const value = slot.getAttribute(attribute);
+    if (value !== null) read[key] = Number(value);
+  }
+  return cleanPlacement(read);
+}
+
+/** Writes a clean placement as attributes and custom properties; an absent member removes both. */
+function writePlacement(slot: Element, placement: Placement): void {
+  const style = (slot as Element & { style?: CSSStyleDeclaration }).style;
+  for (const [key, attribute] of Object.entries(PLACEMENT_ATTRIBUTES) as ['columns' | 'rows', string][]) {
+    const value = placement[key];
+    if (value === undefined) {
+      slot.removeAttribute(attribute);
+      style?.removeProperty(`--braid-${key}`);
+    } else {
+      slot.setAttribute(attribute, String(value));
+      style?.setProperty(`--braid-${key}`, String(value));
+    }
+  }
 }
 
 /** The `<fragment-slot>` children of the workspace area, in document order. */

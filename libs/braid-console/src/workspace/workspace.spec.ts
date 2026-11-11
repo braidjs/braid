@@ -49,6 +49,7 @@ interface FakeSlot {
   props?: Record<string, unknown>;
   getAttribute(name: string): string | null;
   setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
   remove(): void;
   /** Resolves with what the agent gave the fragment once it has booted. */
   booted: Promise<Globals>;
@@ -72,6 +73,7 @@ function fakeContainer(hook: () => Hook) {
           attributes: new Map(),
           getAttribute: (name) => slot.attributes.get(name) ?? null,
           setAttribute: (name, value) => void slot.attributes.set(name, value),
+          removeAttribute: (name) => void slot.attributes.delete(name),
           remove() {
             children.splice(children.indexOf(slot), 1);
             slot.controller.abort();
@@ -82,6 +84,13 @@ function fakeContainer(hook: () => Hook) {
         (slot as unknown as { boot: typeof boot }).boot = boot;
         return slot;
       },
+    },
+    /** A move within the page: the slot keeps running, so nothing is aborted or booted again. */
+    insertBefore(slot: FakeSlot, before: FakeSlot | null) {
+      children.splice(children.indexOf(slot), 1);
+      const at = before ? children.indexOf(before) : children.length;
+      children.splice(at === -1 ? children.length : at, 0, slot);
+      return slot;
     },
     append(slot: FakeSlot) {
       children.push(slot);
@@ -369,6 +378,82 @@ describe('layouts', () => {
     await replacement.addIntentListener('ViewResearch', handled);
     expect((await raised).source.appId).toBe('research');
     await vi.waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('placement, order and handing an app over', () => {
+  const names = (container: { children: FakeSlot[] }) => container.children.map((slot) => slot.getAttribute('name'));
+
+  it('saves and restores each app\'s span with the layout, and drops spans that are not whole and in range', async () => {
+    const { workspace, container } = await setup({ fdc3: false });
+    const chart = workspace.open('chart', { placement: { columns: 2, rows: 3 } });
+    const notes = workspace.open('notes');
+    expect(workspace.placementOf(chart)).toEqual({ columns: 2, rows: 3 });
+    expect(chart.getAttribute('data-braid-columns')).toBe('2');
+    workspace.place(notes, { rows: 2, columns: 0 });
+    expect(workspace.placementOf(notes)).toEqual({ rows: 2 });
+    await Promise.all(container.children.map((slot) => slot.booted));
+
+    expect((await workspace.layouts.save('wide')).slots).toEqual([
+      { appId: 'chart', placement: { columns: 2, rows: 3 } },
+      { appId: 'notes', placement: { rows: 2 } },
+    ]);
+    workspace.place(chart, {});
+    expect(workspace.placementOf(chart)).toEqual({});
+    expect(chart.getAttribute('data-braid-columns')).toBeNull();
+
+    await workspace.layouts.restore('wide');
+    expect(container.children.map((slot) => workspace.placementOf(slot as unknown as Element))).toEqual([{ columns: 2, rows: 3 }, { rows: 2 }]);
+  });
+
+  it('restores a layout saved before placements, and ignores one a store mangled', async () => {
+    const store = memoryStore();
+    await store.set('layouts/old', { version: 1, savedAt: '2026-11-01T00:00:00Z', slots: [{ appId: 'chart' }, { appId: 'notes', placement: { columns: 'wide', rows: 99 } }] });
+    const { workspace, container } = await setup({ fdc3: false, store });
+    await workspace.layouts.restore('old');
+    expect(names(container)).toEqual(['chart', 'notes']);
+    expect(container.children.map((slot) => workspace.placementOf(slot as unknown as Element))).toEqual([{}, {}]);
+  });
+
+  it('moves an app without stopping it, and the next save keeps the new order', async () => {
+    const { workspace, container } = await setup({ fdc3: false });
+    for (const id of ['a', 'b', 'c']) workspace.open(id);
+    const booted = await Promise.all(container.children.map((slot) => slot.booted));
+    booted[0].braidDesktop.onSaveLayout(() => ({ kept: true }));
+    const [a] = container.children;
+
+    workspace.move(a as unknown as Element, 2);
+    expect(names(container)).toEqual(['b', 'c', 'a']);
+    expect(a.controller.signal.aborted).toBe(false);
+    workspace.move(a as unknown as Element, -5);
+    expect(names(container)).toEqual(['a', 'b', 'c']);
+    workspace.move(container.children[2] as unknown as Element, 1);
+    expect(names(container)).toEqual(['a', 'c', 'b']);
+    expect((await workspace.layouts.save('order')).slots.map((slot) => slot.appId)).toEqual(['a', 'c', 'b']);
+    expect((await workspace.layouts.save('order')).slots[0].state).toEqual({ kept: true });
+
+    const stranger = container.ownerDocument.createElement('fragment-slot') as unknown as Element;
+    expect(() => workspace.move(stranger, 0)).toThrow(/in the workspace area/);
+  });
+
+  it('snapshots one app, and opens it elsewhere with that state and span', async () => {
+    const { workspace, container } = await setup({ fdc3: false });
+    const chart = workspace.open('chart', { props: { symbol: 'AAPL' }, placement: { columns: 3 } });
+    const [booted] = await Promise.all(container.children.map((slot) => slot.booted));
+    booted.braidDesktop.onSaveLayout(() => ({ zoom: 2 }));
+
+    const snapshot = await workspace.snapshot(chart);
+    expect(snapshot).toEqual({ appId: 'chart', props: { symbol: 'AAPL' }, state: { zoom: 2 }, placement: { columns: 3 } });
+    expect(names(container)).toEqual(['chart']);
+
+    // another page's workspace, given the snapshot
+    const other = await setup({ fdc3: false });
+    const { appId, ...rest } = snapshot;
+    other.workspace.open(appId, rest);
+    const [reopened] = await Promise.all(other.container.children.map((slot) => slot.booted));
+    expect(reopened.braidDesktop.restoredState).toEqual({ zoom: 2 });
+    expect(other.workspace.placementOf(other.container.children[0] as unknown as Element)).toEqual({ columns: 3 });
+    expect(other.container.children[0].props).toEqual({ symbol: 'AAPL' });
   });
 });
 

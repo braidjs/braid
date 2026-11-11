@@ -135,6 +135,25 @@ A slot can carry host content for two moments: while its fragment boots, and if 
 - **Not for untrusted fragments yet.** Their cross-origin frame doesn't show the loading slot.
 - Listen to `braid:state` on the slot (it doesn't bubble) to follow every state change.
 
+
+### A header of the host's own
+
+A `slot="header"` child shows above the fragment, in every state: loading, ready, failed. It is
+the host's markup in the host's document, styled by the host's CSS, so it is the place for a
+tile's title and controls in a workspace.
+
+```html
+<fragment-slot name="chart">
+  <div slot="header">Chart <button type="button">Pop out</button></div>
+</fragment-slot>
+```
+
+- **It moves with the slot.** Reorder the slot and its header goes along; the fragment keeps
+  running (see [Moving a slot](#moving-a-slot)).
+- **The fragment cannot reach it.** It is outside the fragment's shadow root content, and a
+  fragment's styles don't apply to it.
+- **Untrusted fragments too.** It sits above their frame.
+
 ### Booting on intent
 
 By default a slot boots its fragment as soon as it connects. `boot` defers all of it: the realm
