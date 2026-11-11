@@ -1,3 +1,94 @@
+## 0.8.0 (2026-11-11)
+
+### 🚀 Features
+
+- ask before a navigation loses a fragment's unsaved work ([0d33e7c](https://github.com/braidjs/braid/commit/0d33e7c))
+- per-fragment IndexedDB and Cache Storage, with Storage Buckets ([9bcdd7c](https://github.com/braidjs/braid/commit/9bcdd7c))
+- **console:** design a workspace area into a shell ([9462451](https://github.com/braidjs/braid/commit/9462451))
+- **core:** a slot that moves keeps its fragment running ([dd1aba0](https://github.com/braidjs/braid/commit/dd1aba0))
+- **core:** run on hosts that enforce Trusted Types ([35da155](https://github.com/braidjs/braid/commit/35da155))
+- **core:** lift a fragment's portals into the top layer (opt-in) ([a1ac1fc](https://github.com/braidjs/braid/commit/a1ac1fc))
+- **core:** give the realmGlobals hook the slot a fragment boots in ([9ffaf62](https://github.com/braidjs/braid/commit/9ffaf62))
+- **fdc3:** add client and server preference stores ([7bfc04b](https://github.com/braidjs/braid/commit/7bfc04b))
+- **fdc3:** launch apps, resolve intents, keep preferences and layouts ([3c4401e](https://github.com/braidjs/braid/commit/3c4401e))
+- **gateway:** Speculation Rules from the registry (opt-in) ([0d7afed](https://github.com/braidjs/braid/commit/0d7afed))
+- **gateway:** serve per-user preferences at /__braid/preferences ([80a70ac](https://github.com/braidjs/braid/commit/80a70ac))
+- **registry:** a Cache Storage snapshot store, so the console can edit behind the service-worker gateway ([40892d8](https://github.com/braidjs/braid/commit/40892d8))
+- **sw:** @braidlabs/sw/gateway, the gateway run inside the service worker ([aa4eba9](https://github.com/braidjs/braid/commit/aa4eba9))
+- **sw:** start the worker only for what it answers (static routes) ([508e8e9](https://github.com/braidjs/braid/commit/508e8e9))
+
+### 🩹 Fixes
+
+- storage buckets never delete what is not theirs, and sign-out clears them ([0175841](https://github.com/braidjs/braid/commit/0175841))
+- the leave guard asks once, sees shadow DOM, and can be scoped ([42715b7](https://github.com/braidjs/braid/commit/42715b7))
+- a partition with only cached data stays put, and bucket names fit ([4f7ad4c](https://github.com/braidjs/braid/commit/4f7ad4c))
+- review findings — framework-owned workspace areas, late containers, in-worker API hardening ([44e3ad6](https://github.com/braidjs/braid/commit/44e3ad6))
+- review findings — prove the plain event was dispatched, cover compat events in the guide ([b52ee65](https://github.com/braidjs/braid/commit/b52ee65))
+- **angular-workflow:** scope drafts to the signed-in person ([574cd2e](https://github.com/braidjs/braid/commit/574cd2e))
+- **angular-workflow:** a new person gets a fresh run, and no scope keeps nothing ([6b95fb5](https://github.com/braidjs/braid/commit/6b95fb5))
+- **cli,console:** generated gateways read NODE_ENV for their mode ([fc0a67e](https://github.com/braidjs/braid/commit/fc0a67e))
+- **console:** say what the workspace does, not more ([faecfc5](https://github.com/braidjs/braid/commit/faecfc5))
+- ⚠️  **core:** refuse non-https untrusted src and normalize sandbox tokens ([6adc2ca](https://github.com/braidjs/braid/commit/6adc2ca))
+- ⚠️  **core:** an untrusted fragment with no context grant reads nothing ([2fbef3d](https://github.com/braidjs/braid/commit/2fbef3d))
+- ⚠️  **core:** refuse allow-popups-to-escape-sandbox; load the URL checked ([7ce05df](https://github.com/braidjs/braid/commit/7ce05df))
+- ⚠️  **core:** connect untrusted fragments from an opaque origin ([6fb5881](https://github.com/braidjs/braid/commit/6fb5881))
+- **core:** reboot a moved slot whose boot no longer holds ([5d36f96](https://github.com/braidjs/braid/commit/5d36f96))
+- **core:** claim the braid policy first, and bless only neutralized scripts ([ba57fc7](https://github.com/braidjs/braid/commit/ba57fc7))
+- **core:** lifted portals survive reuse, keep their anchors, spare dialogs ([e0181b9](https://github.com/braidjs/braid/commit/e0181b9))
+- **core:** dirtySlots counts its root, so a ShadowDom view's host finds its slots ([d9b06da](https://github.com/braidjs/braid/commit/d9b06da))
+- **core:** the overlay reset loses to a fragment's layered styles ([9501ef8](https://github.com/braidjs/braid/commit/9501ef8))
+- **core:** keep a fragment's neutralized SVG scripts ([0ec5dc2](https://github.com/braidjs/braid/commit/0ec5dc2))
+- **core:** a moved slot shows its lifted overlays again ([7ec60b0](https://github.com/braidjs/braid/commit/7ec60b0))
+- **data:** let the outbox follow the signed-in person ([efc863e](https://github.com/braidjs/braid/commit/efc863e))
+- **data:** keep each queued entry in its own partition through a flush ([9c055d4](https://github.com/braidjs/braid/commit/9c055d4))
+- **data:** sign-in waits for a purge, and the event queue follows the user ([a4fb920](https://github.com/braidjs/braid/commit/a4fb920))
+- **data:** switchTenant takes the purge lock and notices an ended session ([b906173](https://github.com/braidjs/braid/commit/b906173))
+- **fdc3:** decide launch or reuse in open(), so quick raises mount once ([ba097d7](https://github.com/braidjs/braid/commit/ba097d7))
+- **fdc3:** offer only launches for newInstance raises again ([b552586](https://github.com/braidjs/braid/commit/b552586))
+- **fdc3:** send a held intent to the instance launched for it ([1880daa](https://github.com/braidjs/braid/commit/1880daa))
+- **fdc3:** decide launch or wait from the held intent itself ([8e8f53b](https://github.com/braidjs/braid/commit/8e8f53b))
+- **gateway:** promote Angular's CSP-nonce deferred stylesheet media ([c087f39](https://github.com/braidjs/braid/commit/c087f39))
+- ⚠️  **gateway:** default mode to production so access rules always apply ([bd30221](https://github.com/braidjs/braid/commit/bd30221))
+- **gateway:** ask for development mode where local examples need it ([e29f719](https://github.com/braidjs/braid/commit/e29f719))
+- **gateway:** run in a browser's fetch: unpinnable codings, opaque shells ([fcaf478](https://github.com/braidjs/braid/commit/fcaf478))
+- **gateway:** speculation without buffering, and narrower rules ([0be7e4e](https://github.com/braidjs/braid/commit/0be7e4e))
+- **gateway:** enforce preference quotas inside the write; refuse by Origin ([06e9e4c](https://github.com/braidjs/braid/commit/06e9e4c))
+- **registry:** see route overlaps through a slash an optional part owns ([2c7c0b0](https://github.com/braidjs/braid/commit/2c7c0b0))
+- **sw:** offline composition keeps nothing no-store, and clears at sign-out ([136be18](https://github.com/braidjs/braid/commit/136be18))
+- **sw:** routes match what the workers register, and skip offline ([f381377](https://github.com/braidjs/braid/commit/f381377))
+
+### ⚠️  Breaking Changes
+
+- **core:** connect untrusted fragments from an opaque origin  ([6fb5881](https://github.com/braidjs/braid/commit/6fb5881))
+  allow-same-origin is refused for untrusted fragments,
+  and so is allow-popups-to-escape-sandbox. Every untrusted frame now runs
+  in an opaque origin. That was the only configuration that connected
+  before, so for a vendor page that relied on it:
+  - document.cookie, localStorage, sessionStorage and IndexedDB are
+    unavailable;
+  - module scripts and other CORS-mode subresources need
+    Access-Control-Allow-Origin;
+  - its own API calls go out with `Origin: null` and no cookies;
+  - it cannot mount a nested untrusted fragment.
+  See "What the opaque origin means for a vendor's page" in
+  docs/braid-boundary.md.
+- **core:** refuse allow-popups-to-escape-sandbox; load the URL checked  ([7ce05df](https://github.com/braidjs/braid/commit/7ce05df))
+  untrusted fragments can no longer be granted
+  allow-popups-to-escape-sandbox. allow-popups alone still opens windows,
+  which stay sandboxed.
+- **core:** an untrusted fragment with no context grant reads nothing  ([2fbef3d](https://github.com/braidjs/braid/commit/2fbef3d))
+  an untrusted fragment whose capabilities declare no `context.read` now receives no context. List the keys it may read in `capabilities.context.read`.
+- **core:** refuse non-https untrusted src and normalize sandbox tokens  ([6adc2ca](https://github.com/braidjs/braid/commit/6adc2ca))
+  an untrusted `src` must be https:, or http: on localhost, 127.0.0.1 or [::1]. Sandbox tokens the HTML standard does not define, which browsers ignored, now throw slot-config.
+- **gateway:** default mode to production so access rules always apply  ([bd30221](https://github.com/braidjs/braid/commit/bd30221))
+  a gateway created without `mode` is now a production
+  gateway. Pass `mode: 'development'` for local work that relies on the
+  access bypass, unfiltered discovery, verbose errors or the Origin rewrite.
+
+### ❤️ Thank You
+
+- Jeff Smith @Jefftopia
+
 ## 0.7.1 (2026-11-02)
 
 ### 🚀 Features
