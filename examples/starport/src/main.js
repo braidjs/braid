@@ -310,6 +310,8 @@ for (const [button, dialog, before] of [
   $(button).onclick = () => {
     before?.();
     $(dialog).showModal();
+    // focus lands on Done, at the foot; on a short screen that would open the panel scrolled past its start
+    $(dialog).scrollTop = 0;
   };
   $(`${dialog} .done`).onclick = () => $(dialog).close();
 }

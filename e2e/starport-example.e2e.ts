@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Browser, Page } from 'playwright';
 import { launch } from './harness.js';
@@ -54,6 +55,18 @@ async function ready(page: Page) {
 const app = (page: Page, id: string) => page.locator(`main fragment-slot[name="${id}"]`);
 const open = (page: Page) => page.locator('main > fragment-slot').evaluateAll((slots) => slots.map((slot) => slot.getAttribute('name')));
 const pick = (page: Page, registry: string) => app(page, 'flights').locator(`tr[data-ship="${registry}"]`).click();
+
+/** Sends one raw request line, as a browser would for a URL such as `http://host//`. */
+function rawGet(url: string, target: string): Promise<string> {
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), hostname, () => socket.write(`GET ${target} HTTP/1.1\r\nHost: ${hostname}\r\nConnection: close\r\n\r\n`));
+    let data = '';
+    socket.on('data', (chunk) => (data += chunk));
+    socket.on('end', () => resolve(data.split('\r\n')[0]));
+    socket.on('error', reject);
+  });
+}
 
 describe('the Starport example', () => {
   it('is served as static files under a path, with the gateway in the service worker', async () => {
@@ -263,5 +276,41 @@ describe('the Starport example', () => {
     await expect.poll(() => app(page, 'star-map').locator('#status').textContent()).toBe('Course plotted for Slow Comet: Titan → Mars');
     expect(await page.locator('#chooser').isVisible()).toBe(false);
     await page.context().close();
+  });
+
+  it('fits a phone: nothing wider than the screen, and the Boundaries panel opens at its start, in view', async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 664 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    const page = await context.newPage();
+    await page.goto(server.url);
+    await ready(page);
+    // a page wider than the screen is what put the panel off to one side
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+    for (const id of ['flights', 'star-map', 'cargo']) {
+      const box = await app(page, id).boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    }
+
+    await page.locator('#open-boundaries').click();
+    const panel = await page.locator('#boundaries').boundingBox();
+    expect(panel!.x).toBeGreaterThanOrEqual(0);
+    expect(panel!.x + panel!.width).toBeLessThanOrEqual(390);
+    expect(panel!.y + panel!.height).toBeLessThanOrEqual(664);
+    const title = await page.locator('#boundaries-title').boundingBox();
+    expect(title!.y).toBeGreaterThanOrEqual(panel!.y);
+    expect(await page.locator('#boundary-facts li').count()).toBe(3);
+    expect(await page.locator('#boundary-facts li').first().isVisible()).toBe(true);
+    // the rest is reached by scrolling the panel, not the page
+    await page.locator('#boundaries .done').scrollIntoViewIfNeeded();
+    await page.locator('#boundaries .done').click();
+    expect(await page.locator('#boundaries').isVisible()).toBe(false);
+    await context.close();
+  });
+
+  it('answers a request-target that is not a URL with a 400, and keeps serving', async () => {
+    // `//` throws from `new URL`; uncaught, that took the whole server down, and any page can
+    // make a browser send it
+    expect(await rawGet(server.url, '//')).toBe('HTTP/1.1 400 Bad Request');
+    expect((await fetch(server.url)).status).toBe(200);
   });
 });
