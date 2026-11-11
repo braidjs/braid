@@ -1,4 +1,7 @@
-// Comms takes HailShip. It need not be open: the desk launches it for the raise.
+import { createEventBus } from '@braidlabs/data';
+
+// Comms takes HailShip. It need not be open: the desk launches it for the raise. It also listens
+// to the tower's bus, and logs departures as they happen.
 const REPLIES = ['Copy that, Starport.', 'Holding at the outer marker.', 'Could you repeat? We were watching the rings.', 'Roger. Kettle is on.', 'Requesting a berth with a view.'];
 const log = document.getElementById('log');
 let hailed;
@@ -25,4 +28,12 @@ document.getElementById('send').addEventListener('submit', (event) => {
   say(input.value, 'me');
   input.value = '';
   if (hailed) setTimeout(() => say(REPLIES[replies++ % REPLIES.length], 'them'), 600);
+});
+
+// Events are not replayed: a Comms opened after a departure does not log it. The count is state,
+// so it is right from the start.
+const tower = createEventBus({ consumer: 'comms' }).channel('tower');
+tower.addEventListener('ship.departed', ({ payload }) => say(`Tower: ${payload.name} departed for ${payload.to}.`, 'sys'));
+tower.subscribe(({ departures }) => {
+  document.getElementById('tower').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
 });

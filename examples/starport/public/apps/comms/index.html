@@ -19,13 +19,14 @@
       #log p { margin: 0; padding: 7px 12px; border-radius: 12px; max-width: 85%; background: rgba(255, 255, 255, 0.07); }
       #log p.me { align-self: flex-end; background: rgba(129, 140, 248, 0.3); }
       #log p.sys { align-self: center; background: none; color: var(--sp-dim, #99a1c4); font-size: 12px; }
+      #tower { margin-inline-start: auto; font: 500 11px var(--sp-mono, ui-monospace, monospace); letter-spacing: 0; text-transform: none; color: var(--sp-dim, #99a1c4); }
       form { display: flex; gap: 8px; margin-top: 10px; }
       input { flex: 1; font: inherit; color: inherit; padding: 7px 12px; border-radius: 9px; border: 1px solid var(--sp-line, #94a3ff2e); background: rgba(255, 255, 255, 0.05); }
     </style>
   </head>
   <body>
     <div class="app">
-      <h2>Comms</h2>
+      <h2>Comms <span id="tower"></span></h2>
       <p class="sub" id="status">No channel open. Hail a ship from Flights.</p>
       <div id="log"></div>
       <form id="send"><input id="message" placeholder="Say something" aria-label="Message" /><button>Send</button></form>

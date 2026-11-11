@@ -1,20 +1,16 @@
 import { initBraid } from '@braidlabs/core';
 import { createBraidDesktopAgent } from '@braidlabs/fdc3';
 import { createWorkspace } from '@braidlabs/console/workspace';
+import { createEventBus } from '@braidlabs/data';
+import { APPS, baseOf, basePathOf } from './registry.js';
 
 /**
  * The desk's whole runtime. The workspace is the `[data-braid-workspace]` element in index.html;
- * everything the user keeps (layouts, app settings, remembered choices) goes to localStorage.
+ * everything the user keeps (layouts, app settings, preferences) goes to localStorage.
  */
 
-const APPS = {
-  flights: { title: 'Flights', glyph: '🛫' },
-  'star-map': { title: 'Star Map', glyph: '🌌' },
-  radar: { title: 'Radar', glyph: '📡' },
-  cargo: { title: 'Cargo', glyph: '📦' },
-  comms: { title: 'Comms', glyph: '🛰️' },
-};
 const $ = (selector) => document.querySelector(selector);
+const app = (id) => APPS.find((known) => known.id === id);
 function element(tag, className, text = '') {
   const node = document.createElement(tag);
   node.className = className;
@@ -25,6 +21,19 @@ function element(tag, className, text = '') {
 function report(message) {
   $('#empty').textContent = message;
   $('#empty').hidden = false;
+}
+
+// ── The gateway is a service worker ──────────────────────────────────────────────────────────
+// Until the worker controls this page nothing answers /__braid/: the server only has files. So
+// Braid starts once a controller exists. On a first visit that is a moment after the page paints.
+const base = baseOf(import.meta.url);
+async function controlled() {
+  if (navigator.serviceWorker.controller) return;
+  const changed = new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+  const registration = await navigator.serviceWorker.register(`${base}sw.js`, { type: 'module', scope: base });
+  // a hard reload loads the page past an active worker, which does not claim a page unasked
+  registration.active?.postMessage({ type: 'braid-sw:claim' });
+  await changed;
 }
 
 const workspace = createWorkspace();
@@ -48,7 +57,7 @@ function chooser({ candidates, context }) {
         button.type = 'button';
         button.dataset.app = candidate.appId;
         button.autofocus = index === 0;
-        const glyph = element('span', 'glyph', APPS[candidate.appId]?.glyph ?? '✨');
+        const glyph = element('span', 'glyph', app(candidate.appId)?.glyph ?? '✨');
         glyph.setAttribute('aria-hidden', 'true');
         const state = candidate.instanceId ? 'open' : candidate.starting ? 'starting' : 'will launch';
         button.append(glyph, element('span', 'name', candidate.title), element('span', 'state', state));
@@ -67,10 +76,19 @@ function chooser({ candidates, context }) {
 $('#chooser-cancel').onclick = () => $('#chooser').close();
 
 // ── The agent, and Braid ─────────────────────────────────────────────────────────────────────
-// A directory that fails to load leaves the apps without fdc3, rather than the desk without apps.
-const response = await fetch('/__braid/registry/appd/v2/apps').catch(() => undefined);
-const directory = response?.ok ? (await response.json()).applications : [];
-if (!response?.ok) report('The app directory did not load, so the apps cannot talk to each other. Is the gateway running?');
+// The agent resolves intents against FDC3 App Directory records. A gateway can serve them from
+// its registry (`discovery: { appd: true }`), but not yet under a basePath, so the desk writes
+// the records itself from the same registry the worker uses.
+const directory = APPS.map(({ id, title, fdc3 }) => ({
+  appId: id,
+  title,
+  type: 'web',
+  details: { url: new URL(`${base}apps/${id}/`, location.origin).href },
+  interop: {
+    intents: { ...(fdc3.listensFor ? { listensFor: fdc3.listensFor } : {}), ...(fdc3.raises ? { raises: fdc3.raises } : {}) },
+    ...(fdc3.userChannels ? { userChannels: fdc3.userChannels } : {}),
+  },
+}));
 
 const onDesk = workspace.fdc3(chooser);
 const agent = createBraidDesktopAgent({
@@ -82,31 +100,36 @@ const agent = createBraidDesktopAgent({
 
 // Every app joins the same channel before its code runs, so a ship picked in one is seen in all.
 // setHost replaces the preferences, so whatever else is there is carried over.
-const preferences = await workspace.preferences.getHost();
+let preferences = await workspace.preferences.getHost();
 if (!preferences.defaultUserChannel) {
-  await workspace.preferences.setHost({ ...preferences, defaultUserChannel: 'fdc3.channel.1' });
+  preferences = { ...preferences, defaultUserChannel: 'fdc3.channel.1' };
+  await workspace.preferences.setHost(preferences);
 }
-initBraid({ realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
+
+controlled().then(
+  () => initBraid({ basePath: basePathOf(base), realmGlobals: workspace.realmGlobals(agent.realmGlobals) }),
+  () => report('The service worker could not start, and it is this desk\'s gateway. Starport needs a browser with service workers, over https or on localhost.'),
+);
 
 // ── The dock: launch an app, see what is open, close it ──────────────────────────────────────
 // Closing an app is removing its slot; the workspace and the agent see it go.
 const desk = workspace.container;
 const slotsOf = (id) => [...desk.querySelectorAll(`:scope > fragment-slot[name="${id}"]`)];
-for (const [id, app] of Object.entries(APPS)) {
+for (const { id, title, glyph: icon } of APPS) {
   const entry = element('span', 'app');
   entry.dataset.app = id;
   const launch = element('button', 'launch');
   launch.type = 'button';
-  const glyph = element('span', 'glyph', app.glyph);
+  const glyph = element('span', 'glyph', icon);
   glyph.setAttribute('aria-hidden', 'true');
-  launch.append(glyph, element('span', 'title', app.title), element('span', 'count'));
+  launch.append(glyph, element('span', 'title', title), element('span', 'count'));
   launch.onclick = () => {
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     workspace.open(id).scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'nearest' });
   };
   const close = element('button', 'close', '×');
   close.type = 'button';
-  close.setAttribute('aria-label', `Close ${app.title}`);
+  close.setAttribute('aria-label', `Close ${title}`);
   close.onclick = () => {
     slotsOf(id).at(-1)?.remove();
     launch.focus();
@@ -124,7 +147,7 @@ function showOpen() {
     entry.classList.toggle('running', count > 0);
     entry.querySelector('.count').textContent = count > 1 ? String(count) : '';
     entry.querySelector('.close').hidden = count === 0;
-    entry.querySelector('.launch').setAttribute('aria-label', count ? `Launch another ${APPS[id].title} (${count} open)` : `Launch ${APPS[id].title}`);
+    entry.querySelector('.launch').setAttribute('aria-label', count ? `Launch another ${app(id).title} (${count} open)` : `Launch ${app(id).title}`);
   }
   $('#empty').hidden = open > 0;
 }
@@ -169,12 +192,96 @@ await showLayouts();
 async function showRemembered() {
   const choice = await workspace.preferences.intentChoice('PlotRoute', 'starport.ship');
   $('#remembered').hidden = !choice;
-  $('#remembered-app').textContent = APPS[choice]?.title ?? choice ?? '';
+  $('#remembered-app').textContent = app(choice)?.title ?? choice ?? '';
 }
 $('#forget').onclick = async () => {
   await workspace.preferences.forgetIntentChoice('PlotRoute', 'starport.ship');
   await showRemembered();
 };
 await showRemembered();
+
+// ── Preferences: apps the chooser never offers ───────────────────────────────────────────────
+// `hiddenApps` governs the choice, not delivery: hide Radar and Plot route goes straight to Star
+// Map, the one app left that can take it.
+const takers = APPS.filter(({ fdc3 }) => fdc3.listensFor?.PlotRoute);
+$('#hidden-apps').replaceChildren(
+  ...takers.map(({ id, title }) => {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.hide = id;
+    box.checked = preferences.hiddenApps?.includes(id) ?? false;
+    box.onchange = async () => {
+      const hiddenApps = takers.map((taker) => taker.id).filter((taker) => $(`[data-hide="${taker}"]`).checked);
+      preferences = { ...preferences, hiddenApps };
+      await workspace.preferences.setHost(preferences);
+      $('#hidden-apps').dataset.saved = hiddenApps.join(',');
+    };
+    label.append(box, ` Never offer ${title}`);
+    return label;
+  }),
+);
+
+// ── The tower's event bus ────────────────────────────────────────────────────────────────────
+// Not everything is a selection or a request. "A ship departed" is an event: whoever is listening
+// hears it once, and nobody is asked to act. Flights emits it on a @braidlabs/data channel; the
+// desk and Comms listen. The channel's state half carries the running count, which a late
+// listener does get.
+const tower = createEventBus({ consumer: 'desk' }).channel('tower');
+tower.addEventListener('ship.departed', ({ payload }) => {
+  $('#ticker-event').textContent = `${payload.name} departed for ${payload.to}`;
+  $('#ticker').hidden = false;
+});
+tower.subscribe(({ departures }) => {
+  $('#ticker-count').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
+  $('#ticker').hidden = false;
+});
+
+// ── Boundaries: what the desk and the apps do not share ──────────────────────────────────────
+// Checked when the panel opens, against the page as it is, not asserted.
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+function checkBoundaries() {
+  const slots = [...desk.querySelectorAll(':scope > fragment-slot')];
+  const inApps = (selector) => slots.filter((slot) => slot.shadowRoot?.querySelector(selector)).length;
+  const hiddenByDesk = slots.filter((slot) => {
+    const root = slot.shadowRoot?.querySelector('.app');
+    return root && getComputedStyle(root).display === 'none';
+  }).length;
+  const facts = [
+    [
+      typeof globalThis.SHIPS === 'undefined' && typeof globalThis.fdc3 === 'undefined',
+      'Globals',
+      `Flights keeps its ships in a global, SHIPS, and every app has its own fdc3. The desk's window has ${typeof globalThis.SHIPS === 'undefined' ? 'no SHIPS' : 'a SHIPS'} and ${typeof globalThis.fdc3 === 'undefined' ? 'no fdc3' : 'an fdc3'}: each app runs in its own realm.`,
+    ],
+    [
+      document.getElementById('status') === null && inApps('#status') > 0,
+      'Element ids',
+      `${plural(inApps('#status'), 'open app has', 'open apps each have')} an element with id="status". The desk's document.getElementById('status') finds ${document.getElementById('status') ? 'one of them' : 'nothing'}: each app's markup is in its own shadow root.`,
+    ],
+    [
+      inApps('.app') > 0 && hiddenByDesk === 0,
+      'Styles',
+      `The desk's stylesheet says .app { display: none }. ${plural(inApps('.app'), 'open app uses', 'open apps use')} class="app", and ${hiddenByDesk} of them ${hiddenByDesk === 1 ? 'is' : 'are'} hidden by it.`,
+    ],
+  ];
+  $('#boundary-facts').replaceChildren(
+    ...facts.map(([holds, name, detail]) => {
+      const item = element('li', holds ? 'holds' : 'broken');
+      item.dataset.holds = String(holds);
+      item.append(element('b', '', name), element('span', '', detail));
+      return item;
+    }),
+  );
+}
+for (const [button, dialog, before] of [
+  ['#open-boundaries', '#boundaries', checkBoundaries],
+  ['#open-preferences', '#preferences'],
+]) {
+  $(button).onclick = () => {
+    before?.();
+    $(dialog).showModal();
+  };
+  $(`${dialog} .done`).onclick = () => $(dialog).close();
+}
 
 document.documentElement.dataset.ready = '';

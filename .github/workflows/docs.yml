@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'examples/starport/**'
       - '.github/workflows/docs.yml'
       - 'package.json'
   # So a docs fix can be published without an unrelated commit to trigger it.
@@ -41,6 +42,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run docs:build
+      # The Starport example is static files too, and is published with the docs, at /braid/starport/.
+      - run: node examples/starport/build.mjs --out docs/.vitepress/dist/starport
+        env:
+          BRAID_TSCONFIG: tsconfig.base.json
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:

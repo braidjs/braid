@@ -1,5 +1,7 @@
+import { createEventBus } from '@braidlabs/data';
+
 // Flights knows the ships. It knows nothing about the other apps: it broadcasts the ship the user
-// picks, and raises intents for whoever can take them.
+// picks, raises intents for whoever can take them, and announces departures to whoever listens.
 const SHIPS = [
   { name: 'Marigold', id: { registry: 'NX-204' }, from: 'Ceres', to: 'Europa', eta: '14:20', status: 'On time', bearing: 40, range: 0.55,
     cargo: [{ item: 'Seed vault crates', qty: 120, mass: '4.8 t', hazard: 'None' }, { item: 'Hydroponic gel', qty: 60, mass: '2.1 t', hazard: 'Low' }, { item: 'Honey (yes, honey)', qty: 12, mass: '0.3 t', hazard: 'Sticky' }] },
@@ -15,6 +17,7 @@ const SHIPS = [
 const context = (ship) => ({ type: 'starport.ship', ...ship });
 
 const rows = document.getElementById('ships');
+const departed = new Set();
 let selected;
 
 for (const ship of SHIPS) {
@@ -46,6 +49,7 @@ function show(ship) {
   for (const row of rows.rows) row.toggleAttribute('aria-current', row.dataset.ship === ship?.id.registry);
   document.getElementById('picked').textContent = ship ? `${ship.name} selected` : 'No ship selected';
   document.getElementById('plot').disabled = document.getElementById('hail').disabled = !ship;
+  document.getElementById('depart').disabled = !ship || departed.has(ship.id.registry);
 }
 
 // another Flights' pick arrives here
@@ -55,3 +59,18 @@ fdc3.addContextListener('starport.ship', (ship) => show(SHIPS.find((known) => kn
 const raise = (intent) => fdc3.raiseIntent(intent, context(selected)).catch((error) => console.info(`${intent}: ${error.message}`));
 document.getElementById('plot').addEventListener('click', () => raise('PlotRoute'));
 document.getElementById('hail').addEventListener('click', () => raise('HailShip'));
+
+// A departure is an event, not a selection and not a request: it goes on the tower's bus, for
+// any app (or the desk) that cares. The count is the channel's state, which a late listener gets;
+// the event itself is heard once, by whoever was listening.
+const tower = createEventBus({ consumer: 'flights' }).channel('tower');
+document.getElementById('depart').addEventListener('click', async () => {
+  const ship = selected;
+  departed.add(ship.id.registry);
+  const pill = rows.querySelector(`tr[data-ship="${ship.id.registry}"] .pill`);
+  pill.textContent = 'Departed';
+  pill.className = 'pill departed';
+  show(ship);
+  tower.broadcast({ departures: (tower.state()?.departures ?? 0) + 1 });
+  await tower.emit('ship.departed', { name: ship.name, to: ship.to });
+});

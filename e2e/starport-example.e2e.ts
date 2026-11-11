@@ -1,27 +1,36 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Browser, Page } from 'playwright';
 import { launch } from './harness.js';
 // the example itself, not a copy of it: what it documents is what this runs
-import { bundle, loadGateway, start } from '../examples/starport/server.mjs';
+import { build } from '../examples/starport/build.mjs';
+import { start } from '../examples/starport/server.mjs';
 
 /**
- * The Starport example (`examples/starport`) in Chromium: a console workspace around an FDC3
- * agent, with five static apps. What its README says it shows is what is checked here — a pick
- * followed across apps, an intent two apps can take, and a layout that brings an app's state back.
+ * The Starport example (`examples/starport`) in Chromium, as it is deployed: a folder of static
+ * files under a path, behind a server that has never heard of Braid. The gateway is the page's
+ * service worker. What the README says the desk shows is what is checked here.
  */
 
 const tsconfig = new URL('../tsconfig.base.json', import.meta.url).pathname;
 
 let browser: Browser;
 let server: { url: string; close(): Promise<void> };
+let dir: string;
+const requested: string[] = [];
 
 beforeAll(async () => {
   browser = await launch();
-  server = await start({ bundles: await bundle({ tsconfig }), gateway: await loadGateway({ tsconfig }) });
+  dir = await mkdtemp(join(tmpdir(), 'starport-e2e-'));
+  await build({ out: dir, tsconfig });
+  server = await start({ dir, base: '/starport/', onRequest: (path) => requested.push(path) });
 });
 afterAll(async () => {
   await browser?.close();
   await server?.close();
+  if (dir) await rm(dir, { recursive: true, force: true });
 });
 
 /** A fresh profile, so nothing is remembered from another test. */
@@ -47,6 +56,21 @@ const open = (page: Page) => page.locator('main > fragment-slot').evaluateAll((s
 const pick = (page: Page, registry: string) => app(page, 'flights').locator(`tr[data-ship="${registry}"]`).click();
 
 describe('the Starport example', () => {
+  it('is served as static files under a path, with the gateway in the service worker', async () => {
+    const page = await desk();
+    expect(new URL(page.url()).pathname).toBe('/starport/');
+    expect(await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL)).toBe(`${server.url}sw.js`);
+    expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
+    // the server was asked for files, and never for anything in Braid's namespace
+    expect(requested).toContain('/starport/apps/flights/index.html');
+    expect(requested.filter((path) => path.includes('/__braid/'))).toEqual([]);
+    // and the page did use that namespace, under the desk's own path: the worker answered it
+    const braid = await page.evaluate(() => performance.getEntriesByType('resource').map((entry) => new URL(entry.name).pathname).filter((path) => path.includes('/__braid/')));
+    expect(braid.length).toBeGreaterThan(0);
+    expect(braid.every((path) => path.startsWith('/starport/__braid/'))).toBe(true);
+    await page.context().close();
+  });
+
   it('boots its starting apps, and a ship picked in one is followed by the others', async () => {
     const page = await desk();
     expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
@@ -142,6 +166,84 @@ describe('the Starport example', () => {
     await page.locator('#layouts button[data-restore="night shift"]').click();
     await expect.poll(() => open(page)).toEqual(['flights', 'star-map', 'cargo', 'radar']);
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');
+    await page.context().close();
+  });
+
+  it('announces a departure on the event bus: heard once by who was listening, counted for who comes later', async () => {
+    const page = await desk();
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    await app(page, 'comms').locator('#send').waitFor();
+    expect(await page.locator('#ticker').isVisible()).toBe(false);
+
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-event').textContent()).toBe('Marigold departed for Europa');
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('1 departure today');
+    await expect.poll(() => app(page, 'comms').locator('#log').textContent()).toContain('Tower: Marigold departed for Europa.');
+    expect(await app(page, 'flights').locator('tr[data-ship="NX-204"] .pill').textContent()).toBe('Departed');
+    expect(await app(page, 'flights').locator('#depart').isDisabled()).toBe(true);
+
+    // a second Comms, opened afterwards: the count is state and reaches it, the event is not replayed
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    const late = app(page, 'comms').nth(1);
+    await expect.poll(() => late.locator('#tower').textContent()).toBe('1 departure today');
+    expect(await late.locator('#log').textContent()).not.toContain('Marigold');
+
+    // and the next departure reaches both
+    await pick(page, 'KT-077');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => late.locator('#log').textContent()).toContain('Tower: Slow Comet departed for Mars.');
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('2 departures today');
+    await page.context().close();
+  });
+
+  it('shows what the desk and the apps do not share, checked against the page', async () => {
+    const page = await desk();
+    await page.locator('#open-boundaries').click();
+    const facts = page.locator('#boundary-facts li');
+    expect(await facts.evaluateAll((items) => items.map((item) => [item.querySelector('b')?.textContent, (item as HTMLElement).dataset.holds]))).toEqual([
+      ['Globals', 'true'],
+      ['Element ids', 'true'],
+      ['Styles', 'true'],
+    ]);
+    expect(await facts.nth(1).textContent()).toContain('1 open app has an element with id="status"');
+    // with Radar open there are two with that id, and still no collision
+    await page.locator('#boundaries .done').click();
+    await page.locator('#dock [data-app="radar"] .launch').click();
+    await app(page, 'radar').locator('#status').waitFor();
+    await page.locator('#open-boundaries').click();
+    expect(await facts.evaluateAll((items) => items.map((item) => (item as HTMLElement).dataset.holds))).toEqual(['true', 'true', 'true']);
+    expect(await facts.nth(1).textContent()).toContain('2 open apps each have an element with id="status"');
+    expect(await facts.nth(2).textContent()).toContain('4 open apps use class="app", and 0 of them are hidden');
+    // the claims are the page's: the apps really are visible, and really do hold those ids
+    expect(await app(page, 'radar').locator('.app').isVisible()).toBe(true);
+    expect(await page.evaluate(() => document.getElementById('status'))).toBeNull();
+    await page.context().close();
+  });
+
+  it('never offers an app the user has hidden, after a reload too', async () => {
+    const page = await desk();
+    await page.locator('#open-preferences').click();
+    await page.locator('#preferences [data-hide="radar"]').check();
+    await page.locator('#hidden-apps[data-saved="radar"]').waitFor();
+    await page.locator('#preferences .done').click();
+
+    // Radar is hidden, so one app is left that can take Plot route: nothing is asked
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#plot').click();
+    await expect.poll(() => app(page, 'star-map').locator('#status').textContent()).toBe('Course plotted for Marigold: Ceres → Europa');
+    expect(await page.locator('#chooser').isVisible()).toBe(false);
+    expect(await open(page)).toEqual(['flights', 'star-map', 'cargo']);
+
+    await page.reload();
+    await ready(page);
+    await page.locator('#open-preferences').click();
+    expect(await page.locator('#preferences [data-hide="radar"]').isChecked()).toBe(true);
+    await page.locator('#preferences .done').click();
+    await pick(page, 'KT-077');
+    await app(page, 'flights').locator('#plot').click();
+    await expect.poll(() => app(page, 'star-map').locator('#status').textContent()).toBe('Course plotted for Slow Comet: Titan → Mars');
+    expect(await page.locator('#chooser').isVisible()).toBe(false);
     await page.context().close();
   });
 });

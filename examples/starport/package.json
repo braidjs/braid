@@ -2,16 +2,18 @@
   "name": "starport-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "A Braid workspace: five independent apps on one desk, with intents, channels, saved layouts and per-user settings.",
+  "description": "A Braid workspace as a folder of static files: five independent apps on one desk, with the gateway in a service worker.",
   "type": "module",
   "scripts": {
+    "build": "node build.mjs",
     "start": "node server.mjs"
   },
   "dependencies": {
     "@braidlabs/console": "^0.8.0",
     "@braidlabs/core": "^0.8.0",
+    "@braidlabs/data": "^0.8.0",
     "@braidlabs/fdc3": "^0.8.0",
-    "@braidlabs/gateway": "^0.8.0"
+    "@braidlabs/sw": "^0.8.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

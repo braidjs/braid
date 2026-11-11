@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Starport — a Braid workspace</title>
-    <link rel="stylesheet" href="/shell.css" />
-    <script type="module" src="/main.js"></script>
+    <link rel="stylesheet" href="shell.css" />
+    <script type="module" src="main.js"></script>
   </head>
   <body>
     <header>
@@ -28,6 +28,11 @@
 
       <nav id="dock" aria-label="Launch an app"></nav>
 
+      <div class="panels">
+        <button type="button" id="open-boundaries">Boundaries</button>
+        <button type="button" id="open-preferences">Preferences</button>
+      </div>
+
       <div class="layouts">
         <ul id="layouts" aria-label="Saved layouts"></ul>
         <form id="save-layout">
@@ -36,6 +41,12 @@
         </form>
       </div>
     </header>
+
+    <p id="ticker" role="status" hidden>
+      <span class="tag">Tower</span>
+      <span id="ticker-event">No departures yet</span>
+      <span id="ticker-count"></span>
+    </p>
 
     <p id="remembered" hidden>
       <span>Plot Route always opens in <b id="remembered-app"></b></span>
@@ -59,6 +70,23 @@
         <label><input type="checkbox" id="chooser-remember" /> Remember my choice</label>
         <button type="button" id="chooser-cancel">Cancel</button>
       </footer>
+    </dialog>
+
+    <dialog id="boundaries" aria-labelledby="boundaries-title">
+      <h2 id="boundaries-title">What the desk and the apps do not share</h2>
+      <p class="lede">Checked just now, against this page.</p>
+      <ul id="boundary-facts"></ul>
+      <p class="note">
+        This is namespace isolation: it keeps well-meaning apps out of each other's way. It is not a security boundary.
+      </p>
+      <footer><span></span><button type="button" class="done">Done</button></footer>
+    </dialog>
+
+    <dialog id="preferences" aria-labelledby="preferences-title">
+      <h2 id="preferences-title">Preferences</h2>
+      <p class="lede">Kept for you in this browser, with your layouts and each app's settings.</p>
+      <div id="hidden-apps" class="choices"></div>
+      <footer><span></span><button type="button" class="done">Done</button></footer>
     </dialog>
   </body>
 </html>
