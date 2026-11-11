@@ -28,7 +28,15 @@ gateway runs in the page's service worker.
   opened if it isn't already, and gets the ship.
 - **An event bus.** *Mark departed* emits `ship.departed` on a `@braidlabs/data` channel. The
   desk's ticker and Comms hear it. Which ships have left is the channel's state: a Comms or a
-  Flights opened afterwards gets that, and does not get the old event replayed.
+  Flights opened afterwards gets that, and does not get the old event replayed. The channel reaches
+  every window of the origin, so an app popped out to a window hears departures, and a Flights out
+  in a window can mark them.
+- **Traffic across the boundaries.** *Traffic* opens a live log of what crosses: every write to and
+  read from a bus channel, by the app that did it, and where it runs — on the desk, or in the
+  window it was popped out to. Pop out Comms, mark a ship departed, and watch Flights write on the
+  desk and Comms read in its window. Open a Comms afterwards and it logs a state read and no
+  event: state is replayed to a late reader, events are not. The apps report their own traffic to a
+  `starport.traffic` channel ([`src/traffic.js`](./src/traffic.js)); the bus itself has no tap.
 - **Seams.** *Show seams* outlines every tile and labels it with its `<fragment-slot>` tag, its
   state, and the URL the worker served it from, as the Braid site's "Show the seams" does for its
   sections.
@@ -50,6 +58,8 @@ gateway runs in the page's service worker.
 ![Choosing which app takes an intent](./screenshot-chooser.png)
 
 ![The Boundaries panel](./screenshot-boundaries.png)
+
+![The Traffic panel: Flights writes on the desk, Comms reads in its own window](./screenshot-traffic.png)
 
 Which to use when — a channel, an intent, or an event — is the subject of the
 [events and data guide](../../docs/events-and-data.md).
@@ -123,7 +133,8 @@ desk keeps its entries under its own folder's name, which stops accidents, not a
   worker" in the [`@braidlabs/sw` README](../../libs/braid-sw/README.md).
 - The tiles are a grid: an app has a place in an order and a span, not an x and y of its own.
 - A popped-out window has its own FDC3 agent. The desk relays the selected ship to it over a
-  `@braidlabs/data` channel scoped to the origin; the Tower's departures stay on the desk's page.
+  `@braidlabs/data` channel scoped to the origin. The Tower is scoped to the origin too, so two desks
+  open in two tabs share one departures board.
   A saved layout holds the desk, not apps that are out in windows.
 - A popped-out app's state crosses between windows through `localStorage` and a
   `BroadcastChannel`, in the clear, to any page of this origin. Fine for Starport; think before

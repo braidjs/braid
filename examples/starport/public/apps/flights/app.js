@@ -1,4 +1,4 @@
-import { createEventBus } from '@braidlabs/data';
+import { departedText, starportBus } from '../../../src/traffic.js';
 
 // Flights knows the ships. It knows nothing about the other apps: it broadcasts the ship the user
 // picks, raises intents for whoever can take them, and announces departures to whoever listens.
@@ -66,8 +66,15 @@ document.getElementById('hail').addEventListener('click', () => raise('HailShip'
 // any app (or the desk) that cares. Which ships have left is the channel's state, so a Flights
 // opened later, or a second one, shows the same board; the event itself is heard once, by whoever
 // was listening.
-const tower = createEventBus({ consumer: 'flights' }).channel('tower');
+//
+// The channel reaches every window of this origin, so a Flights popped out to a window of its own
+// shares the board with the desk. Each write and each read it takes in is reported to the traffic
+// log, which the desk shows.
+const { tower, report } = starportBus('flights');
+let wrote;
 tower.subscribe((state) => {
+  // its own write comes back to it too; that is not a read from anyone else
+  if (state !== undefined && JSON.stringify(state) !== wrote) report('read', 'tower', departedText(state));
   departed = new Set(state?.departed ?? []);
   for (const row of rows.rows) {
     if (!departed.has(row.dataset.ship)) continue;
@@ -80,8 +87,12 @@ tower.subscribe((state) => {
 document.getElementById('depart').addEventListener('click', async () => {
   const ship = selected;
   // Last write wins: two Flights marking different ships in the same instant could lose one.
-  tower.broadcast({ departed: [...departed, ship.id.registry] });
+  const state = { departed: [...departed, ship.id.registry] };
+  wrote = JSON.stringify(state);
+  tower.broadcast(state);
+  report('write', 'tower', departedText(state));
   await tower.emit('ship.departed', { name: ship.name, to: ship.to });
+  report('write', 'tower', `event: ship.departed (${ship.name})`);
   // the button has just disabled itself; keep the keyboard on the board
   rows.querySelector(`tr[data-ship="${ship.id.registry}"]`).focus();
 });

@@ -624,4 +624,98 @@ describe('the Starport example', () => {
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 3×');
     await page.context().close();
   });
+  it('sends departures to apps popped out into windows, and back, and logs every crossing in the Traffic panel', async () => {
+    const page = await desk();
+    await page.locator('#traffic-toggle').click();
+    expect(await page.locator('#traffic').isVisible()).toBe(true);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(true);
+    const lines = page.locator('#traffic-lines li');
+    const line = (kind: string, where: string, text: string) => lines.filter({ hasText: text }).and(page.locator(`[data-kind="${kind}"][data-where="${where}"]`));
+
+    // Comms, out in a window of its own
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    await app(page, 'comms').locator('#send').waitFor();
+    const [commsWindow] = await Promise.all([page.context().waitForEvent('page'), app(page, 'comms').locator('.pop').click()]);
+    const comms = commsWindow.locator('main fragment-slot[name="comms"]');
+    await comms.locator('#send').waitFor({ timeout: 15_000 });
+
+    // a departure marked on the desk reaches it there
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => comms.locator('#log').textContent(), { timeout: 5000 }).toContain('Tower: Marigold departed for Europa.');
+    await expect.poll(() => comms.locator('#tower').textContent()).toBe('1 departure today');
+
+    // and the desk's log shows it: who wrote it on the desk, and who read it, in which window
+    await expect.poll(() => line('write', 'desk', 'event: ship.departed (Marigold)').count()).toBe(1);
+    await expect.poll(() => line('write', 'desk', 'state: 1 departed (NX-204)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms window', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms window', 'state: 1 departed').count()).toBeGreaterThan(0);
+    await expect.poll(() => line('read', 'desk', 'event: ship.departed (Marigold, from flights)').count()).toBe(1);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(false);
+    // the ship picked on the desk crossed to the window's own agent through the relay
+    await expect.poll(() => line('write', 'desk', 'ship: Marigold').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms window', 'ship: Marigold').count()).toBe(1);
+    // every line says which channel, and a write is told from a read
+    expect(await lines.first().locator('.channel').textContent()).toMatch(/^(tower|starport\.ship)$/);
+
+    // Flights, out in a window too: a departure marked there reaches the desk, and Comms in its window
+    const [flightsWindow] = await Promise.all([page.context().waitForEvent('page'), app(page, 'flights').locator('.pop').click()]);
+    const flights = flightsWindow.locator('main fragment-slot[name="flights"]');
+    await flights.locator('tr[data-ship="KT-077"]').waitFor({ timeout: 15_000 });
+    // the board it took with it: Marigold has left
+    await expect.poll(() => flights.locator('tr[data-ship="NX-204"] .pill').textContent()).toBe('Departed');
+    await flights.locator('tr[data-ship="KT-077"]').click();
+    await flights.locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-event').textContent()).toBe('Slow Comet departed for Mars');
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('2 departures today');
+    await expect.poll(() => comms.locator('#log').textContent()).toContain('Tower: Slow Comet departed for Mars.');
+    await expect.poll(() => line('write', 'flights window', 'event: ship.departed (Slow Comet)').count()).toBe(1);
+    await expect.poll(() => line('read', 'desk', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
+    await expect.poll(() => line('read', 'comms window', 'event: ship.departed (Slow Comet, from flights)').count()).toBe(1);
+
+    // Clear empties it; it fills again with what crosses next
+    await page.locator('#traffic-clear').click();
+    expect(await lines.count()).toBe(0);
+    expect(await page.locator('#traffic-empty').isVisible()).toBe(true);
+    await page.locator('#traffic-toggle').click();
+    expect(await page.locator('#traffic').isVisible()).toBe(false);
+    expect(await page.locator('#traffic-toggle').getAttribute('aria-pressed')).toBe('false');
+    // a popped-out window has no Traffic panel of its own: the desk shows the log
+    expect(await commsWindow.locator('#traffic-toggle').isVisible()).toBe(false);
+    await page.context().close();
+  });
+
+  it('logs a state read and no event for an app that comes after a departure', async () => {
+    const page = await desk();
+    await page.locator('#traffic-toggle').click();
+    await pick(page, 'NX-204');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('1 departure today');
+    await page.locator('#traffic-clear').click();
+
+    await page.locator('#dock [data-app="comms"] .launch').click();
+    await expect.poll(() => app(page, 'comms').locator('#tower').textContent()).toBe('1 departure today');
+    const comms = page.locator('#traffic-lines li[data-kind="read"][data-where="desk"]').filter({ hasText: 'comms' });
+    await expect.poll(() => comms.filter({ hasText: 'state: 1 departed' }).count()).toBeGreaterThan(0);
+    // give a replayed event every chance to show up: none does
+    await page.waitForTimeout(500);
+    expect(await comms.filter({ hasText: 'event:' }).count()).toBe(0);
+    expect(await app(page, 'comms').locator('#log').textContent()).not.toContain('Marigold');
+    await page.context().close();
+  });
+  it('gives a shared link a title, a description and a preview image', async () => {
+    const page = await desk();
+    const meta = (selector: string) => page.locator(selector).getAttribute('content');
+    expect(await meta('meta[name="description"]')).toContain('Braid');
+    expect(await meta('meta[property="og:title"]')).toBe('Starport — a Braid workspace demo');
+    expect(await meta('meta[name="twitter:card"]')).toBe('summary_large_image');
+    const image = await meta('meta[property="og:image"]');
+    expect(image).toBe('https://braidjs.github.io/braid/starport/og.png');
+    // the image is in the build, where that URL points once deployed
+    const served = await fetch(new URL('og.png', server.url));
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toContain('image/png');
+    await page.context().close();
+  });
 });
+
