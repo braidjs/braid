@@ -2,7 +2,9 @@ import { createEventBus } from '@braidlabs/data';
 
 // Flights knows the ships. It knows nothing about the other apps: it broadcasts the ship the user
 // picks, raises intents for whoever can take them, and announces departures to whoever listens.
-const SHIPS = [
+// A global, as an app written with no thought of sharing a page would have. It is this app's
+// window's: the desk and the other apps have their own.
+const SHIPS = (window.SHIPS = [
   { name: 'Marigold', id: { registry: 'NX-204' }, from: 'Ceres', to: 'Europa', eta: '14:20', status: 'On time', bearing: 40, range: 0.55,
     cargo: [{ item: 'Seed vault crates', qty: 120, mass: '4.8 t', hazard: 'None' }, { item: 'Hydroponic gel', qty: 60, mass: '2.1 t', hazard: 'Low' }, { item: 'Honey (yes, honey)', qty: 12, mass: '0.3 t', hazard: 'Sticky' }] },
   { name: 'Slow Comet', id: { registry: 'KT-077' }, from: 'Titan', to: 'Mars', eta: '15:05', status: 'Delayed', bearing: 135, range: 0.8,
@@ -13,11 +15,11 @@ const SHIPS = [
     cargo: [{ item: 'Reactor coolant', qty: 40, mass: '12 t', hazard: 'High' }, { item: 'Rubber ducks', qty: 5000, mass: '0.5 t', hazard: 'None' }] },
   { name: 'Quiet Tuesday', id: { registry: 'QT-002' }, from: 'Europa', to: 'Luna', eta: '17:30', status: 'On time', bearing: 85, range: 0.9,
     cargo: [{ item: 'Ice cores', qty: 75, mass: '9.3 t', hazard: 'Cold' }, { item: 'Lab samples', qty: 14, mass: '0.1 t', hazard: 'Bio' }] },
-];
+]);
 const context = (ship) => ({ type: 'starport.ship', ...ship });
 
 const rows = document.getElementById('ships');
-const departed = new Set();
+let departed = new Set();
 let selected;
 
 for (const ship of SHIPS) {
@@ -61,16 +63,25 @@ document.getElementById('plot').addEventListener('click', () => raise('PlotRoute
 document.getElementById('hail').addEventListener('click', () => raise('HailShip'));
 
 // A departure is an event, not a selection and not a request: it goes on the tower's bus, for
-// any app (or the desk) that cares. The count is the channel's state, which a late listener gets;
-// the event itself is heard once, by whoever was listening.
+// any app (or the desk) that cares. Which ships have left is the channel's state, so a Flights
+// opened later, or a second one, shows the same board; the event itself is heard once, by whoever
+// was listening.
 const tower = createEventBus({ consumer: 'flights' }).channel('tower');
+tower.subscribe((state) => {
+  departed = new Set(state?.departed ?? []);
+  for (const row of rows.rows) {
+    if (!departed.has(row.dataset.ship)) continue;
+    const pill = row.querySelector('.pill');
+    pill.textContent = 'Departed';
+    pill.className = 'pill departed';
+  }
+  show(selected);
+});
 document.getElementById('depart').addEventListener('click', async () => {
   const ship = selected;
-  departed.add(ship.id.registry);
-  const pill = rows.querySelector(`tr[data-ship="${ship.id.registry}"] .pill`);
-  pill.textContent = 'Departed';
-  pill.className = 'pill departed';
-  show(ship);
-  tower.broadcast({ departures: (tower.state()?.departures ?? 0) + 1 });
+  // Last write wins: two Flights marking different ships in the same instant could lose one.
+  tower.broadcast({ departed: [...departed, ship.id.registry] });
   await tower.emit('ship.departed', { name: ship.name, to: ship.to });
+  // the button has just disabled itself; keep the keyboard on the board
+  rows.querySelector(`tr[data-ship="${ship.id.registry}"]`).focus();
 });

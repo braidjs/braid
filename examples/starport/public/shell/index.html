@@ -42,10 +42,10 @@
       </div>
     </header>
 
-    <p id="ticker" role="status" hidden>
+    <p id="ticker" role="status">
       <span class="tag">Tower</span>
       <span id="ticker-event">No departures yet</span>
-      <span id="ticker-count"></span>
+      <span id="ticker-count">0 departures today</span>
     </p>
 
     <p id="remembered" hidden>
@@ -75,7 +75,7 @@
     <dialog id="boundaries" aria-labelledby="boundaries-title">
       <h2 id="boundaries-title">What the desk and the apps do not share</h2>
       <p class="lede">Checked just now, against this page.</p>
-      <ul id="boundary-facts"></ul>
+      <ul id="boundary-facts" aria-labelledby="boundaries-title"></ul>
       <p class="note">
         This is namespace isolation: it keeps well-meaning apps out of each other's way. It is not a security boundary.
       </p>
@@ -85,7 +85,10 @@
     <dialog id="preferences" aria-labelledby="preferences-title">
       <h2 id="preferences-title">Preferences</h2>
       <p class="lede">Kept for you in this browser, with your layouts and each app's settings.</p>
-      <div id="hidden-apps" class="choices"></div>
+      <fieldset>
+        <legend>Never offer these apps for Plot route</legend>
+        <div id="hidden-apps" class="choices"></div>
+      </fieldset>
       <footer><span></span><button type="button" class="done">Done</button></footer>
     </dialog>
   </body>

@@ -1,6 +1,6 @@
 import { initBraid } from '@braidlabs/core';
 import { createBraidDesktopAgent } from '@braidlabs/fdc3';
-import { createWorkspace } from '@braidlabs/console/workspace';
+import { createWorkspace, localStorageStore } from '@braidlabs/console/workspace';
 import { createEventBus } from '@braidlabs/data';
 import { APPS, baseOf, basePathOf } from './registry.js';
 
@@ -17,8 +17,10 @@ function element(tag, className, text = '') {
   node.textContent = text;
   return node;
 }
-/** Says what went wrong where the desk's one status line is. */
+/** Says what went wrong, in the desk's status line. It stays until the page is reloaded. */
+let failed = false;
 function report(message) {
+  failed = true;
   $('#empty').textContent = message;
   $('#empty').hidden = false;
 }
@@ -33,10 +35,14 @@ async function controlled() {
   const registration = await navigator.serviceWorker.register(`${base}sw.js`, { type: 'module', scope: base });
   // a hard reload loads the page past an active worker, which does not claim a page unasked
   registration.active?.postMessage({ type: 'braid-sw:claim' });
-  await changed;
+  // a worker that fails to install never takes control; say so rather than wait for ever
+  const gaveUp = new Promise((_, reject) => setTimeout(() => reject(new Error('the worker did not take control')), 15_000));
+  await Promise.race([changed, gaveUp]);
 }
 
-const workspace = createWorkspace();
+// Other pages may share this origin (the desk is hosted beside the docs), and localStorage is per
+// origin. The desk's folder in the prefix keeps its layouts and preferences its own.
+const workspace = createWorkspace({ store: localStorageStore({ prefix: `braid.workspace${base}` }) });
 
 // ── Choosing an app for an intent ────────────────────────────────────────────────────────────
 // The agent asks this only when several apps could take a raise. The workspace wraps it: a
@@ -78,7 +84,8 @@ $('#chooser-cancel').onclick = () => $('#chooser').close();
 // ── The agent, and Braid ─────────────────────────────────────────────────────────────────────
 // The agent resolves intents against FDC3 App Directory records. A gateway can serve them from
 // its registry (`discovery: { appd: true }`), but not yet under a basePath, so the desk writes
-// the records itself from the same registry the worker uses.
+// the records itself from the same registry the worker uses. These are the members the agent
+// reads; a gateway's own records carry more.
 const directory = APPS.map(({ id, title, fdc3 }) => ({
   appId: id,
   title,
@@ -107,8 +114,12 @@ if (!preferences.defaultUserChannel) {
 }
 
 controlled().then(
-  () => initBraid({ basePath: basePathOf(base), realmGlobals: workspace.realmGlobals(agent.realmGlobals) }),
-  () => report('The service worker could not start, and it is this desk\'s gateway. Starport needs a browser with service workers, over https or on localhost.'),
+  () => {
+    initBraid({ basePath: basePathOf(base), realmGlobals: workspace.realmGlobals(agent.realmGlobals) });
+    // the desk is wired and Braid has started; each app is ready when its own content says so
+    document.documentElement.dataset.ready = '';
+  },
+  () => report("The service worker could not start, and it is this desk's gateway. Starport needs a browser with service workers, over https or on localhost."),
 );
 
 // ── The dock: launch an app, see what is open, close it ──────────────────────────────────────
@@ -116,7 +127,7 @@ controlled().then(
 const desk = workspace.container;
 const slotsOf = (id) => [...desk.querySelectorAll(`:scope > fragment-slot[name="${id}"]`)];
 for (const { id, title, glyph: icon } of APPS) {
-  const entry = element('span', 'app');
+  const entry = element('span', 'entry');
   entry.dataset.app = id;
   const launch = element('button', 'launch');
   launch.type = 'button';
@@ -149,7 +160,7 @@ function showOpen() {
     entry.querySelector('.close').hidden = count === 0;
     entry.querySelector('.launch').setAttribute('aria-label', count ? `Launch another ${app(id).title} (${count} open)` : `Launch ${app(id).title}`);
   }
-  $('#empty').hidden = open > 0;
+  if (!failed) $('#empty').hidden = open > 0;
 }
 new MutationObserver(showOpen).observe(desk, { childList: true });
 showOpen();
@@ -190,7 +201,9 @@ await showLayouts();
 
 // ── The remembered choice, and forgetting it ─────────────────────────────────────────────────
 async function showRemembered() {
-  const choice = await workspace.preferences.intentChoice('PlotRoute', 'starport.ship');
+  // a remembered app that is now hidden is not used, so it is not announced either
+  const remembered = await workspace.preferences.intentChoice('PlotRoute', 'starport.ship');
+  const choice = preferences.hiddenApps?.includes(remembered) ? undefined : remembered;
   $('#remembered').hidden = !choice;
   $('#remembered-app').textContent = app(choice)?.title ?? choice ?? '';
 }
@@ -215,12 +228,22 @@ $('#hidden-apps').replaceChildren(
       const hiddenApps = takers.map((taker) => taker.id).filter((taker) => $(`[data-hide="${taker}"]`).checked);
       preferences = { ...preferences, hiddenApps };
       await workspace.preferences.setHost(preferences);
+      keepOneTaker();
+      await showRemembered();
       $('#hidden-apps').dataset.saved = hiddenApps.join(',');
     };
-    label.append(box, ` Never offer ${title}`);
+    label.append(box, ` ${title}`);
     return label;
   }),
 );
+
+// with every taker hidden a raise would be cancelled, so the last one cannot be ticked
+function keepOneTaker() {
+  const boxes = [...$('#hidden-apps').querySelectorAll('input')];
+  const shown = boxes.filter((box) => !box.checked);
+  for (const box of boxes) box.disabled = shown.length === 1 && box === shown[0];
+}
+keepOneTaker();
 
 // ── The tower's event bus ────────────────────────────────────────────────────────────────────
 // Not everything is a selection or a request. "A ship departed" is an event: whoever is listening
@@ -230,11 +253,10 @@ $('#hidden-apps').replaceChildren(
 const tower = createEventBus({ consumer: 'desk' }).channel('tower');
 tower.addEventListener('ship.departed', ({ payload }) => {
   $('#ticker-event').textContent = `${payload.name} departed for ${payload.to}`;
-  $('#ticker').hidden = false;
 });
-tower.subscribe(({ departures }) => {
+tower.subscribe((state) => {
+  const departures = state?.departed?.length ?? 0;
   $('#ticker-count').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
-  $('#ticker').hidden = false;
 });
 
 // ── Boundaries: what the desk and the apps do not share ──────────────────────────────────────
@@ -247,11 +269,19 @@ function checkBoundaries() {
     const root = slot.shadowRoot?.querySelector('.app');
     return root && getComputedStyle(root).display === 'none';
   }).length;
+  // each app's realm is a frame of this page: same origin, so the desk can look, and does here
+  const realmsWithShips = Array.from({ length: window.frames.length }, (_, index) => window.frames[index]).filter((realm) => {
+    try {
+      return Array.isArray(realm.SHIPS);
+    } catch {
+      return false;
+    }
+  }).length;
   const facts = [
     [
-      typeof globalThis.SHIPS === 'undefined' && typeof globalThis.fdc3 === 'undefined',
+      realmsWithShips > 0 && typeof globalThis.SHIPS === 'undefined',
       'Globals',
-      `Flights keeps its ships in a global, SHIPS, and every app has its own fdc3. The desk's window has ${typeof globalThis.SHIPS === 'undefined' ? 'no SHIPS' : 'a SHIPS'} and ${typeof globalThis.fdc3 === 'undefined' ? 'no fdc3' : 'an fdc3'}: each app runs in its own realm.`,
+      `Flights keeps its ships in a global, window.SHIPS. ${plural(realmsWithShips, 'realm on this page has', 'realms on this page have')} one. The desk's own window has ${typeof globalThis.SHIPS === 'undefined' ? 'none' : 'one too'}: each app runs in its own realm.`,
     ],
     [
       document.getElementById('status') === null && inApps('#status') > 0,
@@ -268,7 +298,7 @@ function checkBoundaries() {
     ...facts.map(([holds, name, detail]) => {
       const item = element('li', holds ? 'holds' : 'broken');
       item.dataset.holds = String(holds);
-      item.append(element('b', '', name), element('span', '', detail));
+      item.append(element('b', '', `${name}: ${holds ? 'holds' : 'broken'}`), element('span', '', detail));
       return item;
     }),
   );
@@ -284,4 +314,4 @@ for (const [button, dialog, before] of [
   $(`${dialog} .done`).onclick = () => $(dialog).close();
 }
 
-document.documentElement.dataset.ready = '';
+

@@ -51,10 +51,10 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 .brand p { margin: 0; color: var(--sp-dim); font-size: 13px; }
 
 #dock { display: flex; gap: 8px; margin-inline: auto; padding: 6px; border-radius: 16px; background: var(--sp-panel); border: 1px solid var(--sp-line); }
-#dock .app { position: relative; border-radius: 11px; border: 1px solid transparent; transition: background 0.15s, transform 0.15s; }
-#dock .app:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
-#dock .app.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
-#dock .app.running::after { content: ''; position: absolute; bottom: 3px; left: 22px; width: 14px; height: 3px; border-radius: 3px; background: var(--sp-teal); }
+#dock .entry { position: relative; border-radius: 11px; border: 1px solid transparent; transition: background 0.15s, transform 0.15s; }
+#dock .entry:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
+#dock .entry.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
+#dock .entry.running::after { content: ''; position: absolute; bottom: 3px; left: 22px; width: 14px; height: 3px; border-radius: 3px; background: var(--sp-teal); }
 #dock button { border: 0; background: transparent; border-radius: 11px; font-weight: 600; }
 #dock .launch { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 14px; }
 #dock .glyph { font-size: 18px; }
@@ -85,7 +85,7 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
   margin: 18px 28px -4px; padding: 6px 6px 6px 16px; border-radius: 999px;
   background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.35); color: #fde68a; font-size: 14px;
 }
-#remembered[hidden], #empty[hidden], #ticker[hidden] { display: none; }
+#remembered[hidden], #empty[hidden] { display: none; }
 #forget { padding: 4px 12px; border-radius: 999px; background: var(--sp-amber); }
 
 /* The workspace: each app is a tile. The slots are the workspace's to add and remove. */
@@ -128,10 +128,10 @@ dialog footer button { background: transparent; color: var(--sp-dim); border: 1p
 dialog label { display: flex; gap: 8px; align-items: center; }
 dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; height: 16px; }
 
-/* The desk's own rule for its own .app — and the proof, in the Boundaries panel, that the five
-   apps using the same class name are not touched by it. */
+/* Every app wraps itself in class="app". This rule is aimed straight at that class, and the
+   Boundaries panel shows it hides none of them: the desk's styles stop at each app's shadow root.
+   The desk itself uses the class nowhere. */
 .app { display: none; }
-#dock .app { display: flex; }
 
 .panels { display: flex; gap: 6px; }
 .panels button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--sp-line); background: var(--sp-panel); font-weight: 600; }
@@ -158,3 +158,7 @@ dialog input[type='checkbox'] { accent-color: var(--sp-teal); width: 16px; heigh
 #boundaries { width: min(560px, calc(100vw - 32px)); }
 .choices { display: grid; gap: 10px; }
 dialog footer .done { background: linear-gradient(135deg, var(--sp-indigo), var(--sp-teal)); color: #0b1020; border: 0; font-weight: 700; }
+fieldset { border: 1px solid var(--sp-line); border-radius: 14px; padding: 12px 16px 16px; margin: 0; }
+legend { padding: 0 6px; color: var(--sp-dim); font-size: 13px; }
+.choices label { display: flex; gap: 8px; align-items: center; }
+.choices label:has(input:disabled) { color: var(--sp-dim); }

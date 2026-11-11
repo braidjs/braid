@@ -173,7 +173,7 @@ describe('the Starport example', () => {
     const page = await desk();
     await page.locator('#dock [data-app="comms"] .launch').click();
     await app(page, 'comms').locator('#send').waitFor();
-    expect(await page.locator('#ticker').isVisible()).toBe(false);
+    expect(await page.locator('#ticker-count').textContent()).toBe('0 departures today');
 
     await pick(page, 'NX-204');
     await app(page, 'flights').locator('#depart').click();
@@ -193,7 +193,18 @@ describe('the Starport example', () => {
     await pick(page, 'KT-077');
     await app(page, 'flights').locator('#depart').click();
     await expect.poll(() => late.locator('#log').textContent()).toContain('Tower: Slow Comet departed for Mars.');
+    await expect.poll(() => app(page, 'comms').first().locator('#log').textContent()).toContain('Tower: Slow Comet departed for Mars.');
     await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('2 departures today');
+
+    // which ships have left is state too: a Flights opened afresh shows them, and counts on from there
+    await page.locator('#dock [data-app="flights"] .close').click();
+    await page.locator('#dock [data-app="flights"] .launch').click();
+    await expect.poll(() => app(page, 'flights').locator('tr[data-ship="NX-204"] .pill').textContent()).toBe('Departed');
+    await pick(page, 'NX-204');
+    expect(await app(page, 'flights').locator('#depart').isDisabled()).toBe(true);
+    await pick(page, 'PL-311');
+    await app(page, 'flights').locator('#depart').click();
+    await expect.poll(() => page.locator('#ticker-count').textContent()).toBe('3 departures today');
     await page.context().close();
   });
 
@@ -202,10 +213,15 @@ describe('the Starport example', () => {
     await page.locator('#open-boundaries').click();
     const facts = page.locator('#boundary-facts li');
     expect(await facts.evaluateAll((items) => items.map((item) => [item.querySelector('b')?.textContent, (item as HTMLElement).dataset.holds]))).toEqual([
-      ['Globals', 'true'],
-      ['Element ids', 'true'],
-      ['Styles', 'true'],
+      ['Globals: holds', 'true'],
+      ['Element ids: holds', 'true'],
+      ['Styles: holds', 'true'],
     ]);
+    // the global is real: Flights' realm has it, as the panel says, and the desk's window does not
+    expect(await facts.nth(0).textContent()).toContain('1 realm on this page has one');
+    const withShips = await Promise.all(page.frames().map((frame) => frame.evaluate(() => Array.isArray((window as unknown as { SHIPS?: unknown }).SHIPS)).catch(() => false)));
+    expect(withShips.filter(Boolean).length).toBe(1);
+    expect(await page.evaluate(() => 'SHIPS' in window)).toBe(false);
     expect(await facts.nth(1).textContent()).toContain('1 open app has an element with id="status"');
     // with Radar open there are two with that id, and still no collision
     await page.locator('#boundaries .done').click();
@@ -226,6 +242,8 @@ describe('the Starport example', () => {
     await page.locator('#open-preferences').click();
     await page.locator('#preferences [data-hide="radar"]').check();
     await page.locator('#hidden-apps[data-saved="radar"]').waitFor();
+    // hiding the last app that can take the intent would cancel every raise, so it cannot be ticked
+    expect(await page.locator('#preferences [data-hide="star-map"]').isDisabled()).toBe(true);
     await page.locator('#preferences .done').click();
 
     // Radar is hidden, so one app is left that can take Plot route: nothing is asked

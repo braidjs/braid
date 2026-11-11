@@ -37,12 +37,14 @@ export async function start({ dir, port = 0, base = '/starport/', onRequest, hea
       return void res.writeHead(404, headers).end();
     }
     if (!pathname.startsWith(base)) {
-      return void res.writeHead(pathname === '/' ? 302 : 404, pathname === '/' ? { location: base } : {}).end();
+      // the root, and the folder without its slash, go to the desk as a static host would send them
+      const toDesk = pathname === '/' || `${pathname}/` === base;
+      return void res.writeHead(toDesk ? 302 : 404, { ...headers, ...(toDesk ? { location: base } : {}) }).end();
     }
     const file = pathname.slice(base.length);
     // a folder is its index.html, as on any static host
     const resolved = normalize(join(root, extname(file) ? file : join(file, 'index.html')));
-    if (!resolved.startsWith(root + sep)) return void res.writeHead(404).end();
+    if (!resolved.startsWith(root + sep)) return void res.writeHead(404, headers).end();
     try {
       const body = await readFile(resolved);
       res

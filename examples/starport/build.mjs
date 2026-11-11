@@ -1,5 +1,5 @@
 import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
 
@@ -15,14 +15,18 @@ import { build as esbuild } from 'esbuild';
  *   apps/{id}/              each app: its page and its script
  */
 
-const here = resolve(fileURLToPath(new URL('.', import.meta.url)));
+const here = fileURLToPath(new URL('.', import.meta.url));
+/** Says a folder is this build's output, and so safe for the next build to clear. */
+const MARKER = '.starport-build';
 
 /** `tsconfig` lets a Braid checkout resolve the packages from source. */
 export async function build({ out = join(here, 'dist'), tsconfig } = {}) {
   const target = resolve(out);
-  // the folder is cleared first, so it must never be one that holds this example
-  if (`${here}${sep}`.startsWith(`${target}${sep}`) || here.startsWith(`${target}${sep}`)) {
-    throw new Error(`refusing to clear ${target}: --out must not contain the example itself`);
+  // The folder is cleared first. So it is only ever one this build made (it leaves a marker), or
+  // one that is empty or not there yet: a mistyped --out cannot take anything else with it.
+  const existing = await readdir(target).catch(() => []);
+  if (existing.length > 0 && !existing.includes(MARKER)) {
+    throw new Error(`refusing to clear ${target}: it is not empty and was not written by this build`);
   }
   await rm(target, { recursive: true, force: true });
   await mkdir(target, { recursive: true });
@@ -49,7 +53,7 @@ export async function build({ out = join(here, 'dist'), tsconfig } = {}) {
     // Bundling it is this example's stand-in for that app's own build.
     ...apps.map((id) => bundle(join(here, 'public', 'apps', id, 'app.js'), join(target, 'apps', id, 'app.js'), 'iife')),
   ]);
-  await writeFile(join(target, '.nojekyll'), '');
+  await writeFile(join(target, MARKER), '');
   return target;
 }
 

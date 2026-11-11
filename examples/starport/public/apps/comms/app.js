@@ -34,6 +34,7 @@ document.getElementById('send').addEventListener('submit', (event) => {
 // so it is right from the start.
 const tower = createEventBus({ consumer: 'comms' }).channel('tower');
 tower.addEventListener('ship.departed', ({ payload }) => say(`Tower: ${payload.name} departed for ${payload.to}.`, 'sys'));
-tower.subscribe(({ departures }) => {
+tower.subscribe((state) => {
+  const departures = state?.departed?.length ?? 0;
   document.getElementById('tower').textContent = `${departures} ${departures === 1 ? 'departure' : 'departures'} today`;
 });

@@ -10,6 +10,8 @@ on:
     paths:
       - 'docs/**'
       - 'examples/starport/**'
+      # the example is built from the libraries' sources, so it is republished when they change
+      - 'libs/**'
       - '.github/workflows/docs.yml'
       - 'package.json'
   # So a docs fix can be published without an unrelated commit to trigger it.
