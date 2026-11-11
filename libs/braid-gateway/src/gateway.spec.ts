@@ -174,7 +174,7 @@ describe('gateway namespace routing', () => {
       const escaping = new URL('https://example.com/');
       Object.defineProperty(escaping, 'pathname', { value: '/%2e%2e/admin' });
       expect(() => resolveEndpointUrl('https://internal.example/apps/billing/', escaping, 'billing')).toThrow(
-        /outside its endpoint path/,
+        /refusing to forward it/,
       );
     });
 
@@ -182,17 +182,37 @@ describe('gateway namespace routing', () => {
       const endpoint = 'https://internal.example/apps/billing/';
       // each of these is one segment to a URL parser, so it stays under the endpoint's path as a
       // string; an upstream that decodes before resolving would walk out of it
-      for (const path of ['/..%2f..%2fadmin/users', '/..%2F..%2Fadmin', '/a/..%5c..%5cadmin', '/%2e%2e%2fadmin', '/x%2f..%2f..%2f..%2fadmin', '/a/%2E%2E%2Fb']) {
+      for (const path of [
+        '/..%2f..%2fadmin/users',
+        '/..%2F..%2Fadmin',
+        '/a/..%5c..%5cadmin',
+        '/%2e%2e%2fadmin',
+        '/x%2f..%2f..%2f..%2fadmin',
+        '/a/%2E%2E%2Fb',
+        // a servlet container drops ;parameters before it resolves dot segments
+        '/..;/..;/admin',
+        '/%2e%2e;/%2e%2e;/admin',
+        '/..%3b/admin',
+        '/..;jsessionid=1/admin',
+        // an upstream chain that decodes twice
+        '/..%252f..%252fadmin',
+        '/%252e%252e/admin',
+        // a NUL, a trailing space, and forms a file system may best-fit to a dot or a slash
+        '/a%00b',
+        '/..%20/admin',
+        '/%EF%BC%8E%EF%BC%8E/admin',
+        '/a%EF%BC%8Fb',
+      ]) {
         const url = new URL('https://example.com/');
         Object.defineProperty(url, 'pathname', { value: path });
-        expect(() => resolveEndpointUrl(endpoint, url, 'billing'), path).toThrow(/encoded path separator or dot segment/);
+        expect(() => resolveEndpointUrl(endpoint, url, 'billing'), path).toThrow(/refusing to forward/);
       }
       const malformed = new URL('https://example.com/');
       Object.defineProperty(malformed, 'pathname', { value: '/a/%E0%A4%A/b' });
       expect(() => resolveEndpointUrl(endpoint, malformed, 'billing')).toThrow(/not valid percent-encoding/);
 
       // encoding that hides nothing is forwarded as it came
-      for (const path of ['/assets/main%20v2.js', '/files/r%C3%A9sum%C3%A9.pdf', '/v1%2E2/app.js', '/a%3Fb']) {
+      for (const path of ['/assets/main%20v2.js', '/files/r%C3%A9sum%C3%A9.pdf', '/v1%2E2/app.js', '/a%3Fb', '/a;v=1/b.js', '/.../x', '/50%25/off.js', '/.well-known/x']) {
         expect(resolveEndpointUrl(endpoint, new URL(`https://example.com${path}`), 'billing').pathname).toBe(`/apps/billing${path}`);
       }
 
@@ -205,7 +225,7 @@ describe('gateway namespace routing', () => {
       }) as typeof fetch;
       try {
         const gateway = createGateway({ registry: [{ id: 'billing', endpoint }] });
-        for (const path of ['/__braid/frag/billing/..%2f..%2fadmin/users', '/__braid/doc/billing/..%2f..%2fadmin']) {
+        for (const path of ['/__braid/frag/billing/..%2f..%2fadmin/users', '/__braid/doc/billing/..%2f..%2fadmin', '/__braid/frag/billing/..;/..;/admin']) {
           const response = await gateway.handle(new Request(`https://shell.example${path}`));
           expect(response?.status, path).toBeGreaterThanOrEqual(400);
           expect(await response?.text()).not.toContain('upstream');
@@ -218,6 +238,35 @@ describe('gateway namespace routing', () => {
       } finally {
         globalThis.fetch = original;
       }
+    });
+
+    it('gives a function endpoint the same refusals, and never a request for a host named in the path', async () => {
+      const asked: string[] = [];
+      const gateway = createGateway({
+        registry: [
+          {
+            id: 'fn',
+            endpoint: (async (input: RequestInfo | URL) => {
+              asked.push(String(input instanceof Request ? input.url : input));
+              return new Response('served', { headers: { 'content-type': 'text/plain' } });
+            }) as typeof fetch,
+          },
+        ],
+      });
+      for (const path of ['/__braid/frag/fn/..%2f..%2fadmin', '/__braid/frag/fn/..;/admin']) {
+        expect((await gateway.handle(new Request(`https://shell.example${path}`)))?.status, path).toBe(404);
+      }
+      expect(asked).toEqual([]);
+      // `//evil.example/steal` is a protocol-relative URL to a parser: the request stays on the shell's origin
+      await gateway.handle(new Request('https://shell.example/__braid/frag/fn//evil.example/steal'));
+      expect(asked.length).toBe(1);
+      expect(new URL(asked[0]).origin).toBe('https://shell.example');
+    });
+
+    it('answers a fragment id that is not valid percent-encoding as a path it does not own', async () => {
+      const gateway = createGateway({ registry: [{ id: 'billing', endpoint: 'https://internal.example/apps/billing/' }] });
+      // it threw out of handle(), which a server turns into a 500 with a stack trace
+      expect(await gateway.handle(new Request('https://shell.example/__braid/frag/%E0%A4%A/x'))).toBeNull();
     });
 
     it("never leaves the endpoint's origin for a path that starts with //", async () => {

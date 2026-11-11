@@ -37,6 +37,14 @@ A host mounted under a path it shares a domain with sets `createGateway({ basePa
 and `initBraid({ basePath: '/manage' })`; the namespaces then live at `/manage/__braid/…` and the
 root is left alone. Not yet combinable with `serviceWorker`, `discovery`, `preferences`, or `telemetry.webVitals`.
 
+**Paths that are refused.** A fragment request is forwarded only if every segment of its path means
+the same thing decoded as it does as written. A segment that decodes to `.` or `..`, that holds an
+encoded slash, backslash or NUL (`a%2Fb`), that is a dot segment with path parameters (`..;x`), or
+that is not valid percent-encoding (a bare `%`) gets a 404 and nothing is fetched. An upstream that
+decodes before it resolves would otherwise be walked out of the fragment's endpoint path. This
+applies to a bound fragment's page route too: a route parameter that may contain a slash belongs in
+the query string, or give the fragment a `documentPath`.
+
 ---
 
 ## Usage
