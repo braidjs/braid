@@ -203,10 +203,21 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
     describe(slot);
   }
 
+  /**
+   * Puts a tile's edges at its edges: they hang from a frame of no height, so they need its visible
+   * height. Done as soon as the tile is described (a resize, say), not a frame later when the
+   * observer would, so the edges are where the tile is by the time anyone reaches for them.
+   */
+  function fitEdges(slot: Element) {
+    const style = view.getComputedStyle(slot);
+    (slot as HTMLElement).style.setProperty('--braid-tile-height', `${slot.clientHeight - (parseFloat(style.paddingTop) || 0)}px`);
+  }
+
   /** Says what a tile is, in its size buttons, and asks the host to say the rest. */
   function describe(slot: Element) {
     const head = headOf(slot);
     if (!head) return;
+    fitEdges(slot);
     const title = titleOf(slot);
     const { columns, rows } = spanOf(slot);
     const wider = head.querySelector('.braid-tile-wider')!;
@@ -422,10 +433,7 @@ export function arrange(workspace: Workspace, options: ArrangeOptions = {}): Til
             if (target === container) {
               container.toggleAttribute('data-braid-tiles-single', grid().columns < 2);
               for (const slot of tiles()) describe(slot);
-            } else {
-              const style = view.getComputedStyle(target);
-              (target as HTMLElement).style.setProperty('--braid-tile-height', `${target.clientHeight - (parseFloat(style.paddingTop) || 0)}px`);
-            }
+            } else fitEdges(target);
           }
         })
       : undefined;
