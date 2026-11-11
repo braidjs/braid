@@ -122,7 +122,40 @@ await workspace.layouts.delete('morning');
 ```
 
 A layout is the area's `<fragment-slot>`s in order: each one's app, `src` and `props`, and whatever
-state the app gives. A reload shows the shell as designed, with its starting apps; restoring a
+state the app gives.
+
+**Arranging it.** Each app can span more of the area, and move within it; a layout keeps both.
+
+```ts
+workspace.place(slot, { columns: 2, rows: 1 }); // 1 to 12 each; {} goes back to the default
+workspace.placementOf(slot);                    // { columns: 2, rows: 1 }
+workspace.move(slot, 0);                        // to the front, counting apps only; the app keeps running
+```
+
+A span is written to the slot as `data-braid-columns` / `data-braid-rows` and as the custom
+properties `--braid-columns` / `--braid-rows`, so the host's CSS says what it means:
+
+```css
+[data-braid-workspace] { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 200px; }
+[data-braid-workspace] > fragment-slot { grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 2); }
+```
+
+A slot that moves within the page keeps its fragment running (see
+[Moving a slot](./core.md#moving-a-slot)), so a drag-and-drop reorder costs the app nothing. In a
+browser without `moveBefore`, an untrusted (framed) app reloads when it moves. An app the FDC3
+agent launches takes the host's default span; `place` it afterwards for another. A
+`slot="header"` child shows above the app in every state: the place for a tile's title, grip and
+controls ([A header of the host's own](./core.md#a-header-of-the-host-s-own)).
+
+**Handing an app to another page.** `snapshot(slot)` gives one app as a layout would save it,
+without saving; for an app still booting, the state it was opened with. Another page's workspace opens it with that state, channel and span:
+
+```ts
+const { appId, ...rest } = await workspace.snapshot(slot); // in the desk
+other.open(appId, rest);                                  // in a window of its own
+```
+
+A reload shows the shell as designed, with its starting apps; restoring a
 layout is the page's call, so a "restore my last layout on load" is one line in the host.
 
 **Inside an app.** Every fragment gets `window.braidDesktop`:

@@ -16,6 +16,7 @@ export type {
   HostPreferences,
   SavedLayout,
   SavedSlot,
+  Placement,
   BraidDesktopApi,
 } from './workspace/workspace.js';
 export { localStorageStore, serverStore, memoryStore, isStoreKey, keySegment } from './workspace/store.js';

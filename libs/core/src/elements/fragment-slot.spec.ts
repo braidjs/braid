@@ -3,6 +3,7 @@ import { BraidError } from '../errors.js';
 import {
   SLOT_STYLES,
   ensureFallbackSlot,
+  ensureHeaderSlot,
   ensureLoadingSlot,
   fetchFragmentHtml,
   findPiercedContentRoot,
@@ -116,6 +117,59 @@ describe('ensureFallbackSlot()', () => {
   });
 });
 
+describe('ensureHeaderSlot()', () => {
+  const names = (root: ShadowRoot) => [...root.children].map((child) => (child.localName === 'slot' ? `slot:${(child as HTMLSlotElement).name}` : child.localName));
+
+  it('puts the header after the styles and before the fragment, on a client-built root', () => {
+    const slot = document.createElement('fragment-slot');
+    const shadowRoot = slot.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = SLOT_STYLES;
+    shadowRoot.append(style, document.createElement('braid-document'));
+
+    ensureFallbackSlot(shadowRoot);
+    expect(names(shadowRoot)).toEqual(['style', 'slot:header', 'braid-document', 'slot:fallback']);
+  });
+
+  it('puts it before the content of a pierced root, which arrives with its own', () => {
+    const shadowRoot = piercedSlot();
+    ensureFallbackSlot(shadowRoot);
+    const order = names(shadowRoot);
+    expect(order.indexOf('slot:header')).toBeLessThan(order.findIndex((name) => name !== 'style' && name !== 'slot:header'));
+  });
+
+  it('is there for a root that already had its fallback, and only once', () => {
+    const shadowRoot = piercedSlot();
+    const fallback = document.createElement('slot');
+    fallback.name = 'fallback';
+    shadowRoot.append(fallback);
+    ensureFallbackSlot(shadowRoot);
+    ensureFallbackSlot(shadowRoot);
+    ensureHeaderSlot(shadowRoot);
+    expect(shadowRoot.querySelectorAll('slot[name="header"]')).toHaveLength(1);
+  });
+
+  it("is the host's even when the fragment's own markup has a slot of that name", () => {
+    const slot = document.createElement('fragment-slot');
+    const shadowRoot = slot.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    const content = document.createElement('braid-document');
+    content.innerHTML = '<div hidden><slot name="header"></slot></div>';
+    shadowRoot.append(style, content);
+    ensureFallbackSlot(shadowRoot);
+    expect(shadowRoot.children[1].localName).toBe('slot');
+    expect((shadowRoot.children[1] as HTMLSlotElement).name).toBe('header');
+  });
+
+  it('comes first in a root with no styles yet, as an untrusted frame starts', () => {
+    const slot = document.createElement('fragment-slot');
+    const shadowRoot = slot.attachShadow({ mode: 'open' });
+    ensureHeaderSlot(shadowRoot);
+    shadowRoot.append(document.createElement('iframe'));
+    expect(names(shadowRoot)).toEqual(['slot:header', 'iframe']);
+  });
+});
+
 describe('ensureLoadingSlot()', () => {
   it('adds the loading slot after the document, once', () => {
     const slot = document.createElement('fragment-slot');
@@ -130,7 +184,8 @@ describe('ensureLoadingSlot()', () => {
 
     expect(shadowRoot.querySelectorAll('slot[name="loading"]')).toHaveLength(1);
     // after braid-document, so `braid-document:empty ~ slot[name="loading"]` can match it
-    expect([...shadowRoot.children].map((child) => child.localName)).toEqual(['style', 'braid-document', 'slot', 'slot']);
+    // (the header slot comes before the document, which leaves the sibling selector intact)
+    expect([...shadowRoot.children].map((child) => child.localName)).toEqual(['style', 'slot', 'braid-document', 'slot', 'slot']);
     expect(shadowRoot.lastElementChild?.getAttribute('name')).toBe('loading');
   });
 });

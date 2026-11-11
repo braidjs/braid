@@ -152,6 +152,30 @@ export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
 }
 
 /**
+ * Adds the slot a host's `slot="header"` child projects into: host-owned content shown above the
+ * fragment in every state — a title bar, a tile's controls. Placed right after the slot's own
+ * styles, so it comes before the fragment's content whichever path built the root (client,
+ * pierced, or an untrusted frame appended later).
+ *
+ * ```html
+ * <fragment-slot name="chart"><div slot="header">Chart <button>Pop out</button></div></fragment-slot>
+ * ```
+ */
+export function ensureHeaderSlot(shadowRoot: ShadowRoot): void {
+  // the root's own children only: a fragment's markup could carry a slot of that name deeper down
+  if ([...shadowRoot.children].some((child) => child.localName === 'slot' && (child as HTMLSlotElement).name === 'header')) return;
+  const header = document.createElement('slot');
+  header.name = 'header';
+  let after: Element | null = null;
+  for (const child of shadowRoot.children) {
+    if (child.localName !== 'style') break;
+    after = child;
+  }
+  if (after) after.after(header);
+  else shadowRoot.prepend(header);
+}
+
+/**
  * Ensures the shadow root can present host-provided fallback content:
  *
  * ```html
@@ -164,7 +188,11 @@ export function ensureLoadingSlot(shadowRoot: ShadowRoot): void {
  * their first paint matters.
  */
 export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
-  if (shadowRoot.querySelector('slot[name="fallback"]')) return;
+  // the root's own children only, as for the header: a fragment's markup may carry its own
+  if ([...shadowRoot.children].some((child) => child.localName === 'slot' && (child as HTMLSlotElement).name === 'fallback')) {
+    ensureHeaderSlot(shadowRoot);
+    return;
+  }
 
   if (!shadowRoot.querySelector('style')) {
     const styleSheet = document.createElement('style');
@@ -175,6 +203,8 @@ export function ensureFallbackSlot(shadowRoot: ShadowRoot): void {
   const fallback = document.createElement('slot');
   fallback.name = 'fallback';
   shadowRoot.append(fallback);
+  // every root that can show a fallback is one a host may give a header to
+  ensureHeaderSlot(shadowRoot);
 }
 
 /**
@@ -602,6 +632,13 @@ export class FragmentSlot extends HTMLElement {
    *
    * Resolves once the instance is fully gone, so `reload()` and the next `#boot()` can wait on it.
    */
+  /** Empties the shadow root of the fragment, and keeps the host's header showing. */
+  #clearKeepingHeader(): void {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.replaceChildren();
+    ensureHeaderSlot(this.shadowRoot);
+  }
+
   #teardown(reason: CloseReason): Promise<void> {
     const channel = this.#channel;
     const abortController = this.#abortController;
@@ -615,7 +652,7 @@ export class FragmentSlot extends HTMLElement {
     // Nothing mounted: the pre-Weave synchronous path, still the right one for an idle slot.
     if (!channel || !abortController) {
       abortController?.abort();
-      this.shadowRoot?.replaceChildren();
+      this.#clearKeepingHeader();
       this.#setState('idle');
       return Promise.resolve();
     }
@@ -650,7 +687,7 @@ export class FragmentSlot extends HTMLElement {
       // close has already rendered into the shadow root, and wiping it here would blank a fragment
       // that had just successfully mounted.
       if (this.#closingToken === token) {
-        this.shadowRoot?.replaceChildren();
+        this.#clearKeepingHeader();
         this.#setState('idle');
         this.#closing = undefined;
         this.#closingToken = undefined;

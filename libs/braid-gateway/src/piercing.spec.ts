@@ -408,7 +408,8 @@ describe('pierceShellHtml()', () => {
       `<body><fragment-slot name="other"></fragment-slot>` +
         `<fragment-slot name="billing" data-braid-pierced=""><template shadowrootmode="open">` +
         BRAID_FRAGMENT_STYLES +
-        `<braid-document>B</braid-document></template></fragment-slot></body>`,
+        // the host's header shows from the first paint, ahead of the fragment
+        `<slot name="header"></slot><braid-document>B</braid-document></template></fragment-slot></body>`,
     );
   });
 

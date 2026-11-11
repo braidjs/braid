@@ -29,11 +29,23 @@ gateway runs in the page's service worker.
 - **An event bus.** *Mark departed* emits `ship.departed` on a `@braidlabs/data` channel. The
   desk's ticker and Comms hear it. Which ships have left is the channel's state: a Comms or a
   Flights opened afterwards gets that, and does not get the old event replayed.
-- **Layouts that keep each app's state.** Zoom the map, open Radar, save a layout. Close things,
-  restore it: the apps come back, and the map is zoomed as it was. Layouts survive a reload.
+- **Seams.** *Show seams* outlines every tile and labels it with its `<fragment-slot>` tag, its
+  state, and the URL the worker served it from, as the Braid site's "Show the seams" does for its
+  sections.
+- **Tiles you arrange.** Drag a tile by its grip (⠿) to move it, by mouse or touch, or press Alt and
+  an arrow key on the grip. The app keeps running while it moves. Drag a tile's corner, or use its
+  ⇔ and ⇕ buttons, to span up to three columns and three rows. On a phone every tile is full width.
+- **Pop out.** ↗ moves an app into a window of its own, with its state. It still follows the ship
+  picked on the desk, and closing the window puts it back on the desk as it was left. Cmd-click
+  (Ctrl-click) opens a copy in a tab instead, and leaves the desk alone.
+- **Layouts that keep each app's state, order and size.** Zoom the map, widen it, move it, save a
+  layout. Close things, restore it: the apps come back in that order and size, and the map is
+  zoomed as it was. Layouts survive a reload.
 - **Preferences and app settings.** *Preferences* hides an app from the chooser: hide Radar and
   *Plot route* goes straight to Star Map. Cargo's column choice is a setting kept for the app.
   Both are the same after a reload.
+
+![The seams shown: each tile labelled with its slot, state and source](./screenshot-seams.png)
 
 ![Choosing which app takes an intent](./screenshot-chooser.png)
 
@@ -48,7 +60,10 @@ Which to use when — a channel, an intent, or an event — is the subject of th
   worker and the desk both read it.
 - `src/sw.js` — the whole worker: `setupBraidGateway` with that registry.
 - `src/main.js` — the desk's runtime: it registers the worker, then the workspace, the agent, the
-  dock, layouts, the chooser, the ticker and the two panels.
+  dock, layouts, the chooser, the ticker, the two panels, and popping apps out.
+- `src/tiles.js` — each tile's header (a `slot="header"` child of its `<fragment-slot>`): moving,
+  resizing, popping out and the seams. The workspace's `move` and `place` do the work, and a saved
+  layout keeps both.
 - `public/shell` — the desk's page and its theme. The palette is CSS custom properties, which
   cross into each app's shadow root.
 - `public/apps/*` — the five apps. They use `fdc3` and, for settings and layout state,
@@ -106,4 +121,14 @@ desk keeps its entries under its own folder's name, which stops accidents, not a
   FDC3 records from the registry itself.
 - The gateway's policies run on the user's device, so they are advisory. See "The gateway in the
   worker" in the [`@braidlabs/sw` README](../../libs/braid-sw/README.md).
-- The tiles are a grid. The workspace orders apps; it is not a window manager.
+- The tiles are a grid: an app has a place in an order and a span, not an x and y of its own.
+- A popped-out window has its own FDC3 agent. The desk relays the selected ship to it over a
+  `@braidlabs/data` channel scoped to the origin; the Tower's departures stay on the desk's page.
+  A saved layout holds the desk, not apps that are out in windows.
+- A popped-out app's state crosses between windows through `localStorage` and a
+  `BroadcastChannel`, in the clear, to any page of this origin. Fine for Starport; think before
+  carrying anything private that way. A window that does not take its app within ten seconds gives
+  it back to the desk. Reloading a popped-out window keeps the app in it.
+- A popped-out app comes back with its state from a moment after its last change: an app that
+  changes by itself is caught up every few seconds, so a window closed straight after such a change
+  can miss it.
