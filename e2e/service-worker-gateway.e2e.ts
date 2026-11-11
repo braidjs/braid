@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Browser, BrowserContext } from 'playwright';
 import { launch } from './harness.js';
@@ -33,6 +34,18 @@ afterAll(async () => {
 /** A fresh profile: no worker installed yet, as on a first visit. */
 async function firstVisit(): Promise<BrowserContext> {
   return browser.newContext();
+}
+
+/** Sends one raw request line, as a browser would for a URL such as `http://host//`. */
+function rawGet(url: string, target: string): Promise<string> {
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), hostname, () => socket.write(`GET ${target} HTTP/1.1\r\nHost: ${hostname}\r\nConnection: close\r\n\r\n`));
+    let data = '';
+    socket.on('data', (chunk) => (data += chunk));
+    socket.on('end', () => resolve(data.split('\r\n')[0]));
+    socket.on('error', reject);
+  });
 }
 
 describe('the gateway in a service worker', () => {
@@ -165,5 +178,12 @@ describe('the gateway in a service worker', () => {
     );
     // while the billing app's own files were fetched — by the worker, on the page's behalf
     expect(requested).toContain('/billing-app/main.js');
+  });
+
+  it('answers a request-target that is not a URL with a 400, and keeps serving', async () => {
+    // `//` throws from `new URL`; uncaught, that took the whole server down, and any page can
+    // make a browser send it
+    expect(await rawGet(server.url, '//')).toBe('HTTP/1.1 400 Bad Request');
+    expect((await fetch(server.url)).status).toBe(200);
   });
 });

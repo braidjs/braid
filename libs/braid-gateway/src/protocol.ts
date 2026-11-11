@@ -126,11 +126,14 @@ export function parseBraidPathname(pathname: string): BraidRoute | null {
 
     if (!encodedFragmentId) return null;
 
-    return {
-      kind,
-      fragmentId: decodeURIComponent(encodedFragmentId),
-      pathname: slashIndex === -1 ? '/' : rest.slice(slashIndex),
-    };
+    let fragmentId: string;
+    try {
+      fragmentId = decodeURIComponent(encodedFragmentId);
+    } catch {
+      // not valid percent-encoding, so not an id any fragment has: the path names nothing here
+      return null;
+    }
+    return { kind, fragmentId, pathname: slashIndex === -1 ? '/' : rest.slice(slashIndex) };
   }
   return null;
 }

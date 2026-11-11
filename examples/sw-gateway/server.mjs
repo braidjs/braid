@@ -47,7 +47,14 @@ export async function bundle({ tsconfig } = {}) {
 export async function start({ port = 0, bundles, onRequest, compress } = {}) {
   const scripts = bundles ?? (await bundle());
   const server = createServer(async (req, res) => {
-    const { pathname } = new URL(req.url, 'http://localhost');
+    // a request-target such as `//` is not a URL, and any page can make a browser send one here
+    let pathname;
+    try {
+      ({ pathname } = new URL(req.url, 'http://localhost'));
+    } catch {
+      res.writeHead(400).end();
+      return;
+    }
     onRequest?.(pathname);
 
     if (scripts[pathname]) {

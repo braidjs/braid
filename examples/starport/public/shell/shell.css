@@ -51,12 +51,12 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 .brand p { margin: 0; color: var(--sp-dim); font-size: 13px; }
 
 #dock { display: flex; gap: 8px; margin-inline: auto; padding: 6px; border-radius: 16px; background: var(--sp-panel); border: 1px solid var(--sp-line); }
-#dock .entry { position: relative; border-radius: 11px; border: 1px solid transparent; transition: background 0.15s, transform 0.15s; }
+#dock .entry { position: relative; display: flex; flex: none; border-radius: 11px; border: 1px solid transparent; transition: background 0.15s, transform 0.15s; }
 #dock .entry:hover { background: var(--sp-panel-2); transform: translateY(-1px); }
 #dock .entry.running { border-color: var(--sp-line); background: var(--sp-panel-2); }
 #dock .entry.running::after { content: ''; position: absolute; bottom: 3px; left: 22px; width: 14px; height: 3px; border-radius: 3px; background: var(--sp-teal); }
 #dock button { border: 0; background: transparent; border-radius: 11px; font-weight: 600; }
-#dock .launch { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 14px; }
+#dock .launch { white-space: nowrap; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 14px; }
 #dock .glyph { font-size: 18px; }
 #dock .count { font: 600 11px var(--sp-mono); color: var(--sp-amber); }
 #dock .count:empty { display: none; }
@@ -91,11 +91,12 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 /* The workspace: each app is a tile. The slots are the workspace's to add and remove. */
 [data-braid-workspace] {
   display: grid; gap: 20px; padding: 24px 28px 40px;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  /* a tile is never wider than the screen it is on */
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
   align-items: stretch;
 }
 [data-braid-workspace] > fragment-slot {
-  display: block; min-height: 380px; overflow: hidden;
+  display: block; min-width: 0; min-height: 380px; overflow: hidden;
   border-radius: 20px; border: 1px solid var(--sp-line);
   background: linear-gradient(180deg, var(--sp-panel-2), var(--sp-panel));
   box-shadow: 0 18px 50px -24px #000, inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -107,7 +108,7 @@ h1 { margin: 0; font-size: 24px; letter-spacing: 0.14em; text-transform: upperca
 #empty { margin: 12vh auto; text-align: center; color: var(--sp-dim); font-size: 17px; }
 
 dialog {
-  width: min(420px, calc(100vw - 32px)); padding: 24px; border-radius: 22px;
+  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border-radius: 22px;
   border: 1px solid var(--sp-line); color: var(--sp-text);
   background: linear-gradient(180deg, var(--sp-panel-2), var(--sp-panel));
   box-shadow: 0 40px 120px -20px #000;
@@ -162,3 +163,22 @@ fieldset { border: 1px solid var(--sp-line); border-radius: 14px; padding: 12px 
 legend { padding: 0 6px; color: var(--sp-dim); font-size: 13px; }
 .choices label { display: flex; gap: 8px; align-items: center; }
 .choices label:has(input:disabled) { color: var(--sp-dim); }
+
+/* A phone: one column, nothing wider than the screen, and the dock scrolls sideways. */
+@media (max-width: 720px) {
+  header { position: static; padding: 14px 16px; gap: 12px; }
+  h1 { font-size: 20px; }
+  #dock { margin-inline: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .panels, .layouts { width: 100%; flex-wrap: wrap; }
+  .panels button { flex: 1; }
+  #layouts { flex-wrap: wrap; }
+  #save-layout { flex: 1 1 100%; }
+  #save-layout input { flex: 1; width: auto; min-width: 0; }
+  #ticker, #remembered { float: none; width: auto; margin: 14px 16px 0; flex-wrap: wrap; border-radius: 16px; }
+  [data-braid-workspace] { padding: 16px 16px 32px; gap: 14px; }
+  [data-braid-workspace] > fragment-slot { min-height: 0; border-radius: 16px; }
+  dialog { padding: 18px; border-radius: 18px; }
+  dialog h2 { font-size: 18px; }
+  #boundary-facts span, .lede { font-size: 13px; }
+  #boundary-facts li { padding: 12px 12px 12px 38px; }
+}

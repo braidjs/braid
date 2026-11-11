@@ -30,6 +30,8 @@ export async function build({ out = join(here, 'dist'), tsconfig } = {}) {
   }
   await rm(target, { recursive: true, force: true });
   await mkdir(target, { recursive: true });
+  // first, so a build that fails part-way still leaves a folder the next one may clear
+  await writeFile(join(target, MARKER), '');
   await cp(join(here, 'public', 'shell'), target, { recursive: true });
   await cp(join(here, 'public', 'apps'), join(target, 'apps'), { recursive: true });
 
@@ -48,12 +50,12 @@ export async function build({ out = join(here, 'dist'), tsconfig } = {}) {
     });
   await Promise.all([
     bundle(join(here, 'src', 'main.js'), join(target, 'main.js'), 'esm'),
-    bundle(join(here, 'src', 'sw.js'), join(target, 'sw.js'), 'esm'),
+    // a classic script: the bundle has no imports left, and not every browser runs a module worker
+    bundle(join(here, 'src', 'sw.js'), join(target, 'sw.js'), 'iife'),
     // An app's script is a classic script, as an app that has never heard of Braid would ship.
     // Bundling it is this example's stand-in for that app's own build.
     ...apps.map((id) => bundle(join(here, 'public', 'apps', id, 'app.js'), join(target, 'apps', id, 'app.js'), 'iife')),
   ]);
-  await writeFile(join(target, MARKER), '');
   return target;
 }
 

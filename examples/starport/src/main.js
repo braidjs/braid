@@ -32,7 +32,7 @@ const base = baseOf(import.meta.url);
 async function controlled() {
   if (navigator.serviceWorker.controller) return;
   const changed = new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
-  const registration = await navigator.serviceWorker.register(`${base}sw.js`, { type: 'module', scope: base });
+  const registration = await navigator.serviceWorker.register(`${base}sw.js`, { scope: base });
   // a hard reload loads the page past an active worker, which does not claim a page unasked
   registration.active?.postMessage({ type: 'braid-sw:claim' });
   // a worker that fails to install never takes control; say so rather than wait for ever
@@ -310,6 +310,8 @@ for (const [button, dialog, before] of [
   $(button).onclick = () => {
     before?.();
     $(dialog).showModal();
+    // focus lands on Done, at the foot; on a short screen that would open the panel scrolled past its start
+    $(dialog).scrollTop = 0;
   };
   $(`${dialog} .done`).onclick = () => $(dialog).close();
 }

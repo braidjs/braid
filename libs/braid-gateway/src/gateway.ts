@@ -964,7 +964,7 @@ export function createGateway(options: GatewayOptions): BraidGateway {
       console.warn(String(result.error));
       return htmlResponse(
         mode === 'development'
-          ? `<p>braid-gateway: that path is outside the endpoint declared by fragment "${escapeHtml(fragment.id)}".</p>`
+          ? `<p>braid-gateway: that path is outside the endpoint declared by fragment "${escapeHtml(fragment.id)}", or hides a path separator or dot segment.</p>`
           : '<p>Not found</p>',
         404,
         { [BRAID_FRAGMENT_ID_HEADER]: fragment.id },
@@ -1164,7 +1164,19 @@ export function createGateway(options: GatewayOptions): BraidGateway {
     // The caller composes the whole path, query included. Whether the page's query belongs on this
     // request is a question only the caller can answer — a namespace request forwards it, a bound
     // fragment renders it, and to a widget the host's `?tab=` means nothing at all.
-    const strippedUrl = new URL(path, requestUrl);
+    // Assigned, never parsed against the request: as a string, a path starting `//` names another
+    // host, and a function endpoint would be handed a request for it.
+    const queryAt = path.indexOf('?');
+    const strippedUrl = new URL(requestUrl.origin);
+    strippedUrl.pathname = queryAt === -1 ? path : path.slice(0, queryAt);
+    strippedUrl.search = queryAt === -1 ? '' : path.slice(queryAt);
+
+    // every endpoint, a function too: it has no path to stay inside, and may still proxy or serve files
+    try {
+      assertForwardablePath(strippedUrl.pathname, fragment.id);
+    } catch (error) {
+      return { ok: false, error, timedOut: false, outOfScope: error instanceof EndpointScopeError };
+    }
 
     let fragmentRequestUrl: URL;
     let fragmentFetch: typeof fetch;
@@ -1878,8 +1890,13 @@ function normalizeBasePath(basePath: string | undefined): string {
  * ones (`%2e%2e`), are already normalized when the incoming request URL is parsed, which takes
  * such a request out of the fragment namespace entirely before it ever reaches here. The check
  * costs nothing and does not assume every runtime normalizes identically.
+ *
+ * What URL parsing does not normalize is a separator or dot segment hidden inside a segment;
+ * see {@link assertForwardablePath}, which runs first.
  */
 export function resolveEndpointUrl(endpoint: string, strippedUrl: URL, fragmentId: string): URL {
+  assertForwardablePath(strippedUrl.pathname, fragmentId);
+
   const endpointUrl = new URL(endpoint);
   const basePath = endpointUrl.pathname.endsWith('/') ? endpointUrl.pathname.slice(0, -1) : endpointUrl.pathname;
 
@@ -1901,6 +1918,51 @@ export function resolveEndpointUrl(endpoint: string, strippedUrl: URL, fragmentI
 
 /** Thrown when a namespace request would reach outside its fragment endpoint's declared path. */
 class EndpointScopeError extends Error {}
+
+/** How many layers of percent-encoding are looked through. An upstream chain rarely decodes more than twice. */
+const MAX_DECODE_PASSES = 3;
+
+/**
+ * Refuses a path that could mean something else to an upstream than it does as a string: one with
+ * a segment that — once decoded, as far as it decodes — is a dot segment, or holds a path
+ * separator or a NUL. Applied to every fragment request, whatever kind of endpoint serves it.
+ *
+ * - `..%2f..%2fadmin` is one segment to a URL parser, and `../../admin` to an upstream that
+ *   decodes `%2F` before resolving.
+ * - `..;/` is not a dot segment to a URL parser, and is one to a servlet container, which drops
+ *   `;parameters` before resolving. So the part before the first `;` is what is tested.
+ * - Compatibility forms are folded (NFKC) before testing: `．．` and `／` are `..` and `/` to a
+ *   file system that best-fits them.
+ *
+ * A segment that is not valid percent-encoding (a bare `%`) is refused too, rather than guessed at.
+ */
+function assertForwardablePath(pathname: string, fragmentId: string): void {
+  const refuse = (why: string): never => {
+    throw new EndpointScopeError(
+      `braid-gateway: a request for fragment "${fragmentId}" has ${why}, which could resolve outside the fragment's ` +
+        `endpoint upstream — refusing to forward it`,
+    );
+  };
+  for (const segment of pathname.split('/')) {
+    let decoded = segment;
+    for (let pass = 0; pass < MAX_DECODE_PASSES && decoded.includes('%'); pass++) {
+      let next: string;
+      try {
+        next = decodeURIComponent(decoded);
+      } catch {
+        // the segment as sent must decode; a later layer that does not is just text
+        if (pass === 0) refuse('a path segment that is not valid percent-encoding');
+        break;
+      }
+      if (next === decoded) break;
+      decoded = next;
+    }
+    const folded = decoded.normalize('NFKC');
+    const bare = folded.split(';', 1)[0].replace(/[ \t]+$/, '');
+    if (bare === '.' || bare === '..') refuse('a dot segment hidden by encoding or path parameters');
+    if (/[/\\\0]/.test(folded)) refuse('an encoded path separator');
+  }
+}
 
 /**
  * The breaker refused a request without making it.

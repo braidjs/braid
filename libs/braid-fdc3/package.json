@@ -21,7 +21,8 @@
   "dependencies": {
     "@finos/fdc3-agent-proxy": "3.0.0",
     "@finos/fdc3-standard": "3.0.0",
-    "@finos/fdc3-web-impl": "3.0.0"
+    "@finos/fdc3-web-impl": "3.0.0",
+    "uuid": "^14.0.0"
   },
   "publishConfig": {
     "access": "public"
