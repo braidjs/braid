@@ -826,14 +826,17 @@ the contract-aware semantic diff · the `sdui` bin · nx project, tsconfig path,
 Built, then reviewed three ways (goal verification, code review, security audit) and corrected.
 Decisions the review forced, which the sections above should be read with:
 
-- **`required` is strict.** A required node that does not reach the screen blocks it, wherever the
-  node sits — including under an ancestor that was replaced by its own fallback.
-- **Loss is measured, not declared.** A downgrade's lost paths come from taking the node down and
-  back up, in the component's newest shape, which is also the shape `criticalPaths` are written in.
+- **`required` is strict.** A required node in the screen's tree that does not reach the screen
+  blocks it, wherever the node sits — including under an ancestor that was replaced by its own
+  fallback. Inside a fallback it is conditional: it counts when that fallback is what is rendered.
+- **Loss is measured, not declared.** A downgrade's lost paths are what the node held that does not
+  come back from a trip down and up, compared in the component's newest shape, which is also the
+  shape `criticalPaths` are written in. A field a default fills in was never lost.
 - **Conditions are three-valued.** Unknown is not true, and stays unknown through `not`.
-- **Every trust boundary has a parser** with size limits, and the reserved keys `__proto__`,
-  `constructor` and `prototype` are refused in every document. Two root causes were fixed in
-  `@braidlabs/skew` rather than worked around.
+- **Every trust boundary has a parser** with size limits. The reserved keys `__proto__`,
+  `constructor` and `prototype` are refused in every document an editor or a device supplies, and
+  as names and paths in a catalog. Two root causes were fixed in `@braidlabs/skew` rather than
+  worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
 Two things the tables above describe are left for P2, where their acceptance criteria are:

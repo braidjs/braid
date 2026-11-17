@@ -14,10 +14,12 @@ import {
   parseClientManifest,
   parseCondition,
   parseFlagDefinitions,
+  parseHandshakeRequest,
   parseReleasePointer,
   parseRolloutPlan,
   parseScreen,
   projectScreen,
+  resolveHandshake,
   screenId,
   validateScreen,
 } from '../index.js';
@@ -1556,5 +1558,493 @@ describe('diffScreens, the rest', () => {
       from: { parentId: null, slot: null, index: 0 },
       to: { parentId: 'null', slot: 'null', index: 0 },
     });
+  });
+});
+
+/**
+ * Second verification pass: behaviour it found wrong, and fixes whose tests did not pin them.
+ */
+describe('loss is what was there and did not come back', () => {
+  const only = (
+    contract: SkewContractDocument,
+    extra: object = {},
+  ): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: { ...contract, name: 'sdui.component.note' },
+          ...extra,
+        },
+      },
+    });
+  const authored = (v: number, props: object, extra: object = {}): Screen => ({
+    id: 's',
+    slug: 's',
+    root: { id: 'n', type: 'note', v, props, ...extra },
+  });
+
+  it('does not count a field the author left out, which a default fills in on the way back', () => {
+    const mapped = doc('note', 2, [
+      {
+        from: 1,
+        to: 2,
+        description: 'badges',
+        ops: [
+          {
+            map: {
+              path: 'items',
+              ops: [{ default: { path: 'badge', value: 'new' } }],
+            },
+          },
+        ],
+      },
+    ]);
+    // Both of these send the byte-identical payload to a v1 device; neither loses anything.
+    expect(migrate(mapped, { items: [{}] }, 2, 1)).toMatchObject({
+      ok: true,
+      value: { items: [{}] },
+      lossyPaths: [],
+    });
+    expect(migrate(mapped, { items: [{ badge: 'new' }] }, 2, 1)).toMatchObject({
+      ok: true,
+      value: { items: [{}] },
+      lossyPaths: [],
+    });
+    expect(
+      projectScreen(
+        authored(2, { items: [{}] }),
+        only(mapped, { criticalPaths: ['items'] }),
+        device({ note: 1 }),
+      ).root,
+    ).not.toBeNull();
+
+    const toned = doc('note', 2, [
+      {
+        from: 1,
+        to: 2,
+        description: 'tone',
+        ops: [{ default: { path: 'tone', value: 'plain' } }],
+      },
+    ]);
+    const result = projectScreen(
+      authored(2, { text: 'x' }, { required: true }),
+      only(toned, { criticalPaths: ['tone'] }),
+      device({ note: 1 }),
+    );
+    expect(result).toMatchObject({ outcome: 'exact', blockedBy: [] });
+    expect(result.report[0]).toMatchObject({
+      outcome: 'downgraded',
+      lossyPaths: [],
+    });
+  });
+
+  it('does not degrade a screen for a style the author never set', () => {
+    const plain: Screen = {
+      id: 's',
+      slug: 's',
+      root: { id: 'n', type: 'text', v: 2, props: { content: 'Hi' } },
+    };
+    expect(projectScreen(plain, catalog(), manifest('legacy'))).toMatchObject({
+      outcome: 'exact',
+      root: { props: { text: 'Hi' } },
+    });
+  });
+
+  it('treats null and absent as the same nothing', () => {
+    const badged = doc('note', 2, [
+      {
+        from: 1,
+        to: 2,
+        description: 'badge',
+        ops: [{ default: { path: 'badge', value: 'new' } }],
+      },
+    ]);
+    expect(migrate(badged, { text: 'x', badge: null }, 2, 1)).toMatchObject({
+      ok: true,
+      lossyPaths: [],
+    });
+    expect(migrate(badged, { text: 'x', badge: 'SALE' }, 2, 1)).toMatchObject({
+      ok: true,
+      lossyPaths: ['badge'],
+    });
+  });
+
+  const legalSteps: SkewContractDocument['steps'] = [
+    {
+      from: 1,
+      to: 2,
+      description: 'legal text',
+      ops: [{ default: { path: 'legal', value: null } }],
+    },
+    {
+      from: 2,
+      to: 3,
+      description: 'renamed',
+      ops: [{ rename: { from: 'legal', to: 'legalNote' } }],
+    },
+    {
+      from: 3,
+      to: 4,
+      description: 'an unused field is dropped for good',
+      ops: [{ drop: { path: 'unused' } }],
+    },
+  ];
+
+  it('finds a critical field in the newest shape even when a step above the node cannot be inverted', () => {
+    const strict = only(doc('note', 4, legalSteps), {
+      criticalPaths: ['legalNote'],
+    });
+    // Authored at v2, before the rename, and v3 → v4 cannot be taken back down.
+    const result = projectScreen(
+      authored(2, { title: 'x', legal: 'Terms apply' }, { required: true }),
+      strict,
+      device({ note: 1 }),
+    );
+    expect(result).toMatchObject({
+      outcome: 'blocked',
+      root: null,
+      blockedBy: ['n'],
+    });
+    expect(result.report[0]?.reason).toContain('cannot carry "legalNote"');
+    // The same node with nothing in the critical field renders.
+    expect(
+      projectScreen(
+        authored(2, { title: 'x' }, { required: true }),
+        strict,
+        device({ note: 1 }),
+      ).outcome,
+    ).toBe('exact');
+  });
+
+  it('treats any loss as critical when the loss cannot be put in the newest shape at all', () => {
+    const steps: SkewContractDocument['steps'] = [
+      ...legalSteps.slice(0, 2),
+      { from: 3, to: 4, description: 'summarise', code: 'summarise' },
+    ];
+    const strict = only(doc('note', 4, steps), {
+      criticalPaths: ['legalNote'],
+    });
+    const lenient = only(doc('note', 4, steps));
+    const node = authored(2, { title: 'x', legal: 'Terms apply' });
+    // No implementation of the code step here, so v2 cannot be lifted to v4 to learn the new name.
+    expect(projectScreen(node, strict, device({ note: 1 })).root).toBeNull();
+    expect(
+      projectScreen(node, strict, device({ note: 1 })).report[0]?.reason,
+    ).toContain('cannot carry "legal"');
+    // Without critical paths there is nothing to protect: it renders, and says what it lost.
+    expect(
+      projectScreen(node, lenient, device({ note: 1 })).report[0],
+    ).toMatchObject({ outcome: 'downgraded', lossyPaths: ['legal'] });
+    // And with nothing lost, a component with critical paths still renders.
+    expect(
+      projectScreen(authored(2, { title: 'x' }), strict, device({ note: 1 }))
+        .root,
+    ).not.toBeNull();
+  });
+});
+
+describe('required, precisely', () => {
+  const required = {
+    id: 'r',
+    type: 'video-tile',
+    v: 1,
+    required: true,
+    props: { title: 't', src: 's' },
+  };
+
+  it('drops an authored state that renders but lost something required inside it', () => {
+    const authored: Screen = {
+      ...screen('home'),
+      states: {
+        empty: {
+          id: 'e',
+          type: 'stack',
+          v: 1,
+          slots: {
+            children: [
+              {
+                id: 'kept',
+                type: 'text',
+                v: 2,
+                props: { content: 'Nothing yet' },
+              },
+              required,
+            ],
+          },
+        },
+      },
+    };
+    const result = projectScreen(authored, catalog(), manifest('one-behind'));
+    // The stack itself renders on this device; the state is still not worth showing.
+    expect(result.states).toBeUndefined();
+    expect(result.outcome).not.toBe('blocked');
+    expect(result.report.find((entry) => entry.nodeId === 'e')).toMatchObject({
+      outcome: 'exact',
+    });
+    expect(result.report.find((entry) => entry.nodeId === 'r')).toMatchObject({
+      outcome: 'omitted',
+    });
+    expect(
+      projectScreen(authored, catalog(), manifest('current')).states?.empty,
+    ).toMatchObject({ id: 'e' });
+  });
+
+  it('is conditional inside a fallback: it counts when that fallback is what is rendered, and not otherwise', () => {
+    const inFallback = (fallback: object): Screen => ({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'n',
+        type: 'video-tile',
+        v: 1,
+        props: { title: 't', src: 's' },
+        fallback: fallback as never,
+      },
+    });
+    const lacksStack = { ...manifest('one-behind'), components: { text: 2 } };
+    const group = {
+      id: 'f',
+      type: 'stack',
+      v: 1,
+      slots: { children: [{ ...required, type: 'legal-note', v: 9 }] },
+      fallback: { id: 'f2', type: 'text', v: 2, props: { content: 'x' } },
+    };
+    // The fallback `f` is not rendered (the device has no stack); its own fallback is. `r` was
+    // required of `f`, not of the screen.
+    expect(
+      projectScreen(inFallback(group), catalog(), lacksStack),
+    ).toMatchObject({ outcome: 'fallback', blockedBy: [], root: { id: 'f2' } });
+    // Here `f` is rendered, and so what it requires is required.
+    expect(
+      projectScreen(inFallback(group), catalog(), manifest('one-behind')),
+    ).toMatchObject({ outcome: 'blocked', blockedBy: ['r'] });
+  });
+});
+
+describe('limits and names, each pinned', () => {
+  const home = (mutate: (draft: any) => void) => () => {
+    const draft = structuredClone(screen('home')) as any;
+    mutate(draft);
+    return parseScreen(draft);
+  };
+  const first = (draft: any) => draft.root.slots.children[0];
+
+  it.each(['constructor', 'prototype', '__proto__', '0abc', 'has space', ''])(
+    'refuses %j as a slot name and as an action name',
+    (name) => {
+      const keyed = (value: unknown) =>
+        JSON.parse(`{${JSON.stringify(name)}:${JSON.stringify(value)}}`);
+      expect(home((d) => (first(d).slots = keyed([])))).toThrow('slot named');
+      expect(
+        home((d) => (first(d).actions = keyed({ type: 'navigate', v: 1 }))),
+      ).toThrow('action named');
+    },
+  );
+
+  it.each(['constructor', 'prototype', '__proto__'])(
+    'refuses %j as a flag key and in a condition',
+    (name) => {
+      expect(() =>
+        parseFlagDefinitions(
+          JSON.parse(`[{"key":${JSON.stringify(name)},"default":1}]`),
+        ),
+      ).toThrow('short plain word');
+      expect(() => parseCondition({ flag: name })).toThrow(
+        'must be a flag name',
+      );
+    },
+  );
+
+  it('refuses a document with more values than the cap, however it is spread', () => {
+    const many = Array.from(
+      { length: SCREEN_LIMITS.values },
+      (_, index) => index,
+    );
+    expect(home((d) => (first(d).props = { many }))).toThrow(
+      `more than ${SCREEN_LIMITS.values} values`,
+    );
+    expect(
+      home((d) => (first(d).props = { few: many.slice(0, 1000) })),
+    ).not.toThrow();
+  });
+
+  it('refuses a condition nested past the limit, and counts conditions against the value cap', () => {
+    let nested: unknown = { platform: ['ios'] };
+    for (let depth = 0; depth < 17; depth++) nested = { not: nested };
+    expect(() => parseCondition(nested)).toThrow(
+      'nested more than 16 levels deep',
+    );
+    let wide: unknown = { platform: ['ios'] };
+    for (let level = 0; level < 3; level++)
+      wide = { all: Array.from({ length: 64 }, () => wide) };
+    expect(() => parseCondition(wide)).toThrow(
+      `more than ${SCREEN_LIMITS.values} values`,
+    );
+  });
+
+  it('answers unknown, not a stack overflow, for a condition that skipped the parser', () => {
+    let nested: any = { platform: ['ios'] };
+    for (let depth = 0; depth < 20_000; depth++) nested = { not: nested };
+    const gated = { id: 'n', type: 'text', v: 2, visibility: nested } as never;
+    expect(applyVisibility({ root: gated }, { platform: 'ios' })).toMatchObject(
+      { root: null },
+    );
+  });
+});
+
+describe('fixes whose tests did not hold them', () => {
+  it('tells two steps apart even when a 32-bit hash of them collides', () => {
+    // Found by search: these pairs collide under FNV-1a of "description:ops" and of the canonical
+    // step text respectively. A comparison by either hash calls the edit an unchanged step.
+    for (const [a, b] of [
+      [940068, 1784900],
+      [512789, 749192],
+    ] as const) {
+      const at = (value: number): SduiCatalog =>
+        ({
+          sduiCatalog: '1',
+          components: {
+            note: {
+              contract: doc('note', 2, [
+                {
+                  from: 1,
+                  to: 2,
+                  description: 'a badge',
+                  ops: [{ default: { path: 'badge', value: `v${value}` } }],
+                },
+              ]),
+            },
+          },
+        }) as SduiCatalog;
+      expect(checkCatalog(at(a), at(b))).toMatchObject([
+        { kind: 'step-edited', contract: 'sdui.component.note' },
+      ]);
+    }
+  });
+
+  it('diffs a list far too long for any table of pairs', () => {
+    // 60,000 siblings: a table of every pair would be 3.6 billion cells.
+    const children = Array.from({ length: 60_000 }, (_, index) => ({
+      id: `n${index}`,
+      type: 'text',
+      v: 2,
+    }));
+    const make = (list: unknown[]): Screen => ({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'r',
+        type: 'stack',
+        v: 1,
+        slots: { children: list as never },
+      },
+    });
+    const { changes } = diffScreens(
+      make(children),
+      make([children[children.length - 1], ...children.slice(0, -1)]),
+      catalog(),
+    );
+    expect(changes).toEqual([
+      {
+        kind: 'moved',
+        nodeId: 'n59999',
+        type: 'text',
+        from: { parentId: 'r', slot: 'children', index: 59_999 },
+        to: { parentId: 'r', slot: 'children', index: 0 },
+      },
+    ]);
+  });
+
+  it('agrees with brute force on which siblings moved, for every ordering of six', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const make = (order: string[]): Screen => ({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'r',
+        type: 'stack',
+        v: 1,
+        slots: { children: order.map((id) => ({ id, type: 'text', v: 2 })) },
+      },
+    });
+    const longestRun = (order: string[]): number => {
+      const best = order.map(() => 1);
+      for (let i = 0; i < order.length; i++)
+        for (let j = 0; j < i; j++)
+          if ((order[j] as string) < (order[i] as string))
+            best[i] = Math.max(best[i] as number, (best[j] as number) + 1);
+      return Math.max(...best);
+    };
+    const permute = (rest: string[], done: string[] = []): string[][] =>
+      rest.length === 0
+        ? [done]
+        : rest.flatMap((id, index) =>
+            permute(
+              [...rest.slice(0, index), ...rest.slice(index + 1)],
+              [...done, id],
+            ),
+          );
+    for (const order of permute(ids)) {
+      const moved = diffScreens(
+        make(ids),
+        make(order),
+        catalog(),
+      ).changes.filter((change) => change.kind === 'moved');
+      expect(moved.length).toBe(ids.length - longestRun(order));
+    }
+  });
+
+  it('resolveHandshake refuses a malformed manifest itself, without the parser having run', () => {
+    const request = {
+      protocol: [1, 1],
+      manifest: { junk: 1, components: 'not-a-map' },
+      app: { id: 'a', platform: 'ios', version: '6.2.0' },
+    } as never;
+    expect(
+      resolveHandshake(request, {
+        authorized: true,
+        knowsManifest: () => false,
+      }),
+    ).toEqual({ status: 'manifest-unknown', httpStatus: 400, protocol: 1 });
+  });
+
+  it('parseHandshakeRequest bounds device facts and refuses stray keys on app', () => {
+    const valid = {
+      protocol: [1, 1],
+      manifest: 'cm_x',
+      app: { id: 'a', platform: 'ios', version: '6.2.0' },
+    };
+    expect(
+      parseHandshakeRequest({
+        ...valid,
+        device: { os: '17.4', fontScale: 1.3, reduceMotion: true },
+      }),
+    ).toBeTruthy();
+    let deep: unknown = 1;
+    for (let depth = 0; depth < 20_000; depth++) deep = [deep];
+    expect(() =>
+      parseHandshakeRequest({ ...valid, device: { os: deep } }),
+    ).toThrow('device.os must be');
+    expect(() =>
+      parseHandshakeRequest({
+        ...valid,
+        device: { os: 'x'.repeat(5_000_000) },
+      }),
+    ).toThrow('device.os must be');
+    expect(() =>
+      parseHandshakeRequest({
+        ...valid,
+        device: JSON.parse('{"__proto__":{"a":1}}'),
+      }),
+    ).toThrow('not a short plain word');
+    expect(() =>
+      parseHandshakeRequest({
+        ...valid,
+        app: JSON.parse(
+          '{"id":"a","platform":"ios","version":"6.2.0","__proto__":{"a":1}}',
+        ),
+      }),
+    ).toThrow('app has an unknown key');
   });
 });

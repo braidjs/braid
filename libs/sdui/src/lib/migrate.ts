@@ -9,7 +9,7 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
-import { changedPaths } from './paths.js';
+import { lostPaths } from './paths.js';
 
 /**
  * Moves one payload between two versions of one contract.
@@ -34,11 +34,14 @@ export type MigrateResult =
       readonly ok: true;
       readonly value: unknown;
       /**
-       * Where the payload, taken down and straight back up, does not come back as it was — paths
-       * in the shape it had at `from`. Always empty when migrating up: what a newer version of a
-       * component no longer has is the catalog's decision, not a loss.
+       * What the payload held that does not come back when it is taken down and straight back
+       * up — paths in the shape it had at `from`. A field that was absent and is filled by a
+       * default on the way back is not a loss. Always empty when migrating up: what a newer
+       * version of a component no longer has is the catalog's decision, not a loss.
        */
       readonly lossyPaths: readonly string[];
+      /** For a downgrade: the payload after the trip down and back up, at `from`. */
+      readonly roundTrip?: unknown;
       /**
        * Paths the steps fill with guesses rather than authored data, each named as the step that
        * filled it saw it.
@@ -210,7 +213,8 @@ export function migrate(
   return {
     ok: true,
     value: forward.value,
-    lossyPaths: changedPaths(value, back.value),
+    lossyPaths: lostPaths(value, back.value),
+    roundTrip: back.value,
     derivedPaths: forward.derived,
   };
 }

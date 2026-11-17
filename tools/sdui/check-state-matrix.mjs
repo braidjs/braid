@@ -12,6 +12,9 @@
  *   - every state has at least one vector (a state nobody specified), and
  *   - every vector names a state that exists (a specification for a state that was renamed away).
  *
+ * It also insists that each state type is exactly its list, so a state cannot be added to the type
+ * and left out of the list. It cannot see a state invented somewhere other than that file.
+ *
  * This reads the source file rather than importing the built package, so it runs before a build
  * and cannot be satisfied by a stale `dist/`.
  *
@@ -84,6 +87,26 @@ for (let match = OPENING.exec(source); match; match = OPENING.exec(source)) {
 for (const [constant, level] of Object.entries(LEVELS)) {
   if (!declared.has(level))
     failures.push(`${constant} was not found in ${statesPath}`);
+}
+
+// The lists are only the whole truth if the state types are exactly the lists. A type widened on
+// the side — `(typeof ACTION_STATES)[number] | 'cancelled'` — adds a state this check never sees.
+for (const constant of Object.keys(LEVELS)) {
+  const aliases = [...source.matchAll(/^export type (\w+) =([^;]*);/gm)].filter(
+    (alias) => alias[2].includes(constant),
+  );
+  const exact = `(typeof ${constant})[number]`;
+  if (aliases.length === 0)
+    failures.push(
+      `no exported type is derived from ${constant} — a state type must be exactly ${exact}`,
+    );
+  for (const alias of aliases) {
+    if (alias[2].replace(/\s+/g, '') !== exact.replace(/\s+/g, '')) {
+      failures.push(
+        `type ${alias[1]} is not exactly ${exact} — every state must be in the ${constant} list, where this check can see it`,
+      );
+    }
+  }
 }
 
 let stateCount = 0;

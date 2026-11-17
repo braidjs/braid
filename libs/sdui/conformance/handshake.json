@@ -464,6 +464,30 @@
           "recommended": "6.1.0"
         }
       }
+    },
+    {
+      "name": "a manifest sent in full that is not a manifest is refused, with 400: there is nothing to resend",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": {
+          "junk": 1,
+          "components": "not-a-map"
+        },
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": [],
+        "authorized": true
+      },
+      "expect": {
+        "status": "manifest-unknown",
+        "httpStatus": 400,
+        "protocol": 1
+      }
     }
   ]
 }

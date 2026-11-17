@@ -172,6 +172,15 @@
         "phase": "succeeded",
         "draftRestored": true
       }
+    },
+    {
+      "state": "confirming",
+      "description": "Confirming wins over a restored draft.",
+      "given": {
+        "supported": true,
+        "phase": "confirming",
+        "draftRestored": true
+      }
     }
   ]
 }

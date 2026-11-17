@@ -111,4 +111,25 @@ describe('check-state-matrix', () => {
     expect(result.status).toBe(1);
     expect(Date.now() - started).toBeLessThan(3000);
   });
+
+  it('catches a state added to the type and left out of the list', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    const source = readFileSync(statesSource, 'utf8');
+    expect(source).toContain(
+      'export type ActionState = (typeof ACTION_STATES)[number];',
+    );
+    writeFileSync(
+      modified,
+      source.replace(
+        'export type ActionState = (typeof ACTION_STATES)[number];',
+        "export type ActionState = (typeof ACTION_STATES)[number] | 'cancelled';",
+      ),
+    );
+    const result = check('--states', modified);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'type ActionState is not exactly (typeof ACTION_STATES)[number]',
+    );
+  });
 });

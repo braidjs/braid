@@ -31,17 +31,22 @@ const flagTerm = (condition: {
     'is' in condition ? [condition.flag, condition.is] : [condition.flag],
   );
 
+/** Deeper than any condition a parser lets through; past it the answer is "unknown", not a crash. */
+const MAX_DEPTH = 64;
+
 function evaluate(
   condition: Condition,
   context: ConditionContext,
   assumed?: ReadonlyMap<string, boolean>,
+  depth = 0,
 ): Tri {
-  if (typeof condition !== 'object' || condition === null) return null;
+  if (typeof condition !== 'object' || condition === null || depth > MAX_DEPTH)
+    return null;
   if ('all' in condition) {
     if (!Array.isArray(condition.all)) return null;
     let unknown = false;
     for (const inner of condition.all) {
-      const result = evaluate(inner, context, assumed);
+      const result = evaluate(inner, context, assumed, depth + 1);
       if (result === false) return false;
       if (result === null) unknown = true;
     }
@@ -51,14 +56,14 @@ function evaluate(
     if (!Array.isArray(condition.any)) return null;
     let unknown = false;
     for (const inner of condition.any) {
-      const result = evaluate(inner, context, assumed);
+      const result = evaluate(inner, context, assumed, depth + 1);
       if (result === true) return true;
       if (result === null) unknown = true;
     }
     return unknown ? null : false;
   }
   if ('not' in condition) {
-    const result = evaluate(condition.not, context, assumed);
+    const result = evaluate(condition.not, context, assumed, depth + 1);
     return result === null ? null : !result;
   }
   if ('flag' in condition) {
@@ -75,6 +80,7 @@ function evaluate(
   if ('platform' in condition) {
     if (
       typeof context.platform !== 'string' ||
+      context.platform.length === 0 ||
       !Array.isArray(condition.platform)
     )
       return null;
@@ -162,30 +168,36 @@ export function hiddenByFlagsAlone(
   return false;
 }
 
-function flagTermsIn(condition: Condition): string[] {
-  if (typeof condition !== 'object' || condition === null) return [];
+function flagTermsIn(condition: Condition, depth = 0): string[] {
+  if (typeof condition !== 'object' || condition === null || depth > MAX_DEPTH)
+    return [];
   if ('flag' in condition) return [flagTerm(condition)];
   if ('all' in condition)
     return Array.isArray(condition.all)
-      ? condition.all.flatMap(flagTermsIn)
+      ? condition.all.flatMap((inner) => flagTermsIn(inner, depth + 1))
       : [];
   if ('any' in condition)
     return Array.isArray(condition.any)
-      ? condition.any.flatMap(flagTermsIn)
+      ? condition.any.flatMap((inner) => flagTermsIn(inner, depth + 1))
       : [];
-  if ('not' in condition) return flagTermsIn(condition.not);
+  if ('not' in condition) return flagTermsIn(condition.not, depth + 1);
   return [];
 }
 
 /** The flag names a condition reads, for checking a release against the flags that exist. */
-export function flagsIn(condition: Condition): string[] {
-  if (typeof condition !== 'object' || condition === null) return [];
+export function flagsIn(condition: Condition, depth = 0): string[] {
+  if (typeof condition !== 'object' || condition === null || depth > MAX_DEPTH)
+    return [];
   if ('flag' in condition) return [condition.flag];
   if ('all' in condition)
-    return Array.isArray(condition.all) ? condition.all.flatMap(flagsIn) : [];
+    return Array.isArray(condition.all)
+      ? condition.all.flatMap((inner) => flagsIn(inner, depth + 1))
+      : [];
   if ('any' in condition)
-    return Array.isArray(condition.any) ? condition.any.flatMap(flagsIn) : [];
-  if ('not' in condition) return flagsIn(condition.not);
+    return Array.isArray(condition.any)
+      ? condition.any.flatMap((inner) => flagsIn(inner, depth + 1))
+      : [];
+  if ('not' in condition) return flagsIn(condition.not, depth + 1);
   return [];
 }
 

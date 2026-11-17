@@ -24,6 +24,48 @@ export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
 }
 
 /**
+ * What `original` held that `back` does not give back — `back` being the same value after a trip
+ * down to an older version and up again.
+ *
+ * Directed on purpose. A field the author never wrote, which the trip up filled with a default,
+ * is not something the trip down lost; only a value that was there and did not return is. A
+ * `null` and an absent field are the same nothing.
+ */
+export function lostPaths(
+  original: unknown,
+  back: unknown,
+  prefix = '',
+): string[] {
+  if (original === undefined || original === null) return [];
+  if (isPlainRecord(original)) {
+    const keys = Object.keys(original).sort();
+    if (!isPlainRecord(back))
+      return keys.some(
+        (key) => lostPaths(original[key], undefined, key).length > 0,
+      )
+        ? [prefix]
+        : [];
+    return keys.flatMap((key) =>
+      lostPaths(
+        original[key],
+        ownValue(back, key),
+        prefix ? `${prefix}.${key}` : key,
+      ),
+    );
+  }
+  if (Array.isArray(original)) {
+    if (!Array.isArray(back) || back.length !== original.length)
+      return [prefix];
+    return original.flatMap((element, position) =>
+      lostPaths(element, back[position], `${prefix}[${position}]`),
+    );
+  }
+  return canonicalJson(original) === canonicalJson(back ?? null)
+    ? []
+    : [prefix];
+}
+
+/**
  * Whether one path is the other or lies under it, ignoring which element of a list is meant:
  * `price.amount` and `price` are within each other, and `items[2].badge` is within `items`.
  */

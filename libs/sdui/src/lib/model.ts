@@ -172,6 +172,8 @@ function checkCondition(
   budget: { values: number },
   fail: Fail,
 ): void {
+  if (--budget.values < 0)
+    fail(`the document holds more than ${SCREEN_LIMITS.values} values`);
   if (!isRecord(value)) return fail(`${where} must be an object`);
   if (depth > 16) fail(`${where} is nested more than 16 levels deep`);
   const kinds = CONDITION_KEYS.filter((key) =>

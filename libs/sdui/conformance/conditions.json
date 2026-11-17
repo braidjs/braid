@@ -440,6 +440,157 @@
         "audiences": []
       },
       "expect": false
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "all": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "locale": ["fr"]
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "locale": ["fr"]
+        }
+      },
+      "context": {
+        "locale": "en-CA"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "platform": ["ios"]
+        }
+      },
+      "context": {
+        "platform": ""
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "v6.0"
+          }
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "schedule": {
+            "from": "soon"
+          }
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "v6.0"
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "max": "six"
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "soon"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "until": "later"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
     }
   ]
 }

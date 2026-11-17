@@ -22,7 +22,7 @@ import {
   type SduiNode,
 } from './model.js';
 import { isRecord, own } from './internal.js';
-import { pathWithin } from './paths.js';
+import { lostPaths, pathWithin } from './paths.js';
 
 /**
  * Projection — one authored screen, turned into what one binary can render.
@@ -352,9 +352,12 @@ export function projectScreen(
     if (!migrated.ok) return { ok: false, reason: migrated.message };
 
     // What was lost, in the component's newest shape: that is the shape `criticalPaths` are
-    // written in and the one an author sees. A node authored at an older version is lifted to the
-    // newest first, so a field a later step renamed is still found under its current name.
+    // written in and the one an author sees. Both the node and the node as it came back from the
+    // device's version are lifted to the newest version and compared there, so a field a later
+    // step renamed is found under its current name — and lifting only ever goes up, so a later
+    // step that cannot be inverted does not get in the way.
     let lossy = [...migrated.lossyPaths];
+    let inNewestShape = true;
     if (clientVersion < node.v && node.v < contract.current) {
       const lifted = migrate(
         contract,
@@ -363,16 +366,16 @@ export function projectScreen(
         contract.current,
         migrateOptions,
       );
-      const probe = lifted.ok
-        ? migrate(
-            contract,
-            lifted.value,
-            contract.current,
-            clientVersion,
-            migrateOptions,
-          )
-        : null;
-      if (probe?.ok) lossy = [...probe.lossyPaths];
+      const liftedBack = migrate(
+        contract,
+        migrated.roundTrip,
+        node.v,
+        contract.current,
+        migrateOptions,
+      );
+      if (lifted.ok && liftedBack.ok)
+        lossy = lostPaths(lifted.value, liftedBack.value);
+      else inNewestShape = false;
     }
 
     const keptSlots: [string, readonly SduiNode[]][] = [];
@@ -388,9 +391,17 @@ export function projectScreen(
       }
     }
 
-    const critical = lossy.find((path) =>
-      (definition.criticalPaths ?? []).some((c) => pathWithin(path, c)),
-    );
+    const criticalPaths = definition.criticalPaths ?? [];
+    // If the loss could not be put in the newest shape (a code step above this node has no
+    // implementation here), its paths cannot be compared with the critical ones by name. Then
+    // any loss at all on a component that has critical paths is treated as critical: refusing a
+    // render that would have been fine costs a fallback; allowing one that drops a price does not
+    // bear thinking about.
+    const critical = inNewestShape
+      ? lossy.find((path) => criticalPaths.some((c) => pathWithin(path, c)))
+      : criticalPaths.length > 0
+        ? lossy[0]
+        : undefined;
     if (critical !== undefined) {
       return {
         ok: false,

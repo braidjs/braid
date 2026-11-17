@@ -112,7 +112,8 @@ export interface HandshakeResolution {
  *    manifest for a server that will never render for it. This is skew's `retired` — a policy
  *    outcome, not an error — and the screen it leads to is native, never server-driven. A version
  *    that cannot be read is below any floor.
- * 5. **Unknown manifest** — the device resends it in full.
+ * 5. **Unknown manifest** — the device resends it in full (409). A manifest sent in full that is
+ *    not a manifest is answered the same way with 400: there is nothing to resend.
  * 6. **Recommended update**, then `ok`.
  *
  * Throws `TypeError` for a policy that is itself malformed (a floor that is not a version): that
@@ -156,11 +157,19 @@ export function resolveHandshake(
       ? { recommended: policy.recommendedVersion }
       : {}),
   };
+  // A manifest sent in full is checked here too, not only in `parseHandshakeRequest`: this
+  // function is the one that decides, and must not decide `ok` for something that is not a
+  // manifest because a caller skipped the parser.
+  let sent: ClientManifest | null = null;
+  if (typeof request.manifest !== 'string') {
+    try {
+      sent = parseClientManifest(request.manifest);
+    } catch {
+      return { status: 'manifest-unknown', httpStatus: 400, protocol };
+    }
+  }
   const version =
-    policy.registeredVersion ??
-    (typeof request.manifest === 'string'
-      ? request.app.version
-      : request.manifest.version);
+    policy.registeredVersion ?? (sent ? sent.version : request.app.version);
   const below = (bound: string | undefined): boolean => {
     if (bound === undefined) return false;
     const order = compareVersions(version, bound);
@@ -169,12 +178,11 @@ export function resolveHandshake(
   if (below(policy.requiredVersion))
     return { status: 'update-required', httpStatus: 200, protocol, update };
 
-  const fingerprint =
-    typeof request.manifest === 'string'
-      ? request.manifest
-      : manifestFingerprint(request.manifest);
+  const fingerprint = sent
+    ? manifestFingerprint(sent)
+    : (request.manifest as string);
   const registered = policy.knowsManifest(fingerprint) === true;
-  if (typeof request.manifest === 'string' && !registered)
+  if (!sent && !registered)
     return { status: 'manifest-unknown', httpStatus: 409, protocol };
 
   const degraded =
@@ -333,6 +341,38 @@ export function parseHandshakeRequest(raw: unknown): HandshakeRequest {
     fail('app.version must be dotted numbers, like "5.8.0"');
   if (app['build'] !== undefined && !Number.isSafeInteger(app['build']))
     fail('app.build must be an integer');
+  const strayApp = Object.keys(app).find(
+    (key) => !['id', 'platform', 'version', 'build'].includes(key),
+  );
+  if (strayApp !== undefined)
+    fail(`app has an unknown key "${strayApp.slice(0, 40)}"`);
+
+  // `device` is free-form facts about the device (OS, locale, font scale…): a flat record of
+  // short scalars, and nothing a parser downstream could trip over.
+  const device = raw['device'];
+  if (device !== undefined) {
+    if (!isRecord(device)) return fail('device must be an object');
+    const entries = Object.entries(device);
+    if (entries.length > 32) fail('device has more than 32 entries');
+    for (const [key, value] of entries) {
+      if (
+        !/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(key) ||
+        key === 'constructor' ||
+        key === 'prototype'
+      )
+        fail(
+          `device has a key ${JSON.stringify(key.slice(0, 40))} that is not a short plain word`,
+        );
+      const scalar =
+        typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value)) ||
+        (typeof value === 'string' && value.length <= 128);
+      if (!scalar)
+        fail(
+          `device.${key} must be a boolean, a number or a string of at most 128 characters`,
+        );
+    }
+  }
 
   const manifest = raw['manifest'];
   if (isRecord(manifest)) {

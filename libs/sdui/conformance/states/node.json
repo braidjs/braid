@@ -241,6 +241,25 @@
         "disabled": true
       },
       "also": []
+    },
+    {
+      "state": "data-stale",
+      "description": "Stale data comes before a fallback and before disabled.",
+      "given": {
+        "outcome": "fallback-authored",
+        "data": "stale",
+        "disabled": true
+      },
+      "also": ["fallback-authored", "disabled"]
+    },
+    {
+      "state": "data-stale",
+      "given": {
+        "outcome": "exact",
+        "data": "stale",
+        "disabled": true
+      },
+      "also": ["disabled", "exact"]
     }
   ]
 }

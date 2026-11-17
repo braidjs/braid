@@ -110,7 +110,7 @@ Every document that crosses a trust boundary has a parser that throws a `TypeErr
 | `parseScreen`                                                | A screen from an editor                        | Unknown keys; unique node ids; slot and action names; condition bodies; the reserved keys `__proto__`, `constructor`, `prototype` anywhere; the size limits in `SCREEN_LIMITS` (5,000 nodes, 64 levels of nodes, 32 levels inside props) |
 | `parseCatalog`                                               | A catalog                                      | Contract names; **every step's ops are compiled**, so a catalog that parses can be migrated; fallbacks name real components                                                                                                              |
 | `parseClientManifest`                                        | A manifest, possibly from a device             | Unknown keys (so one binary cannot be given unlimited fingerprints); entry counts; versions                                                                                                                                              |
-| `parseHandshakeRequest`                                      | The first body an unauthenticated device sends | Shape and lengths; a manifest sent in full is parsed and must describe the app the request claims to be                                                                                                                                  |
+| `parseHandshakeRequest`                                      | The first body an unauthenticated device sends | Shape, lengths and unknown keys; `device` is a flat record of short scalars; a manifest sent in full is parsed and must describe the app the request claims to be                                                                        |
 | `parseReleasePointer`                                        | A pointer a device received                    | `seq` is a non-negative integer                                                                                                                                                                                                          |
 | `parseCondition`, `parseRolloutPlan`, `parseFlagDefinitions` | Operator configuration                         | Closed condition kinds; ascending stages; a flag rule cannot read another flag                                                                                                                                                           |
 
@@ -136,7 +136,7 @@ For the card above on an app whose `product-card` is v2, the node is downgraded 
 { "nodeId": "n_card", "outcome": "downgraded", "rung": 2, "authored": 3, "rendered": 2, "lossyPaths": ["badge"] }
 ```
 
-On an app whose `product-card` is v1 the sale price cannot be carried, `price` is critical, and so the node is never rendered as a card with the wrong price. It takes its authored fallback:
+On an app whose `product-card` is v1 (and which has the `text` component the fallback uses) the sale price cannot be carried, `price` is critical, and so the node is never rendered as a card with the wrong price. It takes its authored fallback:
 
 ```json
 {
@@ -152,8 +152,8 @@ On an app whose `product-card` is v1 the sale price cannot be carried, `price` i
 
 `lossyPaths` is not read off the ops. The node is taken down to the device's version and straight back up, and whatever does not come back is what was lost. Two consequences:
 
-- A field still at its default is not a loss; an authored value is.
-- Paths are in the component's **newest** shape, the one an author edits and `criticalPaths` are written in. A field that a later step renamed is found under its current name.
+- A field the author left out, or left at the value a default would give it, is not a loss; a value that was there and did not come back is.
+- Paths are in the component's **newest** shape, the one an author edits and `criticalPaths` are written in. Both the node and the node as it came back are lifted to the newest version and compared there, so a field that a later step renamed is found under its current name. If that lift cannot be run (a `code` step above the node has no implementation here), paths cannot be compared by name, and any loss at all on a component with critical paths is treated as critical.
 
 Migrating _up_ never reports a loss: what a newer version of a component no longer has is the catalog's decision. If the way back up cannot be run, the loss cannot be measured, and the node is treated as unsupported.
 
@@ -169,7 +169,9 @@ Migrating _up_ never reports a loss: what a newer version of a component no long
 
 Rungs beyond this — an earlier release, the device's cache, the baseline bundled in the binary — belong to the delivery API and the client. A `blocked` result is how projection hands over to them.
 
-**`required` is a property of the node, not of the route to it.** A required node (or a `fail-screen` component) must reach the screen as itself or as its own fallback. If it does not — because it could not be rendered, because it sat in a slot the device's version lacks, or because an ancestor was omitted or replaced — the screen is `blocked` for that device and `blockedBy` names the node.
+**`required` is a property of the node, not of the route to it.** A required node (or a `fail-screen` component) in the screen's tree must reach the screen as itself or as its own fallback. If it does not — because it could not be rendered, because it sat in a slot the device's version lacks, or because an ancestor was omitted or replaced by a fallback — the screen is `blocked` for that device and `blockedBy` names the node.
+
+Inside a fallback, `required` is conditional on that fallback being the thing rendered. A fallback that is itself passed over asks nothing of the screen; one that is rendered must show what it requires. An authored state that loses something required is dropped, and the device uses the default for that state.
 
 The catalog's `placeholder` is the protocol type `sdui.placeholder`, which every client renders. It carries nothing about the component it replaces.
 
@@ -183,7 +185,7 @@ The catalog's `placeholder` is the protocol type `sdui.placeholder`, which every
 | `codeSteps`   | Implementations for a contract's named `code` steps. Without one, that step is a gap.                                                                                                                                  |
 | `context`     | The clock `$now` reads. One instant is taken from it for the whole projection.                                                                                                                                         |
 
-`projectScreen` is deterministic for a given clock, and only a catalog that uses `$now` reads the clock at all — so a projection can be computed once per release and manifest and cached by their ids.
+`projectScreen` is deterministic for a given clock. The clock is read once per call, and only a catalog that uses `$now` puts what it returns into a result — so for any other catalog a projection can be computed once per release and manifest and cached by their ids.
 
 ### Visibility
 
@@ -217,21 +219,21 @@ const answer = resolveHandshake(parseHandshakeRequest(body), {
 });
 ```
 
-| Status                 | HTTP | When                                                                            |
-| :--------------------- | :--- | :------------------------------------------------------------------------------ |
-| `protocol-unsupported` | 426  | No wire-protocol version in common. Checked first: nothing else could be read.  |
-| `maintenance`          | 503  | The global kill switch.                                                         |
-| `unauthorized`         | 401  | `authorized` is anything but `true`.                                            |
-| `update-required`      | 200  | Below `requiredVersion`. A retired binary is told to update and served nothing. |
-| `manifest-unknown`     | 409  | The fingerprint is not registered; the device resends its manifest in full.     |
-| `update-recommended`   | 200  | Below `recommendedVersion`, or too much of the release renders degraded.        |
-| `ok`                   | 200  |                                                                                 |
+| Status                 | HTTP | When                                                                                                                                                                                  |
+| :--------------------- | :--- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `protocol-unsupported` | 426  | No wire-protocol version in common. Checked first: nothing else could be read.                                                                                                        |
+| `maintenance`          | 503  | The global kill switch.                                                                                                                                                               |
+| `unauthorized`         | 401  | `authorized` is anything but `true`.                                                                                                                                                  |
+| `update-required`      | 200  | Below `requiredVersion`. A retired binary is told to update and served nothing.                                                                                                       |
+| `manifest-unknown`     | 409  | The fingerprint is not registered; the device resends its manifest in full. A manifest sent in full that is not a manifest gets the same status with 400: there is nothing to resend. |
+| `update-recommended`   | 200  | Below `recommendedVersion`, or too much of the release renders degraded.                                                                                                              |
+| `ok`                   | 200  |                                                                                                                                                                                       |
 
 Three things are deliberate:
 
 - `authorized` is required and only `true` passes. A delivery API with no tokens says so by passing `true`.
 - A device reports its own version. Pass `registeredVersion` — the version in the manifest your release job registered — and it is used instead. A version that cannot be read is below any floor.
-- A manifest sent in full is served, with `registered: false` in the answer when nobody registered it: its capabilities are the device's own word.
+- A manifest sent in full is validated by `resolveHandshake` itself, and served with `registered: false` in the answer when nobody registered it: its capabilities are the device's own word.
 
 A policy whose own versions are malformed throws, rather than answering every device `ok`.
 
@@ -294,7 +296,7 @@ A transport failure shows the cached copy when there is one. A semantic failure 
 
 `source` says where the pixels come from (`server`, `cache`, `skeleton`, `authored-state`, `system-state`, `earlier-release`, `bundled`, `native`), so a state whose interface the server cannot supply is one the server is not needed for.
 
-`tools/sdui/check-state-matrix.mjs` fails when a state is listed without a conformance vector. The vectors set several facts at once where order matters, so the precedence between states is part of the specification.
+`tools/sdui/check-state-matrix.mjs` fails when a state is listed without a conformance vector, and when a state type is anything but exactly its list. The vectors set several facts at once where order matters, so the precedence between states is part of the specification.
 
 ---
 
@@ -345,6 +347,20 @@ Content already in the field was authored under the published steps and is decod
 A component's `fallback`, `accepts`, `max` and editor metadata are policy and may change. A catalog whose ops cannot be compiled is a usage error (exit 2), not an addition.
 
 `checkCatalog`, `createClientManifest`, `catalogId` and `runSdui` are the same things as functions. `migrate(contract, value, from, to)` is the single-payload migration projection is built on.
+
+---
+
+## Also exported
+
+|                                                                                                                                                                                    |                                                                                                       |
+| :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------- |
+| `contentAddress`, `sha256Hex`, `hash32`                                                                                                                                            | The content addressing behind `scr_`, `cat_` and `cm_` ids: a synchronous SHA-256 over canonical JSON |
+| `changedPaths`                                                                                                                                                                     | Dot-paths at which two values differ                                                                  |
+| `compareVersions`, `parseVersion`                                                                                                                                                  | Dotted-number versions; `null` for anything that is not one                                           |
+| `evaluateCondition`, `hiddenByFlagsAlone`, `flagsIn`                                                                                                                               | The condition language, outside `applyVisibility`                                                     |
+| `bucketOf`, `inPercent`, `rolloutPercent`                                                                                                                                          | The pieces of `assignRollout`                                                                         |
+| `contractName`                                                                                                                                                                     | `sdui.component.<type>`, the name a catalog entry's contract must carry                               |
+| `SCREEN_LIMITS`, `MANIFEST_LIMITS`, `BUCKETS`, `PLACEHOLDER_TYPE`, `SDUI_PROTOCOL_VERSION`, `HANDSHAKE_STATUSES`, `CLOCK_SKEW_LIMIT_MS`, the `*_ID_PREFIX` constants, `SDUI_USAGE` | Constants                                                                                             |
 
 ---
 
