@@ -13,6 +13,7 @@ import {
   type SduiAction,
   type SduiNode,
   isRecord,
+  own,
 } from './model.js';
 
 /**
@@ -176,8 +177,8 @@ export function projectScreen(
     let reason: string | undefined;
     let isFallback = false;
     while (candidate) {
-      const definition = catalog.actions?.[candidate.type];
-      const clientVersion = manifest.actions?.[candidate.type];
+      const definition = own(catalog.actions, candidate.type);
+      const clientVersion = own(manifest.actions, candidate.type);
       const attempt:
         | string
         | {
@@ -246,7 +247,7 @@ export function projectScreen(
 
   /** Rungs 1 and 2: this node, as itself, at the client's version — or why not. */
   function render(node: SduiNode, into: NodeReport[]): Rendered {
-    const definition = catalog.components[node.type];
+    const definition = own(catalog.components, node.type);
     if (!definition)
       return {
         ok: false,
@@ -257,7 +258,7 @@ export function projectScreen(
         ok: false,
         reason: `"${node.type}" is switched off for this app version`,
       };
-    const clientVersion = manifest.components[node.type];
+    const clientVersion = own(manifest.components, node.type);
     if (clientVersion === undefined)
       return {
         ok: false,
@@ -282,7 +283,7 @@ export function projectScreen(
     const lossy = [...migrated.lossyPaths];
     const keptSlots: [string, readonly SduiNode[]][] = [];
     for (const [slot, children] of Object.entries(node.slots ?? {})) {
-      const since = definition.slots?.[slot]?.since ?? 1;
+      const since = own(definition.slots, slot)?.since ?? 1;
       if (since > clientVersion) {
         if (children.length > 0) lossy.push(`slots.${slot}`);
       } else {
@@ -371,8 +372,8 @@ export function projectScreen(
   ): SduiNode | 'placeholder' | null {
     if (fallback === 'placeholder') return 'placeholder';
     if (!isRecord(fallback)) return null;
-    const target = catalog.components[fallback.type as string];
-    const source = catalog.components[node.type];
+    const target = own(catalog.components, fallback.type as string);
+    const source = own(catalog.components, node.type);
     if (!target || !source) return null;
     // `$from` paths are written against the component's newest shape, so read them from there.
     const upgraded =
@@ -394,7 +395,8 @@ export function projectScreen(
         const value = spec['$from']
           .split('.')
           .reduce<unknown>(
-            (scope, segment) => (isRecord(scope) ? scope[segment] : undefined),
+            (scope, segment) =>
+              isRecord(scope) ? own(scope, segment) : undefined,
             upgraded.value,
           );
         if (value !== undefined) props[key] = value;
@@ -419,7 +421,7 @@ export function projectScreen(
     const direct = render(node, into);
     if (direct.ok) return { node: direct.node, blocked: direct.blocked };
 
-    const definition = catalog.components[node.type];
+    const definition = own(catalog.components, node.type);
     const base = {
       nodeId: node.id,
       type: node.type,

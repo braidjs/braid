@@ -191,6 +191,8 @@ const answer = resolveHandshake(request, {
 | `update-recommended`   | 200  | Below `recommendedVersion`, or too much of the release renders degraded.        |
 | `ok`                   | 200  |                                                                                 |
 
+A handshake is the first thing an unauthenticated device sends. `parseHandshakeRequest` validates the body before it reaches `resolveHandshake`, and `parseClientManifest` validates a manifest sent in full.
+
 ### Rollback or stale replica?
 
 Both hand a device an older release. `decidePointer` tells them apart with a sequence number that goes up every time an environment's pointer moves:

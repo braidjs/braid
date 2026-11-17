@@ -207,3 +207,58 @@ export function decidePointer(
     };
   return { action: 'adopt', changed, rolledBack: offered.kind === 'rollback' };
 }
+
+/**
+ * Validates an untrusted handshake body. A handshake is the first thing an unauthenticated device
+ * sends, so this is the outermost boundary of the whole system: it throws `TypeError` naming the
+ * first problem, and nothing malformed gets as far as {@link resolveHandshake}.
+ *
+ * A manifest sent in full is validated separately, with `parseClientManifest`.
+ */
+export function parseHandshakeRequest(raw: unknown): HandshakeRequest {
+  const fail = (message: string): never => {
+    throw new TypeError(`sdui handshake: ${message}`);
+  };
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const isText = (value: unknown, max: number): value is string =>
+    typeof value === 'string' && value.length > 0 && value.length <= max;
+  if (!isObject(raw)) return fail('body must be an object');
+
+  const protocol = raw['protocol'];
+  if (
+    !Array.isArray(protocol) ||
+    protocol.length !== 2 ||
+    !protocol.every((v) => Number.isSafeInteger(v) && v >= 1) ||
+    protocol[0] > protocol[1]
+  ) {
+    fail('protocol must be [min, max], two positive integers in order');
+  }
+  const manifest = raw['manifest'];
+  if (!isText(manifest, 128) && !isObject(manifest))
+    fail('manifest must be a fingerprint or a manifest document');
+
+  const app = raw['app'];
+  if (!isObject(app)) return fail('app must be an object');
+  for (const key of ['id', 'platform', 'version'] as const) {
+    if (!isText(app[key], 128))
+      fail(`app.${key} must be a non-empty string of at most 128 characters`);
+  }
+  if (app['build'] !== undefined && !Number.isSafeInteger(app['build']))
+    fail('app.build must be an integer');
+  if (raw['install'] !== undefined && !isText(raw['install'], 128))
+    fail('install must be a non-empty string of at most 128 characters');
+
+  const known = raw['known'];
+  if (known !== undefined && known !== null) {
+    if (
+      !isObject(known) ||
+      !isText(known['release'], 128) ||
+      !Number.isSafeInteger(known['seq']) ||
+      (known['seq'] as number) < 0
+    ) {
+      fail('known must be { release, seq } with a non-negative integer seq');
+    }
+  }
+  return raw as unknown as HandshakeRequest;
+}

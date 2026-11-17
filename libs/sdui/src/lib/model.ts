@@ -246,6 +246,22 @@ function checkCondition(
   }
 }
 
+/**
+ * An own-property lookup. Every map here is keyed by names that arrive in documents — component
+ * types, action types, slot names — and a document may name one `constructor`. Indexing with `[]`
+ * would find `Object.prototype.constructor` and treat it as a catalog entry.
+ */
+export function own<T>(
+  record: Readonly<Record<string, T>> | undefined | null,
+  key: string,
+): T | undefined {
+  return record !== undefined &&
+    record !== null &&
+    Object.prototype.hasOwnProperty.call(record, key)
+    ? record[key]
+    : undefined;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

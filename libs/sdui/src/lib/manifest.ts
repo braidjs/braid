@@ -1,5 +1,5 @@
 import { contentAddress } from './hash.js';
-import { isRecord } from './model.js';
+import { isRecord, own } from './model.js';
 import type { SduiCatalog } from './catalog.js';
 
 /**
@@ -120,7 +120,7 @@ export function createClientManifest(
   ): Record<string, number> => {
     const out: Record<string, number> = {};
     for (const [type, entry] of Object.entries(entries)) {
-      const pinned = options.pin?.[type];
+      const pinned = own(options.pin, type);
       if (pinned === 0) continue;
       const version = pinned ?? entry.contract.current;
       if (
@@ -137,7 +137,10 @@ export function createClientManifest(
     return out;
   };
   for (const type of Object.keys(options.pin ?? {})) {
-    if (!(type in catalog.components) && !(type in (catalog.actions ?? {}))) {
+    if (
+      own(catalog.components, type) === undefined &&
+      own(catalog.actions, type) === undefined
+    ) {
       throw new TypeError(
         `sdui manifest: cannot pin "${type}" — the catalog has no component or action by that name`,
       );

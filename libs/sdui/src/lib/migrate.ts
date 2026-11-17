@@ -50,6 +50,15 @@ export type MigrateResult =
       readonly message: string;
     };
 
+function ownStep(
+  steps: CodeSteps | undefined,
+  name: string,
+): ContractCodeStep | undefined {
+  return steps && Object.prototype.hasOwnProperty.call(steps, name)
+    ? steps[name]
+    : undefined;
+}
+
 const lenses = new WeakMap<SkewContractStep, CompiledLens>();
 
 function lensOf(step: SkewContractStep): CompiledLens | null {
@@ -91,7 +100,9 @@ export function migrate(
       const step = stepTo(v);
       const span = { from: v - 1, to: v };
       const lens = lensOf(step);
-      const code = step.code ? options.codeSteps?.[step.code] : undefined;
+      const code = step.code
+        ? ownStep(options.codeSteps, step.code)
+        : undefined;
       if (!lens && !code) {
         return {
           ok: false,
@@ -120,7 +131,9 @@ export function migrate(
       const step = stepTo(v);
       const span = { from: v, to: v - 1 };
       const lens = lensOf(step);
-      const code = step.code ? options.codeSteps?.[step.code] : undefined;
+      const code = step.code
+        ? ownStep(options.codeSteps, step.code)
+        : undefined;
       const down = lens ? lens.down : code?.down;
       if (!down) {
         const why = lens

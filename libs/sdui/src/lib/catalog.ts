@@ -5,7 +5,7 @@ import {
   parseContractDocument,
 } from '@braidlabs/contract';
 import { contentAddress } from './hash.js';
-import { isRecord } from './model.js';
+import { isRecord, own } from './model.js';
 
 /**
  * The catalog — an app's UI vocabulary, owned by engineering.
@@ -183,7 +183,10 @@ export function parseCatalog(raw: unknown): SduiCatalog {
   // A fallback names another component; one that names nothing fails here, not on a device.
   for (const [type, entry] of Object.entries(raw['components'])) {
     const fallback = (entry as ComponentDefinition).fallback;
-    if (isRecord(fallback) && !(fallback['type'] in raw['components'])) {
+    if (
+      isRecord(fallback) &&
+      own(raw['components'], fallback['type'] as string) === undefined
+    ) {
       fail(
         `component "${type}": its fallback names "${String(fallback['type'])}", which is not in this catalog`,
       );
@@ -239,7 +242,7 @@ export function checkCatalog(
   ): void => {
     for (const [type, entry] of Object.entries(before)) {
       const name = contractName(kind, type);
-      const proposed = after[type];
+      const proposed = own(after, type);
       if (!proposed) {
         violations.push({
           kind: 'removed',

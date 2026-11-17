@@ -6,6 +6,7 @@ import {
   type SduiAction,
   type SduiNode,
   isRecord,
+  own,
   screenId,
 } from './model.js';
 
@@ -126,7 +127,7 @@ export function diffScreens(
     v: number,
     props: unknown,
   ): { value: unknown; derived: readonly string[]; pinned?: number } => {
-    const contract = catalog[kind]?.[type]?.contract;
+    const contract = own(catalog[kind], type)?.contract;
     if (contract && v <= contract.current) {
       const result = migrate(
         contract,
@@ -285,7 +286,7 @@ export function diffScreens(
     const left = upgrade('components', old.type, old.v, old.props);
     const right = upgrade('components', node.type, node.v, node.props);
     if (old.v !== node.v) {
-      const contract = catalog.components[node.type]?.contract;
+      const contract = own(catalog.components, node.type)?.contract;
       const step =
         contract && old.v < node.v && node.v <= contract.current
           ? migrate(contract, old.props ?? {}, old.v, node.v, migrateOptions)
@@ -352,10 +353,28 @@ export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
   return canonicalJson(a ?? null) === canonicalJson(b ?? null) ? [] : [prefix];
 }
 
+/** Beyond this many table cells an exact answer is not worth its memory. */
+const LCS_CELL_LIMIT = 4_000_000;
+
 function longestCommonSubsequence(
   a: readonly string[],
   b: readonly string[],
 ): string[] {
+  if (a.length * b.length > LCS_CELL_LIMIT) {
+    // A list this long is data, not a layout. Take a run that is in order in both — not always
+    // the longest, so a few extra nodes may be reported as moved, but never a missed move.
+    const position = new Map(a.map((id, index) => [id, index]));
+    const out: string[] = [];
+    let last = -1;
+    for (const id of b) {
+      const at = position.get(id);
+      if (at !== undefined && at > last) {
+        out.push(id);
+        last = at;
+      }
+    }
+    return out;
+  }
   const rows = a.length + 1;
   const columns = b.length + 1;
   const table = new Uint32Array(rows * columns);
