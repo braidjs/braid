@@ -88,13 +88,13 @@ That gives four things no hand-rolled SDUI stack has:
                                    events ◄── census, projection outcomes, product analytics
 ```
 
-| Package                                                | What it is                                                                                                                                                                                                                                                             | Depends on                                            |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `@braidlabs/sdui`                                      | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.              | `skew`, `contract`                                    |
-| `@braidlabs/sdui/server`                               | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                | core; optional peer `jose`                            |
-| `@braidlabs/sdui/client`                               | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                        | core                                                  |
-| `@braidlabs/cms`                                       | The CMS: WYSIWYG editor, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Includes a web preview renderer for the starter catalog. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
-| `skew-contract` / new `sdui` bin in `@braidlabs/build` | `sdui catalog check\|publish`, `sdui manifest gen\|register`, `sdui bundle`.                                                                                                                                                                                           | —                                                     |
+| Package                                                | What it is                                                                                                                                                                                                                                                                                                            | Depends on                                            |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `@braidlabs/sdui`                                      | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.                                                             | `skew`, `contract`                                    |
+| `@braidlabs/sdui/server`                               | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                                                               | core; optional peer `jose`                            |
+| `@braidlabs/sdui/client`                               | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                                                                       | core                                                  |
+| `@braidlabs/cms`                                       | The CMS: WYSIWYG editor, web and emulator preview, history and compare, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Includes a web preview renderer for the starter catalog. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
+| `skew-contract` / new `sdui` bin in `@braidlabs/build` | `sdui catalog check\|publish`, `sdui manifest gen\|register`, `sdui bundle`.                                                                                                                                                                                                                                          | —                                                     |
 
 Subpath exports with optional peers are this repo's existing convention (`@braidlabs/registry/oidc`),
 and keep the count at two new packages.
@@ -527,17 +527,17 @@ deletion by install or user id is an admin API; raw IPs are not stored.
 
 ### Devices
 
-| Concern            | Design                                                                                                                                                                                                                                                                                                |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| App identity       | A public app key per environment. Not a secret — nothing in a binary is. It selects the app and its rate limits.                                                                                                                                                                                      |
-| Device integrity   | Optional `attest` hook (App Attest, Play Integrity) exchanged at handshake for the short-lived **delivery token** (signed, 30 min, audience `sdui-delivery`, claims: app, environment, manifest, install, `attested`). Policy per environment: require, prefer, or ignore.                            |
-| End-user identity  | The app's own access token from the customer's issuer, verified with JWKS (the `createOidcAuthorizer` verifier, asymmetric algorithms only, `exp` required). Yields the principal used for audiences, entitlements and gated screens. Anonymous is a first-class principal.                           |
-| Expiry mid-session | 401 → refresh once → retry once → continue anonymous or native sign-in. No retry loops.                                                                                                                                                                                                               |
-| Sign-out           | Re-handshake; personalised cache partition purged. Caches are partitioned by environment, manifest and principal (`@braidlabs/data` partitions).                                                                                                                                                      |
-| On-device storage  | Tokens in Keychain / Keystore; gated-content cache encrypted at rest.                                                                                                                                                                                                                                 |
-| Tampering          | Optional detached signature (Ed25519, keys at a JWKS URL, pinned key ids in the binary) on screen responses, so a compromised CDN or proxy cannot inject UI. Navigation and URL actions are restricted to the manifest's allowlist, so even a compromised CMS cannot send users to an arbitrary host. |
-| Preview            | An editor's draft on a real phone: QR code carrying a preview token bound to draft, editor subject and environment; 10 minutes, renewable, revocable; the device shows a persistent preview mark and sends no production analytics.                                                                   |
-| Abuse              | Rate limits per install and per address; manifest-registration limits; unverified manifests never persisted in prod.                                                                                                                                                                                  |
+| Concern            | Design                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App identity       | A public app key per environment. Not a secret — nothing in a binary is. It selects the app and its rate limits.                                                                                                                                                                                                                                                    |
+| Device integrity   | Optional `attest` hook (App Attest, Play Integrity) exchanged at handshake for the short-lived **delivery token** (signed, 30 min, audience `sdui-delivery`, claims: app, environment, manifest, install, `attested`). Policy per environment: require, prefer, or ignore.                                                                                          |
+| End-user identity  | The app's own access token from the customer's issuer, verified with JWKS (the `createOidcAuthorizer` verifier, asymmetric algorithms only, `exp` required). Yields the principal used for audiences, entitlements and gated screens. Anonymous is a first-class principal.                                                                                         |
+| Expiry mid-session | 401 → refresh once → retry once → continue anonymous or native sign-in. No retry loops.                                                                                                                                                                                                                                                                             |
+| Sign-out           | Re-handshake; personalised cache partition purged. Caches are partitioned by environment, manifest and principal (`@braidlabs/data` partitions).                                                                                                                                                                                                                    |
+| On-device storage  | Tokens in Keychain / Keystore; gated-content cache encrypted at rest.                                                                                                                                                                                                                                                                                               |
+| Tampering          | Optional detached signature (Ed25519, keys at a JWKS URL, pinned key ids in the binary) on screen responses, so a compromised CDN or proxy cannot inject UI. Navigation and URL actions are restricted to the manifest's allowlist, so even a compromised CMS cannot send users to an arbitrary host.                                                               |
+| Preview            | A draft on a web link, an emulator or a real phone (QR code): a preview token bound to draft, editor subject, environment and scope; 10 minutes, renewable, revocable. Remote control and node-rectangle reporting are honoured only in preview mode; store builds ignore preview links unless the app opts in; a persistent preview mark; no production analytics. |
+| Abuse              | Rate limits per install and per address; manifest-registration limits; unverified manifests never persisted in prod.                                                                                                                                                                                                                                                |
 
 ### CMS users
 
@@ -546,21 +546,23 @@ mounted inside a portal it inherits that portal's session. Roles come from the i
 through a role map, and CI from scopes through a scope map — no local user table, so deprovisioning
 in the IdP is deprovisioning here.
 
-| Grant                                                         | Viewer |  Editor   | Admin | CI  |
-| ------------------------------------------------------------- | :----: | :-------: | :---: | :-: |
-| `read` — content, releases, history, insights, audit          |   ✓    |     ✓     |   ✓   |     |
-| `preview` — simulator; device preview of _published_ releases |   ✓    |     ✓     |   ✓   |     |
-| `preview:draft` — device preview tokens for drafts            |        |     ✓     |   ✓   |     |
-| `edit` — drafts, assets, strings                              |        |     ✓     |   ✓   |     |
-| `publish` — mint a release into `dev`                         |        |     ✓     |   ✓   |     |
-| `promote:test`                                                |        |     ✓     |   ✓   |     |
-| `promote:prod` — _request_; lands as pending                  |        |     ✓     |   ✓   |     |
-| `approve:prod` — never one's own request                      |        |           |   ✓   |     |
-| `rollout:<env>` · `rollback:<env>`                            |        | dev, test |  all  |     |
-| `flags:<env>`                                                 |        | dev, test |  all  |     |
-| `kill` — kill switches and component overrides                |        |           |   ✓   |     |
-| `admin` — apps, keys, environments, retention, deletion       |        |           |   ✓   |     |
-| `catalog:publish` · `clients:register`                        |        |           |   ✓   |  ✓  |
+| Grant                                                       | Viewer |  Editor   | Admin | CI  |
+| ----------------------------------------------------------- | :----: | :-------: | :---: | :-: |
+| `read` — content, releases, history, insights, audit        |   ✓    |     ✓     |   ✓   |     |
+| `preview` — web preview and compare, of anything readable   |   ✓    |     ✓     |   ✓   |     |
+| `preview:draft` — device and emulator tokens for drafts     |        |     ✓     |   ✓   |     |
+| `emulator:<env>` — start emulator sessions and capture jobs |        | dev, test |  all  |  ✓  |
+| `restore` — restore a revision, screen or field             |        |     ✓     |   ✓   |     |
+| `edit` — drafts, assets, strings                            |        |     ✓     |   ✓   |     |
+| `publish` — mint a release into `dev`                       |        |     ✓     |   ✓   |     |
+| `promote:test`                                              |        |     ✓     |   ✓   |     |
+| `promote:prod` — _request_; lands as pending                |        |     ✓     |   ✓   |     |
+| `approve:prod` — never one's own request                    |        |           |   ✓   |     |
+| `rollout:<env>` · `rollback:<env>`                          |        | dev, test |  all  |     |
+| `flags:<env>`                                               |        | dev, test |  all  |     |
+| `kill` — kill switches and component overrides              |        |           |   ✓   |     |
+| `admin` — apps, keys, environments, retention, deletion     |        |           |   ✓   |     |
+| `catalog:publish` · `clients:register`                      |        |           |   ✓   |  ✓  |
 
 Default group names `sdui-viewers`, `sdui-editors`, `sdui-admins`; all remappable, and grants are
 environment-scoped the way `RegistryGrant` already is (`promote:${env}`), so "approver for prod but
@@ -576,8 +578,8 @@ table and fails on any route without an expected status per role.
 
 ## The CMS and its editor
 
-Design boards: <https://claude.ai/artifact/VMfSjLxUXzb42svH5EDubW> — the editor, the state board, and
-the releases board. Braid's own palette and faces (the site's ink ground, thread teal, amber, clay;
+Design boards: <https://claude.ai/artifact/VMfSjLxUXzb42svH5EDubW> — the editor, the state board, the
+releases board, and compare with emulator preview. Braid's own palette and faces (the site's ink ground, thread teal, amber, clay;
 Instrument Serif, IBM Plex Sans and Mono), themable through scoped custom properties like the console.
 
 **Editor layout.**
@@ -602,8 +604,7 @@ Instrument Serif, IBM Plex Sans and Mono), themable through scoped custom proper
 **Other views.** Releases (dev, test, prod as lanes; promote, approve, rollout stages with
 guardrail traces, rollback), Flags, Clients (census, per-manifest capabilities, retirement advisor,
 component overrides), Catalog (components, versions, steps, which steps are lossy), Insights, Audit,
-Settings. History and diffs use `diffPayloads` from `@braidlabs/studio`, which already speaks the
-migration vocabulary.
+Settings. Preview, History and Compare have their own sections below.
 
 **Editing model.** Edits are operations (`insert`, `move`, `remove`, `setProp`, `setAction`, …) over
 the document, which gives undo/redo and a readable history. Autosave carries the draft's base
@@ -612,10 +613,166 @@ optimistic-concurrency stance. A soft lock with presence covers the common case 
 one screen. Opening a draft authored against an older catalog up-migrates its nodes and lists the
 `derivedPaths` as "filled with defaults — review".
 
-**The preview is honest about what it is.** The canvas is a web rendering of native components. It
-is exact about structure, content, tokens, states and compatibility, and approximate about pixels;
-device preview by QR is the pixel truth. Custom catalog components without a registered web preview
-render as a labelled box with their props — never as nothing.
+**The canvas is honest about what it is.** It is a web rendering of native components: exact about
+structure, content, tokens, states and compatibility, and approximate about pixels. The emulator
+and device previews below are the pixel truth. Custom catalog components without a registered web
+preview render as a labelled box with their props — never as nothing.
+
+## Previews
+
+Three tiers, cheapest first. All three run the **same preview protocol**, so a draft, a control and a
+forced state behave identically whether the renderer is a browser tab or a real binary.
+
+| Tier         | What renders                                                                                                             | Fidelity                                                              | Cost                        | Who uses it                              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | --------------------------- | ---------------------------------------- |
+| **Web**      | The web preview renderer driving the real `@braidlabs/sdui/client` against the delivery API                              | Structure, content, states, compatibility: exact. Pixels: approximate | Free, instant               | Everyone; the editor canvas is this tier |
+| **Emulator** | The app's **real binary** in an iOS Simulator or Android Emulator, streamed into the CMS or run on a developer's machine | Native truth for that OS and app version                              | A session, seconds to start | Editors before publishing, approvers, QA |
+| **Device**   | The real app on a real phone, by QR code                                                                                 | Native truth, plus the hardware                                       | A phone                     | Anyone holding one                       |
+
+### The preview protocol
+
+- A **preview token** binds a draft (or a release), an environment, the issuing editor's subject and
+  a scope. `POST /sdui/v1/preview/redeem` exchanges it for a delivery token; from there the client
+  performs an ordinary handshake and ordinary fetches, so preview exercises the real projection,
+  flags, fallbacks and auth — not a parallel code path that could drift.
+- **Live reload.** The client holds `GET /sdui/v1/preview/stream` (server-sent events). A new draft
+  revision arrives as an event and the client refetches the affected screen; the editor's keystroke
+  shows on the simulator in well under a second.
+- **Remote control**, over the same stream, only honoured in preview mode: go to a screen; force any
+  state from the state tables (`loading-initial`, `error-network`, `empty`, …) without having to
+  break the network; set locale, theme, text size, direction; override flags and audience; freeze
+  the clock.
+- **Inspect, both ways.** In preview mode the client reports each node's on-screen rectangle. Tap a
+  component in the emulator and the editor selects that node; select a node in the editor and the
+  emulator outlines it.
+- **Settled signal.** The client reports when a screen has finished loading data, assets and
+  animations (and holds animations and the clock still when asked). Captures wait for it, which is
+  what makes native screenshots repeatable enough to diff.
+- A persistent **PREVIEW** mark on every previewed surface; preview sessions send no production
+  analytics; store builds ignore preview links unless the app opts in.
+
+### Web preview
+
+- **In the editor**: the canvas, with compare mode and every toolbar control.
+- **As a link**: `/preview/<token>` opens the screen full-window with a slim control bar — device,
+  app version ("as seen by 5.8"), locale, theme, text size, state, flags. This is what a product
+  owner or a legal reviewer is sent; it needs only the `preview` grant, or a time-limited link with
+  no account when an editor chooses to make one.
+- **The matrix**: one screen rendered as a grid — app versions across, and down the side any of
+  locales, themes, text sizes or states. Web-rendered, so it is instant, and it is the fastest way
+  to see what a change does to the long tail.
+
+### Emulator preview
+
+The point of this tier is that it runs **old binaries too**. Projection _predicts_ what 5.8 shows;
+an emulator running the real 5.8 build _shows_ it. When the two disagree the catalog or a native
+component is wrong, and that is found in the CMS rather than in production.
+
+- **Preview builds.** The app's release job uploads a simulator build (`.app`) and an emulator build
+  (`.apk`) alongside `sdui manifest register`, so every registered app version has a runnable
+  artifact with the preview SDK enabled.
+- **Providers, behind one interface.** Braid does not run a device farm.
+
+  ```ts
+  interface EmulatorProvider {
+    devices(): Promise<EmulatorDevice[]>; // platform, OS versions, models
+    start(options: { build: string; device: string; os: string; launchUrl: string; locale?: string }): Promise<EmulatorSession>;
+    screenshot(session: string): Promise<Blob>;
+    end(session: string): Promise<void>;
+  }
+  interface EmulatorSession {
+    id: string;
+    embedUrl?: string;
+    expiresAt: string;
+  }
+  ```
+
+  Three implementations are planned: a **hosted** adapter for a streamed-emulator service (the
+  session's `embedUrl` is framed inside the CMS, so an editor with nothing installed sees the real
+  app in the browser); a **self-hosted** adapter for an Android emulator container with a WebRTC
+  bridge; and **local**.
+
+- **Local.** `sdui preview --ios | --android [--app-version 5.8] --draft <id>` boots the simulator
+  or emulator on the developer's machine, installs the matching preview build, opens the preview
+  link (`xcrun simctl openurl`, `adb shell am start`), and stays attached for live reload. The CMS
+  shows the session as connected and the inspect bridge works the same way.
+- **In the CMS**: an Emulator tab beside the canvas — pick platform, model, OS and app version; the
+  stream sits where the web frame was, with the same state, locale and flag controls driving it
+  through remote control. Sessions idle out, are capped per person and per day, and are an
+  environment-scoped grant because they cost money.
+- **Captures.** A capture job walks screens × states × locales × themes for a chosen set of app
+  versions, waits for the settled signal, and stores each screenshot content-addressed against
+  `(release, screen, manifest, state, locale, theme)`. Captures run on publish for the configured
+  set and on demand; they feed history thumbnails and the visual diff below. With no provider
+  configured, the same job runs the web renderer headlessly, so visual history and diffing always
+  exist — at web fidelity.
+
+## History, comparison and diffing
+
+### What has a history
+
+| Thing                             | History is                                                                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A draft                           | Its operation log: every autosave is a revision. Runs of edits by one person are grouped into sessions; an editor can name a checkpoint.           |
+| A screen                          | The releases that changed it. Each screen subtree has its own content address (`scr_<hash>`), so "did Home change in r40?" is a comparison of ids. |
+| A node or a field                 | Who last changed it, in which revision and release — shown in the inspector on demand.                                                             |
+| An environment                    | Its ref log: every promotion, rollout stage, pause and rollback, with actor and `seq`.                                                             |
+| Flags, overrides, strings, tokens | Their own revision lists, with the same compare view.                                                                                              |
+
+History is append-only everywhere. **Restore** never rewrites it: restoring a revision, a screen
+from an old release, or a single field from a diff creates a new revision whose content matches the
+old one, attributed to whoever restored it. Draft operation logs are compacted to checkpoints after
+a retention window; releases are kept forever, since everything else points at them.
+
+The **History view** is a timeline per screen and per app: revisions and releases on one axis,
+environment moves marked on it, each entry with its author, a capture thumbnail and a one-line
+summary generated from the diff. Filter by screen, person, environment or date; any two entries
+can be selected and compared.
+
+### What can be compared
+
+Any two of: draft revision, release, environment ("what is on test that is not on prod"). And, for
+one version, any two **viewpoints**: app versions (the editor's compare mode, generalised), locales,
+themes, audiences, flag settings. The compare view always states both sides in full, e.g. _prod r37
+as 6.2, en-CA_ against _draft r42 as 6.2, en-CA_.
+
+### Three synchronised views of one comparison
+
+Selecting a change in any view selects it in the others.
+
+1. **Changes** — a semantic diff, in sentences. Nodes are matched by stable id, so a move is a move
+   and not a delete plus an add. Each change is one of: added, removed, moved, content changed,
+   action changed, visibility changed, fallback changed, state changed, string changed, token
+   changed, asset replaced. Field-level differences come from `diffPayloads` in `@braidlabs/studio`;
+   text is diffed by word, tokens show before and after swatches, assets sit side by side.
+2. **Visual** — the two renders, as side by side, a swipe divider, onion skin, or changes
+   highlighted. In the web tier changed regions are drawn from the changed nodes' own rectangles,
+   so there is no pixel noise. On captures, a per-pixel comparison with a tolerance finds the
+   regions and the reported node rectangles name them. Web renders are instant; native captures
+   are shown when they exist and can be requested when they do not.
+3. **Data** — the raw documents, as authored and **as delivered**: what bytes a given app version
+   received before and after. This is the view for engineers and for incident review.
+
+**The diff is contract-aware**, which is what makes it trustworthy here. Two sides authored against
+different catalog versions are first migrated to a common version, so a component upgrade does not
+masquerade as an edit. What the catalog changed is listed separately — "upgraded by the catalog, no
+content change", with the `derivedPaths` it filled in. The reverse case is called out too: a screen
+whose content is identical but whose render differs (a token or a native component changed) is
+flagged as **changed without an edit**, which is the change nobody reviewed.
+
+### Where the diff is used
+
+- **Before publishing**: draft against the environment's current release.
+- **Approving a promotion**: the approver sees changes and visuals for the promotion, per affected
+  app version, before the Approve button is enabled. Four-eyes means the second pair looked at
+  something.
+- **Visual gate** (optional, per environment): captures of the candidate against the current
+  release; any visual change not explained by a content change needs an explicit acknowledgement.
+- **Rollback**: the diff of what a rollback will undo, shown before confirming.
+- **Release notes**: the change list, as text, attached to the release and to its audit event.
+- **Conflicting saves**: the three-way view (base, theirs, yours) is this compare view with a third
+  column.
+- **Selective restore**: "restore this" on a single change in the Changes view.
 
 ## API surface
 
@@ -628,6 +785,14 @@ Admin (`/sdui/admin`): drafts (`GET/PUT/DELETE`, `POST …/ops`), `POST /release
 (`start|advance|pause|halt`), flags, `GET/POST /clients`, `GET /census`, `POST /overrides`,
 catalogs, assets, `POST /compat` (projection report for a draft against an environment's census),
 `GET /insights`, `GET /audit`, `GET /permissions`, `POST /tick`.
+
+Preview: `POST /admin/preview-tokens`, `GET /v1/preview/stream`, `POST /admin/preview/:session/control`,
+`GET /admin/emulators/devices`, `POST /admin/emulators/sessions`, `DELETE /admin/emulators/sessions/:id`,
+`POST /admin/captures`, `GET /admin/captures`.
+
+History: `GET /admin/drafts/:id/revisions`, `GET /admin/screens/:slug/history`,
+`POST /admin/compare` (two versions, optional viewpoints → change list, both projected documents,
+capture ids), `POST /admin/restore`.
 
 ## Phases
 
@@ -647,9 +812,14 @@ Each phase is shippable and is locked with `/goal-set` on its own. Criteria are 
       sequence rule holds: lower `seq` is ignored, higher `seq` with an older release is followed.
 - [ ] `tools/sdui/check-state-matrix.mjs` passes, and fails when a state id is added without a
       vector.
+- [ ] `diffScreens` vectors pass: a moved node reports one move (not a delete and an add); two
+      sides authored at different contract versions with the same content report no content change
+      and one "upgraded by the catalog" entry; an unchanged screen is detected by equal `scr_` ids
+      without walking it.
 
 Tasks: model and validators · catalog and manifest fingerprints · projection and report · ladder ·
-flag and rollout evaluation · handshake resolution · state unions · `sdui` bin in `@braidlabs/build`
+flag and rollout evaluation · handshake resolution · state unions · screen content addresses and
+the contract-aware semantic diff · `sdui` bin in `@braidlabs/build`
 · nx project, tsconfig path, publishable check · `docs/packages/sdui.md`.
 
 ### P2 — Delivery and control plane (`@braidlabs/sdui/server`)
@@ -669,6 +839,12 @@ flag and rollout evaluation · handshake resolution · state unions · `sdui` bi
       with no new release.
 - [ ] A release whose compatibility report exceeds the environment's budget is refused promotion,
       and the response names the nodes.
+- [ ] A preview token redeemed by a client yields the draft's content through the ordinary
+      handshake; a new draft revision reaches an open preview stream; an expired or revoked token,
+      or one presented for another draft, is refused; preview traffic produces no product events.
+- [ ] `POST /admin/compare` between two releases returns the change list and both documents as
+      delivered to a named manifest; `POST /admin/restore` of a revision creates a new revision
+      with identical content and leaves the log intact.
 
 ### P3 — Reference client (`@braidlabs/sdui/client`)
 
@@ -680,8 +856,11 @@ flag and rollout evaluation · handshake resolution · state unions · `sdui` bi
       order, and are purged when consent is revoked.
 - [ ] Changing the principal switches cache partition; the previous principal's gated content is
       unreadable afterwards.
+- [ ] In preview mode the client obeys every remote-control command (navigate, force each state
+      id, locale, theme, flags, frozen clock), reports node rectangles, and emits a settled signal
+      exactly once per screen load; outside preview mode it ignores all of them.
 
-### P4 — The CMS (`@braidlabs/cms`)
+### P4 — The CMS: editor and web preview (`@braidlabs/cms`)
 
 - [ ] Playwright, against the demo server and the mock issuer (`tools/braid-console/mock-oidc.mjs`):
       an editor signs in, drags a component onto the canvas, types into it in place, sees the
@@ -695,9 +874,44 @@ flag and rollout evaluation · handshake resolution · state unions · `sdui` bi
       API.
 - [ ] No serious or critical axe violations in the editor and releases views; insert, reorder and
       delete are completable by keyboard alone.
+- [ ] A web preview link opens the draft full-window with no editing surface; typing in the editor
+      updates it without a reload; the matrix view renders the demo screen for every registered
+      app version and none is blank.
 - [ ] The library entry stays under a size budget checked like `tools/braid-console/check-size.mjs`.
 
-### P5 — Example, end to end, docs
+### P5 — History, compare and visual diff
+
+- [ ] Playwright: the history timeline lists the demo screen's revisions and releases with authors
+      and environment moves; selecting two opens Compare.
+- [ ] In Compare, a known edit (one title changed, one card moved, one card added) appears as
+      exactly three entries in Changes; selecting each outlines the matching region in Visual and
+      the matching lines in Data.
+- [ ] The visual view's four modes (side by side, swipe, onion skin, highlight) each render both
+      sides; on two stored captures that differ in one known region, the pixel comparison reports
+      that region and no other, and reports none for identical captures.
+- [ ] A screen whose content is identical across two releases but whose token set changed is
+      flagged "changed without an edit".
+- [ ] Restoring one field from the Changes view changes only that field and adds one revision.
+- [ ] The approval dialog for a pending promotion shows the comparison and enables Approve only
+      after it has been opened.
+
+### P6 — Emulator and device preview
+
+- [ ] Against a fake `EmulatorProvider` in tests: starting a session frames its embed in the
+      Emulator tab; state, locale and flag controls reach the session as remote-control commands;
+      tapping a reported node rectangle selects that node in the editor; idle sessions end and the
+      per-person cap is enforced.
+- [ ] A capture job over the demo release stores one screenshot per screen × state × app version
+      in the configured set, each taken after the settled signal, and re-running it stores nothing
+      new.
+- [ ] With no provider configured, the same job produces web-rendered captures and Compare works
+      from them.
+- [ ] `sdui preview --android --draft <id>` and `--ios`, run on a machine with the emulators
+      installed, boot the device, open the draft and live-reload an edit. **Verified by hand on a
+      developer machine, not in CI**; the command's argument handling and the commands it would
+      run are unit-tested here.
+
+### P7 — Example, end to end, docs
 
 - [ ] `npm run sdui:demo` starts the server, the CMS and three simulated devices pinned at three
       manifests; an e2e asserts they render the same release three ways and that a rollback reaches
@@ -725,7 +939,13 @@ Folded in above; listed so the removals are visible.
 - **Database adapters** → memory and file stores behind the interface.
 - **A drag-and-drop or rich-text dependency** → pointer events as `@braidlabs/console/tiles` does;
   rich text limited to marks over plain text.
-- **Comments, screenshot diffing, AI authoring, a marketplace of templates.**
+- **Running a device farm** → an `EmulatorProvider` interface with hosted, self-hosted and local
+  adapters; the hosted adapter targets one service first.
+- **A pixel-diff or image dependency** → a small per-pixel comparison in the browser over canvas
+  data; region naming comes from node rectangles, not from image analysis.
+- **Branching and merging of drafts** → linear history with restore, including single-field
+  restore; the three-way view exists only to resolve a conflicting save.
+- **Comments, AI authoring, a marketplace of templates.**
 - **Seven packages** → two, with subpaths.
 
 ## Risks and open questions
@@ -751,5 +971,19 @@ Folded in above; listed so the removals are visible.
   minimum-sample thresholds, and auto-rollback stays opt-in.
 - **Attestation and payload signing** are designed as hooks; the provider integrations are the
   adopter's, and are untested here.
-- **Scope.** This is five phases. P1–P2 prove the idea and are useful alone (a headless SDUI backend
-  with a compatibility gate). The editor is the largest single piece of work.
+- **Emulator preview cannot be proven in this repository.** iOS simulators need macOS hosts; a
+  streamed emulator needs a provider account; none of that exists in CI here. P6 is tested against
+  a fake provider and the local command is verified by hand. The hosted adapter's first target
+  service is an open choice. Emulator preview also depends on a native SDK with preview mode, so it
+  is only real once the Swift and Kotlin SDKs exist — until then it runs a React Native build or
+  the web client inside the frame.
+- **Native captures are only as repeatable as the app.** Frozen clock, held animations and the
+  settled signal remove most noise; remote images, system fonts and OS updates remove the rest of
+  the guarantee. The visual gate therefore asks for acknowledgement instead of failing a
+  promotion, and compares with a tolerance.
+- **Capture volume.** Screens × states × locales × themes × app versions grows quickly. Captures
+  run for a configured set, content-addressed so unchanged screens cost nothing, and on demand
+  otherwise.
+- **Scope.** This is seven phases. P1–P2 prove the idea and are useful alone (a headless SDUI
+  backend with a compatibility gate). The editor is the largest single piece of work; history and
+  compare (P5) depend only on P1–P4, and emulator preview (P6) can ship after everything else.
