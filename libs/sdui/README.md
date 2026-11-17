@@ -14,10 +14,11 @@ const { outcome, root, report } = projectScreen(screen, catalog, manifest);
 // report:  per node — downgraded with lossyPaths: ['badge'], or which fallback it took and why
 ```
 
-- What a downgrade loses is **computed**, so a degraded render is labelled as one.
+- What a downgrade loses is **measured** — taken down and straight back up — so a degraded render
+  is labelled as one.
 - Where a step cannot be inverted, or a critical field would be lost, **nothing is guessed**: the
   node takes its authored fallback, then the catalog's, then is omitted — and a required node that
-  cannot be rendered blocks the screen for that device.
+  does not reach the screen, for any reason, blocks it for that device.
 - Projection is a pure function, so the cost of a change is known **before** it is published, for
   every app version in the field.
 
@@ -35,4 +36,5 @@ Also here, all pure and dependency-free beyond `@braidlabs/skew` and `@braidlabs
 `conformance/` holds the specification as data — the vectors a client in any language is checked
 against.
 
-Full documentation: `docs/packages/sdui.md`. Design and roadmap: `docs/sdui-cms-plan.md`.
+Full documentation: <https://github.com/braidjs/braid/blob/main/docs/packages/sdui.md>. Design and
+roadmap: <https://github.com/braidjs/braid/blob/main/docs/sdui-cms-plan.md>.

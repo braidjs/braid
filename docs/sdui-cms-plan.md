@@ -823,7 +823,20 @@ flag and rollout evaluation · handshake resolution · state unions · screen co
 the contract-aware semantic diff · the `sdui` bin · nx project, tsconfig path, publishable check ·
 `docs/packages/sdui.md`.
 
-Built. Two things the tables above describe are left for P2, where their acceptance criteria are:
+Built, then reviewed three ways (goal verification, code review, security audit) and corrected.
+Decisions the review forced, which the sections above should be read with:
+
+- **`required` is strict.** A required node that does not reach the screen blocks it, wherever the
+  node sits — including under an ancestor that was replaced by its own fallback.
+- **Loss is measured, not declared.** A downgrade's lost paths come from taking the node down and
+  back up, in the component's newest shape, which is also the shape `criticalPaths` are written in.
+- **Conditions are three-valued.** Unknown is not true, and stays unknown through `not`.
+- **Every trust boundary has a parser** with size limits, and the reserved keys `__proto__`,
+  `constructor` and `prototype` are refused in every document. Two root causes were fixed in
+  `@braidlabs/skew` rather than worked around.
+- **`hide` removes the node**; it does not swap in the catalog's fallback.
+
+Two things the tables above describe are left for P2, where their acceptance criteria are:
 validating projected props against the client version's JSON Schema, and enforcing a manifest's
 `limits`. Projection reports four screen outcomes — `exact`, `degraded`, `fallback`, `blocked` —
 and `blocked` is what the `incompatible` screen state is resolved from.
