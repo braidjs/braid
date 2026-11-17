@@ -1,11 +1,12 @@
-import { canonicalJson, fnv1a } from '@braidlabs/skew';
+import { canonicalJson, compileLens } from '@braidlabs/skew';
 import {
   type SkewContractDocument,
   type SkewContractStep,
   parseContractDocument,
 } from '@braidlabs/contract';
 import { contentAddress } from './hash.js';
-import { isRecord, own } from './model.js';
+import { type Screen, type SduiAction, type SduiNode } from './model.js';
+import { isRecord, isSafeName, own } from './internal.js';
 
 /**
  * The catalog — an app's UI vocabulary, owned by engineering.
@@ -48,8 +49,9 @@ export interface ComponentDefinition {
   readonly slots?: Readonly<Record<string, SlotDefinition>>;
   readonly fallback?: CatalogFallback;
   /**
-   * Prop paths (or `slots.<name>`) a render must not lose. A downgrade that would discard one is
-   * not a degraded render, it is an unsupported one — a price, a legal note.
+   * Prop paths in the component's **newest** shape (or `slots.<name>`) that a render must not
+   * lose. A downgrade that would discard one is not a degraded render, it is an unsupported one —
+   * a price, a legal note.
    */
   readonly criticalPaths?: readonly string[];
   readonly localizable?: readonly string[];
@@ -87,9 +89,13 @@ export function catalogId(catalog: SduiCatalog): string {
 }
 
 const TYPE_NAME = /^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$/;
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Validates an untrusted value as a catalog. Throws `TypeError` naming the first problem.
+ *
+ * Every step's ops are compiled here, so a catalog that parses is one whose migrations can run:
+ * a malformed op fails at the door, in `sdui catalog check`, not inside a projection.
  */
 export function parseCatalog(raw: unknown): SduiCatalog {
   const fail = (message: string): never => {
@@ -109,8 +115,10 @@ export function parseCatalog(raw: unknown): SduiCatalog {
       return fail(`${kind}s must be an object keyed by type`);
     for (const [type, entry] of Object.entries(entries)) {
       const where = `${kind} "${type}"`;
-      if (!TYPE_NAME.test(type))
-        fail(`${where}: type names are lowercase words joined by "-" or "."`);
+      if (type.length > 128 || !TYPE_NAME.test(type) || RESERVED.has(type))
+        fail(
+          `${where}: type names are lowercase words joined by "-" or ".", and not a reserved word`,
+        );
       if (kind === 'component' && type === PLACEHOLDER_TYPE)
         fail(`"${PLACEHOLDER_TYPE}" is reserved by the protocol`);
       if (!isRecord(entry)) return fail(`${where} must be an object`);
@@ -127,12 +135,26 @@ export function parseCatalog(raw: unknown): SduiCatalog {
         fail(
           `${where}: its contract must be named "${expected}", got "${contract.name}"`,
         );
+      for (const step of contract.steps) {
+        if (!step.ops) continue;
+        try {
+          compileLens(step.ops);
+        } catch (cause) {
+          fail(
+            `${where}: step v${step.from} → v${step.to} cannot be compiled — ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
+        }
+      }
       if (kind !== 'component') continue;
 
       const slots = entry['slots'];
       if (slots !== undefined) {
         if (!isRecord(slots)) return fail(`${where}: slots must be an object`);
         for (const [slot, definition] of Object.entries(slots)) {
+          if (!isSafeName(slot))
+            fail(
+              `${where}: ${JSON.stringify(slot)} is not a slot name — a slot name is a short plain word`,
+            );
           if (!isRecord(definition))
             return fail(`${where}: slot "${slot}" must be an object`);
           const since = definition['since'];
@@ -146,6 +168,21 @@ export function parseCatalog(raw: unknown): SduiCatalog {
               `${where}: slot "${slot}" since must be a version between 1 and ${contract.current}`,
             );
           }
+          const accepts = definition['accepts'];
+          if (
+            accepts !== undefined &&
+            (!Array.isArray(accepts) ||
+              !accepts.every((t) => typeof t === 'string'))
+          )
+            fail(
+              `${where}: slot "${slot}" accepts must be an array of component types`,
+            );
+          const max = definition['max'];
+          if (
+            max !== undefined &&
+            (!Number.isInteger(max) || (max as number) < 0)
+          )
+            fail(`${where}: slot "${slot}" max must be a whole number`);
         }
       }
       const fallback = entry['fallback'];
@@ -162,6 +199,14 @@ export function parseCatalog(raw: unknown): SduiCatalog {
         }
         if (fallback['type'] === type)
           fail(`${where}: a component cannot be its own fallback`);
+        const props = fallback['props'];
+        if (props !== undefined) {
+          if (!isRecord(props))
+            return fail(`${where}: fallback props must be an object`);
+          const reserved = Object.keys(props).find((key) => RESERVED.has(key));
+          if (reserved !== undefined)
+            fail(`${where}: fallback props use the reserved key "${reserved}"`);
+        }
       }
       for (const key of ['criticalPaths', 'localizable'] as const) {
         const list = entry[key];
@@ -204,30 +249,40 @@ export interface CatalogViolation {
     | 'step-edited'
     | 'steps-reordered'
     | 'version-lowered'
-    | 'schema-edited';
+    | 'schema-edited'
+    | 'slot-changed'
+    | 'critical-path-removed';
   readonly contract: string;
   /** The step concerned, as the published catalog numbered it. */
   readonly step?: { readonly from: number; readonly to: number };
   readonly message: string;
 }
 
-/** What a step *is*, apart from where it sits — so a reorder can be told from an edit. */
+/**
+ * What a step *is*, apart from where it sits — so a reorder can be told from an edit. The whole
+ * canonical text, not a hash of it: this is compared to decide whether published history was
+ * rewritten, and a short hash is something a determined edit can be made to collide with.
+ */
 function stepIdentity(step: SkewContractStep): string {
-  return fnv1a(
-    `${step.description}:${step.ops ? canonicalJson(step.ops) : `code:${step.code}`}`,
-  );
+  return canonicalJson([step.description, step.ops ?? null, step.code ?? null]);
 }
 
 /**
- * Compares a proposed catalog against the published one and reports every way it breaks the
- * append-only rule.
+ * Compares a proposed catalog against the published one and reports every way it rewrites what
+ * was shipped.
  *
  * Content already in the field was authored under the published steps, and is decoded by exactly
- * those steps for as long as a binary that old is running. So a published step may never change
- * or move, a published version's schema may never change, and nothing may disappear. New shape
- * means a new step appended; a wrong old step means a *correcting* step appended.
+ * those steps for as long as a binary that old is running. So:
  *
- * An empty result means the proposal only adds.
+ * - a published **step** may never change or move, and a published version's **schema** may never
+ *   change — new shape means a new step appended, a wrong old step means a correcting one;
+ * - no contract may **disappear**, and no version number may go down;
+ * - a **slot** may not be removed or have its `since` changed, which would send an old binary
+ *   children it has nowhere to put;
+ * - a **critical path** may not be removed, which would turn a refusal into a silent loss.
+ *
+ * A component's `fallback`, `accepts`, `max` and editor metadata are policy, not history, and may
+ * change. An empty result means the proposal only adds.
  */
 export function checkCatalog(
   published: SduiCatalog,
@@ -262,12 +317,22 @@ export function checkCatalog(
       }
 
       const identities = now.steps.map(stepIdentity);
+      const publishedIdentities = was.steps.map(stepIdentity);
+      // A proposed step that is still where its published twin was is spoken for: it cannot also
+      // be the place some other identical-looking step "moved to".
+      const inPlace = new Set(
+        publishedIdentities.map((identity, index) =>
+          identities[index] === identity ? index : -1,
+        ),
+      );
       was.steps.forEach((step, index) => {
+        if (inPlace.has(index)) return;
         const span = { from: step.from, to: step.to };
         const label = `${name} step v${step.from} → v${step.to} ("${step.description}")`;
-        const identity = stepIdentity(step);
-        if (identities[index] === identity) return;
-        const movedTo = identities.indexOf(identity);
+        const movedTo = identities.findIndex(
+          (identity, at) =>
+            identity === publishedIdentities[index] && !inPlace.has(at),
+        );
         if (movedTo >= 0) {
           violations.push({
             kind: 'steps-reordered',
@@ -287,7 +352,10 @@ export function checkCatalog(
       });
 
       for (const [version, schema] of Object.entries(was.schemas ?? {})) {
-        const proposedSchema = now.schemas?.[version];
+        const proposedSchema = own(
+          now.schemas as Record<string, unknown> | undefined,
+          version,
+        );
         if (
           proposedSchema === undefined ||
           canonicalJson(proposedSchema) !== canonicalJson(schema)
@@ -299,6 +367,37 @@ export function checkCatalog(
           });
         }
       }
+
+      if (kind !== 'component') continue;
+      const wasComponent = entry as ComponentDefinition;
+      const nowComponent = proposed as ComponentDefinition;
+      for (const [slot, definition] of Object.entries(
+        wasComponent.slots ?? {},
+      )) {
+        const proposedSlot = own(nowComponent.slots, slot);
+        if (!proposedSlot) {
+          violations.push({
+            kind: 'slot-changed',
+            contract: name,
+            message: `${name} slot "${slot}" was removed — published content still fills it`,
+          });
+        } else if ((proposedSlot.since ?? 1) !== (definition.since ?? 1)) {
+          violations.push({
+            kind: 'slot-changed',
+            contract: name,
+            message: `${name} slot "${slot}" went from since v${definition.since ?? 1} to since v${proposedSlot.since ?? 1} — which versions have a slot is frozen`,
+          });
+        }
+      }
+      for (const path of wasComponent.criticalPaths ?? []) {
+        if (!(nowComponent.criticalPaths ?? []).includes(path)) {
+          violations.push({
+            kind: 'critical-path-removed',
+            contract: name,
+            message: `${name} no longer treats "${path}" as critical — older apps would lose it silently instead of taking a fallback`,
+          });
+        }
+      }
     }
   };
 
@@ -306,4 +405,108 @@ export function checkCatalog(
   compare('action', published.actions, next.actions);
   compare('event', published.events, next.events);
   return violations;
+}
+
+// --- does a screen fit a catalog? -------------------------------------------
+
+export interface ScreenProblem {
+  readonly nodeId: string;
+  readonly message: string;
+}
+
+/**
+ * Checks an authored screen against a catalog: every way it names something the catalog does not
+ * have, or uses a slot the catalog does not allow.
+ *
+ * Projection is forgiving about these — an unknown component is simply unsupported and takes its
+ * fallback — which is right for a device and wrong for an author, who should hear about a typo
+ * before publishing rather than see a node quietly missing.
+ *
+ * Structural only. Whether props match a version's JSON Schema is checked where screens are
+ * published.
+ */
+export function validateScreen(
+  screen: Screen,
+  catalog: SduiCatalog,
+): ScreenProblem[] {
+  const problems: ScreenProblem[] = [];
+
+  const checkAction = (
+    nodeId: string,
+    name: string,
+    action: SduiAction,
+  ): void => {
+    const definition = own(catalog.actions, action.type);
+    if (!definition)
+      problems.push({
+        nodeId,
+        message: `action "${name}" is a "${action.type}", which is not an action in the catalog`,
+      });
+    else if (action.v > definition.contract.current)
+      problems.push({
+        nodeId,
+        message: `action "${name}" is authored at "${action.type}" v${action.v}, but the catalog only goes to v${definition.contract.current}`,
+      });
+    if (action.fallback) checkAction(nodeId, name, action.fallback);
+  };
+
+  const checkNode = (node: SduiNode): void => {
+    const definition = own(catalog.components, node.type);
+    if (!definition) {
+      problems.push({
+        nodeId: node.id,
+        message: `"${node.type}" is not a component in the catalog`,
+      });
+    } else {
+      if (node.v > definition.contract.current)
+        problems.push({
+          nodeId: node.id,
+          message: `authored at "${node.type}" v${node.v}, but the catalog only goes to v${definition.contract.current}`,
+        });
+      for (const [slot, children] of Object.entries(node.slots ?? {})) {
+        const slotDefinition = own(definition.slots, slot);
+        if (!slotDefinition) {
+          problems.push({
+            nodeId: node.id,
+            message: `"${node.type}" has no slot named "${slot}"`,
+          });
+          continue;
+        }
+        if ((slotDefinition.since ?? 1) > node.v)
+          problems.push({
+            nodeId: node.id,
+            message: `slot "${slot}" needs "${node.type}" v${slotDefinition.since}, and this node is authored at v${node.v}`,
+          });
+        if (
+          slotDefinition.max !== undefined &&
+          children.length > slotDefinition.max
+        )
+          problems.push({
+            nodeId: node.id,
+            message: `slot "${slot}" takes at most ${slotDefinition.max}, and has ${children.length}`,
+          });
+        for (const child of children) {
+          if (
+            slotDefinition.accepts &&
+            !slotDefinition.accepts.includes(child.type)
+          )
+            problems.push({
+              nodeId: child.id,
+              message: `a "${child.type}" cannot go in the "${slot}" slot of "${node.type}", which takes ${slotDefinition.accepts.join(', ')}`,
+            });
+        }
+      }
+    }
+    for (const [name, action] of Object.entries(node.actions ?? {}))
+      checkAction(node.id, name, action);
+    for (const children of Object.values(node.slots ?? {}))
+      children.forEach(checkNode);
+    if (node.fallback) checkNode(node.fallback);
+  };
+
+  checkNode(screen.root);
+  for (const state of Object.values(screen.states ?? {})) {
+    if (typeof state !== 'string') checkNode(state);
+  }
+  return problems;
 }

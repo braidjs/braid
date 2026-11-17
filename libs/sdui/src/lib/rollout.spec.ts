@@ -86,7 +86,10 @@ describe('rollout plans', () => {
         ),
     ).toBe(true);
     expect(rolloutPercent(plan(2))).toBe(25);
-    expect(rolloutPercent(plan(9))).toBe(100);
+    // A stage that is not one of the plan's stages is nobody, not everybody.
+    expect(rolloutPercent(plan(9))).toBe(0);
+    expect(rolloutPercent(plan(-1))).toBe(0);
+    expect(assignRollout(plan(9), 'ins_1').arm).toBe('stable');
     expect(rolloutPercent(plan(2, { halted: true }))).toBe(0);
   });
 

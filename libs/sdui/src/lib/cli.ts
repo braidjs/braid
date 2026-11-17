@@ -1,4 +1,5 @@
 import { catalogId, checkCatalog, parseCatalog } from './catalog.js';
+import { printable } from './internal.js';
 import {
   createClientManifest,
   manifestFingerprint,
@@ -40,13 +41,14 @@ export const SDUI_USAGE = `sdui — catalogs and client manifests for server-dri
   --help
 `;
 
-type Flags = Record<string, string[]>;
+type Flags = Map<string, string[]>;
 
 function parseArgs(argv: readonly string[]): {
   positional: string[];
   flags: Flags;
 } {
-  const flags: Flags = {};
+  // A Map, not an object: a flag is whatever was typed, including `--constructor`.
+  const flags: Flags = new Map();
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i] as string;
@@ -56,7 +58,8 @@ function parseArgs(argv: readonly string[]): {
     }
     const key = token.slice(2);
     const next = argv[i + 1];
-    const values = (flags[key] ??= []);
+    const values = flags.get(key) ?? [];
+    flags.set(key, values);
     if (next !== undefined && !next.startsWith('--')) {
       values.push(next);
       i++;
@@ -69,17 +72,27 @@ function parseArgs(argv: readonly string[]): {
 export function runSdui(argv: readonly string[], io: CliIo): number {
   const { positional, flags } = parseArgs(argv);
   const command = positional.slice(0, 2).join(' ');
-  if ('help' in flags || positional.length === 0 || positional[0] === 'help') {
+  if (
+    flags.has('help') ||
+    positional.length === 0 ||
+    positional[0] === 'help'
+  ) {
     io.stdout(SDUI_USAGE);
     return 0;
   }
 
+  // Everything echoed here can come from a document in a pull request — a path, a component
+  // name, a step description — and this runs in CI, where a line that begins `::error` is a
+  // command to the runner. Control characters are replaced before anything is printed.
+  const out = (text: string): void => io.stdout(`${printable(text, 4000)}\n`);
+  const err = (text: string): void => io.stderr(`${printable(text, 4000)}\n`);
+
   const usage = (message: string): number => {
-    io.stderr(`sdui ${command}: ${message}\n\n${SDUI_USAGE}`);
+    err(`sdui ${command}: ${message}`);
+    io.stderr(`\n${SDUI_USAGE}`);
     return 2;
   };
-  const one = (name: string): string | undefined =>
-    flags[name]?.[flags[name].length - 1];
+  const one = (name: string): string | undefined => flags.get(name)?.at(-1);
   const readJson = (path: string): unknown => {
     let text: string;
     try {
@@ -108,19 +121,18 @@ export function runSdui(argv: readonly string[], io: CliIo): number {
           parseCatalog(readJson(next)),
         );
         if (violations.length === 0) {
-          io.stdout(`sdui: ${next} only adds to ${published}\n`);
+          out(`sdui: ${next} only adds to ${published}`);
           return 0;
         }
-        io.stderr(
-          `sdui: ${next} changes what ${published} already shipped:\n${violations.map((violation) => `  - ${violation.message}\n`).join('')}`,
-        );
+        err(`sdui: ${next} changes what ${published} already shipped:`);
+        for (const violation of violations) err(`  - ${violation.message}`);
         return 1;
       }
 
       case 'catalog id': {
         const input = one('in');
         if (!input) return usage('--in is required');
-        io.stdout(`${catalogId(parseCatalog(readJson(input)))}\n`);
+        out(catalogId(parseCatalog(readJson(input))));
         return 0;
       }
 
@@ -137,15 +149,20 @@ export function runSdui(argv: readonly string[], io: CliIo): number {
           return usage(
             `missing ${missing.map((name) => `--${name}`).join(', ')}`,
           );
-        const pin: Record<string, number> = {};
-        for (const entry of flags['pin'] ?? []) {
-          const match = /^([^=]+)=(\d+)$/.exec(entry);
+        const target = one('out') as string;
+        if (target === one('catalog'))
+          return usage(
+            '--out is the same file as --catalog; refusing to overwrite the catalog',
+          );
+        const pins: [string, number][] = [];
+        for (const entry of flags.get('pin') ?? []) {
+          const match = /^([^=]+)=(\d{1,9})$/.exec(entry);
           if (!match)
             return usage(`--pin takes <type>=<version>, got "${entry}"`);
-          pin[match[1] as string] = Number(match[2]);
+          pins.push([match[1] as string, Number(match[2])]);
         }
         const build = one('build');
-        if (build !== undefined && !/^\d+$/.test(build))
+        if (build !== undefined && !/^\d{1,15}$/.test(build))
           return usage(`--build must be a whole number, got "${build}"`);
         const manifest = createClientManifest(
           parseCatalog(readJson(one('catalog') as string)),
@@ -154,24 +171,22 @@ export function runSdui(argv: readonly string[], io: CliIo): number {
             platform: one('platform') as string,
             version: one('app-version') as string,
             ...(build !== undefined ? { build: Number(build) } : {}),
-            ...(Object.keys(pin).length > 0 ? { pin } : {}),
+            // From entries, so that `--pin __proto__=1` is an unknown type and not a silent no-op.
+            ...(pins.length > 0 ? { pin: Object.fromEntries(pins) } : {}),
             ...(one('assets')
               ? { assets: (one('assets') as string).split(',').filter(Boolean) }
               : {}),
           },
         );
-        const out = one('out') as string;
-        io.writeFile(out, `${JSON.stringify(manifest, null, 2)}\n`);
-        io.stdout(`sdui: ${manifestFingerprint(manifest)} → ${out}\n`);
+        io.writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`);
+        out(`sdui: ${manifestFingerprint(manifest)} → ${target}`);
         return 0;
       }
 
       case 'manifest fingerprint': {
         const input = one('in');
         if (!input) return usage('--in is required');
-        io.stdout(
-          `${manifestFingerprint(parseClientManifest(readJson(input)))}\n`,
-        );
+        out(manifestFingerprint(parseClientManifest(readJson(input))));
         return 0;
       }
 
@@ -179,8 +194,8 @@ export function runSdui(argv: readonly string[], io: CliIo): number {
         return usage(`unknown command`);
     }
   } catch (cause) {
-    io.stderr(
-      `sdui ${command}: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+    err(
+      `sdui ${command}: ${cause instanceof Error ? cause.message : String(cause)}`,
     );
     return 2;
   }

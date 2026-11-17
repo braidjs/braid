@@ -1,5 +1,6 @@
+import { parseVersion } from './conditions.js';
 import { contentAddress } from './hash.js';
-import { isRecord, own } from './model.js';
+import { isRecord, own } from './internal.js';
 import type { SduiCatalog } from './catalog.js';
 
 /**
@@ -32,19 +33,49 @@ export const MANIFEST_ID_PREFIX = 'cm_';
 /** The wire-protocol version this package implements. */
 export const SDUI_PROTOCOL_VERSION = 1;
 
+/** How much a manifest may hold. A device can send one unauthenticated, so it is bounded. */
+export const MANIFEST_LIMITS = Object.freeze({
+  types: 2_000,
+  assets: 64,
+  name: 128,
+});
+
+const MANIFEST_KEYS = [
+  'sduiManifest',
+  'protocol',
+  'app',
+  'platform',
+  'version',
+  'build',
+  'components',
+  'actions',
+  'assets',
+  'limits',
+];
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
+
 /**
  * A manifest's fingerprint. Key order never matters, so two build machines that emit the same
- * capabilities emit the same fingerprint.
+ * document emit the same fingerprint. Array order does: `assets` is part of what is addressed.
  */
 export function manifestFingerprint(manifest: ClientManifest): string {
   return contentAddress(MANIFEST_ID_PREFIX, manifest);
 }
 
+/**
+ * Validates an untrusted value as a client manifest. Throws `TypeError` naming the first problem.
+ *
+ * Strict about unknown keys on purpose: the fingerprint covers the whole document, so a manifest
+ * that could carry arbitrary extra fields could be given unlimited fingerprints, each one a new
+ * entry in whatever is cached per manifest.
+ */
 export function parseClientManifest(raw: unknown): ClientManifest {
   const fail = (message: string): never => {
     throw new TypeError(`sdui manifest: ${message}`);
   };
   if (!isRecord(raw)) return fail('document must be an object');
+  const unknown = Object.keys(raw).find((key) => !MANIFEST_KEYS.includes(key));
+  if (unknown !== undefined) fail(`unknown key "${unknown}"`);
   if (raw['sduiManifest'] !== '1')
     fail(
       `unsupported manifest format "${String(raw['sduiManifest'])}" — this reader understands "1"`,
@@ -54,39 +85,69 @@ export function parseClientManifest(raw: unknown): ClientManifest {
   if (
     !Array.isArray(protocol) ||
     protocol.length !== 2 ||
-    !protocol.every((v) => Number.isInteger(v) && v >= 1) ||
+    !protocol.every((v) => Number.isSafeInteger(v) && v >= 1) ||
     protocol[0] > protocol[1]
   ) {
     fail('protocol must be [min, max], two positive integers in order');
   }
+  const isName = (value: unknown): value is string =>
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MANIFEST_LIMITS.name;
   for (const key of ['app', 'platform', 'version'] as const) {
-    if (typeof raw[key] !== 'string' || raw[key].length === 0)
-      fail(`${key} must be a non-empty string`);
+    if (!isName(raw[key]))
+      fail(
+        `${key} must be a non-empty string of at most ${MANIFEST_LIMITS.name} characters`,
+      );
   }
-  if (!/^\d+(\.\d+)*$/.test(raw['version'] as string))
+  if (!parseVersion(raw['version']))
     fail(`version must be dotted numbers, got "${String(raw['version'])}"`);
-  if (raw['build'] !== undefined && !Number.isInteger(raw['build']))
-    fail('build must be an integer');
+  if (
+    raw['build'] !== undefined &&
+    (!Number.isSafeInteger(raw['build']) || (raw['build'] as number) < 0)
+  )
+    fail('build must be a whole number');
 
   const versions = (key: 'components' | 'actions', required: boolean): void => {
     const map = raw[key];
     if (map === undefined && !required) return;
     if (!isRecord(map))
       return fail(`${key} must be an object of type → version`);
-    for (const [type, version] of Object.entries(map)) {
-      if (!Number.isInteger(version) || (version as number) < 1)
+    const entries = Object.entries(map);
+    if (entries.length > MANIFEST_LIMITS.types)
+      fail(`${key} has more than ${MANIFEST_LIMITS.types} entries`);
+    for (const [type, version] of entries) {
+      if (!isName(type) || RESERVED.has(type))
+        fail(
+          `${key} has an entry named ${JSON.stringify(type.slice(0, 40))}, which is not a type name`,
+        );
+      if (!Number.isSafeInteger(version) || (version as number) < 1)
         fail(`${key}.${type} must be a positive integer version`);
     }
   };
   versions('components', true);
   versions('actions', false);
 
+  const assets = raw['assets'];
   if (
-    raw['assets'] !== undefined &&
-    (!Array.isArray(raw['assets']) ||
-      !raw['assets'].every((a) => typeof a === 'string'))
+    assets !== undefined &&
+    (!Array.isArray(assets) ||
+      assets.length > MANIFEST_LIMITS.assets ||
+      !assets.every(isName))
   ) {
-    fail('assets must be an array of format names');
+    fail(
+      `assets must be an array of at most ${MANIFEST_LIMITS.assets} format names`,
+    );
+  }
+  const limits = raw['limits'];
+  if (limits !== undefined) {
+    if (!isRecord(limits)) return fail('limits must be an object');
+    for (const [key, value] of Object.entries(limits)) {
+      if (key !== 'depth' && key !== 'bytes')
+        fail(`limits has an unknown key "${key}"`);
+      if (!Number.isSafeInteger(value) || (value as number) < 1)
+        fail(`limits.${key} must be a positive integer`);
+    }
   }
   return raw as unknown as ClientManifest;
 }
@@ -118,7 +179,7 @@ export function createClientManifest(
     kind: string,
     entries: Readonly<Record<string, { contract: { current: number } }>> = {},
   ): Record<string, number> => {
-    const out: Record<string, number> = {};
+    const out: [string, number][] = [];
     for (const [type, entry] of Object.entries(entries)) {
       const pinned = own(options.pin, type);
       if (pinned === 0) continue;
@@ -132,9 +193,9 @@ export function createClientManifest(
           `sdui manifest: cannot pin ${kind} "${type}" at v${version} — the catalog covers v1 through v${entry.contract.current}`,
         );
       }
-      out[type] = version;
+      out.push([type, version]);
     }
-    return out;
+    return Object.fromEntries(out);
   };
   for (const type of Object.keys(options.pin ?? {})) {
     if (

@@ -156,6 +156,23 @@
           "props": {
             "text": "Prices include tax."
           }
+        },
+        {
+          "id": "n_returns",
+          "type": "legal-note",
+          "v": 2,
+          "props": {
+            "text": "Free returns within 30 days."
+          },
+          "fallback": {
+            "id": "n_returns_fallback",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Free returns within 30 days.",
+              "style": "body"
+            }
+          }
         }
       ]
     }

@@ -1,6 +1,6 @@
 {
   "resolver": "evaluateCondition",
-  "note": "A condition about something the context does not say is false.",
+  "note": "Three-valued: a term about something the context does not say is unknown, unknown survives `not`, and only a condition known to hold is true. `all` is false as soon as one term is known false; `any` is true as soon as one is known true.",
   "vectors": [
     {
       "condition": {
@@ -272,6 +272,173 @@
         "any": []
       },
       "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "platform": ["ios"]
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "flag": "kill-checkout"
+        }
+      },
+      "context": {
+        "flags": {}
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "flag": "kill-checkout"
+        }
+      },
+      "context": {
+        "flags": {
+          "kill-checkout": false
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "audience": "banned"
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "6.0"
+          }
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "6.0"
+          }
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "6.0"
+        }
+      },
+      "context": {
+        "appVersion": "garbage"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "max": "5.0"
+        }
+      },
+      "context": {
+        "appVersion": "garbage"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "schedule": {
+            "from": "2026-11-01T00:00:00Z"
+          }
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "all": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "any": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": []
+      },
       "expect": false
     }
   ]

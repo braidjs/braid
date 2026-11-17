@@ -166,6 +166,81 @@
         "truncated": true
       },
       "also": ["exact"]
+    },
+    {
+      "state": "deferred-error",
+      "description": "Everything at once: the full order.",
+      "given": {
+        "outcome": "fallback-authored",
+        "variant": "b",
+        "deferred": "failed",
+        "data": "failed",
+        "disabled": true,
+        "asset": "failed",
+        "stringMissing": true,
+        "truncated": true
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "fallback-authored",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "variant": "a",
+        "deferred": "loading",
+        "data": "loading",
+        "disabled": true,
+        "asset": "unsupported-format"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "disabled",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "upgraded",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "loading",
+        "stringMissing": true
+      },
+      "also": ["asset-loading", "data-stale", "string-missing", "upgraded"]
+    },
+    {
+      "state": "hidden-by-flag",
+      "description": "Hidden wins over everything, including omitted.",
+      "given": {
+        "outcome": "omitted",
+        "hidden": "flag",
+        "deferred": "failed",
+        "disabled": true
+      },
+      "also": []
+    },
+    {
+      "state": "omitted",
+      "description": "Omitted wins over everything but hidden.",
+      "given": {
+        "outcome": "omitted",
+        "variant": "b",
+        "deferred": "failed",
+        "data": "failed",
+        "disabled": true
+      },
+      "also": []
     }
   ]
 }

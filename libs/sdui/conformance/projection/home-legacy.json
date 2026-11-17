@@ -105,6 +105,14 @@
             "props": {
               "text": "Prices include tax."
             }
+          },
+          {
+            "id": "n_returns_fallback",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Free returns within 30 days."
+            }
           }
         ]
       }
@@ -261,6 +269,42 @@
           "id": "n_legal",
           "type": "text"
         }
+      },
+      {
+        "nodeId": "n_legal",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": ["style"],
+        "derivedPaths": [],
+        "fallbackFor": "n_legal"
+      },
+      {
+        "nodeId": "n_returns",
+        "type": "legal-note",
+        "authored": 2,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "\"sdui.component.legal-note\" v2 → v1 cannot be inverted",
+        "outcome": "fallback-authored",
+        "rung": 3,
+        "replacedBy": {
+          "id": "n_returns_fallback",
+          "type": "text"
+        }
+      },
+      {
+        "nodeId": "n_returns_fallback",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "fallbackFor": "n_returns"
       },
       {
         "nodeId": "n_empty",

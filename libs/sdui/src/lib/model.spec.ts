@@ -2,13 +2,13 @@ import {
   type Screen,
   compareVersions,
   evaluateCondition,
+  hiddenByFlagsAlone,
   flagsIn,
-  hasPath,
   migrate,
   parseScreen,
-  pathWithin,
   screenId,
 } from '../index.js';
+import { pathWithin } from './paths.js';
 import { catalog, screen } from './fixtures.spec-util.js';
 
 describe('parseScreen', () => {
@@ -123,41 +123,56 @@ describe('migrate', () => {
 });
 
 describe('paths, versions and flag names', () => {
-  it('finds values under list segments', () => {
-    expect(hasPath({ items: [{ a: 1 }, {}] }, 'items[].a')).toBe(true);
-    expect(hasPath({ items: [{}] }, 'items[].a')).toBe(false);
-    expect(hasPath({ a: null }, 'a')).toBe(true);
-  });
-
-  it('matches a path against a critical prefix in both directions', () => {
+  it('matches a path against a critical prefix in both directions, whichever list element is meant', () => {
     expect(pathWithin('price.sale', 'price')).toBe(true);
     expect(pathWithin('price', 'price.sale')).toBe(true);
     expect(pathWithin('pricing', 'price')).toBe(false);
+    expect(pathWithin('items[2].badge', 'items')).toBe(true);
+    expect(pathWithin('items[2].badge', 'items[].badge')).toBe(true);
   });
 
-  it('orders versions numerically and survives junk', () => {
+  it('orders versions numerically, and says so when one is not a version', () => {
     expect(compareVersions('5.10', '5.8')).toBe(1);
     expect(compareVersions('5.8', '5.8.0')).toBe(0);
-    expect(compareVersions('six', '0')).toBe(0);
+    expect(compareVersions('5.8', '6')).toBe(-1);
+    expect(compareVersions('six', '0')).toBeNull();
+    expect(compareVersions('v6.0', '6.0')).toBeNull();
+    expect(compareVersions(6 as never, '6.0')).toBeNull();
   });
 
-  it('lists the flags a condition reads and answers "is it only a flag?"', () => {
-    const condition = {
-      all: [
-        { flag: 'a' },
-        { any: [{ not: { flag: 'b' } }, { platform: ['ios'] }] },
-      ],
-    };
-    expect(flagsIn(condition)).toEqual(['a', 'b']);
+  it('lists the flags a condition reads', () => {
     expect(
-      evaluateCondition({ not: { flag: 'a' } }, { flags: { a: true } }),
+      flagsIn({
+        all: [
+          { flag: 'a' },
+          { any: [{ not: { flag: 'b' } }, { platform: ['ios'] }] },
+        ],
+      }),
+    ).toEqual(['a', 'b']);
+  });
+
+  it('tells "hidden by its flags" from "hidden from this person", through not and all', () => {
+    // On iOS with the flag on, only the flag keeps this hidden.
+    const negated = { not: { all: [{ flag: 'f' }, { platform: ['ios'] }] } };
+    expect(
+      evaluateCondition(negated, { flags: { f: true }, platform: 'ios' }),
     ).toBe(false);
     expect(
-      evaluateCondition(
-        { not: { flag: 'a' } },
-        { flags: { a: true } },
-        { assumeFlags: true },
-      ),
+      hiddenByFlagsAlone(negated, { flags: { f: true }, platform: 'ios' }),
     ).toBe(true);
+    // No setting of the flag shows a members-only node to a non-member.
+    const gated = { all: [{ flag: 'f' }, { audience: 'members' }] };
+    expect(
+      hiddenByFlagsAlone(gated, { flags: { f: false }, audiences: [] }),
+    ).toBe(false);
+    expect(
+      hiddenByFlagsAlone(gated, {
+        flags: { f: false },
+        audiences: ['members'],
+      }),
+    ).toBe(true);
+    expect(
+      hiddenByFlagsAlone({ platform: ['ios'] }, { platform: 'android' }),
+    ).toBe(false);
   });
 });

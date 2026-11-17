@@ -1,14 +1,18 @@
-import { canonicalJson } from '@braidlabs/skew';
+import {
+  type MigrationContext,
+  canonicalJson,
+  defaultMigrationContext,
+} from '@braidlabs/skew';
 import type { SduiCatalog } from './catalog.js';
+import { own } from './internal.js';
 import { type CodeSteps, migrate } from './migrate.js';
 import {
   type Screen,
   type SduiAction,
   type SduiNode,
-  isRecord,
-  own,
   screenId,
 } from './model.js';
+import { changedPaths } from './paths.js';
 
 /**
  * A semantic diff of two versions of a screen.
@@ -66,21 +70,24 @@ export type ScreenChange =
       readonly nodeId: string;
       readonly type: string;
     }
-  /** Something about the screen itself: its title, slug, or an authored state. */
+  /** Something about the screen itself: its id, title, slug, or an authored state. */
   | { readonly kind: 'screen'; readonly paths: readonly string[] };
 
-/** A node whose contract version differs between the two sides — the catalog's doing, not an edit. */
+/** Something whose contract version differs between the two sides — the catalog's doing, not an edit. */
 export interface CatalogUpgrade {
+  /** The node concerned. For an action, the node the action is on. */
   readonly nodeId: string;
   readonly type: string;
   readonly from: number;
   readonly to: number;
   /** Fields the upgrade filled with defaults, which nobody wrote. Worth a look. */
   readonly derivedPaths: readonly string[];
+  /** Set when it is an action that was upgraded: its name on the node. */
+  readonly action?: string;
 }
 
 export interface ScreenDiff {
-  /** The two sides are the same content. Nothing else in the result is populated. */
+  /** Nothing differs: neither content nor contract versions. Nothing else is populated. */
   readonly unchanged: boolean;
   readonly beforeId: string;
   readonly afterId: string;
@@ -90,6 +97,8 @@ export interface ScreenDiff {
 
 export interface DiffOptions {
   readonly codeSteps?: CodeSteps;
+  /** The clock `$now` reads. One instant is taken from it and used for both sides. */
+  readonly context?: MigrationContext;
   /** The sides' content addresses, when the caller already has them. */
   readonly beforeId?: string;
   readonly afterId?: string;
@@ -118,7 +127,16 @@ export function diffScreens(
       catalogUpgrades: [],
     };
 
-  const migrateOptions = { codeSteps: options.codeSteps };
+  // Both sides are brought to the newest version at one instant. Read the clock separately for
+  // each and a `$now` field differs between two copies of the same untouched node.
+  const instant = (options.context ?? defaultMigrationContext).now();
+  const migrateOptions = {
+    codeSteps: options.codeSteps,
+    context: { ...(options.context ?? {}), now: () => instant },
+  };
+
+  const changes: ScreenChange[] = [];
+  const catalogUpgrades: CatalogUpgrade[] = [];
 
   /** Props at the catalog's newest version of their contract, so two authoring versions compare. */
   const upgrade = (
@@ -126,7 +144,7 @@ export function diffScreens(
     type: string,
     v: number,
     props: unknown,
-  ): { value: unknown; derived: readonly string[]; pinned?: number } => {
+  ): { value: unknown; pinned?: number } => {
     const contract = own(catalog[kind], type)?.contract;
     if (contract && v <= contract.current) {
       const result = migrate(
@@ -136,11 +154,35 @@ export function diffScreens(
         contract.current,
         migrateOptions,
       );
-      if (result.ok)
-        return { value: result.value, derived: result.derivedPaths };
+      if (result.ok) return { value: result.value };
     }
     // Cannot be brought to a common version, so the version is part of what is compared.
-    return { value: props ?? {}, derived: [], pinned: v };
+    return { value: props ?? {}, pinned: v };
+  };
+
+  const noteUpgrade = (
+    kind: 'components' | 'actions',
+    nodeId: string,
+    type: string,
+    from: number,
+    to: number,
+    props: unknown,
+    action?: string,
+  ): void => {
+    if (from === to) return;
+    const contract = own(catalog[kind], type)?.contract;
+    const step =
+      contract && from < to && to <= contract.current
+        ? migrate(contract, props ?? {}, from, to, migrateOptions)
+        : null;
+    catalogUpgrades.push({
+      nodeId,
+      type,
+      from,
+      to,
+      derivedPaths: step?.ok ? step.derivedPaths : [],
+      ...(action !== undefined ? { action } : {}),
+    });
   };
 
   const comparableAction = (action: SduiAction): unknown => {
@@ -166,22 +208,18 @@ export function diffScreens(
       ...(upgraded.pinned !== undefined ? { v: upgraded.pinned } : {}),
       ...(node.slots
         ? {
-            slots: Object.fromEntries(
-              Object.entries(node.slots).map(([slot, children]) => [
-                slot,
-                children.map(comparableTree),
-              ]),
-            ),
+            slots: Object.entries(node.slots).map(([slot, children]) => [
+              slot,
+              children.map(comparableTree),
+            ]),
           }
         : {}),
       ...(node.actions
         ? {
-            actions: Object.fromEntries(
-              Object.entries(node.actions).map(([name, action]) => [
-                name,
-                comparableAction(action),
-              ]),
-            ),
+            actions: Object.entries(node.actions).map(([name, action]) => [
+              name,
+              comparableAction(action),
+            ]),
           }
         : {}),
       ...(node.visibility ? { visibility: node.visibility } : {}),
@@ -189,6 +227,30 @@ export function diffScreens(
       ...(node.required ? { required: true } : {}),
       ...(node.analytics ? { analytics: node.analytics } : {}),
     };
+  };
+
+  /** Every node in a subtree, by id — so an upgrade inside a fallback or a state is still noticed. */
+  const flatten = (
+    root: SduiNode | undefined,
+    into = new Map<string, SduiNode>(),
+  ): Map<string, SduiNode> => {
+    if (!root) return into;
+    into.set(root.id, root);
+    for (const children of Object.values(root.slots ?? {}))
+      for (const child of children) flatten(child, into);
+    flatten(root.fallback, into);
+    return into;
+  };
+  const noteUpgradesWithin = (
+    was: SduiNode | undefined,
+    now: SduiNode | undefined,
+  ): void => {
+    const previous = flatten(was);
+    for (const [id, node] of flatten(now)) {
+      const old = previous.get(id);
+      if (old && old.type === node.type)
+        noteUpgrade('components', id, node.type, old.v, node.v, old.props);
+    }
   };
 
   const index = (screen: Screen): Map<string, Indexed> => {
@@ -207,13 +269,14 @@ export function diffScreens(
 
   const was = index(before);
   const now = index(after);
-  const changes: ScreenChange[] = [];
-  const catalogUpgrades: CatalogUpgrade[] = [];
 
   const screenPaths: string[] = [];
+  if (before.id !== after.id) screenPaths.push('id');
   if (before.title !== after.title) screenPaths.push('title');
   if (before.slug !== after.slug) screenPaths.push('slug');
   for (const name of ['loading', 'empty', 'error', 'offline'] as const) {
+    const left = before.states?.[name];
+    const right = after.states?.[name];
     const comparable = (
       value: 'auto' | 'system' | SduiNode | undefined,
     ): string =>
@@ -222,8 +285,12 @@ export function diffScreens(
           ? (value ?? null)
           : comparableTree(value),
       );
-    if (comparable(before.states?.[name]) !== comparable(after.states?.[name]))
+    if (comparable(left) !== comparable(right))
       screenPaths.push(`states.${name}`);
+    noteUpgradesWithin(
+      typeof left === 'object' ? left : undefined,
+      typeof right === 'object' ? right : undefined,
+    );
   }
   if (screenPaths.length > 0)
     changes.push({ kind: 'screen', paths: screenPaths });
@@ -231,9 +298,13 @@ export function diffScreens(
   // Children that stayed under the same parent and slot, and changed order: the fewest that
   // explain the new order are the ones that moved, so reordering two cards is one move.
   const reordered = new Set<string>();
-  const containers = new Map<string, { before: string[]; after: string[] }>();
+  const containers = new Map<
+    string,
+    { before: [number, string][]; after: [number, string][] }
+  >();
+  // A JSON pair, not a joined string: an id is any text, and must not be able to imitate the join.
   const containerOf = (place: NodePlace): string =>
-    `${place.parentId}\u0000${place.slot}`;
+    JSON.stringify([place.parentId, place.slot]);
   for (const [id, entry] of was) {
     const other = now.get(id);
     if (!other || containerOf(other.place) !== containerOf(entry.place))
@@ -242,16 +313,19 @@ export function diffScreens(
       before: [],
       after: [],
     };
-    lists.before[entry.place.index] = id;
-    lists.after[other.place.index] = id;
+    lists.before.push([entry.place.index, id]);
+    lists.after.push([other.place.index, id]);
     containers.set(containerOf(entry.place), lists);
   }
   for (const lists of containers.values()) {
-    const a = lists.before.filter((id) => id !== undefined);
-    const b = lists.after.filter((id) => id !== undefined);
-    const kept = new Set(longestCommonSubsequence(a, b));
-    for (const id of b) if (!kept.has(id)) reordered.add(id);
+    const ordered = (list: [number, string][]): string[] =>
+      list.sort((a, b) => a[0] - b[0]).map(([, id]) => id);
+    const kept = stayedInOrder(ordered(lists.before), ordered(lists.after));
+    for (const [, id] of lists.after) if (!kept.has(id)) reordered.add(id);
   }
+
+  const differs = (a: unknown, b: unknown): boolean =>
+    canonicalJson(a ?? null) !== canonicalJson(b ?? null);
 
   for (const [id, entry] of now) {
     const previous = was.get(id);
@@ -278,42 +352,39 @@ export function diffScreens(
         to: entry.place,
       });
     }
+
     if (old.type !== node.type) {
+      // Props of two different components are not comparable; everything else about the node is.
       changes.push({ kind: 'type', nodeId: id, from: old.type, to: node.type });
-      continue;
+    } else {
+      const left = upgrade('components', old.type, old.v, old.props);
+      const right = upgrade('components', node.type, node.v, node.props);
+      noteUpgrade('components', id, node.type, old.v, node.v, old.props);
+      const paths = changedPaths(left.value, right.value);
+      if (paths.length > 0 || left.pinned !== right.pinned)
+        changes.push({ kind: 'content', nodeId: id, type: node.type, paths });
     }
 
-    const left = upgrade('components', old.type, old.v, old.props);
-    const right = upgrade('components', node.type, node.v, node.props);
-    if (old.v !== node.v) {
-      const contract = own(catalog.components, node.type)?.contract;
-      const step =
-        contract && old.v < node.v && node.v <= contract.current
-          ? migrate(contract, old.props ?? {}, old.v, node.v, migrateOptions)
-          : null;
-      catalogUpgrades.push({
-        nodeId: id,
-        type: node.type,
-        from: old.v,
-        to: node.v,
-        derivedPaths: step?.ok ? step.derivedPaths : [],
-      });
-    }
-    const paths = changedPaths(left.value, right.value);
-    if (paths.length > 0 || left.pinned !== right.pinned)
-      changes.push({ kind: 'content', nodeId: id, type: node.type, paths });
-
-    const differs = (a: unknown, b: unknown): boolean =>
-      canonicalJson(a ?? null) !== canonicalJson(b ?? null);
     const actionsOf = (n: SduiNode): unknown =>
-      Object.fromEntries(
-        Object.entries(n.actions ?? {}).map(([name, action]) => [
-          name,
-          comparableAction(action),
-        ]),
-      );
+      Object.entries(n.actions ?? {}).map(([name, action]) => [
+        name,
+        comparableAction(action),
+      ]);
     if (differs(actionsOf(old), actionsOf(node)))
       changes.push({ kind: 'actions', nodeId: id, type: node.type });
+    for (const [name, action] of Object.entries(node.actions ?? {})) {
+      const oldAction = own(old.actions, name);
+      if (oldAction && oldAction.type === action.type)
+        noteUpgrade(
+          'actions',
+          id,
+          action.type,
+          oldAction.v,
+          action.v,
+          oldAction.props,
+          name,
+        );
+    }
     if (differs(old.visibility, node.visibility))
       changes.push({ kind: 'visibility', nodeId: id, type: node.type });
     if (
@@ -323,6 +394,7 @@ export function diffScreens(
       )
     )
       changes.push({ kind: 'fallback', nodeId: id, type: node.type });
+    noteUpgradesWithin(old.fallback, node.fallback);
     if ((old.required ?? false) !== (node.required ?? false))
       changes.push({ kind: 'required', nodeId: id, type: node.type });
     if (differs(old.analytics, node.analytics))
@@ -334,77 +406,45 @@ export function diffScreens(
       changes.push({ kind: 'removed', nodeId: id, type: entry.node.type });
   }
 
-  return { unchanged: false, beforeId, afterId, changes, catalogUpgrades };
+  // Two documents can differ as bytes and not as screens — `props: {}` against no props at all.
+  const unchanged = changes.length === 0 && catalogUpgrades.length === 0;
+  return { unchanged, beforeId, afterId, changes, catalogUpgrades };
 }
 
-/** Dot-paths at which two values differ. Arrays of different lengths differ as a whole. */
-export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
-  if (isRecord(a) && isRecord(b)) {
-    const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
-    return keys.flatMap((key) =>
-      changedPaths(a[key], b[key], prefix ? `${prefix}.${key}` : key),
-    );
-  }
-  if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
-    return a.flatMap((element, position) =>
-      changedPaths(element, b[position], `${prefix}[${position}]`),
-    );
-  }
-  return canonicalJson(a ?? null) === canonicalJson(b ?? null) ? [] : [prefix];
-}
-
-/** Beyond this many table cells an exact answer is not worth its memory. */
-const LCS_CELL_LIMIT = 4_000_000;
-
-function longestCommonSubsequence(
-  a: readonly string[],
-  b: readonly string[],
-): string[] {
-  if (a.length * b.length > LCS_CELL_LIMIT) {
-    // A list this long is data, not a layout. Take a run that is in order in both — not always
-    // the longest, so a few extra nodes may be reported as moved, but never a missed move.
-    const position = new Map(a.map((id, index) => [id, index]));
-    const out: string[] = [];
-    let last = -1;
-    for (const id of b) {
-      const at = position.get(id);
-      if (at !== undefined && at > last) {
-        out.push(id);
-        last = at;
-      }
+/**
+ * Of ids that are in both lists, the largest set that kept its relative order — everything else
+ * moved. The ids are unique and the two lists hold the same ones, so this is the longest
+ * increasing run of "where each id used to be", found in `n log n` with no table: a list of ten
+ * thousand siblings costs the same per element as one of ten.
+ */
+function stayedInOrder(
+  before: readonly string[],
+  after: readonly string[],
+): Set<string> {
+  const position = new Map(before.map((id, index) => [id, index]));
+  const sequence = after.map((id) => position.get(id) as number);
+  // tails[k] is the index in `sequence` of the smallest value ending an increasing run of k + 1.
+  const tails: number[] = [];
+  const previous = new Array<number>(sequence.length).fill(-1);
+  sequence.forEach((value, at) => {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if ((sequence[tails[middle] as number] as number) < value)
+        low = middle + 1;
+      else high = middle;
     }
-    return out;
+    if (low > 0) previous[at] = tails[low - 1] as number;
+    tails[low] = at;
+  });
+  const kept = new Set<string>();
+  for (
+    let at = tails.length > 0 ? (tails[tails.length - 1] as number) : -1;
+    at >= 0;
+    at = previous[at] as number
+  ) {
+    kept.add(after[at] as string);
   }
-  const rows = a.length + 1;
-  const columns = b.length + 1;
-  const table = new Uint32Array(rows * columns);
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      table[i * columns + j] =
-        a[i] === b[j]
-          ? (table[(i + 1) * columns + j + 1] as number) + 1
-          : Math.max(
-              table[(i + 1) * columns + j] as number,
-              table[i * columns + j + 1] as number,
-            );
-    }
-  }
-  const out: string[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      out.push(a[i] as string);
-      i++;
-      j++;
-    } else if (
-      (table[(i + 1) * columns + j] as number) >=
-      (table[i * columns + j + 1] as number)
-    ) {
-      i++;
-    } else {
-      j++;
-    }
-  }
-  return out;
+  return kept;
 }

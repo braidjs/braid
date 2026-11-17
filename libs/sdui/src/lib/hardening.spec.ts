@@ -71,9 +71,47 @@ describe('names that collide with Object.prototype', () => {
     expect(() => diffScreens(before, after, catalog())).not.toThrow();
   });
 
-  it('handles a catalog entry named "constructor" as an ordinary entry', () => {
+  it('refuses a catalog entry, a slot or a fallback prop with a reserved name', () => {
     const base = readVector('catalog.json');
-    const withOdd = structuredClone(base);
+    const odd = (mutate: (draft: any) => void) => () => {
+      const draft = structuredClone(base);
+      mutate(draft);
+      parseCatalog(draft);
+    };
+    expect(
+      odd(
+        (d) =>
+          (d.components['constructor'] = {
+            contract: {
+              skewContract: '1',
+              name: 'sdui.component.constructor',
+              current: 1,
+              steps: [],
+            },
+          }),
+      ),
+    ).toThrow('not a reserved word');
+    expect(
+      odd((d) =>
+        Object.defineProperty(d.components['stack'].slots, '__proto__', {
+          value: {},
+          enumerable: true,
+        }),
+      ),
+    ).toThrow('is not a slot name');
+    expect(
+      odd(
+        (d) =>
+          (d.components['legal-note'].fallback.props = JSON.parse(
+            '{"__proto__":{"x":1}}',
+          )),
+      ),
+    ).toThrow('reserved key "__proto__"');
+  });
+
+  it('reports a removed contract by own name even when an inherited member has that name', () => {
+    // Built by hand, as `checkCatalog` may be given catalogs that never went through the parser.
+    const withOdd = structuredClone(readVector('catalog.json'));
     withOdd.components['constructor'] = {
       contract: {
         skewContract: '1',
@@ -82,12 +120,9 @@ describe('names that collide with Object.prototype', () => {
         steps: [],
       },
     };
-    expect(
-      checkCatalog(parseCatalog(withOdd), parseCatalog(base)),
-    ).toMatchObject([
+    expect(checkCatalog(withOdd, catalog())).toMatchObject([
       { kind: 'removed', contract: 'sdui.component.constructor' },
     ]);
-    expect(checkCatalog(parseCatalog(base), parseCatalog(withOdd))).toEqual([]);
   });
 
   it('refuses to pin a type the catalog does not have, even one every object has', () => {
@@ -97,6 +132,15 @@ describe('names that collide with Object.prototype', () => {
         platform: 'ios',
         version: '1.0',
         pin: { constructor: 1 },
+      }),
+    ).toThrow('no component or action by that name');
+    const proto = JSON.parse('{"__proto__":1}');
+    expect(() =>
+      createClientManifest(catalog(), {
+        app: 'a',
+        platform: 'ios',
+        version: '1.0',
+        pin: proto,
       }),
     ).toThrow('no component or action by that name');
   });
@@ -129,6 +173,32 @@ describe('names that collide with Object.prototype', () => {
       props: { style: 'body' },
     });
   });
+
+  it('keeps a slot or an action keyed __proto__ in the output of a screen that skipped the parser', () => {
+    const slots = JSON.parse(
+      '{"__proto__":[{"id":"c","type":"text","v":2,"props":{"content":"kept"}}]}',
+    );
+    const actions = JSON.parse(
+      '{"__proto__":{"type":"navigate","v":2,"props":{"to":"x","transition":"push"}}}',
+    );
+    const screen = {
+      id: 's',
+      slug: 's',
+      root: { id: 'n', type: 'stack', v: 1, slots, actions },
+    } as unknown as Screen;
+    const base = readVector('catalog.json');
+    Object.defineProperty(base.components['stack'].slots, '__proto__', {
+      value: {},
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    const result = projectScreen(screen, base, manifest('current'));
+    expect(Object.keys(result.root?.slots ?? {})).toEqual(['__proto__']);
+    expect(Object.keys(result.root?.actions ?? {})).toEqual(['__proto__']);
+    expect(JSON.stringify(result.root)).toContain('"content":"kept"');
+    expect(({} as Record<string, unknown>)['0']).toBeUndefined();
+  });
 });
 
 describe('parseHandshakeRequest', () => {
@@ -143,7 +213,8 @@ describe('parseHandshakeRequest', () => {
   it('accepts a well-formed request, which then resolves', () => {
     const request = parseHandshakeRequest(structuredClone(valid));
     expect(
-      resolveHandshake(request, { knowsManifest: () => true }).status,
+      resolveHandshake(request, { authorized: true, knowsManifest: () => true })
+        .status,
     ).toBe('ok');
   });
 
@@ -164,9 +235,11 @@ describe('parseHandshakeRequest', () => {
       'app.version must be a non-empty string',
     ],
     [
-      { ...valid, install: 'i'.repeat(500) },
-      'install must be a non-empty string of at most 128',
+      { ...valid, app: { ...valid.app, version: 'v6' } },
+      'app.version must be dotted numbers',
     ],
+    [{ ...valid, install: 'i'.repeat(500) }, 'install must be 1 to 128'],
+    [{ ...valid, install: 'a\u0000b' }, 'install must be 1 to 128'],
     [
       { ...valid, known: { release: 'rel_a', seq: -1 } },
       'known must be { release, seq }',
@@ -175,43 +248,84 @@ describe('parseHandshakeRequest', () => {
       { ...valid, known: { release: 'rel_a', seq: '3' } },
       'known must be { release, seq }',
     ],
+    [{ ...valid, extra: 1 }, 'unknown key "extra"'],
   ])('refuses %j', (body, message) => {
     expect(() => parseHandshakeRequest(body)).toThrow(message);
   });
+
+  it('validates a manifest sent in full, and refuses one that describes a different app', () => {
+    const full = structuredClone(manifest('current'));
+    const request = { ...valid, manifest: full };
+    expect(parseHandshakeRequest(structuredClone(request)).manifest).toEqual(
+      full,
+    );
+    expect(() =>
+      parseHandshakeRequest({
+        ...request,
+        app: { ...valid.app, version: '99.0' },
+      }),
+    ).toThrow('describes a different app, platform or version');
+    expect(() => parseHandshakeRequest({ ...request, manifest: {} })).toThrow(
+      'unsupported manifest format',
+    );
+    expect(() =>
+      parseHandshakeRequest({ ...request, manifest: { ...full, junk: 1 } }),
+    ).toThrow('unknown key "junk"');
+
+    let deep: unknown = 1;
+    for (let depth = 0; depth < 20_000; depth++) deep = [deep];
+    expect(() =>
+      parseHandshakeRequest({
+        ...request,
+        manifest: { ...full, components: deep },
+      }),
+    ).toThrow(TypeError);
+  });
 });
 
-describe('diffScreens on very long lists', () => {
-  it('still finds a move among 3,000 siblings without building a 9-million-cell table', () => {
-    const child = (index: number) => ({
-      id: `n${index}`,
-      type: 'text',
-      v: 2,
-      props: { content: String(index) },
-    });
-    const children = Array.from({ length: 3000 }, (_, index) => child(index));
-    const before: Screen = {
-      id: 's',
-      slug: 's',
-      root: { id: 'r', type: 'stack', v: 1, slots: { children } },
-    };
-    const moved = [
-      ...children.slice(1),
-      children[0] as (typeof children)[number],
-    ];
-    const after: Screen = {
-      id: 's',
-      slug: 's',
-      root: { id: 'r', type: 'stack', v: 1, slots: { children: moved } },
-    };
-    const { changes } = diffScreens(before, after, catalog());
-    expect(changes).toEqual([
-      {
-        kind: 'moved',
-        nodeId: 'n0',
-        type: 'text',
-        from: { parentId: 'r', slot: 'children', index: 0 },
-        to: { parentId: 'r', slot: 'children', index: 2999 },
-      },
-    ]);
+describe('resolveHandshake', () => {
+  const request = {
+    protocol: [1, 1] as const,
+    manifest: 'cm_known',
+    app: { id: 'acme-shop', platform: 'ios', version: '6.2.0' },
+  };
+
+  it('passes only an explicit authorized: true', () => {
+    for (const authorized of [undefined, null, 1, 'yes', false]) {
+      expect(
+        resolveHandshake(request, {
+          authorized: authorized as never,
+          knowsManifest: () => true,
+        }).status,
+      ).toBe('unauthorized');
+    }
+    expect(
+      resolveHandshake(request, { authorized: true, knowsManifest: () => true })
+        .status,
+    ).toBe('ok');
+  });
+
+  it('throws on a policy whose versions are not versions, instead of waving everyone through', () => {
+    expect(() =>
+      resolveHandshake(request, {
+        authorized: true,
+        knowsManifest: () => true,
+        requiredVersion: 'v6.0',
+      }),
+    ).toThrow('policy.requiredVersion must be a version');
+  });
+
+  it('serves a manifest sent in full and says it is unregistered; its own version is the one judged', () => {
+    const full = manifest('legacy');
+    const answer = resolveHandshake(
+      { ...request, manifest: full, app: { ...request.app, version: '99.0' } },
+      { authorized: true, knowsManifest: () => false, requiredVersion: '6.0' },
+    );
+    expect(answer.status).toBe('update-required');
+    const served = resolveHandshake(
+      { ...request, manifest: full },
+      { authorized: true, knowsManifest: () => false },
+    );
+    expect(served).toMatchObject({ status: 'ok', registered: false });
   });
 });

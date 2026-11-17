@@ -1,6 +1,6 @@
 {
   "name": "moved",
-  "description": "Two cards swap places. One move, not a removal and an addition.",
+  "description": "Two cards swap places. One move, not a removal and an addition. Of the two, the one reported is the one that now comes first.",
   "catalog": "catalog.json",
   "before": {
     "id": "screen-picks",
@@ -105,17 +105,17 @@
     "changes": [
       {
         "kind": "moved",
-        "nodeId": "n_shell",
+        "nodeId": "n_runner",
         "type": "product-card",
         "from": {
           "parentId": "n_root",
           "slot": "children",
-          "index": 1
+          "index": 2
         },
         "to": {
           "parentId": "n_root",
           "slot": "children",
-          "index": 2
+          "index": 1
         }
       }
     ],

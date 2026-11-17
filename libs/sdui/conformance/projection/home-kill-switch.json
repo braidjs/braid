@@ -144,6 +144,14 @@
             "props": {
               "text": "Prices include tax."
             }
+          },
+          {
+            "id": "n_returns",
+            "type": "legal-note",
+            "v": 2,
+            "props": {
+              "text": "Free returns within 30 days."
+            }
           }
         ]
       }
@@ -282,6 +290,16 @@
       },
       {
         "nodeId": "n_legal",
+        "type": "legal-note",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_returns",
         "type": "legal-note",
         "outcome": "exact",
         "rung": 1,

@@ -128,7 +128,7 @@ export function resolveSessionState(facts: SessionFacts): {
     case 'unauthorized':
       return {
         state: 'token-expired',
-        source: facts.hasCache ? 'cache' : 'bundled',
+        source: facts.hasCache && !facts.manifestChanged ? 'cache' : 'bundled',
       };
   }
 
@@ -186,6 +186,14 @@ export interface ScreenFacts {
   readonly renderFailed?: boolean;
 }
 
+const SEMANTIC_FAILURES = [
+  'not-found',
+  'gone',
+  'forbidden',
+  'not-yet-live',
+  'expired',
+] as const satisfies readonly ScreenFailure[];
+
 const TRANSPORT_FAILURES: Partial<Record<ScreenFailure, ScreenState>> = {
   network: 'error-network',
   server: 'error-server',
@@ -215,13 +223,25 @@ export function resolveScreenState(facts: ScreenFacts): {
         state: 'decode-error',
         source: facts.cached ? 'cache' : 'bundled',
       };
-    const transport = TRANSPORT_FAILURES[failure];
+    const transport = Object.prototype.hasOwnProperty.call(
+      TRANSPORT_FAILURES,
+      failure,
+    )
+      ? TRANSPORT_FAILURES[failure]
+      : undefined;
     if (transport)
       return facts.cached
         ? { state: 'loaded-stale', source: 'cache' }
         : { state: transport, source: 'system-state' };
     if (failure === 'moved') return { state: 'moved', source: 'server' };
-    return { state: failure as ScreenState, source: 'system-state' };
+    // A failure this client does not know is treated as the server's error, and never as a reason
+    // to show the cached copy: only a failure known to be about transport may do that.
+    return {
+      state: (SEMANTIC_FAILURES as readonly string[]).includes(failure)
+        ? (failure as ScreenState)
+        : 'error-server',
+      source: 'system-state',
+    };
   }
 
   if (
@@ -343,8 +363,13 @@ const ACTION_FAILURES: Record<
 
 export function resolveActionState(facts: ActionFacts): ActionState {
   if (!facts.supported) return 'unsupported';
-  if (facts.phase === 'failed')
-    return ACTION_FAILURES[facts.failure ?? 'retryable'];
+  if (facts.phase === 'failed') {
+    const failure = facts.failure ?? 'retryable';
+    // A failure this client does not know is not one it may retry on its own.
+    return Object.prototype.hasOwnProperty.call(ACTION_FAILURES, failure)
+      ? ACTION_FAILURES[failure]
+      : 'failed-terminal';
+  }
   if (facts.phase === 'pending')
     return facts.queued ? 'queued-offline' : 'pending';
   if (facts.phase === 'confirming') return 'confirming';

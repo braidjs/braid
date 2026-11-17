@@ -1,8 +1,10 @@
-import { compareVersions } from './conditions.js';
+import { compareVersions, parseVersion } from './conditions.js';
+import { isRecord } from './internal.js';
 import {
   type ClientManifest,
   SDUI_PROTOCOL_VERSION,
   manifestFingerprint,
+  parseClientManifest,
 } from './manifest.js';
 import type { ApplyBoundary } from './rollout.js';
 
@@ -55,14 +57,23 @@ export interface HandshakePolicy {
   readonly protocol?: readonly [min: number, max: number];
   /** The global kill switch for this app and environment. */
   readonly maintenance?: boolean;
-  /** `false` when the delivery or user token was rejected. */
-  readonly authorized?: boolean;
+  /**
+   * Whether the caller may be served. Required, and only `true` passes: a delivery API with no
+   * tokens says so by passing `true`, rather than by leaving a field out.
+   */
+  readonly authorized: boolean;
   /** The floor. Below it a binary is retired: it is told to update and is served nothing. */
   readonly requiredVersion?: string;
   /** Below this a binary still works, and is nudged. */
   readonly recommendedVersion?: string;
   /** Whether a fingerprint is registered. */
   readonly knowsManifest: (fingerprint: string) => boolean;
+  /**
+   * The app version in the *registered* manifest for this fingerprint, when the caller has it.
+   * It is used in place of what the request claims: a device reports its own version, and one
+   * that wanted past the floor would report a high one.
+   */
+  readonly registeredVersion?: string;
   /**
    * The share of this manifest's nodes that render degraded or as a fallback in the release it
    * would be served, 0–1, when the caller has it. Above `degradedThreshold` the device is nudged
@@ -80,6 +91,11 @@ export interface HandshakeResolution {
   readonly protocol?: number;
   /** The fingerprint the device is known by, once it is known. */
   readonly manifest?: string;
+  /**
+   * Whether that fingerprint was registered by a release job. `false` for a manifest a device
+   * sent in full that nobody registered: servable, but its capabilities are its own word.
+   */
+  readonly registered?: boolean;
   readonly update?: {
     readonly required?: string;
     readonly recommended?: string;
@@ -94,26 +110,42 @@ export interface HandshakeResolution {
  * 3. **Authorization.**
  * 4. **The floor** before the manifest: a retired binary is told to update, not asked to upload a
  *    manifest for a server that will never render for it. This is skew's `retired` — a policy
- *    outcome, not an error — and the screen it leads to is native, never server-driven.
+ *    outcome, not an error — and the screen it leads to is native, never server-driven. A version
+ *    that cannot be read is below any floor.
  * 5. **Unknown manifest** — the device resends it in full.
  * 6. **Recommended update**, then `ok`.
+ *
+ * Throws `TypeError` for a policy that is itself malformed (a floor that is not a version): that
+ * is a deployment mistake, and answering every device `ok` because of it would hide it.
  */
 export function resolveHandshake(
   request: HandshakeRequest,
   policy: HandshakePolicy,
 ): HandshakeResolution {
+  for (const key of [
+    'requiredVersion',
+    'recommendedVersion',
+    'registeredVersion',
+  ] as const) {
+    if (policy[key] !== undefined && !parseVersion(policy[key])) {
+      throw new TypeError(
+        `sdui handshake: policy.${key} must be a version of dotted numbers, got ${JSON.stringify(policy[key])}`,
+      );
+    }
+  }
+
   const [serverMin, serverMax] = policy.protocol ?? [
     SDUI_PROTOCOL_VERSION,
     SDUI_PROTOCOL_VERSION,
   ];
   const [clientMin, clientMax] = request.protocol;
   const protocol = Math.min(serverMax, clientMax);
-  if (protocol < Math.max(serverMin, clientMin))
+  if (!(protocol >= Math.max(serverMin, clientMin)))
     return { status: 'protocol-unsupported', httpStatus: 426 };
 
   if (policy.maintenance)
     return { status: 'maintenance', httpStatus: 503, protocol };
-  if (policy.authorized === false)
+  if (policy.authorized !== true)
     return { status: 'unauthorized', httpStatus: 401, protocol };
 
   const update = {
@@ -124,35 +156,39 @@ export function resolveHandshake(
       ? { recommended: policy.recommendedVersion }
       : {}),
   };
-  if (
-    policy.requiredVersion !== undefined &&
-    compareVersions(request.app.version, policy.requiredVersion) < 0
-  ) {
+  const version =
+    policy.registeredVersion ??
+    (typeof request.manifest === 'string'
+      ? request.app.version
+      : request.manifest.version);
+  const below = (bound: string | undefined): boolean => {
+    if (bound === undefined) return false;
+    const order = compareVersions(version, bound);
+    return order === null || order < 0;
+  };
+  if (below(policy.requiredVersion))
     return { status: 'update-required', httpStatus: 200, protocol, update };
-  }
 
   const fingerprint =
     typeof request.manifest === 'string'
       ? request.manifest
       : manifestFingerprint(request.manifest);
-  if (
-    typeof request.manifest === 'string' &&
-    !policy.knowsManifest(fingerprint)
-  ) {
+  const registered = policy.knowsManifest(fingerprint) === true;
+  if (typeof request.manifest === 'string' && !registered)
     return { status: 'manifest-unknown', httpStatus: 409, protocol };
-  }
 
-  const behind =
-    policy.recommendedVersion !== undefined &&
-    compareVersions(request.app.version, policy.recommendedVersion) < 0;
   const degraded =
-    policy.degradedShare !== undefined &&
+    typeof policy.degradedShare === 'number' &&
     policy.degradedShare > (policy.degradedThreshold ?? 0.25);
   return {
-    status: behind || degraded ? 'update-recommended' : 'ok',
+    status:
+      below(policy.recommendedVersion) || degraded
+        ? 'update-recommended'
+        : 'ok',
     httpStatus: 200,
     protocol,
     manifest: fingerprint,
+    registered,
     ...(Object.keys(update).length > 0 ? { update } : {}),
   };
 }
@@ -172,15 +208,20 @@ export interface PointerDecision {
   /**
    * - `adopt` — newer than anything seen: follow it.
    * - `keep` — the same move the device already has.
-   * - `ignore-stale` — older than what the device has seen: a lagging replica. Do not go back.
+   * - `ignore-stale` — older than what the device has seen, or not a pointer at all. Do not move.
    * - `conflict` — the same `seq` naming a different release. Should not happen; keep and report.
    */
   readonly action: 'adopt' | 'keep' | 'ignore-stale' | 'conflict';
   /** Whether adopting changes which release the device shows. */
   readonly changed: boolean;
-  /** The server moved the environment *back* on purpose. */
+  /** The server moved the environment *back* on purpose, and this device has to move with it. */
   readonly rolledBack: boolean;
 }
+
+const isSeq = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0;
+const isRelease = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 128;
 
 /**
  * Tells a rollback from a stale replica.
@@ -190,14 +231,25 @@ export interface PointerDecision {
  * cannot tell them apart — but a rollback is a *new* move, so it carries a *higher* sequence
  * number, and a lagging replica by definition carries a lower one. So a device never accepts a
  * lower `seq` than it has seen, and always accepts a higher one, whatever it points at.
+ *
+ * An offered pointer that is not well formed — a `seq` that is missing, fractional, a string — is
+ * never adopted. This runs on a device against whatever a network handed it.
  */
 export function decidePointer(
   known: { readonly release: string; readonly seq: number } | null | undefined,
   offered: ReleasePointer,
 ): PointerDecision {
-  if (!known) return { action: 'adopt', changed: true, rolledBack: false };
-  if (offered.seq < known.seq)
-    return { action: 'ignore-stale', changed: false, rolledBack: false };
+  const stay: PointerDecision = {
+    action: 'ignore-stale',
+    changed: false,
+    rolledBack: false,
+  };
+  if (!isRecord(offered) || !isSeq(offered.seq) || !isRelease(offered.release))
+    return stay;
+  // A device whose own record is unreadable has seen nothing it can compare against.
+  if (!known || !isSeq(known.seq) || !isRelease(known.release))
+    return { action: 'adopt', changed: true, rolledBack: false };
+  if (offered.seq < known.seq) return stay;
   const changed = offered.release !== known.release;
   if (offered.seq === known.seq)
     return {
@@ -205,25 +257,61 @@ export function decidePointer(
       changed: false,
       rolledBack: false,
     };
-  return { action: 'adopt', changed, rolledBack: offered.kind === 'rollback' };
+  return {
+    action: 'adopt',
+    changed,
+    rolledBack: changed && offered.kind === 'rollback',
+  };
 }
+
+/** Validates an untrusted value as a release pointer. Throws `TypeError` naming the problem. */
+export function parseReleasePointer(raw: unknown): ReleasePointer {
+  const fail = (message: string): never => {
+    throw new TypeError(`sdui pointer: ${message}`);
+  };
+  if (!isRecord(raw)) return fail('must be an object');
+  if (!isRelease(raw['release']))
+    fail('release must be a non-empty string of at most 128 characters');
+  if (!isSeq(raw['seq'])) fail('seq must be a non-negative integer');
+  if (
+    raw['kind'] !== undefined &&
+    !['promote', 'rollout', 'rollback'].includes(raw['kind'] as string)
+  )
+    fail('kind must be promote, rollout or rollback');
+  if (
+    raw['apply'] !== undefined &&
+    !['next-launch', 'next-navigation', 'immediate'].includes(
+      raw['apply'] as string,
+    )
+  )
+    fail('apply must be next-launch, next-navigation or immediate');
+  return raw as unknown as ReleasePointer;
+}
+
+const INSTALL = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /**
  * Validates an untrusted handshake body. A handshake is the first thing an unauthenticated device
  * sends, so this is the outermost boundary of the whole system: it throws `TypeError` naming the
  * first problem, and nothing malformed gets as far as {@link resolveHandshake}.
  *
- * A manifest sent in full is validated separately, with `parseClientManifest`.
+ * A manifest sent in full is validated here too, and must describe the app the request says it
+ * is: a device cannot present one binary's capabilities under another's name.
  */
 export function parseHandshakeRequest(raw: unknown): HandshakeRequest {
   const fail = (message: string): never => {
     throw new TypeError(`sdui handshake: ${message}`);
   };
-  const isObject = (value: unknown): value is Record<string, unknown> =>
-    typeof value === 'object' && value !== null && !Array.isArray(value);
   const isText = (value: unknown, max: number): value is string =>
     typeof value === 'string' && value.length > 0 && value.length <= max;
-  if (!isObject(raw)) return fail('body must be an object');
+  if (!isRecord(raw)) return fail('body must be an object');
+  const unknown = Object.keys(raw).find(
+    (key) =>
+      !['protocol', 'manifest', 'app', 'install', 'known', 'device'].includes(
+        key,
+      ),
+  );
+  if (unknown !== undefined) fail(`unknown key "${unknown.slice(0, 40)}"`);
 
   const protocol = raw['protocol'];
   if (
@@ -234,31 +322,48 @@ export function parseHandshakeRequest(raw: unknown): HandshakeRequest {
   ) {
     fail('protocol must be [min, max], two positive integers in order');
   }
-  const manifest = raw['manifest'];
-  if (!isText(manifest, 128) && !isObject(manifest))
-    fail('manifest must be a fingerprint or a manifest document');
 
   const app = raw['app'];
-  if (!isObject(app)) return fail('app must be an object');
+  if (!isRecord(app)) return fail('app must be an object');
   for (const key of ['id', 'platform', 'version'] as const) {
     if (!isText(app[key], 128))
       fail(`app.${key} must be a non-empty string of at most 128 characters`);
   }
+  if (!parseVersion(app['version']))
+    fail('app.version must be dotted numbers, like "5.8.0"');
   if (app['build'] !== undefined && !Number.isSafeInteger(app['build']))
     fail('app.build must be an integer');
-  if (raw['install'] !== undefined && !isText(raw['install'], 128))
-    fail('install must be a non-empty string of at most 128 characters');
 
+  const manifest = raw['manifest'];
+  if (isRecord(manifest)) {
+    const parsed = parseClientManifest(manifest);
+    if (
+      parsed.app !== app['id'] ||
+      parsed.platform !== app['platform'] ||
+      parsed.version !== app['version']
+    ) {
+      fail(
+        'manifest describes a different app, platform or version than the request does',
+      );
+    }
+  } else if (!isText(manifest, 128)) {
+    fail('manifest must be a fingerprint or a manifest document');
+  }
+
+  if (
+    raw['install'] !== undefined &&
+    (typeof raw['install'] !== 'string' || !INSTALL.test(raw['install']))
+  ) {
+    fail('install must be 1 to 128 letters, digits, ".", "_", ":" or "-"');
+  }
   const known = raw['known'];
   if (known !== undefined && known !== null) {
     if (
-      !isObject(known) ||
-      !isText(known['release'], 128) ||
-      !Number.isSafeInteger(known['seq']) ||
-      (known['seq'] as number) < 0
-    ) {
+      !isRecord(known) ||
+      !isRelease(known['release']) ||
+      !isSeq(known['seq'])
+    )
       fail('known must be { release, seq } with a non-negative integer seq');
-    }
   }
   return raw as unknown as HandshakeRequest;
 }

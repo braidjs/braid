@@ -346,7 +346,6 @@ describe('projectScreen: the rest of the ladder', () => {
       id: 'n_video',
       type: PLACEHOLDER_TYPE,
       v: 1,
-      props: { for: 'video-tile' },
     });
     expect(reportOf(result, 'n_video')).toMatchObject({
       outcome: 'fallback-catalog',
@@ -588,8 +587,8 @@ describe('projectScreen: versions in every direction', () => {
 
 describe('applyVisibility', () => {
   const projected = () =>
-    projectScreen(screen('home'), catalog(), manifest('current')).root;
-  const ids = (root: ReturnType<typeof projected>) =>
+    projectScreen(screen('home'), catalog(), manifest('current'));
+  const ids = (root: ReturnType<typeof applyVisibility>['root']) =>
     root?.slots?.['children']?.map((child) => child.id) ?? [];
 
   it('prunes a node whose condition is false and strips every condition from what is sent', () => {
@@ -638,6 +637,6 @@ describe('applyVisibility', () => {
       id: 'n_fb',
       visibility: { audience: 'members' },
     });
-    expect(applyVisibility(result.root, { audiences: [] }).root).toBeNull();
+    expect(applyVisibility(result, { audiences: [] }).root).toBeNull();
   });
 });
