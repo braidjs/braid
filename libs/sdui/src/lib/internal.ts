@@ -94,54 +94,101 @@ export function notJson(value: unknown): string | null {
   }
 }
 
-const SCALAR = Object.freeze({ height: 0, size: 1 });
-const TOO = Object.freeze({ depth: 'depth', values: 'values' } as const);
+/** What a value comes to, written out. */
+export interface Measure {
+  /** Scalars, arrays and objects. */
+  readonly values: number;
+  /** Characters in its strings and its keys. */
+  readonly characters: number;
+}
+
+export interface MeasureLimits {
+  readonly depth: number;
+  readonly values: number;
+  readonly characters: number;
+}
+
+type Over = 'depth' | 'values' | 'characters';
+interface Measured {
+  readonly height: number;
+  readonly values: number;
+  readonly characters: number;
+}
+const NOTHING: Measured = Object.freeze({
+  height: 0,
+  values: 1,
+  characters: 0,
+});
 
 /**
- * Whether a value is more than `limits` allow: nested more than `depth` levels, or holding more
- * than `values` scalars, arrays and objects once written out — which is how it is hashed, compared
- * and sent. Says which, or `null`.
+ * What a value comes to once written out — which is how it is hashed, compared and sent — or
+ * which of `limits` it is over: nested more than `depth` levels, more than `values` scalars,
+ * arrays and objects, or more than `characters` in its strings and keys.
  *
- * Each distinct object is measured once. Steps can build a value that holds one object in many
- * places, and a graph like that a few dozen levels deep has more paths through it than can ever
- * be walked; measured this way the cost is the number of objects, not the number of paths, and
- * the descent stops at `depth` however deep the value goes. A cycle counts as too deep.
+ * Each distinct object is measured once. Steps can build a value that holds one object, or one
+ * long string, in many places; a graph like that a few dozen levels deep has more paths through
+ * it than can ever be walked, and is larger written out than memory. Measured this way the cost
+ * is the number of objects, not the number of paths, and the descent stops at `depth` however
+ * deep the value goes. A cycle counts as too deep.
  */
-export function outgrows(
-  value: unknown,
-  limits: { readonly depth: number; readonly values: number },
-): 'depth' | 'values' | null {
-  const measured = new Map<object, { height: number; size: number }>();
-  const measure = (
-    inner: unknown,
-    room: number,
-  ): { height: number; size: number } => {
-    if (typeof inner !== 'object' || inner === null) return SCALAR;
+export function measure(value: unknown, limits: MeasureLimits): Measure | Over {
+  const measured = new Map<object, Measured>();
+  const visit = (inner: unknown, room: number): Measured => {
+    if (typeof inner === 'string')
+      return { height: 0, values: 1, characters: inner.length };
+    if (typeof inner !== 'object' || inner === null) return NOTHING;
     const known = measured.get(inner);
     if (known !== undefined) {
-      if (known.height > room) throw TOO.depth;
+      if (known.height > room) throw new TooMuch('depth');
       return known;
     }
-    if (room <= 0) throw TOO.depth;
+    if (room <= 0) throw new TooMuch('depth');
     let height = 1;
-    let size = 1;
-    for (const child of Array.isArray(inner) ? inner : Object.values(inner)) {
-      const below = measure(child, room - 1);
+    let values = 1;
+    let characters = 0;
+    const add = (child: unknown): void => {
+      const below = visit(child, room - 1);
       height = Math.max(height, below.height + 1);
-      size += below.size;
-      if (size > limits.values) throw TOO.values;
-    }
-    const result = { height, size };
+      values += below.values;
+      characters += below.characters;
+      // Stops a walk of something enormous early. Characters need no such stop: they are
+      // counted, not walked, and are checked once at the end.
+      if (values > limits.values) throw new TooMuch('values');
+    };
+    if (Array.isArray(inner)) for (const child of inner) add(child);
+    else
+      for (const [key, child] of Object.entries(inner)) {
+        characters += key.length;
+        add(child);
+      }
+    const result = { height, values, characters };
     measured.set(inner, result);
     return result;
   };
   try {
-    measure(value, limits.depth);
-    return null;
+    const whole = visit(value, limits.depth);
+    if (whole.characters > limits.characters) return 'characters';
+    return { values: whole.values, characters: whole.characters };
   } catch (reason) {
-    if (reason === TOO.depth || reason === TOO.values) return reason;
+    if (reason instanceof TooMuch) return reason.over;
     throw reason;
   }
+}
+
+class TooMuch {
+  constructor(readonly over: Over) {}
+}
+
+/** {@link measure}, when only the verdict matters: which limit a value is over, or `null`. */
+export function outgrows(
+  value: unknown,
+  limits: Omit<MeasureLimits, 'characters'> & { readonly characters?: number },
+): Over | null {
+  const result = measure(value, {
+    characters: Number.POSITIVE_INFINITY,
+    ...limits,
+  });
+  return typeof result === 'string' ? result : null;
 }
 
 /** Whether a dotted path has a reserved segment: `a.__proto__.b`, `constructor`. */

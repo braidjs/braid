@@ -113,13 +113,19 @@ export const CATALOG_LIMITS = Object.freeze({
   depth: 64,
   /** Scalars, arrays and objects in the whole document. */
   values: 1_000_000,
-  /** Segments in any one path an op names: `a.b.c` is three. */
+  /** Characters in all its strings and keys. */
+  characters: 8_000_000,
+  /** Segments in any one path an op or a fallback names: `a.b.c` is three. */
   pathSegments: 32,
 });
 
+/**
+ * Whether a path has more segments than the limit. Every separator counts, so a path of nothing
+ * but dots is as long as it looks; a pointer's leading "/" is not a segment.
+ */
 const tooLong = (path: unknown): path is string =>
   typeof path === 'string' &&
-  path.split(/[./]/).filter((segment) => segment !== '').length >
+  path.split(/[./]/).length - (path.startsWith('/') ? 1 : 0) >
     CATALOG_LIMITS.pathSegments;
 
 /** A `$from` anywhere under a value that reads a path longer than the limit. */
@@ -210,7 +216,9 @@ export function parseCatalog(raw: unknown): SduiCatalog {
     fail(
       outgrown === 'depth'
         ? `the document nests more than ${CATALOG_LIMITS.depth} levels deep`
-        : `the document holds more than ${CATALOG_LIMITS.values} values`,
+        : outgrown === 'values'
+          ? `the document holds more than ${CATALOG_LIMITS.values} values`
+          : `the document holds more than ${CATALOG_LIMITS.characters} characters`,
     );
   // Then that it is data, so that nothing below meets a hole where a step should be, or a value
   // it cannot print.
@@ -338,6 +346,10 @@ export function parseCatalog(raw: unknown): SduiCatalog {
               )
                 fail(
                   `${where}: fallback prop "${prop}" must be { "$from": "<path>" } and nothing else`,
+                );
+              if (tooLong(spec['$from']))
+                fail(
+                  `${where}: fallback prop "${prop}" reads a path of more than ${CATALOG_LIMITS.pathSegments} segments`,
                 );
               if (hasReservedSegment(spec['$from'] as string))
                 fail(

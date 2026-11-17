@@ -14,7 +14,7 @@ import {
   hiddenByFlagsAlone,
 } from './conditions.js';
 import type { ClientManifest } from './manifest.js';
-import { type CodeSteps, migrate } from './migrate.js';
+import { type CodeSteps, MIGRATION_ALLOWANCE, migrate } from './migrate.js';
 import {
   type Condition,
   type Screen,
@@ -224,6 +224,8 @@ export function projectScreen(
   const migrateOptions = {
     codeSteps: options.codeSteps,
     context: { ...(options.context ?? {}), now: () => instant },
+    // One allowance for every migration of this projection — see `MIGRATION_ALLOWANCE`.
+    allowance: { ...MIGRATION_ALLOWANCE },
   };
 
   const isRequired = (

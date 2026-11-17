@@ -111,9 +111,22 @@ export const SCREEN_LIMITS = Object.freeze({
   values: 200_000,
   /** Characters in any one string. */
   string: 100_000,
+  /** Characters in all the strings and keys of all props together. */
+  characters: 4_000_000,
 });
 
 type Fail = (message: string) => never;
+interface Budget {
+  values: number;
+  characters: number;
+}
+const spend = (budget: Budget, characters: number, fail: Fail): void => {
+  budget.characters -= characters;
+  if (budget.characters < 0)
+    fail(
+      `the document's strings and keys come to more than ${SCREEN_LIMITS.characters} characters`,
+    );
+};
 
 /**
  * Walks an arbitrary JSON value an editor supplied — props, a flag's `is` — and refuses what
@@ -124,7 +137,7 @@ function checkValue(
   value: unknown,
   where: string,
   depth: number,
-  budget: { values: number },
+  budget: Budget,
   fail: Fail,
 ): void {
   if (--budget.values < 0)
@@ -134,6 +147,7 @@ function checkValue(
       fail(
         `${where} is a string of more than ${SCREEN_LIMITS.string} characters`,
       );
+    spend(budget, value.length, fail);
     return;
   }
   const problem = notJson(value);
@@ -151,6 +165,7 @@ function checkValue(
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
+    spend(budget, key.length, fail);
     // A key with path punctuation in it could not be told, in a report or a critical path, from
     // a nesting or a list index.
     if (/[.[\]]/.test(key))
@@ -177,7 +192,7 @@ function checkCondition(
   value: unknown,
   where: string,
   depth: number,
-  budget: { values: number },
+  budget: Budget,
   fail: Fail,
 ): void {
   if (--budget.values < 0)
@@ -288,7 +303,7 @@ export function parseCondition(raw: unknown): Condition {
     raw,
     'condition',
     0,
-    { values: SCREEN_LIMITS.values },
+    { values: SCREEN_LIMITS.values, characters: SCREEN_LIMITS.characters },
     (message) => {
       throw new TypeError(`sdui condition: ${message}`);
     },
@@ -323,7 +338,10 @@ export function parseScreen(raw: unknown): Screen {
     fail('title must be a string of at most 512 characters');
 
   const seen = new Set<string>();
-  const budget = { values: SCREEN_LIMITS.values };
+  const budget = {
+    values: SCREEN_LIMITS.values,
+    characters: SCREEN_LIMITS.characters,
+  };
 
   const checkProps = (props: unknown, where: string): void => {
     if (props === undefined) return;

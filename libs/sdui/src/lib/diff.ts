@@ -5,7 +5,7 @@ import {
 } from '@braidlabs/skew';
 import type { SduiCatalog } from './catalog.js';
 import { own } from './internal.js';
-import { type CodeSteps, migrate } from './migrate.js';
+import { type CodeSteps, MIGRATION_ALLOWANCE, migrate } from './migrate.js';
 import {
   type Screen,
   type SduiAction,
@@ -133,6 +133,9 @@ export function diffScreens(
   const migrateOptions = {
     codeSteps: options.codeSteps,
     context: { ...(options.context ?? {}), now: () => instant },
+    // One allowance for every migration of this diff — see `MIGRATION_ALLOWANCE`. Props that
+    // cannot be brought to the newest version for want of it are compared as authored.
+    allowance: { ...MIGRATION_ALLOWANCE },
   };
 
   const changes: ScreenChange[] = [];

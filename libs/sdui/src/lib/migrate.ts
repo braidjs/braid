@@ -9,7 +9,7 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
-import { outgrows } from './internal.js';
+import { measure } from './internal.js';
 import { type Path, formatPath, lostSegments } from './paths.js';
 
 /**
@@ -24,6 +24,32 @@ export const MIGRATED_DEPTH_LIMIT = 64;
  * catalog; nothing downstream should be handed the result.
  */
 export const MIGRATED_VALUE_LIMIT = 400_000;
+
+/** How many characters a migrated payload's strings and keys may come to: twice a screen's. */
+export const MIGRATED_CHARACTER_LIMIT = 8_000_000;
+
+/**
+ * What the migrations of one projection, or one diff, may produce between them.
+ *
+ * The limits above are per payload, and a screen has thousands. A catalog that makes each of them
+ * a hundred times larger stays inside every one of those limits and still asks for more memory
+ * than there is. So each result is counted against an allowance shared by the whole call; once it
+ * is spent, the migrations that remain fail like a step that failed, and their nodes go down the
+ * ladder.
+ *
+ * Forty times a screen at its limits in values, and eight times in characters: a projection
+ * migrates each node a handful of times, and traces its losses within `TRACE_BUDGET`.
+ */
+export const MIGRATION_ALLOWANCE = Object.freeze({
+  values: 8_000_000,
+  characters: 32_000_000,
+});
+
+/** A {@link MIGRATION_ALLOWANCE} being spent. Mutable: every migration given it draws on it. */
+export interface MigrationAllowance {
+  values: number;
+  characters: number;
+}
 
 /**
  * Moves one payload between two versions of one contract.
@@ -41,6 +67,12 @@ export interface MigrateOptions {
   readonly codeSteps?: CodeSteps;
   /** The clock `$now` reads. Pin it and a migration is a pure function of its inputs. */
   readonly context?: MigrationContext;
+  /**
+   * What this migration and the others sharing the object may still produce. Drawn down by each
+   * result; a migration that finds it spent fails. Without one there is only the limit on each
+   * payload.
+   */
+  readonly allowance?: MigrationAllowance;
 }
 
 export type MigrateResult =
@@ -120,6 +152,13 @@ function walk(
   options: MigrateOptions,
   ctx: MigrationContext,
 ): Walk {
+  const allowance = options.allowance;
+  if (allowance && (allowance.values <= 0 || allowance.characters <= 0))
+    return {
+      ok: false,
+      reason: 'threw',
+      message: `"${doc.name}" v${from} → v${to} was not run: the migrations of this call have produced all they may`,
+    };
   const derived = new Set<string>();
   let current = value;
   const up = to > from;
@@ -176,20 +215,27 @@ function walk(
       };
     }
   }
-  const outgrown = outgrows(current, {
+  const size = measure(current, {
     depth: MIGRATED_DEPTH_LIMIT,
     values: MIGRATED_VALUE_LIMIT,
+    characters: MIGRATED_CHARACTER_LIMIT,
   });
-  if (outgrown !== null)
+  if (typeof size === 'string')
     return {
       ok: false,
       reason: 'threw',
       message: `"${doc.name}" v${from} → v${to} gives a value ${
-        outgrown === 'depth'
+        size === 'depth'
           ? `nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`
-          : `of more than ${MIGRATED_VALUE_LIMIT} values`
+          : size === 'values'
+            ? `of more than ${MIGRATED_VALUE_LIMIT} values`
+            : `of more than ${MIGRATED_CHARACTER_LIMIT} characters`
       }`,
     };
+  if (allowance) {
+    allowance.values -= size.values;
+    allowance.characters -= size.characters;
+  }
   return { ok: true, value: current, derived: [...derived] };
 }
 
