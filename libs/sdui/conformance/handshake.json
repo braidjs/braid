@@ -1,0 +1,280 @@
+{
+  "resolver": "resolveHandshake",
+  "note": "`policy.knownManifests` stands for the `knowsManifest` lookup.",
+  "vectors": [
+    {
+      "name": "ok",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "ok",
+        "httpStatus": 200,
+        "protocol": 1,
+        "manifest": "cm_known",
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "update-recommended: below the recommended version",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "5.8.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "update-recommended",
+        "httpStatus": 200,
+        "protocol": 1,
+        "manifest": "cm_known",
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "update-recommended: current version, but too much of the release renders degraded",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0",
+        "degradedShare": 0.4,
+        "degradedThreshold": 0.25
+      },
+      "expect": {
+        "status": "update-recommended",
+        "httpStatus": 200,
+        "protocol": 1,
+        "manifest": "cm_known",
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "update-required: below the floor",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "5.1.9"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "update-required",
+        "httpStatus": 200,
+        "protocol": 1,
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "update-required wins over an unknown manifest: a retired binary is not asked to upload one",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_never_seen",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "4.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "update-required",
+        "httpStatus": 200,
+        "protocol": 1,
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "protocol-unsupported: no version in common",
+      "request": {
+        "protocol": [2, 3],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "protocol-unsupported",
+        "httpStatus": 426
+      }
+    },
+    {
+      "name": "protocol-unsupported wins over maintenance: nothing else in the answer could be read",
+      "request": {
+        "protocol": [2, 3],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0",
+        "maintenance": true
+      },
+      "expect": {
+        "status": "protocol-unsupported",
+        "httpStatus": 426
+      }
+    },
+    {
+      "name": "a protocol range picks the highest version in common",
+      "request": {
+        "protocol": [1, 3],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0",
+        "protocol": [1, 2]
+      },
+      "expect": {
+        "status": "ok",
+        "httpStatus": 200,
+        "protocol": 2,
+        "manifest": "cm_known",
+        "update": {
+          "required": "5.2.0",
+          "recommended": "6.1.0"
+        }
+      }
+    },
+    {
+      "name": "manifest-unknown: fingerprint not registered",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_never_seen",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0"
+      },
+      "expect": {
+        "status": "manifest-unknown",
+        "httpStatus": 409,
+        "protocol": 1
+      }
+    },
+    {
+      "name": "maintenance",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0",
+        "maintenance": true
+      },
+      "expect": {
+        "status": "maintenance",
+        "httpStatus": 503,
+        "protocol": 1
+      }
+    },
+    {
+      "name": "unauthorized",
+      "request": {
+        "protocol": [1, 1],
+        "manifest": "cm_known",
+        "app": {
+          "id": "acme-shop",
+          "platform": "ios",
+          "version": "6.2.0"
+        }
+      },
+      "policy": {
+        "knownManifests": ["cm_known"],
+        "requiredVersion": "5.2.0",
+        "recommendedVersion": "6.1.0",
+        "authorized": false
+      },
+      "expect": {
+        "status": "unauthorized",
+        "httpStatus": 401,
+        "protocol": 1
+      }
+    }
+  ]
+}

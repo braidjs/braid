@@ -1,0 +1,26 @@
+{
+  "sduiManifest": "1",
+  "protocol": [1, 1],
+  "app": "acme-shop",
+  "platform": "ios",
+  "version": "6.2.0",
+  "build": 6200118,
+  "components": {
+    "stack": 1,
+    "text": 2,
+    "hero-banner": 3,
+    "product-card": 3,
+    "video-tile": 1,
+    "legal-note": 2
+  },
+  "actions": {
+    "navigate": 2,
+    "open-url": 1,
+    "share": 1
+  },
+  "assets": ["jpeg", "png", "webp"],
+  "limits": {
+    "depth": 12,
+    "bytes": 262144
+  }
+}

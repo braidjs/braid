@@ -1,0 +1,108 @@
+{
+  "name": "unchanged",
+  "description": "The same screen with every object's keys in reverse order. The content addresses are equal, so there is nothing to walk.",
+  "catalog": "catalog.json",
+  "before": {
+    "id": "screen-picks",
+    "slug": "picks",
+    "title": "Picked for you",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "slots": {
+        "children": [
+          {
+            "id": "n_head",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Picked for you",
+              "style": "title"
+            }
+          },
+          {
+            "id": "n_shell",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Ridge Shell",
+              "price": {
+                "amount": 168,
+                "sale": null
+              },
+              "badge": null
+            }
+          },
+          {
+            "id": "n_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": null
+              },
+              "badge": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  "after": {
+    "root": {
+      "slots": {
+        "children": [
+          {
+            "props": {
+              "style": "title",
+              "content": "Picked for you"
+            },
+            "v": 2,
+            "type": "text",
+            "id": "n_head"
+          },
+          {
+            "props": {
+              "badge": null,
+              "price": {
+                "sale": null,
+                "amount": 168
+              },
+              "title": "Ridge Shell"
+            },
+            "v": 3,
+            "type": "product-card",
+            "id": "n_shell"
+          },
+          {
+            "props": {
+              "badge": null,
+              "price": {
+                "sale": null,
+                "amount": 129
+              },
+              "title": "Trail Runner 2"
+            },
+            "v": 3,
+            "type": "product-card",
+            "id": "n_runner"
+          }
+        ]
+      },
+      "v": 1,
+      "type": "stack",
+      "id": "n_root"
+    },
+    "title": "Picked for you",
+    "slug": "picks",
+    "id": "screen-picks"
+  },
+  "expect": {
+    "unchanged": true,
+    "changes": [],
+    "catalogUpgrades": []
+  }
+}

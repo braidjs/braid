@@ -1,0 +1,278 @@
+{
+  "resolver": "evaluateCondition",
+  "note": "A condition about something the context does not say is false.",
+  "vectors": [
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {
+        "flags": {
+          "a": true
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {
+        "flags": {
+          "a": false
+        }
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "flag": "layout",
+        "is": "b"
+      },
+      "context": {
+        "flags": {
+          "layout": "b"
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "flag": "layout",
+        "is": "b"
+      },
+      "context": {
+        "flags": {
+          "layout": "a"
+        }
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {
+        "platform": "android"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.10.0"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.7.9"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8",
+          "max": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.8.0"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "audience": "members"
+      },
+      "context": {
+        "audiences": ["members", "staff"]
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "audience": "members"
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "locale": ["fr"]
+      },
+      "context": {
+        "locale": "fr-CA"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "locale": ["fr-CA"]
+      },
+      "context": {
+        "locale": "fr"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "locale": ["en"]
+      },
+      "context": {
+        "locale": "EN-gb"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z",
+          "until": "2026-11-20T00:00:00Z"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z",
+          "until": "2026-11-20T00:00:00Z"
+        }
+      },
+      "context": {
+        "now": "2026-11-20T00:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z"
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": true
+        },
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": true
+        },
+        "platform": "android"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": false
+        },
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "audience": "members"
+        }
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": []
+      },
+      "context": {},
+      "expect": true
+    },
+    {
+      "condition": {
+        "any": []
+      },
+      "context": {},
+      "expect": false
+    }
+  ]
+}

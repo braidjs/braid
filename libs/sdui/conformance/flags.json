@@ -1,0 +1,131 @@
+{
+  "resolver": "evaluateFlags",
+  "definitions": [
+    {
+      "key": "summer-sale",
+      "default": false,
+      "rules": [
+        {
+          "value": true
+        }
+      ]
+    },
+    {
+      "key": "new-search",
+      "default": false,
+      "rules": [
+        {
+          "when": {
+            "appVersion": {
+              "min": "6.1"
+            }
+          },
+          "percent": 5,
+          "value": true
+        }
+      ]
+    },
+    {
+      "key": "checkout-layout",
+      "default": "a",
+      "rules": [
+        {
+          "when": {
+            "audience": "staff"
+          },
+          "value": "b"
+        },
+        {
+          "percent": 50,
+          "value": "b"
+        }
+      ]
+    },
+    {
+      "key": "killed",
+      "default": "safe",
+      "off": true,
+      "rules": [
+        {
+          "value": "risky"
+        }
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "install": "ins_0043",
+      "context": {
+        "appVersion": "6.2.0"
+      },
+      "expect": {
+        "values": {
+          "summer-sale": true,
+          "new-search": true,
+          "checkout-layout": "a",
+          "killed": "safe"
+        },
+        "assignments": ["summer-sale:0", "new-search:0"]
+      }
+    },
+    {
+      "install": "ins_0043",
+      "context": {
+        "appVersion": "5.8.0"
+      },
+      "expect": {
+        "values": {
+          "summer-sale": true,
+          "new-search": false,
+          "checkout-layout": "a",
+          "killed": "safe"
+        },
+        "assignments": ["summer-sale:0"]
+      }
+    },
+    {
+      "install": "ins_0001",
+      "context": {
+        "appVersion": "6.2.0"
+      },
+      "expect": {
+        "values": {
+          "summer-sale": true,
+          "new-search": false,
+          "checkout-layout": "a",
+          "killed": "safe"
+        },
+        "assignments": ["summer-sale:0"]
+      }
+    },
+    {
+      "install": "ins_0001",
+      "context": {
+        "appVersion": "6.2.0",
+        "audiences": ["staff"]
+      },
+      "expect": {
+        "values": {
+          "summer-sale": true,
+          "new-search": false,
+          "checkout-layout": "b",
+          "killed": "safe"
+        },
+        "assignments": ["summer-sale:0", "checkout-layout:0"]
+      }
+    },
+    {
+      "install": "ins_0043",
+      "context": {},
+      "expect": {
+        "values": {
+          "summer-sale": true,
+          "new-search": false,
+          "checkout-layout": "a",
+          "killed": "safe"
+        },
+        "assignments": ["summer-sale:0"]
+      }
+    }
+  ]
+}

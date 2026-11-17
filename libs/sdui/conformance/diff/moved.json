@@ -1,0 +1,124 @@
+{
+  "name": "moved",
+  "description": "Two cards swap places. One move, not a removal and an addition.",
+  "catalog": "catalog.json",
+  "before": {
+    "id": "screen-picks",
+    "slug": "picks",
+    "title": "Picked for you",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "slots": {
+        "children": [
+          {
+            "id": "n_head",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Picked for you",
+              "style": "title"
+            }
+          },
+          {
+            "id": "n_shell",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Ridge Shell",
+              "price": {
+                "amount": 168,
+                "sale": null
+              },
+              "badge": null
+            }
+          },
+          {
+            "id": "n_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": null
+              },
+              "badge": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  "after": {
+    "id": "screen-picks",
+    "slug": "picks",
+    "title": "Picked for you",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "slots": {
+        "children": [
+          {
+            "id": "n_head",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Picked for you",
+              "style": "title"
+            }
+          },
+          {
+            "id": "n_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": null
+              },
+              "badge": null
+            }
+          },
+          {
+            "id": "n_shell",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Ridge Shell",
+              "price": {
+                "amount": 168,
+                "sale": null
+              },
+              "badge": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "unchanged": false,
+    "changes": [
+      {
+        "kind": "moved",
+        "nodeId": "n_shell",
+        "type": "product-card",
+        "from": {
+          "parentId": "n_root",
+          "slot": "children",
+          "index": 1
+        },
+        "to": {
+          "parentId": "n_root",
+          "slot": "children",
+          "index": 2
+        }
+      }
+    ],
+    "catalogUpgrades": []
+  }
+}

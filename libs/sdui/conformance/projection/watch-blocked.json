@@ -1,0 +1,45 @@
+{
+  "name": "watch-blocked",
+  "description": "A required node this app cannot render and that has no fallback: the screen is blocked for this device.",
+  "catalog": "catalog.json",
+  "screen": "screens/watch.json",
+  "manifest": "manifests/one-behind.json",
+  "expect": {
+    "outcome": "blocked",
+    "root": null,
+    "report": [
+      {
+        "nodeId": "n_root",
+        "type": "stack",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 1,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_title",
+        "type": "text",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_player",
+        "type": "video-tile",
+        "authored": 1,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "this app version has no \"video-tile\" component",
+        "outcome": "omitted",
+        "rung": 5,
+        "blocking": true
+      }
+    ],
+    "blockedBy": ["n_player"]
+  }
+}

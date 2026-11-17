@@ -1,0 +1,44 @@
+{
+  "name": "@braidlabs/sdui",
+  "version": "0.0.1",
+  "description": "Server-driven UI that survives app version skew: every component is a contract document, and each screen is projected to exactly what a device's binary was built to render.",
+  "keywords": [
+    "server-driven-ui",
+    "sdui",
+    "version-skew",
+    "mobile",
+    "feature-flags",
+    "rollout"
+  ],
+  "license": "MIT",
+  "sideEffects": false,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "bin": {
+    "sdui": "./src/bin/sdui.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@braidlabs/contract": "^0.0.1",
+    "@braidlabs/skew": "^0.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/braidjs/braid.git",
+    "directory": "libs/sdui"
+  },
+  "homepage": "https://github.com/braidjs/braid#readme",
+  "bugs": {
+    "url": "https://github.com/braidjs/braid/issues"
+  }
+}

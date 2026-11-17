@@ -1,0 +1,460 @@
+{
+  "sduiCatalog": "1",
+  "components": {
+    "stack": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.stack",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "gap": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "slots": {
+        "children": {}
+      }
+    },
+    "text": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.text",
+        "current": 2,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "text becomes content; a style role is added",
+            "ops": [
+              {
+                "rename": {
+                  "from": "text",
+                  "to": "content"
+                }
+              },
+              {
+                "default": {
+                  "path": "style",
+                  "value": "body"
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["text"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "style": {
+                "type": "string"
+              }
+            },
+            "required": ["content"]
+          }
+        }
+      }
+    },
+    "hero-banner": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.hero-banner",
+        "current": 3,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "the call to action becomes an object",
+            "ops": [
+              {
+                "wrap": {
+                  "path": "cta",
+                  "key": "label"
+                }
+              }
+            ]
+          },
+          {
+            "from": 2,
+            "to": 3,
+            "description": "an optional countdown",
+            "ops": [
+              {
+                "default": {
+                  "path": "countdown",
+                  "value": null
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "subtitle": {
+                "type": "string"
+              },
+              "cta": {
+                "type": "string"
+              }
+            },
+            "required": ["title"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "subtitle": {
+                "type": "string"
+              },
+              "cta": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": ["title"]
+          },
+          "3": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "subtitle": {
+                "type": "string"
+              },
+              "cta": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  }
+                }
+              },
+              "countdown": {
+                "type": ["object", "null"],
+                "properties": {
+                  "endsAt": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": ["title"]
+          }
+        }
+      }
+    },
+    "product-card": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.product-card",
+        "current": 3,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "price becomes an object that can carry a sale price",
+            "ops": [
+              {
+                "wrap": {
+                  "path": "price",
+                  "key": "amount",
+                  "also": {
+                    "sale": null
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "from": 2,
+            "to": 3,
+            "description": "an optional badge",
+            "ops": [
+              {
+                "default": {
+                  "path": "badge",
+                  "value": null
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "price": {
+                "type": "number"
+              }
+            },
+            "required": ["title", "price"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "price": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "sale": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["amount"]
+              }
+            },
+            "required": ["title", "price"]
+          },
+          "3": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "price": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "sale": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["amount"]
+              },
+              "badge": {
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["title", "price"]
+          }
+        }
+      },
+      "criticalPaths": ["price"],
+      "localizable": ["title", "badge"]
+    },
+    "video-tile": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.video-tile",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "seconds": {
+                "type": "number"
+              },
+              "src": {
+                "type": "string"
+              }
+            },
+            "required": ["title", "src"]
+          }
+        }
+      }
+    },
+    "legal-note": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.legal-note",
+        "current": 2,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "the unused legacy flag is removed",
+            "ops": [
+              {
+                "drop": {
+                  "path": "legacyFlag"
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "legacyFlag": {
+                "type": "boolean"
+              }
+            },
+            "required": ["text"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["text"]
+          }
+        }
+      },
+      "fallback": {
+        "type": "text",
+        "props": {
+          "content": {
+            "$from": "text"
+          },
+          "style": "caption"
+        }
+      }
+    }
+  },
+  "actions": {
+    "navigate": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.action.navigate",
+        "current": 2,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "a transition style",
+            "ops": [
+              {
+                "default": {
+                  "path": "transition",
+                  "value": "push"
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": ["to"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string"
+              },
+              "transition": {
+                "type": "string"
+              }
+            },
+            "required": ["to"]
+          }
+        }
+      }
+    },
+    "open-url": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.action.open-url",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": ["url"]
+          }
+        }
+      }
+    },
+    "share": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.action.share",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["text"]
+          }
+        }
+      }
+    }
+  },
+  "events": {
+    "impression": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.event.impression",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "node": {
+                "type": "string"
+              }
+            },
+            "required": ["node"]
+          }
+        }
+      }
+    }
+  }
+}

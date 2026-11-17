@@ -1,0 +1,110 @@
+{
+  "definition": "bucket = (first 32 bits, big-endian, of SHA-256(salt + U+0000 + install)) mod 10000; an install is inside p percent when bucket < round(p * 100)",
+  "vectors": [
+    {
+      "salt": "rollout-r40",
+      "install": "ins_0001",
+      "bucket": 22
+    },
+    {
+      "salt": "rollout-r40",
+      "install": "ins_0002",
+      "bucket": 4886
+    },
+    {
+      "salt": "rollout-r40",
+      "install": "ins_7f3a",
+      "bucket": 1378
+    },
+    {
+      "salt": "rollout-r40",
+      "install": "ins_c0ffee",
+      "bucket": 6790
+    },
+    {
+      "salt": "rollout-r40",
+      "install": "ins_zzzz",
+      "bucket": 4128
+    },
+    {
+      "salt": "summer-sale",
+      "install": "ins_0001",
+      "bucket": 1303
+    },
+    {
+      "salt": "summer-sale",
+      "install": "ins_0002",
+      "bucket": 2398
+    },
+    {
+      "salt": "summer-sale",
+      "install": "ins_7f3a",
+      "bucket": 7414
+    },
+    {
+      "salt": "summer-sale",
+      "install": "ins_c0ffee",
+      "bucket": 7331
+    },
+    {
+      "salt": "summer-sale",
+      "install": "ins_zzzz",
+      "bucket": 8889
+    }
+  ],
+  "assignments": {
+    "plan": {
+      "stable": "rel_41aa",
+      "candidate": "rel_7c1e",
+      "stages": [1, 5, 25, 50, 100],
+      "stage": 2,
+      "salt": "rollout-r40"
+    },
+    "vectors": [
+      {
+        "install": "ins_0001",
+        "expect": {
+          "release": "rel_7c1e",
+          "arm": "candidate",
+          "bucket": 22
+        }
+      },
+      {
+        "install": "ins_0002",
+        "expect": {
+          "release": "rel_41aa",
+          "arm": "stable",
+          "bucket": 4886
+        }
+      },
+      {
+        "install": "ins_7f3a",
+        "expect": {
+          "release": "rel_7c1e",
+          "arm": "candidate",
+          "bucket": 1378
+        }
+      },
+      {
+        "install": "ins_c0ffee",
+        "expect": {
+          "release": "rel_41aa",
+          "arm": "stable",
+          "bucket": 6790
+        }
+      },
+      {
+        "install": "ins_zzzz",
+        "expect": {
+          "release": "rel_41aa",
+          "arm": "stable",
+          "bucket": 4128
+        }
+      }
+    ],
+    "halted": {
+      "note": "With `halted: true` every install is on stable.",
+      "release": "rel_41aa"
+    }
+  }
+}

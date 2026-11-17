@@ -1,0 +1,171 @@
+{
+  "level": "node",
+  "resolver": "resolveNodeStates",
+  "note": "`state` is the first state returned, the one that decides what is drawn; `also` is the rest, in order.",
+  "vectors": [
+    {
+      "state": "exact",
+      "given": {
+        "outcome": "exact"
+      },
+      "also": []
+    },
+    {
+      "state": "upgraded",
+      "given": {
+        "outcome": "upgraded"
+      },
+      "also": []
+    },
+    {
+      "state": "downgraded",
+      "given": {
+        "outcome": "downgraded"
+      },
+      "also": []
+    },
+    {
+      "state": "fallback-authored",
+      "given": {
+        "outcome": "fallback-authored"
+      },
+      "also": []
+    },
+    {
+      "state": "fallback-catalog",
+      "given": {
+        "outcome": "fallback-catalog"
+      },
+      "also": []
+    },
+    {
+      "state": "omitted",
+      "given": {
+        "outcome": "omitted",
+        "asset": "loading"
+      },
+      "also": []
+    },
+    {
+      "state": "hidden-by-visibility",
+      "given": {
+        "outcome": "exact",
+        "hidden": "visibility"
+      },
+      "also": []
+    },
+    {
+      "state": "hidden-by-flag",
+      "given": {
+        "outcome": "downgraded",
+        "hidden": "flag"
+      },
+      "also": []
+    },
+    {
+      "state": "variant",
+      "given": {
+        "outcome": "exact",
+        "variant": "b"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "exact",
+        "deferred": "loading"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "exact",
+        "deferred": "failed"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "exact",
+        "deferred": "empty"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "data-loading",
+      "given": {
+        "outcome": "downgraded",
+        "data": "loading"
+      },
+      "also": ["downgraded"]
+    },
+    {
+      "state": "data-error",
+      "given": {
+        "outcome": "exact",
+        "data": "failed"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "data-stale",
+      "given": {
+        "outcome": "exact",
+        "data": "stale"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "disabled",
+      "given": {
+        "outcome": "exact",
+        "disabled": true
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "asset-loading",
+      "given": {
+        "outcome": "downgraded",
+        "asset": "loading",
+        "truncated": true
+      },
+      "also": ["truncated", "downgraded"]
+    },
+    {
+      "state": "asset-error",
+      "given": {
+        "outcome": "exact",
+        "asset": "failed"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "asset-format-unsupported",
+      "given": {
+        "outcome": "exact",
+        "asset": "unsupported-format"
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "string-missing",
+      "given": {
+        "outcome": "exact",
+        "stringMissing": true
+      },
+      "also": ["exact"]
+    },
+    {
+      "state": "truncated",
+      "given": {
+        "outcome": "exact",
+        "truncated": true
+      },
+      "also": ["exact"]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "level": "action",
+  "resolver": "resolveActionState",
+  "vectors": [
+    {
+      "state": "idle",
+      "given": {
+        "supported": true,
+        "phase": "idle"
+      }
+    },
+    {
+      "state": "unsupported",
+      "given": {
+        "supported": false,
+        "phase": "idle"
+      }
+    },
+    {
+      "state": "confirming",
+      "given": {
+        "supported": true,
+        "phase": "confirming"
+      }
+    },
+    {
+      "state": "pending",
+      "given": {
+        "supported": true,
+        "phase": "pending"
+      }
+    },
+    {
+      "state": "succeeded",
+      "given": {
+        "supported": true,
+        "phase": "succeeded"
+      }
+    },
+    {
+      "state": "failed-retryable",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "retryable"
+      }
+    },
+    {
+      "state": "failed-terminal",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "terminal"
+      }
+    },
+    {
+      "state": "queued-offline",
+      "given": {
+        "supported": true,
+        "phase": "pending",
+        "queued": true
+      }
+    },
+    {
+      "state": "requires-auth",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "auth"
+      }
+    },
+    {
+      "state": "target-missing",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "target-missing"
+      }
+    },
+    {
+      "state": "blocked-url",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "blocked-url"
+      }
+    },
+    {
+      "state": "invalid",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "validation"
+      }
+    },
+    {
+      "state": "server-rejected",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "rejected"
+      }
+    },
+    {
+      "state": "draft-restored",
+      "given": {
+        "supported": true,
+        "phase": "idle",
+        "draftRestored": true
+      }
+    }
+  ]
+}
