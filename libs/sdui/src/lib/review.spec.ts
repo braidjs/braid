@@ -3708,60 +3708,66 @@ describe('the seventh pass: what migrations may produce, in all', () => {
     ).toBe('characters');
   });
 
-  it('shares one allowance across a projection, and across a diff', () => {
-    // Each card comes to 2^17 values twice over — inside the limit for one payload. Sixty of them
-    // are sixteen million values; the allowance is eight.
-    const catalog = cards(17);
-    const screen = (id: string, tag: string): Screen =>
-      parseScreen({
-        id,
-        slug: 's',
-        root: {
-          id: 'root',
-          type: 'stack',
-          v: 1,
-          slots: {
-            children: Array.from({ length: 60 }, (_, index) =>
-              card(`n${index}`, tag),
-            ),
+  // Spending an allowance of eight million values is seconds of work by design, here twice over:
+  // well past the default five seconds on a slow machine.
+  it(
+    'shares one allowance across a projection, and across a diff',
+    { timeout: 60_000 },
+    () => {
+      // Each card comes to 2^17 values twice over — inside the limit for one payload. Forty of them
+      // are ten million values; the allowance is eight.
+      const catalog = cards(17);
+      const screen = (id: string, tag: string): Screen =>
+        parseScreen({
+          id,
+          slug: 's',
+          root: {
+            id: 'root',
+            type: 'stack',
+            v: 1,
+            slots: {
+              children: Array.from({ length: 40 }, (_, index) =>
+                card(`n${index}`, tag),
+              ),
+            },
           },
-        },
-      });
-    const result = projectScreen(
-      screen('s', 'a'),
-      catalog,
-      device({ card: 2, stack: 1 }),
-    );
-    expect(reportOf(result, 'n0')[0]?.outcome).toBe('upgraded');
-    expect(reportOf(result, 'n59')[0]).toMatchObject({ outcome: 'omitted' });
-    expect(reportOf(result, 'n59')[0]?.reason).toContain(
-      'the migrations of this call have produced all they may',
-    );
-    const rendered = result.report.filter(
-      (entry) => entry.outcome === 'upgraded',
-    ).length;
-    // 262,143 values a card: thirty fit in eight million, and the thirty-first overdraws it.
-    expect(rendered).toBe(31);
-    expect(() =>
-      diffScreens(screen('s', 'a'), screen('s2', 'b'), catalog),
-    ).not.toThrow();
+        });
+      const result = projectScreen(
+        screen('s', 'a'),
+        catalog,
+        device({ card: 2, stack: 1 }),
+      );
+      expect(reportOf(result, 'n0')[0]?.outcome).toBe('upgraded');
+      expect(reportOf(result, 'n39')[0]).toMatchObject({ outcome: 'omitted' });
+      expect(reportOf(result, 'n39')[0]?.reason).toContain(
+        'the migrations of this call have produced all they may',
+      );
+      const rendered = result.report.filter(
+        (entry) => entry.outcome === 'upgraded',
+      ).length;
+      // 262,143 values a card: thirty fit in eight million, and the thirty-first overdraws it.
+      expect(rendered).toBe(31);
+      expect(() =>
+        diffScreens(screen('s', 'a'), screen('s2', 'b'), catalog),
+      ).not.toThrow();
 
-    // A migration on its own has no allowance unless it is given one; given one, it draws on it.
-    const allowance = { values: 10, characters: 1000 };
-    const small = doc('card', 2, doubling(1));
-    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
-    // { p: { k: 'x', r: 'x' } } is four values, and five characters of keys and strings.
-    expect(allowance).toEqual({ values: 6, characters: 995 });
-    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
-    // Two left: the next one still runs, and overdraws; the one after finds nothing.
-    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
-    expect(allowance.values).toBe(-2);
-    const spent = migrate(small, { p: 'x' }, 1, 2, { allowance });
-    expect(spent.ok ? '' : spent.message).toContain(
-      'have produced all they may',
-    );
-    expect(migrate(small, { p: 'x' }, 1, 2).ok).toBe(true);
-  });
+      // A migration on its own has no allowance unless it is given one; given one, it draws on it.
+      const allowance = { values: 10, characters: 1000 };
+      const small = doc('card', 2, doubling(1));
+      expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
+      // { p: { k: 'x', r: 'x' } } is four values, and five characters of keys and strings.
+      expect(allowance).toEqual({ values: 6, characters: 995 });
+      expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
+      // Two left: the next one still runs, and overdraws; the one after finds nothing.
+      expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
+      expect(allowance.values).toBe(-2);
+      const spent = migrate(small, { p: 'x' }, 1, 2, { allowance });
+      expect(spent.ok ? '' : spent.message).toContain(
+        'have produced all they may',
+      );
+      expect(migrate(small, { p: 'x' }, 1, 2).ok).toBe(true);
+    },
+  );
 
   it('holds the character limits exactly: screen, catalog and migrated payload', () => {
     const hundredK = 'x'.repeat(100_000);
