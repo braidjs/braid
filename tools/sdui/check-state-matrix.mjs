@@ -42,10 +42,15 @@ const LEVELS = {
 };
 const failures = [];
 
-const source = readFileSync(statesPath, 'utf8');
+// Comments are removed first, so nothing in one can stand in for a declaration: a list or a type
+// left behind in a comment is not the list or the type.
+const source = readFileSync(statesPath, 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
 const declared = new Map();
 // Found by position, not by one regex across the file: each list is located at its `export const`
 // and read up to the first `] as const`, which is linear however large the file is.
+const seenConstants = new Set();
 const OPENING = /^export const (\w+_STATES) = \[/gm;
 for (let match = OPENING.exec(source); match; match = OPENING.exec(source)) {
   const constant = match[1];
@@ -55,6 +60,16 @@ for (let match = OPENING.exec(source); match; match = OPENING.exec(source)) {
     failures.push(`${constant} has no closing "] as const" in ${statesPath}`);
     break; // nothing after this point closes either, so there is no reason to look again
   }
+  // Exactly `] as const;` and nothing more: a cast after it could widen the list's type to
+  // admit a state that is not in it.
+  if (!source.startsWith('] as const;', end)) {
+    failures.push(
+      `${constant} must end with "] as const;" and nothing else — a cast there can add states this check cannot see`,
+    );
+  }
+  if (seenConstants.has(constant))
+    failures.push(`${constant} is declared more than once`);
+  seenConstants.add(constant);
   const level = LEVELS[constant];
   if (!level) {
     failures.push(

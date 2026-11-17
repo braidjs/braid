@@ -22,7 +22,14 @@ import {
   type SduiNode,
 } from './model.js';
 import { isRecord, own } from './internal.js';
-import { lostPaths, pathWithin, withValueFrom } from './paths.js';
+import {
+  type Path,
+  formatPath,
+  lostPaths,
+  pathWithin,
+  shapeOf,
+  withValuesFrom,
+} from './paths.js';
 
 /**
  * Projection — one authored screen, turned into what one binary can render.
@@ -46,8 +53,8 @@ import { lostPaths, pathWithin, withValueFrom } from './paths.js';
  *
  * Deterministic for a given clock: the same screen, catalog and manifest give the same result,
  * which is why a projection can be computed once per release and manifest and cached by their
- * ids. The clock is read once per call, and only a catalog that uses `$now` puts what it returns
- * into a result; pin `context` to fix it.
+ * ids. The clock is read once per call, and only an op that uses `$now`, or a code step that
+ * reads its context, puts what it returns into a result; pin `context` to fix it.
  */
 
 export type NodeOutcome =
@@ -161,6 +168,9 @@ export interface ProjectionOptions {
    */
   readonly unsupported?: readonly string[];
 }
+
+/** More kinds of lost field than this on one node, and every loss is treated as untraced. */
+const MAX_LOSS_KINDS = 32;
 
 type Rendered =
   | {
@@ -317,25 +327,27 @@ export function projectScreen(
   /**
    * Puts what a downgrade lost into the component's newest shape.
    *
-   * Each lost value is traced separately: take the node as authored, put back at that one path
-   * what the trip down and up left there, lift both copies to the newest version, and see where
-   * they differ. Lifting only goes up, so a later step that cannot be inverted is no obstacle;
-   * and because everything else in the two copies is identical, a field the author never wrote
-   * cannot show up as a difference.
+   * The node as authored, and the node with what was lost put back as the trip down and up left
+   * it, are both lifted to the newest version and compared. Everything else in the two copies is
+   * identical, so a field the author never wrote cannot show up as a difference; and lifting only
+   * goes up, so a later step that cannot be inverted is no obstacle.
    *
-   * A loss with no trace — the newest version no longer has the field, or a later step folds the
-   * lost value and what replaced it into the same thing, or the lift cannot be run at all — is
-   * returned as `untraced`, under the name it had where it was authored.
+   * That is done once for all the losses together, which is what the device actually gets and so
+   * catches losses that only matter in combination. It is done again per *kind* of lost field
+   * (`items[].badge` is one kind however long the list), to find a loss that leaves no trace: the
+   * newest version no longer has the field, or a later step folds the lost value and what
+   * replaced it into the same thing. Those are returned as `untraced`, under their authored
+   * names. The number of lifts is bounded by the number of kinds, not by the size of the payload.
    */
   function traceLoss(
     contract: ComponentDefinition['contract'],
     node: SduiNode,
-    lossyPaths: readonly string[],
+    lost: readonly Path[],
     roundTrip: unknown,
   ): { traced: string[]; untraced: string[] } {
-    if (lossyPaths.length === 0) return { traced: [], untraced: [] };
-    if (node.v === contract.current)
-      return { traced: [...lossyPaths], untraced: [] };
+    if (lost.length === 0) return { traced: [], untraced: [] };
+    const names = lost.map(formatPath);
+    if (node.v === contract.current) return { traced: names, untraced: [] };
     const props = node.props ?? {};
     const lifted = migrate(
       contract,
@@ -344,24 +356,35 @@ export function projectScreen(
       contract.current,
       migrateOptions,
     );
-    if (!lifted.ok) return { traced: [], untraced: [...lossyPaths] };
-    const traced = new Set<string>();
-    const untraced: string[] = [];
-    for (const path of lossyPaths) {
+    // Where the lift cannot be run — for the node itself or for a copy of it — nothing can be said
+    // about where the loss lands, so all of it is untraced.
+    const liftWithout = (paths: readonly Path[]): string[] | null => {
+      if (!lifted.ok) return null;
       const without = migrate(
         contract,
-        withValueFrom(props, roundTrip, path),
+        withValuesFrom(props, roundTrip, paths),
         node.v,
         contract.current,
         migrateOptions,
       );
-      const found = without.ok
+      return without.ok
         ? lostPaths(lifted.value, without.value).filter((at) => at !== '')
-        : [];
-      if (found.length === 0) untraced.push(path);
-      else for (const at of found) traced.add(at);
+        : null;
+    };
+    const traced = liftWithout(lost);
+    if (traced === null) return { traced: [], untraced: names };
+
+    const kinds = new Map<string, Path[]>();
+    for (const path of lost)
+      kinds.set(shapeOf(path), [...(kinds.get(shapeOf(path)) ?? []), path]);
+    if (kinds.size > MAX_LOSS_KINDS) return { traced, untraced: names };
+    const untraced: string[] = [];
+    for (const paths of kinds.values()) {
+      const found = liftWithout(paths);
+      if (found === null || found.length === 0)
+        for (const path of paths) untraced.push(formatPath(path));
     }
-    return { traced: [...traced], untraced };
+    return { traced, untraced };
   }
 
   /** Rungs 1 and 2: this node, as itself, at the client's version — or why not. */
@@ -409,9 +432,14 @@ export function projectScreen(
     // on its own — see `traceLoss`. What cannot be traced is kept, under its authored name.
     const { traced, untraced } =
       clientVersion < node.v
-        ? traceLoss(contract, node, migrated.lossyPaths, migrated.roundTrip)
+        ? traceLoss(
+            contract,
+            node,
+            migrated.lossySegments ?? [],
+            migrated.roundTrip,
+          )
         : { traced: [], untraced: [] };
-    const lossy = [...traced, ...untraced];
+    const lossy = [...new Set([...traced, ...untraced])];
 
     const keptSlots: [string, readonly SduiNode[]][] = [];
     const droppedSlots: [string, readonly SduiNode[]][] = [];

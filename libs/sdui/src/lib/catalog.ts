@@ -6,7 +6,13 @@ import {
 } from '@braidlabs/contract';
 import { contentAddress } from './hash.js';
 import { type Screen, type SduiAction, type SduiNode } from './model.js';
-import { hasReservedSegment, isRecord, isSafeName, own } from './internal.js';
+import {
+  hasReservedSegment,
+  isRecord,
+  isSafeName,
+  own,
+  reservedKeyIn,
+} from './internal.js';
 
 /**
  * The catalog — an app's UI vocabulary, owned by engineering.
@@ -211,16 +217,26 @@ export function parseCatalog(raw: unknown): SduiCatalog {
           const reserved = Object.keys(props).find((key) => RESERVED.has(key));
           if (reserved !== undefined)
             fail(`${where}: fallback props use the reserved key "${reserved}"`);
-          for (const spec of Object.values(props)) {
-            if (
-              isRecord(spec) &&
-              typeof spec['$from'] === 'string' &&
-              hasReservedSegment(spec['$from'])
-            ) {
-              fail(
-                `${where}: fallback props read from a reserved path "${spec['$from']}"`,
-              );
+          for (const [prop, spec] of Object.entries(props)) {
+            if (isRecord(spec) && '$from' in spec) {
+              if (
+                typeof spec['$from'] !== 'string' ||
+                Object.keys(spec).length !== 1
+              )
+                fail(
+                  `${where}: fallback prop "${prop}" must be { "$from": "<path>" } and nothing else`,
+                );
+              if (hasReservedSegment(spec['$from'] as string))
+                fail(
+                  `${where}: fallback props read from a reserved path "${String(spec['$from'])}"`,
+                );
+              continue;
             }
+            const reservedInside = reservedKeyIn(spec);
+            if (reservedInside !== null)
+              fail(
+                `${where}: fallback prop "${prop}" uses the reserved key "${reservedInside}"`,
+              );
           }
         }
       }

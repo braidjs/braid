@@ -9,7 +9,7 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
-import { lostPaths } from './paths.js';
+import { type Path, formatPath, lostSegments } from './paths.js';
 
 /**
  * Moves one payload between two versions of one contract.
@@ -42,6 +42,8 @@ export type MigrateResult =
       readonly lossyPaths: readonly string[];
       /** For a downgrade: the payload after the trip down and back up, at `from`. */
       readonly roundTrip?: unknown;
+      /** `lossyPaths` as key-and-index segments, for callers that need to address the values. */
+      readonly lossySegments?: readonly Path[];
       /**
        * Paths the steps fill with guesses rather than authored data, each named as the step that
        * filled it saw it.
@@ -210,10 +212,12 @@ export function migrate(
       message: `cannot tell what "${doc.name}" v${from} → v${to} loses: ${back.message}`,
     };
   }
+  const lost = lostSegments(value, back.value);
   return {
     ok: true,
     value: forward.value,
-    lossyPaths: lostPaths(value, back.value),
+    lossyPaths: lost.map(formatPath),
+    lossySegments: lost,
     roundTrip: back.value,
     derivedPaths: forward.derived,
   };

@@ -1448,6 +1448,112 @@
         "variant",
         "downgraded"
       ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "upgraded",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "failed"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "upgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-authored",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "loading"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "fallback-authored",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "upgraded",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "unsupported-format"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "upgraded"
+      ]
+    },
+    {
+      "state": "data-loading",
+      "given": {
+        "outcome": "exact",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b",
+        "data": "loading",
+        "asset": "loading"
+      },
+      "also": [
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "exact"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-authored",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b",
+        "deferred": "empty",
+        "asset": "unsupported-format"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "fallback-authored",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
     }
   ]
 }

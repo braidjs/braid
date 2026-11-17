@@ -2420,3 +2420,327 @@ describe('the rest of the third pass', () => {
     ).toMatchObject({ status: 'manifest-unknown', httpStatus: 400 });
   });
 });
+
+/**
+ * Fourth verification pass.
+ */
+describe('loss tracing is bounded, and sees losses together', () => {
+  const only = (
+    contract: SkewContractDocument,
+    extra: object = {},
+  ): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: { ...contract, name: 'sdui.component.note' },
+          ...extra,
+        },
+      },
+    });
+  const authored = (v: number, props: object, extra: object = {}): Screen => ({
+    id: 's',
+    slug: 's',
+    root: { id: 'n', type: 'note', v, props, ...extra },
+  });
+  const project = (node: Screen, strict: SduiCatalog) =>
+    projectScreen(node, strict, device({ note: 1 }));
+
+  it('catches two losses that only reach a critical field together', () => {
+    // Either of `p.a.v` and `p.b.v` alone leaves `c` standing, filled from the other.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'wrap',
+        ops: [{ wrap: { path: 'p', key: 'k' } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'c from b, then from a',
+        ops: [
+          { rename: { from: 'p.b.v', to: 'c' } },
+          { rename: { from: 'p.a.v', to: 'c' } },
+        ],
+      },
+    ];
+    const strict = only(doc('note', 3, steps), { criticalPaths: ['c'] });
+    const both = project(
+      authored(
+        2,
+        { p: { k: 'K', a: { v: 'X', note: 'n1' }, b: { v: 'X', note: 'n2' } } },
+        { required: true },
+      ),
+      strict,
+    );
+    expect(both).toMatchObject({ outcome: 'blocked', blockedBy: ['n'] });
+    expect(both.report[0]?.reason).toContain('cannot carry "c"');
+  });
+
+  it('refuses when the lost value itself lifts to nothing, so the loss leaves no trace', () => {
+    // 'Terms' becomes null in the newest shape. Comparing the two lifted copies in both
+    // directions would see the replacement appear and call the loss traced and harmless.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'legal',
+        ops: [{ default: { path: 'legal', value: null } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'kinds',
+        ops: [
+          {
+            convert: {
+              path: 'legal',
+              to: 'string',
+              via: { Terms: null, null: 'none' },
+            },
+          },
+        ],
+      },
+    ];
+    const result = project(
+      authored(2, { title: 'x', legal: 'Terms' }),
+      only(doc('note', 3, steps), { criticalPaths: ['price'] }),
+    );
+    expect(result.root).toBeNull();
+    expect(result.report[0]?.reason).toContain('cannot carry "legal"');
+  });
+
+  it('refuses when the node without what it lost cannot be lifted at all', () => {
+    // Without `p.price` the later hoist has nothing to hoist from, so that copy cannot be lifted.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'price',
+        ops: [{ default: { path: 'p.price', value: { amount: 0 } } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'cost',
+        ops: [
+          { hoist: { path: 'p.price', key: 'amount' } },
+          { rename: { from: 'p.price', to: 'cost' } },
+        ],
+      },
+    ];
+    const strict = only(doc('note', 3, steps), { criticalPaths: ['cost'] });
+    const node = authored(
+      2,
+      { p: { k: 'K', price: { amount: 5 } } },
+      { required: true },
+    );
+    // On a v1 device `p.price` is gone; it must not render without the cost.
+    const result = project(node, strict);
+    expect(result).toMatchObject({ outcome: 'blocked', blockedBy: ['n'] });
+  });
+
+  it('costs the same number of migrations for a list of 8,000 as for a list of 8', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'badges',
+        ops: [
+          {
+            map: {
+              path: 'items',
+              ops: [{ default: { path: 'badge', value: null } }],
+            },
+          },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'tone',
+        ops: [{ default: { path: 'tone', value: 'plain' } }],
+      },
+    ];
+    const strict = only(doc('note', 3, steps), { criticalPaths: ['tone'] });
+    const list = (length: number) =>
+      authored(2, {
+        items: Array.from({ length }, (_, index) => ({
+          id: index,
+          badge: `b${index}`,
+        })),
+      });
+    const started = Date.now();
+    const result = project(list(8000), strict);
+    const elapsed = Date.now() - started;
+    expect(result.report[0]?.lossyPaths).toHaveLength(8000);
+    expect(result.root?.props).toMatchObject({ items: expect.any(Array) });
+    // One lift for everything and one per kind of field: four in all here. Tracing each of the
+    // 8,000 on its own took a minute and a half.
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it('is not stalled, or misled, by a prop key spelled like an array index', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'extras',
+        ops: [{ default: { path: 'note', value: null } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'each x',
+        ops: [
+          {
+            map: {
+              path: 'x',
+              ops: [{ default: { path: 'seen', value: false } }],
+            },
+          },
+        ],
+      },
+    ];
+    const odd = {
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'n',
+        type: 'note',
+        v: 2,
+        props: { x: [{ a: 1 }], 'x[4294967294]': 'k', note: 'lost' },
+      },
+    } as Screen;
+    const started = Date.now();
+    const result = project(odd, only(doc('note', 3, steps)));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(result.report[0]).toMatchObject({ lossyPaths: ['note'] });
+    // And a parsed screen cannot carry such a key in the first place.
+    expect(() => parseScreen(structuredClone(odd))).toThrow(
+      'containing ".", "[" or "]"',
+    );
+    expect(() =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: { id: 'n', type: 'note', v: 1, props: { 'a.b': 1 } },
+      }),
+    ).toThrow('containing ".", "[" or "]"');
+  });
+});
+
+describe('the fourth pass, the rest', () => {
+  it('holds the value cap on props alone, with no condition in the screen to trip it', () => {
+    const plain = (count: number) => ({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'n',
+        type: 'text',
+        v: 2,
+        props: { many: Array.from({ length: count }, (_, index) => index) },
+      },
+    });
+    expect(() => parseScreen(plain(SCREEN_LIMITS.values + 10))).toThrow(
+      `more than ${SCREEN_LIMITS.values} values`,
+    );
+    expect(() => parseScreen(plain(1000))).not.toThrow();
+  });
+
+  it('refuses reserved keys inside a catalog fallback, and a $from that carries anything else', () => {
+    const broken = (fallback: unknown) => () => {
+      const draft = structuredClone(readVector('catalog.json'));
+      draft.components['video-tile'].fallback = fallback;
+      return parseCatalog(draft);
+    };
+    expect(
+      broken({
+        type: 'text',
+        props: { content: { nested: JSON.parse('{"__proto__":{"x":1}}') } },
+      }),
+    ).toThrow('fallback prop "content" uses the reserved key "__proto__"');
+    expect(
+      broken({ type: 'text', props: { content: [{ constructor: 1 }] } }),
+    ).toThrow('uses the reserved key "constructor"');
+    expect(
+      broken({
+        type: 'text',
+        props: { content: JSON.parse('{"$from":"title","__proto__":{"x":1}}') },
+      }),
+    ).toThrow('must be { "$from": "<path>" } and nothing else');
+    expect(broken({ type: 'text', props: { content: { $from: 7 } } })).toThrow(
+      'must be { "$from": "<path>" }',
+    );
+    expect(
+      broken({
+        type: 'text',
+        props: { content: { $from: 'title' }, style: 'link' },
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses a flag owner or expiry that is not a short string', () => {
+    expect(() =>
+      parseFlagDefinitions([
+        { key: 'a', default: 1, owner: JSON.parse('{"__proto__":{"x":1}}') },
+      ]),
+    ).toThrow('owner must be a string');
+    expect(() =>
+      parseFlagDefinitions([
+        { key: 'a', default: 1, expires: { constructor: 1 } },
+      ]),
+    ).toThrow('expires must be a string');
+    expect(() =>
+      parseFlagDefinitions([
+        { key: 'a', default: 1, owner: 'growth', expires: '2027-01-01' },
+      ]),
+    ).not.toThrow();
+  });
+});
+
+describe('more kinds of loss than can be traced one by one', () => {
+  it('reports them all, and refuses on a component with critical paths', () => {
+    const fields = Array.from({ length: 40 }, (_, index) => `f${index}`);
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'forty fields',
+        ops: fields.map((field) => ({ default: { path: field, value: null } })),
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'tone',
+        ops: [{ default: { path: 'tone', value: 'plain' } }],
+      },
+    ];
+    const only = (extra: object = {}): SduiCatalog =>
+      parseCatalog({
+        sduiCatalog: '1',
+        components: { note: { contract: doc('note', 3, steps), ...extra } },
+      });
+    const node: Screen = {
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'n',
+        type: 'note',
+        v: 2,
+        props: Object.fromEntries(fields.map((field) => [field, 'set'])),
+      },
+    };
+    const lenient = projectScreen(node, only(), device({ note: 1 }));
+    expect(lenient.report[0]?.lossyPaths).toHaveLength(40);
+    expect(lenient.outcome).toBe('degraded');
+    expect(
+      projectScreen(
+        node,
+        only({ criticalPaths: ['tone'] }),
+        device({ note: 1 }),
+      ).root,
+    ).toBeNull();
+  });
+});

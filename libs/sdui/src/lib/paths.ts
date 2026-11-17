@@ -1,6 +1,35 @@
 import { canonicalJson } from '@braidlabs/skew';
 
 /**
+ * Paths into a payload.
+ *
+ * Inside the package a path is a list of segments — a key or an array index — never a string to
+ * be parsed back: a prop may be keyed `x[3]` or `a.b`, and a string could not tell that from an
+ * index or a nesting. Strings are for reports only.
+ */
+export type PathSegment = string | number;
+export type Path = readonly PathSegment[];
+
+/** A path as it is shown: `items[2].badge`. */
+export function formatPath(path: Path): string {
+  let out = '';
+  for (const segment of path) {
+    out +=
+      typeof segment === 'number'
+        ? `[${segment}]`
+        : out === ''
+          ? segment
+          : `.${segment}`;
+  }
+  return out;
+}
+
+/** The kind of place a path is, whichever list element it is in: `items[].badge`. */
+export function shapeOf(path: Path): string {
+  return formatPath(path).replace(/\[\d+\]/g, '[]');
+}
+
+/**
  * Dot-paths at which two values differ. Arrays of the same length are compared element by
  * element (`items[2].badge`); arrays of different lengths differ as a whole.
  */
@@ -24,45 +53,46 @@ export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
 }
 
 /**
- * What `original` held that `back` does not give back — `back` being the same value after a trip
- * down to an older version and up again.
+ * Where `original` held something that `back` does not give back — `back` being the same value
+ * after a trip down to an older version and up again.
  *
  * Directed on purpose. A field the author never wrote, which the trip up filled with a default,
  * is not something the trip down lost; only a value that was there and did not return is. A
  * `null` and an absent field are the same nothing.
  */
-export function lostPaths(
+export function lostSegments(
   original: unknown,
   back: unknown,
-  prefix = '',
-): string[] {
+  prefix: Path = [],
+): Path[] {
   if (original === undefined || original === null) return [];
   if (isPlainRecord(original)) {
     const keys = Object.keys(original).sort();
     if (!isPlainRecord(back))
       return keys.some(
-        (key) => lostPaths(original[key], undefined, key).length > 0,
+        (key) => lostSegments(original[key], undefined).length > 0,
       )
         ? [prefix]
         : [];
     return keys.flatMap((key) =>
-      lostPaths(
-        original[key],
-        ownValue(back, key),
-        prefix ? `${prefix}.${key}` : key,
-      ),
+      lostSegments(original[key], ownValue(back, key), [...prefix, key]),
     );
   }
   if (Array.isArray(original)) {
     if (!Array.isArray(back) || back.length !== original.length)
       return [prefix];
     return original.flatMap((element, position) =>
-      lostPaths(element, back[position], `${prefix}[${position}]`),
+      lostSegments(element, back[position], [...prefix, position]),
     );
   }
   return canonicalJson(original) === canonicalJson(back ?? null)
     ? []
     : [prefix];
+}
+
+/** {@link lostSegments}, as the strings a report shows. */
+export function lostPaths(original: unknown, back: unknown): string[] {
+  return lostSegments(original, back).map(formatPath);
 }
 
 /**
@@ -76,60 +106,49 @@ export function pathWithin(path: string, prefix: string): boolean {
   return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
 }
 
-type Segment = string | number;
-
-/** Splits a path as `lostPaths` writes them: `items[1].badge` is `items`, 1, `badge`. */
-function segmentsOf(path: string): Segment[] {
-  const segments: Segment[] = [];
-  for (const part of path.split('.')) {
-    const match = /^([^[\]]*)((?:\[\d+\])*)$/.exec(part);
-    if (!match) return [part];
-    if (match[1] !== '') segments.push(match[1] as string);
-    for (const index of (match[2] as string).matchAll(/\[(\d+)\]/g))
-      segments.push(Number(index[1]));
-  }
-  return segments;
-}
-
-function stepInto(scope: unknown, segment: Segment): unknown {
+function stepInto(scope: unknown, segment: PathSegment): unknown {
   if (typeof segment === 'number')
     return Array.isArray(scope) ? scope[segment] : undefined;
   return isPlainRecord(scope) ? ownValue(scope, segment) : undefined;
 }
 
 /**
- * A copy of `target` in which the value at `path` is whatever `source` has there — or nothing, if
- * `source` has nothing there. Used to ask what one loss, on its own, does to a payload.
+ * A copy of `target` in which the value at each of `paths` is whatever `source` has there — or
+ * nothing, if `source` has nothing there. Used to ask what a set of losses does to a payload,
+ * leaving everything else exactly as it was.
+ *
+ * It never grows an array: an index past the end of one is not a place in `target`, and is left
+ * alone.
  */
-export function withValueFrom(
+export function withValuesFrom(
   target: unknown,
   source: unknown,
-  path: string,
+  paths: readonly Path[],
 ): unknown {
-  const segments = segmentsOf(path);
-  if (path === '' || segments.length === 0) return structuredClone(source);
+  if (paths.some((path) => path.length === 0)) return structuredClone(source);
   const copy = structuredClone(target);
-  let into: unknown = copy;
-  let from: unknown = source;
-  for (let i = 0; i < segments.length - 1; i++) {
-    into = stepInto(into, segments[i] as Segment);
-    from = stepInto(from, segments[i] as Segment);
-    if (typeof into !== 'object' || into === null) return copy;
-  }
-  const last = segments[segments.length - 1] as Segment;
-  const value = stepInto(from, last);
-  if (typeof last === 'number') {
-    if (Array.isArray(into))
-      into[last] = value === undefined ? null : structuredClone(value);
-  } else if (isPlainRecord(into)) {
-    if (value === undefined) delete into[last];
-    else
-      Object.defineProperty(into, last, {
-        value: structuredClone(value),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+  for (const path of paths) {
+    let into: unknown = copy;
+    let from: unknown = source;
+    for (let i = 0; i < path.length - 1 && into !== undefined; i++) {
+      into = stepInto(into, path[i] as PathSegment);
+      from = stepInto(from, path[i] as PathSegment);
+    }
+    const last = path[path.length - 1] as PathSegment;
+    const value = stepInto(from, last);
+    if (typeof last === 'number') {
+      if (Array.isArray(into) && last < into.length)
+        into[last] = value === undefined ? null : structuredClone(value);
+    } else if (isPlainRecord(into)) {
+      if (value === undefined) delete into[last];
+      else
+        Object.defineProperty(into, last, {
+          value: structuredClone(value),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+    }
   }
   return copy;
 }

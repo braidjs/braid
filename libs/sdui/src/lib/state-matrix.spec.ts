@@ -167,4 +167,65 @@ describe('check-state-matrix', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('type ScreenState is not declared');
   });
+
+  const withStates = (edit: (source: string) => string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    const source = readFileSync(statesSource, 'utf8');
+    const edited = edit(source);
+    expect(edited).not.toBe(source);
+    writeFileSync(modified, edited);
+    return check('--states', modified);
+  };
+
+  it('refuses a list followed by a cast that widens it', () => {
+    const result = withStates((source) =>
+      source.replace(
+        /(export const ACTION_STATES = \[[\s\S]*?\]) as const;/,
+        "$1 as const as readonly (string | 'pulsing')[];",
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'ACTION_STATES must end with "] as const;" and nothing else',
+    );
+  });
+
+  it('is not satisfied by a declaration that only exists in a comment', () => {
+    const exact = 'export type NodeState = (typeof NODE_STATES)[number];';
+    const widened = withStates((source) =>
+      source.replace(
+        exact,
+        `export type NodeState = (typeof NODE_STATES)[number] | 'pulsing';\n/*\n${exact}\n*/`,
+      ),
+    );
+    expect(widened.status).toBe(1);
+    expect(widened.stderr).toContain('type NodeState is not exactly');
+
+    // A new state in the real list, with the old list kept in a comment after it.
+    const old = /export const ACTION_STATES = \[[\s\S]*?\] as const;/.exec(
+      readFileSync(statesSource, 'utf8'),
+    )?.[0] as string;
+    const shadowed = withStates((source) =>
+      source.replace(
+        old,
+        `${old.replace("'idle',", "'idle', 'pulsing',")}\n/*\n${old}\n*/`,
+      ),
+    );
+    expect(shadowed.status).toBe(1);
+    expect(shadowed.stderr).toContain(
+      'action: "pulsing" has no conformance vector',
+    );
+  });
+
+  it('refuses a list declared twice', () => {
+    const old = /export const ACTION_STATES = \[[\s\S]*?\] as const;/.exec(
+      readFileSync(statesSource, 'utf8'),
+    )?.[0] as string;
+    const result = withStates((source) =>
+      source.replace(old, `${old}\n${old}`),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ACTION_STATES is declared more than once');
+  });
 });

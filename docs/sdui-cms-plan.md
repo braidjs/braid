@@ -830,10 +830,10 @@ Decisions the review forced, which the sections above should be read with:
   blocks it, wherever the node sits — including under an ancestor that was replaced by its own
   fallback. Inside a fallback it is conditional: it counts when that fallback is what is rendered.
 - **Loss is measured, not declared.** A downgrade's lost paths are what the node held that does not
-  come back from a trip down and up. Each is traced into the component's newest shape on its own,
-  which is the shape `criticalPaths` are written in. A field a default fills in was never lost. A
-  loss that leaves no trace in the newest shape is still reported, and on a component with
-  critical paths it is refused.
+  come back from a trip down and up, placed in the component's newest shape, which is the shape
+  `criticalPaths` are written in. A field the author left out was never lost. A loss that leaves
+  no trace in the newest shape is still reported, and on a component with critical paths it is
+  refused. The work is bounded by the kinds of field lost, not by the size of the node.
 - **Conditions are three-valued.** Unknown is not true, and stays unknown through `not`.
 - **Every trust boundary has a parser** with size limits. The reserved keys `__proto__`,
   `constructor` and `prototype` are refused in screens, manifests and handshake bodies, in a

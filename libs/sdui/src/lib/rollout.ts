@@ -272,6 +272,16 @@ export function parseFlagDefinitions(raw: unknown): FlagDefinition[] {
     );
     if (strayFlag !== undefined)
       fail(`flag "${key}" has an unknown key "${strayFlag.slice(0, 40)}"`);
+    for (const text of ['owner', 'expires'] as const) {
+      if (
+        definition[text] !== undefined &&
+        (typeof definition[text] !== 'string' ||
+          (definition[text] as string).length > 128)
+      )
+        fail(
+          `flag "${key}": ${text} must be a string of at most 128 characters`,
+        );
+    }
     const reservedDefault = reservedKeyIn(definition['default']);
     if (reservedDefault !== null)
       fail(

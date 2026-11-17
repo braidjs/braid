@@ -153,6 +153,12 @@ function checkValue(
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
+    // A key with path punctuation in it could not be told, in a report or a critical path, from
+    // a nesting or a list index.
+    if (/[.[\]]/.test(key))
+      fail(
+        `${where} has a key ${JSON.stringify(key.slice(0, 40))} containing ".", "[" or "]"`,
+      );
     checkValue(inner, `${where}.${key}`, depth + 1, budget, fail);
   }
 }
