@@ -48,15 +48,25 @@ const failures = [];
 // Comments are removed first, so nothing in one can stand in for a declaration: a list or a type
 // left behind in a comment is not the list or the type. Strings are stepped over while doing it,
 // so a comment opener inside one hides nothing.
-function withoutComments(text) {
+function withoutComments(text, { blankStrings = false } = {}) {
   let out = '';
   let quote = null;
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
     if (quote !== null) {
-      out += char;
-      if (char === '\\') out += text[++i] ?? '';
-      else if (char === quote) quote = null;
+      if (char === '\\') {
+        if (!blankStrings) out += char + (text[i + 1] ?? '');
+        i++;
+      } else if (char === quote) {
+        quote = null;
+        out += char;
+      } else if (quote === '`' && char === '$' && text[i + 1] === '{') {
+        // What is inside `${…}` is code again, and this scanner does not follow it there.
+        templateExpressions++;
+        if (!blankStrings) out += char;
+      } else if (!blankStrings) {
+        out += char;
+      }
     } else if (char === "'" || char === '"' || char === '`') {
       quote = char;
       out += char;
@@ -73,7 +83,16 @@ function withoutComments(text) {
   }
   return out;
 }
-const source = withoutComments(readFileSync(statesPath, 'utf8'));
+let templateExpressions = 0;
+const raw = readFileSync(statesPath, 'utf8');
+const source = withoutComments(raw);
+// The same, with what is inside every string removed: for looking at the code, where the text of
+// a string must not be taken for a declaration or hide one.
+const code = withoutComments(raw, { blankStrings: true });
+if (templateExpressions > 0)
+  failures.push(
+    `a template literal with an expression ("\${…}") in ${statesPath} — this check cannot read inside one; build the string another way`,
+  );
 const declared = new Map();
 // Found by position, not by one regex across the file: each list is located at its `export const`
 // and read up to the first `] as const`, which is linear however large the file is.
@@ -140,11 +159,14 @@ const TYPES = {
   NODE_STATES: 'NodeState',
   ACTION_STATES: 'ActionState',
 };
-const typeAliases = new Map(
-  [...source.matchAll(/^export type (\w+)(?:<[^>]*>)? =([^;]*);/gm)].map(
-    (alias) => [alias[1], alias[2].replace(/\s+/g, '')],
-  ),
-);
+const typeAliases = new Map();
+for (const alias of code.matchAll(
+  /^export type (\w+)(?:<[^>]*>)? =([^;]*);/gm,
+)) {
+  if (typeAliases.has(alias[1]))
+    failures.push(`type ${alias[1]} is declared more than once`);
+  typeAliases.set(alias[1], alias[2].replace(/\s+/g, ''));
+}
 for (const [constant, type] of Object.entries(TYPES)) {
   const exact = `(typeof${constant})[number]`;
   const declared = typeAliases.get(type);
@@ -161,7 +183,6 @@ for (const [constant, type] of Object.entries(TYPES)) {
 // A cast can make a value a state without it being in a list, and a resolver whose return type
 // names more than the state type can return one. Neither is needed in this file, so neither is
 // allowed: the only `as` is `as const`, and each resolver returns exactly its state type.
-const code = source.replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
 // `as` in any spelling — `as X`, `as (X)`, `as (typeof LIST)[number]` — and the older `<X>value`.
 const STATE_TYPES =
   'SessionState|ScreenState|NodeState|ActionState|unknown|any|never';

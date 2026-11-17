@@ -29,7 +29,7 @@ import {
 } from '../index.js';
 import { runSdui } from './cli.js';
 import { outgrows } from './internal.js';
-import { withValuesFrom } from './paths.js';
+import { withValuesFrom, withinAny } from './paths.js';
 import { catalog, manifest, readVector, screen } from './fixtures.spec-util.js';
 
 /**
@@ -3113,15 +3113,21 @@ describe('the fifth pass: a loss with no trace, wherever it hides', () => {
         ),
       });
       const started = Date.now();
-      const refused = onV1(node, only(steps, { criticalPaths: ['tone'] }));
+      // A thousand critical paths as well: each lost path is checked against all of them.
+      const critical = [
+        'tone',
+        ...Array.from({ length: 1000 }, (_, index) => `c${index}.x`),
+      ];
+      const refused = onV1(node, only(steps, { criticalPaths: critical }));
       const reported = onV1(node, only(steps));
       const elapsed = Date.now() - started;
       expect(refused.root).toBeNull();
       expect(reported.report[0]?.lossyPaths).toHaveLength(
         SCREEN_LIMITS.values / 2 - 10,
       );
-      // About a second and a half here. It was a minute when the losses were grouped by copying.
-      expect(elapsed).toBeLessThan(15_000);
+      // About two seconds here. It was a minute when the losses were grouped by copying, and a
+      // quarter of one when each lost path was compared with each critical path in turn.
+      expect(elapsed).toBeLessThan(8000);
     },
   );
 });
@@ -3447,6 +3453,96 @@ describe('review of the fifth pass: size, not only depth', () => {
         },
       }),
     ).toThrow('segments');
+  });
+
+  it('limits a path an op reads with `$from` like any other it names', () => {
+    const long = `/${Array.from({ length: 40 }, (_, index) => `a${index}`).join('/')}`;
+    const reading = (from: string) => () =>
+      noteWith([
+        {
+          from: 1,
+          to: 2,
+          description: 'w',
+          ops: [
+            { wrap: { path: 'p', key: 'k', also: { copy: { $from: from } } } },
+          ],
+        },
+      ]);
+    expect(reading(long)).toThrow('segments');
+    expect(reading('/a/b')).not.toThrow();
+  });
+
+  it('says which kind of refusal it is: a critical field lost, or a loss it could not place', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'price and note',
+        ops: [
+          { default: { path: 'price', value: null } },
+          { default: { path: 'note', value: null } },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'no notes',
+        ops: [{ drop: { path: 'note' } }],
+      },
+    ];
+    const strict = noteWith(steps, { criticalPaths: ['price'] });
+    const on = device({ note: 1 });
+    expect(
+      projectScreen(note(2, { price: 5 }), strict, on).report[0]?.reason,
+    ).toContain('cannot carry "price", which must not be lost');
+    // `note` is not critical, but v3 has no place for it, so nothing shows where it went.
+    expect(
+      projectScreen(note(2, { note: 'n' }), strict, on).report[0]?.reason,
+    ).toContain(
+      'cannot carry "note", and what was lost could not be traced to show that nothing critical went with it',
+    );
+  });
+
+  it('answers "is this within a critical path" the same from a prepared list as one by one', () => {
+    const paths = [
+      'price',
+      'price.sale',
+      'items[].badge',
+      'a.b.c',
+      'slots.media',
+      'x',
+    ];
+    const asked = [
+      'price',
+      'price.sale.amount',
+      'pric',
+      'prices',
+      'items[3].badge',
+      'items[3]',
+      'items',
+      'items[0].title',
+      'a',
+      'a.b',
+      'a.b.c.d',
+      'a.c',
+      'slots.media',
+      'slots',
+      'x[2]',
+      'y',
+      '',
+    ];
+    for (const subset of [paths, paths.slice(1, 3), ['a.b.c'], []]) {
+      const prepared = withinAny(subset);
+      for (const path of asked)
+        expect([path, prepared(path)]).toEqual([
+          path,
+          subset.some((prefix) => {
+            const a = path.replace(/\[\d*\]/g, '');
+            const b = prefix.replace(/\[\d*\]/g, '');
+            return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+          }),
+        ]);
+    }
   });
 
   it('refuses a list with a hole where a node or a condition should be', () => {

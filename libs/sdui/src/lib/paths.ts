@@ -90,15 +90,44 @@ export function lostPaths(original: unknown, back: unknown): string[] {
   return lostSegments(original, back).map(formatPath);
 }
 
+const withoutIndexes = (path: string): string => path.replace(/\[\d*\]/g, '');
+
 /**
  * Whether one path is the other or lies under it, ignoring which element of a list is meant:
  * `price.amount` and `price` are within each other, and `items[2].badge` is within `items`.
  */
 export function pathWithin(path: string, prefix: string): boolean {
-  const normalize = (p: string): string => p.replace(/\[\d*\]/g, '');
-  const a = normalize(path);
-  const b = normalize(prefix);
-  return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+  return withinAny([prefix])(path);
+}
+
+/**
+ * {@link pathWithin} against a whole list at once: a function that says whether a path is, lies
+ * under, or lies over any of `prefixes`. The list is prepared once, so asking costs the length
+ * of the path asked about, not the length of the list.
+ */
+export function withinAny(
+  prefixes: readonly string[],
+): (path: string) => boolean {
+  const exact = new Set<string>();
+  const over = new Set<string>();
+  for (const prefix of prefixes) {
+    const segments = withoutIndexes(prefix).split('.');
+    exact.add(segments.join('.'));
+    for (let length = 1; length < segments.length; length++)
+      over.add(segments.slice(0, length).join('.'));
+  }
+  return (path) => {
+    const segments = withoutIndexes(path).split('.');
+    // Over one of them: `price` when `price.sale` is listed.
+    if (over.has(segments.join('.'))) return true;
+    // One of them, or under it: `price.sale.amount` when `price.sale` is listed.
+    let head = '';
+    for (const segment of segments) {
+      head = head === '' ? segment : `${head}.${segment}`;
+      if (exact.has(head)) return true;
+    }
+    return false;
+  };
 }
 
 function stepInto(scope: unknown, segment: PathSegment): unknown {

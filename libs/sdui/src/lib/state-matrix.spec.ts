@@ -286,6 +286,56 @@ describe('check-state-matrix', () => {
     expect(result.stderr).toContain('type ScreenState is not exactly');
   });
 
+  const TRUNCATED = "  if (facts.truncated) states.push('truncated');";
+  const NODE_TYPE = 'export type NodeState = (typeof NODE_STATES)[number];';
+
+  it.each([
+    [
+      'after an escaped quote on the same line',
+      `{ const note = 'it\\'s'; states.push('clipped' as unknown as NodeState); const end = ''; void note; void end; }`,
+    ],
+    ['to an object type', `states.push(({ s: 'clipped' } as { s: never }).s);`],
+    [
+      'in parentheses, twice',
+      `states.push(('clipped' as (unknown)) as (NodeState));`,
+    ],
+  ])('refuses a cast %s', (_label, statement) => {
+    const result = withStates((source) =>
+      source.replace(TRUNCATED, `${TRUNCATED}\n  ${statement}`),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('a cast ("as ');
+  });
+
+  it('reads declarations from code, not from the text of a string', () => {
+    // The real type is widened; an exact-looking one sits inside a template literal after it.
+    const fake = withStates((source) =>
+      source.replace(
+        NODE_TYPE,
+        `${NODE_TYPE.replace(';', " | 'pulsing';")}\nexport const NOTE = \`\n${NODE_TYPE}\n\`;`,
+      ),
+    );
+    expect(fake.status).toBe(1);
+    expect(fake.stderr).toContain('type NodeState is not exactly');
+
+    const twice = withStates((source) =>
+      source.replace(NODE_TYPE, `${NODE_TYPE}\n${NODE_TYPE}`),
+    );
+    expect(twice.status).toBe(1);
+    expect(twice.stderr).toContain('type NodeState is declared more than once');
+
+    const expression = withStates((source) =>
+      source.replace(
+        TRUNCATED,
+        `${TRUNCATED}\n  void \`\${'clipped' as unknown as NodeState}\`;`,
+      ),
+    );
+    expect(expression.status).toBe(1);
+    expect(expression.stderr).toContain(
+      'a template literal with an expression',
+    );
+  });
+
   it('refuses a list declared twice', () => {
     const old = /export const ACTION_STATES = \[[\s\S]*?\] as const;/.exec(
       readFileSync(statesSource, 'utf8'),

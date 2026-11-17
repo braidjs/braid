@@ -117,7 +117,26 @@ export const CATALOG_LIMITS = Object.freeze({
   pathSegments: 32,
 });
 
-/** The first path in a list of ops that is longer than the limit, looking inside `map`. */
+const tooLong = (path: unknown): path is string =>
+  typeof path === 'string' &&
+  path.split(/[./]/).filter((segment) => segment !== '').length >
+    CATALOG_LIMITS.pathSegments;
+
+/** A `$from` anywhere under a value that reads a path longer than the limit. */
+function overlongSource(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return null;
+  for (const [key, inner] of Object.entries(value)) {
+    if (key === '$from' && tooLong(inner)) return inner;
+    const found = overlongSource(inner);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
+ * The first path in a list of ops that is longer than the limit: what an op names as `path`,
+ * `from` or `to`, what it reads with `$from`, and the same inside `map`.
+ */
 function overlongPath(ops: unknown): string | null {
   if (!Array.isArray(ops)) return null;
   for (const op of ops) {
@@ -126,13 +145,11 @@ function overlongPath(ops: unknown): string | null {
       if (!isRecord(body)) continue;
       for (const key of ['path', 'from', 'to']) {
         const path = own(body, key);
-        if (
-          typeof path === 'string' &&
-          path.split('.').length > CATALOG_LIMITS.pathSegments
-        )
-          return path;
+        if (tooLong(path)) return path;
       }
-      const inner = overlongPath(own(body, 'ops'));
+      const inner =
+        overlongPath(own(body, 'ops')) ??
+        overlongSource({ ...body, ops: undefined });
       if (inner !== null) return inner;
     }
   }

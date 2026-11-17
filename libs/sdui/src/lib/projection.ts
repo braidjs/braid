@@ -26,8 +26,8 @@ import {
   type Path,
   formatPath,
   lostPaths,
-  pathWithin,
   withValuesFrom,
+  withinAny,
 } from './paths.js';
 
 /**
@@ -206,6 +206,19 @@ export function projectScreen(
 ): ProjectionResult {
   const killed = new Set(options.unsupported ?? []);
   let tracing = TRACE_BUDGET;
+  // Prepared once per component, not once per lost path: a long list can lose a field in every
+  // element, and a component may name many critical paths.
+  const critical = new Map<ComponentDefinition, (path: string) => boolean>();
+  const criticalOf = (
+    definition: ComponentDefinition,
+  ): ((path: string) => boolean) => {
+    let matcher = critical.get(definition);
+    if (!matcher) {
+      matcher = withinAny(definition.criticalPaths ?? []);
+      critical.set(definition, matcher);
+    }
+    return matcher;
+  };
   // One instant for the whole screen, so two nodes of one projection cannot disagree about "now".
   const instant = (options.context ?? defaultMigrationContext).now();
   const migrateOptions = {
@@ -486,17 +499,24 @@ export function projectScreen(
     }
 
     const criticalPaths = definition.criticalPaths ?? [];
+    const isCritical = criticalOf(definition);
+    const lostCritical = traced.find(isCritical);
+    if (lostCritical !== undefined) {
+      return {
+        ok: false,
+        reason: `"${node.type}" v${clientVersion} cannot carry "${lostCritical}", which must not be lost`,
+      };
+    }
     // A loss that could not be traced into the newest shape cannot be compared with the critical
     // paths by name. On a component that has critical paths it is treated as one: refusing a
     // render that would have been fine costs a fallback — or the screen, on this device, if the
-    // node is required; allowing one that drops a price does not bear thinking about.
-    const critical =
-      traced.find((path) => criticalPaths.some((c) => pathWithin(path, c))) ??
-      (criticalPaths.length > 0 ? untraced[0] : undefined);
-    if (critical !== undefined) {
+    // node is required and has none; allowing one that drops a price does not bear thinking about.
+    if (criticalPaths.length > 0 && untraced.length > 0) {
+      const lost =
+        untraced[0] === '' ? 'its props as a whole' : `"${untraced[0]}"`;
       return {
         ok: false,
-        reason: `"${node.type}" v${clientVersion} cannot carry ${critical === '' ? 'its props as a whole' : `"${critical}"`}, which must not be lost`,
+        reason: `"${node.type}" v${clientVersion} cannot carry ${lost}, and what was lost could not be traced to show that nothing critical went with it`,
       };
     }
 
