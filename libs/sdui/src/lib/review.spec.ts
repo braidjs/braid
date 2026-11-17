@@ -5,6 +5,7 @@ import {
   type SduiCatalog,
   CATALOG_LIMITS,
   MIGRATED_DEPTH_LIMIT,
+  MIGRATED_VALUE_LIMIT,
   SCREEN_LIMITS,
   TRACE_BUDGET,
   applyVisibility,
@@ -27,6 +28,7 @@ import {
   validateScreen,
 } from '../index.js';
 import { runSdui } from './cli.js';
+import { outgrows } from './internal.js';
 import { withValuesFrom } from './paths.js';
 import { catalog, manifest, readVector, screen } from './fixtures.spec-util.js';
 
@@ -2990,68 +2992,91 @@ describe('the fifth pass: a loss with no trace, wherever it hides', () => {
     });
   });
 
-  it('shares one tracing budget across the nodes of a projection', () => {
-    const fields = Array.from({ length: 32 }, (_, index) => `f${index}`);
-    const strict = parseCatalog({
-      sduiCatalog: '1',
-      components: {
-        note: {
-          contract: doc('note', 3, [
-            {
-              from: 1,
-              to: 2,
-              description: 'fields',
-              ops: fields.map((field) => ({
-                default: { path: field, value: null },
+  it.each([1, 2])(
+    'shares one tracing budget across the nodes of a projection (%i versions lifted)',
+    (above) => {
+      const fields = Array.from({ length: 32 }, (_, index) => `f${index}`);
+      const strict = parseCatalog({
+        sduiCatalog: '1',
+        components: {
+          note: {
+            contract: doc('note', 2 + above, [
+              {
+                from: 1,
+                to: 2,
+                description: 'fields',
+                ops: fields.map((field) => ({
+                  default: { path: field, value: null },
+                })),
+              },
+              ...Array.from({ length: above }, (_, index) => ({
+                from: 2 + index,
+                to: 3 + index,
+                description: `tone ${index}`,
+                ops: [{ default: { path: `tone${index}`, value: 'plain' } }],
               })),
-            },
-            {
-              from: 2,
-              to: 3,
-              description: 'tone',
-              ops: [{ default: { path: 'tone', value: 'plain' } }],
-            },
-          ]),
-          criticalPaths: ['tone'],
-        },
-        stack: { contract: doc('stack', 1, []), slots: { children: {} } },
-      },
-    });
-    const notes = (count: number): Screen =>
-      parseScreen({
-        id: 's',
-        slug: 's',
-        root: {
-          id: 'root',
-          type: 'stack',
-          v: 1,
-          slots: {
-            children: Array.from({ length: count }, (_, index) => ({
-              id: `n${index}`,
-              type: 'note',
-              v: 2,
-              props: Object.fromEntries(fields.map((field) => [field, 'x'])),
-            })),
+            ]),
+            criticalPaths: ['tone0'],
           },
+          stack: { contract: doc('stack', 1, []), slots: { children: {} } },
         },
       });
-    const on = device({ note: 1, stack: 1 });
-    // Each node costs 32 losses × (33 values + 32) = 2,080 of the budget.
-    const within = Math.floor(TRACE_BUDGET / 2080);
-    const result = projectScreen(notes(within + 5), strict, on);
-    const outcomes = result.report
-      .filter((entry) => entry.type === 'note')
-      .map((entry) => entry.outcome);
-    expect(outcomes.slice(0, within)).toEqual(
-      Array.from({ length: within }, () => 'downgraded'),
+      const notes = (count: number): Screen =>
+        parseScreen({
+          id: 's',
+          slug: 's',
+          root: {
+            id: 'root',
+            type: 'stack',
+            v: 1,
+            slots: {
+              children: Array.from({ length: count }, (_, index) => ({
+                id: `n${index}`,
+                type: 'note',
+                v: 2,
+                props: Object.fromEntries(fields.map((field) => [field, 'x'])),
+              })),
+            },
+          },
+        });
+      const on = device({ note: 1, stack: 1 });
+      // Each node costs 32 losses × (33 values + 32) = 2,080 of the budget per version lifted.
+      const within = Math.floor(TRACE_BUDGET / (2080 * above));
+      const result = projectScreen(notes(within + 5), strict, on);
+      const outcomes = result.report
+        .filter((entry) => entry.type === 'note')
+        .map((entry) => entry.outcome);
+      expect(outcomes.slice(0, within)).toEqual(
+        Array.from({ length: within }, () => 'downgraded'),
+      );
+      // Past the budget the losses are not traced, so a component with critical paths refuses.
+      expect(outcomes.slice(within)).toEqual(
+        Array.from({ length: 5 }, () => 'omitted'),
+      );
+      expect(reportOf(result, `n${within}`)[0]?.reason).toContain(
+        'cannot carry',
+      );
+      // The budget is the projection's, not the process's: the next one starts afresh.
+      expect(projectScreen(notes(3), strict, on).outcome).toBe('degraded');
+    },
+  );
+
+  it('refuses the loss of the props as a whole at the newest version too', () => {
+    const steps: SkewContractDocument['steps'] = [
+      { from: 1, to: 2, description: 'opaque', code: 'opaque' },
+    ];
+    const codeSteps = { opaque: { up: () => 'gone', down: () => ({}) } };
+    const node = authored({ price: 5, a: 1 });
+    const strict = onV1(node, only(steps, { criticalPaths: ['price'] }), {
+      codeSteps,
+    });
+    expect(strict.root).toBeNull();
+    expect(strict.report[0]?.reason).toContain(
+      'cannot carry its props as a whole',
     );
-    // Past the budget the losses are not traced, so a component with critical paths refuses.
-    expect(outcomes.slice(within)).toEqual(
-      Array.from({ length: 5 }, () => 'omitted'),
-    );
-    expect(reportOf(result, `n${within}`)[0]?.reason).toContain('cannot carry');
-    // The budget is the projection's, not the process's: the next one starts afresh.
-    expect(projectScreen(notes(3), strict, on).outcome).toBe('degraded');
+    expect(
+      onV1(node, only(steps), { codeSteps }).report[0]?.lossyPaths,
+    ).toEqual(['']);
   });
 
   it(
@@ -3188,7 +3213,7 @@ describe('the fifth pass: nothing parsed can make a projection throw', () => {
 
   it('refuses values that are not JSON, in a screen and in a catalog', () => {
     const screenWith = (value: unknown) => () => authored({ a: value });
-    expect(screenWith(10n)).toThrow(
+    expect(screenWith(BigInt(10))).toThrow(
       'root.props.a is a bigint, which is not JSON',
     );
     expect(screenWith(Symbol('x'))).toThrow('a symbol');
@@ -3207,7 +3232,7 @@ describe('the fifth pass: nothing parsed can make a projection throw', () => {
           id: 'n',
           type: 'note',
           v: 2,
-          visibility: { flag: 'f', is: 10n },
+          visibility: { flag: 'f', is: BigInt(10) },
         },
       }),
     ).toThrow('a bigint');
@@ -3215,7 +3240,7 @@ describe('the fifth pass: nothing parsed can make a projection throw', () => {
     expect(screenWith([1, 'two', null, true, { three: 3 }])).not.toThrow();
 
     expect(() =>
-      parseCatalog(withSteps([{ default: { path: 'n', value: 10n } }])),
+      parseCatalog(withSteps([{ default: { path: 'n', value: BigInt(10) } }])),
     ).toThrow('is a bigint, which is not JSON');
   });
 
@@ -3231,5 +3256,277 @@ describe('the fifth pass: nothing parsed can make a projection throw', () => {
     expect(() => parseCatalog(editor)).toThrow(
       'catalog.components.note.editor uses the reserved key "constructor"',
     );
+  });
+});
+
+describe('review of the fifth pass: size, not only depth', () => {
+  const noteWith = (
+    steps: SkewContractDocument['steps'],
+    extra: object = {},
+  ): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: { contract: doc('note', steps.length + 1, steps), ...extra },
+      },
+    });
+  const note = (v: number, props: unknown, id = 's'): Screen =>
+    parseScreen({ id, slug: 's', root: { id: 'n', type: 'note', v, props } });
+
+  it('fails a node, quickly, when steps copy a value into itself until it cannot be written out', () => {
+    // Each op puts what `a` holds under two keys of a new `a`. Sixty of them are a value with
+    // 2^60 paths through it, in about a hundred objects.
+    const doubling = noteWith([
+      {
+        from: 1,
+        to: 2,
+        description: 'double, sixty times',
+        ops: Array.from({ length: 60 }, () => ({
+          wrap: { path: 'a', key: 'l', also: { r: { $from: 'a' } } },
+        })),
+      },
+    ]);
+    const started = Date.now();
+    const result = projectScreen(
+      note(1, { a: 'x' }),
+      doubling,
+      device({ note: 2 }),
+    );
+    expect(result.outcome).toBe('fallback');
+    expect(result.report[0]?.reason).toMatch(
+      /nested more than 64 levels deep|of more than 400000 values/,
+    );
+    expect(() =>
+      diffScreens(note(1, { a: 'x' }), note(1, { a: 'y' }, 's2'), doubling),
+    ).not.toThrow();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('holds the value limit exactly, counting a shared object once per place it appears', () => {
+    const contract = doc('note', 2, [
+      { from: 1, to: 2, description: 'rows', code: 'rows' },
+    ]);
+    // { rows: [ [0], [0], … ] } is 2 + 2 × count values written out; the row is one object.
+    const rows = (count: number) => ({
+      rows: {
+        up: () => ({
+          rows: Array.from({ length: count }, () => 0).map(() => ROW),
+        }),
+      },
+    });
+    const ROW = [0];
+    expect(MIGRATED_VALUE_LIMIT).toBe(400_000);
+    expect(migrate(contract, {}, 1, 2, { codeSteps: rows(199_999) }).ok).toBe(
+      true,
+    );
+    const over = migrate(contract, {}, 1, 2, { codeSteps: rows(200_000) });
+    expect(over).toMatchObject({ ok: false, reason: 'threw' });
+    expect(over.ok ? '' : over.message).toContain('more than 400000 values');
+  });
+
+  it('pins the limits themselves, which the docs quote', () => {
+    expect(MIGRATED_DEPTH_LIMIT).toBe(64);
+    expect(TRACE_BUDGET).toBe(2_000_000);
+    expect(CATALOG_LIMITS).toEqual({
+      depth: 64,
+      values: 1_000_000,
+      pathSegments: 32,
+    });
+  });
+
+  it('measures a shared object once, and still sees it where it sits too deep', () => {
+    let looked = 0;
+    const shared = {
+      get counted() {
+        looked++;
+        return 1;
+      },
+    };
+    const limits = { depth: 64, values: 1_000_000 };
+    expect(
+      outgrows(
+        Array.from({ length: 1000 }, () => shared),
+        limits,
+      ),
+    ).toBeNull();
+    expect(looked).toBe(1);
+
+    // Ten levels of its own, met first near the top and then again sixty levels down.
+    const nest = (value: unknown, levels: number): unknown => {
+      let nested = value;
+      for (let level = 0; level < levels; level++) nested = [nested];
+      return nested;
+    };
+    const ten = nest(0, 10);
+    expect(outgrows({ a: ten, b: nest(ten, 50) }, limits)).toBeNull();
+    expect(outgrows({ a: ten, b: nest(ten, 60) }, limits)).toBe('depth');
+    const loop: unknown[] = [];
+    loop.push(loop);
+    expect(outgrows(loop, limits)).toBe('depth');
+  });
+
+  it('holds the depth limit exactly', () => {
+    const wraps = (count: number) =>
+      doc('note', 2, [
+        {
+          from: 1,
+          to: 2,
+          description: 'wrap',
+          ops: Array.from({ length: count }, () => ({
+            wrap: { path: 'p', key: 'k' },
+          })),
+        },
+      ]);
+    // { p: 'x' } is one level; each wrap adds one.
+    expect(migrate(wraps(MIGRATED_DEPTH_LIMIT - 1), { p: 'x' }, 1, 2).ok).toBe(
+      true,
+    );
+    const over = migrate(wraps(MIGRATED_DEPTH_LIMIT), { p: 'x' }, 1, 2);
+    expect(over.ok ? '' : over.message).toContain(
+      `nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`,
+    );
+  });
+
+  it('holds the catalog limits exactly: depth, values, and `from` as well as `path` and `to`', () => {
+    const depthOf = (value: unknown): number =>
+      typeof value !== 'object' || value === null
+        ? 0
+        : 1 + Math.max(0, ...Object.values(value).map(depthOf));
+    const withDefault = (value: unknown): unknown => ({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: doc('note', 2, [
+            {
+              from: 1,
+              to: 2,
+              description: 'd',
+              ops: [{ default: { path: 'd', value } }],
+            },
+          ]),
+        },
+      },
+    });
+    const nested = (levels: number): unknown => {
+      let value: unknown = 1;
+      for (let level = 0; level < levels; level++) value = [value];
+      return value;
+    };
+    const base = depthOf(withDefault(1));
+    const atLimit = withDefault(nested(CATALOG_LIMITS.depth - base));
+    expect(depthOf(atLimit)).toBe(CATALOG_LIMITS.depth);
+    expect(() => parseCatalog(atLimit)).not.toThrow();
+    expect(() =>
+      parseCatalog(withDefault(nested(CATALOG_LIMITS.depth - base + 1))),
+    ).toThrow(`more than ${CATALOG_LIMITS.depth} levels deep`);
+
+    // A thousand references to one row of a thousand: small in memory, a million values written
+    // out, and refused without being walked a million times.
+    const row = Array.from({ length: 1000 }, () => 0);
+    expect(() =>
+      parseCatalog(withDefault(Array.from({ length: 1000 }, () => row))),
+    ).toThrow(`more than ${CATALOG_LIMITS.values} values`);
+
+    const long = Array.from({ length: 40 }, (_, index) => `a${index}`).join(
+      '.',
+    );
+    expect(() =>
+      parseCatalog({
+        sduiCatalog: '1',
+        components: {
+          note: {
+            contract: doc('note', 2, [
+              {
+                from: 1,
+                to: 2,
+                description: 'r',
+                ops: [{ rename: { from: long, to: 'b' } }],
+              },
+            ]),
+          },
+        },
+      }),
+    ).toThrow('segments');
+  });
+
+  it('refuses a list with a hole where a node or a condition should be', () => {
+    const stack = {
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'r',
+        type: 'stack',
+        v: 1,
+        slots: { children: new Array(1) as unknown[] },
+      },
+    };
+    expect(() => parseScreen(stack)).toThrow(
+      'root.slots.children[0] must be an object',
+    );
+    expect(() =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'r',
+          type: 'stack',
+          v: 1,
+          visibility: { all: new Array(2) as unknown[] },
+        },
+      }),
+    ).toThrow('root.visibility.all[0] must be an object');
+  });
+
+  it('refuses a catalog that is not data in its own words, before reading any of it', () => {
+    const holes = {
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: {
+            ...doc('note', 2, []),
+            steps: new Array(1) as unknown[],
+          },
+        },
+      },
+    };
+    expect(() => parseCatalog(holes)).toThrow(
+      'sdui catalog: catalog.components.note.contract.steps[0] is undefined',
+    );
+    expect(() =>
+      parseCatalog({ sduiCatalog: Object.create(null), components: {} }),
+    ).toThrow('sdui catalog: unsupported catalog format (not a string)');
+    expect(() => parseCatalog({ sduiCatalog: '2', components: {} })).toThrow(
+      'sdui catalog: unsupported catalog format "2"',
+    );
+  });
+
+  it('refuses an array that carries anything besides its elements', () => {
+    // Defined, not assigned: assigning `__proto__` would set the prototype and leave no key.
+    const smuggling = (extra: object): unknown[] =>
+      Object.defineProperties(
+        [1, 2] as unknown[],
+        Object.getOwnPropertyDescriptors(extra),
+      );
+    expect(() => note(1, { list: smuggling({ f: () => 1 }) })).toThrow(
+      'root.props.list is an array with properties besides its elements',
+    );
+    expect(() =>
+      noteWith([
+        {
+          from: 1,
+          to: 2,
+          description: 'd',
+          ops: [
+            {
+              default: {
+                path: 'd',
+                value: smuggling(JSON.parse('{"__proto__": 1}') as object),
+              },
+            },
+          ],
+        },
+      ]),
+    ).toThrow('an array with properties besides its elements');
+    expect(() => note(1, { list: [1, 2] })).not.toThrow();
   });
 });

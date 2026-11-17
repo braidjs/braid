@@ -65,7 +65,9 @@ export function reservedKeyIn(value: unknown, depth = 0): string | null {
  * `undefined`, a number that is not finite, or an object that is not a plain one. Everything here
  * is hashed, compared and serialised as JSON, and none of those survive it — some of them throw.
  *
- * Not recursive: the caller is already walking the value.
+ * Not recursive: the caller is already walking the value. And it is a check of what a value is
+ * when it is looked at — data, as `JSON.parse` gives it. An object that answers differently the
+ * next time it is asked (a proxy, a getter) is a program, and no parser here claims to tame one.
  */
 export function notJson(value: unknown): string | null {
   switch (typeof value) {
@@ -75,7 +77,13 @@ export function notJson(value: unknown): string | null {
     case 'number':
       return Number.isFinite(value) ? null : 'a number that is not finite';
     case 'object': {
-      if (value === null || Array.isArray(value)) return null;
+      if (value === null) return null;
+      // An array's own keys are its elements. One that carries anything else — a named property
+      // can hold a function, or a reserved key — is not a list, and would be copied as one.
+      if (Array.isArray(value))
+        return Object.keys(value).length > value.length
+          ? 'an array with properties besides its elements'
+          : null;
       const prototype: unknown = Object.getPrototypeOf(value);
       return prototype === Object.prototype || prototype === null
         ? null
@@ -86,16 +94,54 @@ export function notJson(value: unknown): string | null {
   }
 }
 
+const SCALAR = Object.freeze({ height: 0, size: 1 });
+const TOO = Object.freeze({ depth: 'depth', values: 'values' } as const);
+
 /**
- * Whether a value nests more than `limit` levels. It stops looking as soon as the answer is yes,
- * so it is safe on a value far deeper than the stack.
+ * Whether a value is more than `limits` allow: nested more than `depth` levels, or holding more
+ * than `values` scalars, arrays and objects once written out — which is how it is hashed, compared
+ * and sent. Says which, or `null`.
+ *
+ * Each distinct object is measured once. Steps can build a value that holds one object in many
+ * places, and a graph like that a few dozen levels deep has more paths through it than can ever
+ * be walked; measured this way the cost is the number of objects, not the number of paths, and
+ * the descent stops at `depth` however deep the value goes. A cycle counts as too deep.
  */
-export function deeperThan(value: unknown, limit: number): boolean {
-  if (typeof value !== 'object' || value === null) return false;
-  if (limit <= 0) return true;
-  for (const inner of Array.isArray(value) ? value : Object.values(value))
-    if (deeperThan(inner, limit - 1)) return true;
-  return false;
+export function outgrows(
+  value: unknown,
+  limits: { readonly depth: number; readonly values: number },
+): 'depth' | 'values' | null {
+  const measured = new Map<object, { height: number; size: number }>();
+  const measure = (
+    inner: unknown,
+    room: number,
+  ): { height: number; size: number } => {
+    if (typeof inner !== 'object' || inner === null) return SCALAR;
+    const known = measured.get(inner);
+    if (known !== undefined) {
+      if (known.height > room) throw TOO.depth;
+      return known;
+    }
+    if (room <= 0) throw TOO.depth;
+    let height = 1;
+    let size = 1;
+    for (const child of Array.isArray(inner) ? inner : Object.values(inner)) {
+      const below = measure(child, room - 1);
+      height = Math.max(height, below.height + 1);
+      size += below.size;
+      if (size > limits.values) throw TOO.values;
+    }
+    const result = { height, size };
+    measured.set(inner, result);
+    return result;
+  };
+  try {
+    measure(value, limits.depth);
+    return null;
+  } catch (reason) {
+    if (reason === TOO.depth || reason === TOO.values) return reason;
+    throw reason;
+  }
 }
 
 /** Whether a dotted path has a reserved segment: `a.__proto__.b`, `constructor`. */

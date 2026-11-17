@@ -9,7 +9,7 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
-import { deeperThan } from './internal.js';
+import { outgrows } from './internal.js';
 import { type Path, formatPath, lostSegments } from './paths.js';
 
 /**
@@ -17,6 +17,13 @@ import { type Path, formatPath, lostSegments } from './paths.js';
  * but a result past this is no payload, and the functions that compare payloads recurse.
  */
 export const MIGRATED_DEPTH_LIMIT = 64;
+
+/**
+ * How many values a migrated payload may hold, written out: twice what a whole screen may. Steps
+ * that copy a value into itself double it each time, and sixty of them are a few hundred bytes of
+ * catalog; nothing downstream should be handed the result.
+ */
+export const MIGRATED_VALUE_LIMIT = 400_000;
 
 /**
  * Moves one payload between two versions of one contract.
@@ -169,11 +176,19 @@ function walk(
       };
     }
   }
-  if (deeperThan(current, MIGRATED_DEPTH_LIMIT))
+  const outgrown = outgrows(current, {
+    depth: MIGRATED_DEPTH_LIMIT,
+    values: MIGRATED_VALUE_LIMIT,
+  });
+  if (outgrown !== null)
     return {
       ok: false,
       reason: 'threw',
-      message: `"${doc.name}" v${from} → v${to} gives a value nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`,
+      message: `"${doc.name}" v${from} → v${to} gives a value ${
+        outgrown === 'depth'
+          ? `nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`
+          : `of more than ${MIGRATED_VALUE_LIMIT} values`
+      }`,
     };
   return { ok: true, value: current, derived: [...derived] };
 }

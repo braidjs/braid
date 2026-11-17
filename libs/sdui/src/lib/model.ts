@@ -263,15 +263,15 @@ function checkCondition(
         return fail(
           `${where}.${kind} must be an array of at most 64 conditions`,
         );
-      body.forEach((inner, index) =>
+      // By index: `forEach` steps over a hole, and a hole is not a condition.
+      for (let index = 0; index < body.length; index++)
         checkCondition(
-          inner,
+          body[index],
           `${where}.${kind}[${index}]`,
           depth + 1,
           budget,
           fail,
-        ),
-      );
+        );
       return;
     case 'not':
       checkCondition(body, `${where}.not`, depth + 1, budget, fail);
@@ -416,9 +416,13 @@ export function parseScreen(raw: unknown): Screen {
           );
         if (!Array.isArray(children))
           return fail(`${where}.slots.${slot} must be an array`);
-        children.forEach((child, index) =>
-          checkNode(child, `${where}.slots.${slot}[${index}]`, depth + 1),
-        );
+        // By index: `forEach` steps over a hole, and a hole is not a node.
+        for (let index = 0; index < children.length; index++)
+          checkNode(
+            children[index],
+            `${where}.slots.${slot}[${index}]`,
+            depth + 1,
+          );
       }
     }
     if (value['actions'] !== undefined) {

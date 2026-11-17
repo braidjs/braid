@@ -230,6 +230,22 @@ describe('check-state-matrix', () => {
     expect(result.stderr).toContain('a cast ("as unknown")');
   });
 
+  it.each([
+    'failure as (ScreenState)',
+    'failure as (typeof SCREEN_STATES)[number]',
+    '<ScreenState>(<unknown>failure)',
+    '<ScreenState>failure',
+  ])('refuses a cast however it is spelled: %s', (cast) => {
+    const result = withStates((source) =>
+      source.replace(
+        /SEMANTIC_FAILURES\.find\(\(known\) => known === failure\) \?\?\s+'error-server'/,
+        `(${cast})`,
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('a cast ("');
+  });
+
   it('refuses a resolver declared as returning more than its state type', () => {
     const inline = withStates((source) =>
       source.replace(

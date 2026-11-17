@@ -370,8 +370,11 @@ export function projectScreen(
   ): { traced: string[]; untraced: string[] } {
     if (lost.length === 0) return { traced: [], untraced: [] };
     const names = lost.map(formatPath);
-    if (node.v === contract.current) return { traced: names, untraced: [] };
     const all = { traced: [], untraced: names };
+    // The props as a whole did not come back. That has no place in any shape to compare with a
+    // critical path, at the newest version or below it.
+    if (lost.some((path) => path.length === 0)) return all;
+    if (node.v === contract.current) return { traced: names, untraced: [] };
     const props = node.props ?? {};
     const lifted = migrate(
       contract,

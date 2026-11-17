@@ -162,9 +162,20 @@ for (const [constant, type] of Object.entries(TYPES)) {
 // names more than the state type can return one. Neither is needed in this file, so neither is
 // allowed: the only `as` is `as const`, and each resolver returns exactly its state type.
 const code = source.replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
-for (const cast of code.matchAll(/\bas\s+(?!const\b)([\w.]+)/g))
+// `as` in any spelling — `as X`, `as (X)`, `as (typeof LIST)[number]` — and the older `<X>value`.
+const STATE_TYPES =
+  'SessionState|ScreenState|NodeState|ActionState|unknown|any|never';
+for (const cast of [
+  ...code.matchAll(/\bas\b(?!\s+const\b)\s*[^\s;,)]*/g),
+  ...code.matchAll(
+    new RegExp(
+      `(?<![\\w$])<\\s*(?:${STATE_TYPES})(?:\\[\\])?\\s*>\\s*[\\w(<]`,
+      'g',
+    ),
+  ),
+])
   failures.push(
-    `a cast ("as ${cast[1]}") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
+    `a cast ("${cast[0].replace(/\s+/g, ' ').trim()}") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
   );
 const RESOLVERS = {
   resolveSessionState: '{state:SessionState;source:UiSource;}',

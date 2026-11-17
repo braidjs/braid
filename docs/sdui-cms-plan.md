@@ -839,9 +839,10 @@ Decisions the review forced, which the sections above should be read with:
 - **Every trust boundary has a parser** with size limits. The reserved keys `__proto__`,
   `constructor` and `prototype` are refused in screens, manifests and handshake bodies, anywhere
   in a catalog, and in flag and rollout definitions; values that are not JSON are refused in
-  screens and catalogs. A catalog's depth is limited, and a migration whose result nests past
-  walking fails like any other step that fails. Two root causes were fixed in `@braidlabs/skew`
-  rather than worked around.
+  screens and catalogs. A catalog's depth and size are limited, and a migration whose result is
+  too deep or too large to write out fails like any other step that fails. The parsers vouch for
+  data as `JSON.parse` gives it, not for a live object that changes after it is read. Two root
+  causes were fixed in `@braidlabs/skew` rather than worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
 Two things the tables above describe are left for P2, where their acceptance criteria are:

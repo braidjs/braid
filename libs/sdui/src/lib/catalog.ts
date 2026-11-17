@@ -8,11 +8,11 @@ import { contentAddress } from './hash.js';
 import { type Screen, type SduiAction, type SduiNode } from './model.js';
 import {
   RESERVED_KEYS,
-  deeperThan,
   hasReservedSegment,
   isRecord,
   isSafeName,
   notJson,
+  outgrows,
   own,
   reservedKeyIn,
 } from './internal.js';
@@ -101,13 +101,18 @@ const TYPE_NAME = /^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$/;
 const RESERVED = RESERVED_KEYS;
 
 /**
- * How deep a catalog may go. A catalog is written by engineers, so these are not there to ration
- * it; they are there so that nothing a catalog says can make a payload deeper than the functions
- * that walk payloads can follow.
+ * How big a catalog may be. A catalog is written by engineers, so these are not there to ration
+ * it. They are there so that a mistake is a message at the door: a document this deep or this
+ * large is not a catalog, and a path this long names nothing in a payload.
+ *
+ * They do not bound what a catalog's steps go on to build — a thousand short steps can nest a
+ * payload a thousand deep. `migrate` checks what comes out, for that.
  */
 export const CATALOG_LIMITS = Object.freeze({
   /** How deep the document itself nests, schemas and default values included. */
   depth: 64,
+  /** Scalars, arrays and objects in the whole document. */
+  values: 1_000_000,
   /** Segments in any one path an op names: `a.b.c` is three. */
   pathSegments: 32,
 });
@@ -134,22 +139,37 @@ function overlongPath(ops: unknown): string | null {
   return null;
 }
 
-/** The first thing in a document that is a reserved key or is not JSON, with where it is. */
-function documentProblem(value: unknown, where: string): string | null {
-  const problem = notJson(value);
+/**
+ * The first thing in a document that is not JSON — or, when `reserved` is set, that is a reserved
+ * key — with where it is.
+ */
+function documentProblem(
+  value: unknown,
+  where: string,
+  reserved: boolean,
+): string | null {
+  const problem = reserved ? null : notJson(value);
   if (problem !== null) return `${where} is ${problem}, which is not JSON`;
   if (typeof value !== 'object' || value === null) return null;
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index++) {
-      const found = documentProblem(value[index], `${where}[${index}]`);
+      const found = documentProblem(
+        value[index],
+        `${where}[${index}]`,
+        reserved,
+      );
       if (found !== null) return found;
     }
     return null;
   }
   for (const [key, inner] of Object.entries(value)) {
-    if (RESERVED_KEYS.has(key))
+    if (reserved && RESERVED_KEYS.has(key))
       return `${where} uses the reserved key "${key}"`;
-    const found = documentProblem(inner, `${where}.${key.slice(0, 64)}`);
+    const found = documentProblem(
+      inner,
+      `${where}.${key.slice(0, 64)}`,
+      reserved,
+    );
     if (found !== null) return found;
   }
   return null;
@@ -166,13 +186,22 @@ export function parseCatalog(raw: unknown): SduiCatalog {
     throw new TypeError(`sdui catalog: ${message}`);
   };
   if (!isRecord(raw)) return fail('document must be an object');
-  // Before anything walks it: everything below, and everything that runs a catalog later, may
-  // then assume a document of ordinary depth.
-  if (deeperThan(raw, CATALOG_LIMITS.depth))
-    fail(`the document nests more than ${CATALOG_LIMITS.depth} levels deep`);
+  // Before anything walks it: everything below, and everything that reads a catalog later, may
+  // then assume a document of ordinary depth and size.
+  const outgrown = outgrows(raw, CATALOG_LIMITS);
+  if (outgrown !== null)
+    fail(
+      outgrown === 'depth'
+        ? `the document nests more than ${CATALOG_LIMITS.depth} levels deep`
+        : `the document holds more than ${CATALOG_LIMITS.values} values`,
+    );
+  // Then that it is data, so that nothing below meets a hole where a step should be, or a value
+  // it cannot print.
+  const notData = documentProblem(raw, 'catalog', false);
+  if (notData !== null) fail(notData);
   if (raw['sduiCatalog'] !== '1')
     fail(
-      `unsupported catalog format "${String(raw['sduiCatalog'])}" — this reader understands "1"`,
+      `unsupported catalog format ${typeof raw['sduiCatalog'] === 'string' ? `"${raw['sduiCatalog'].slice(0, 40)}"` : '(not a string)'} — this reader understands "1"`,
     );
   if (!isRecord(raw['components']))
     return fail('components must be an object keyed by component type');
@@ -340,9 +369,9 @@ export function parseCatalog(raw: unknown): SduiCatalog {
     }
   }
 
-  // Last, so that a problem with a name is reported in the terms above: nothing anywhere in the
-  // document — a default value, a schema, editor metadata — is a reserved key or is not JSON.
-  const problem = documentProblem(raw, 'catalog');
+  // Last, so that a problem with a name is reported in the terms above: no key anywhere in the
+  // document — in a default value, a schema, editor metadata — is a reserved one.
+  const problem = documentProblem(raw, 'catalog', true);
   if (problem !== null) fail(problem);
 
   return raw as unknown as SduiCatalog;
