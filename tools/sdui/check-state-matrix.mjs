@@ -41,21 +41,42 @@ const failures = [];
 
 const source = readFileSync(statesPath, 'utf8');
 const declared = new Map();
-for (const match of source.matchAll(
-  /export const (\w+_STATES) = \[([\s\S]*?)\] as const;/g,
-)) {
-  const level = LEVELS[match[1]];
+// Found by position, not by one regex across the file: each list is located at its `export const`
+// and read up to the first `] as const`, which is linear however large the file is.
+const OPENING = /^export const (\w+_STATES) = \[/gm;
+for (let match = OPENING.exec(source); match; match = OPENING.exec(source)) {
+  const constant = match[1];
+  const start = match.index + match[0].length;
+  const end = source.indexOf('] as const', start);
+  if (end < 0) {
+    failures.push(`${constant} has no closing "] as const" in ${statesPath}`);
+    break; // nothing after this point closes either, so there is no reason to look again
+  }
+  const level = LEVELS[constant];
   if (!level) {
     failures.push(
-      `${match[1]} is a state list this check does not know — add its level to LEVELS in tools/sdui/check-state-matrix.mjs`,
+      `${constant} is a state list this check does not know — add its level to LEVELS in tools/sdui/check-state-matrix.mjs`,
     );
     continue;
   }
-  const names = [...match[2].matchAll(/'([^']+)'/g)].map((name) => name[1]);
+  const body = source.slice(start, end).replace(/\/\/[^\n]*/g, '');
+  // Any quote style: a state added as "x" or `x` is still a state.
+  const names = [...body.matchAll(/'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`/g)].map(
+    (name) => name[1] ?? name[2] ?? name[3],
+  );
+  // Whatever is left once the names and commas are gone is something this check cannot read —
+  // a spread, a variable — and a list it cannot read is a list it cannot vouch for.
+  const rest = body
+    .replace(/'[^'\n]*'|"[^"\n]*"|`[^`\n]*`/g, '')
+    .replace(/[\s,]/g, '');
+  if (rest.length > 0)
+    failures.push(
+      `${constant} holds something other than string literals ("${rest.slice(0, 30)}") — list every state by name`,
+    );
   const seen = new Set();
   for (const name of names) {
     if (seen.has(name))
-      failures.push(`${level}: "${name}" is listed twice in ${match[1]}`);
+      failures.push(`${level}: "${name}" is listed twice in ${constant}`);
     seen.add(name);
   }
   declared.set(level, seen);

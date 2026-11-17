@@ -50,7 +50,7 @@ describe('check-state-matrix', () => {
     for (const level of ['session', 'screen', 'node']) {
       writeFileSync(
         join(dir, `${level}.json`),
-        readFileSync(join(vectorsDir, `${level}.json`), 'utf8').replace(
+        readFileSync(join(vectorsDir, `${level}.json`), 'utf8').replaceAll(
           '"state": "ok"',
           '"state": "fine"',
         ),
@@ -63,5 +63,52 @@ describe('check-state-matrix', () => {
     );
     expect(result.stderr).toContain('session: "ok" has no conformance vector');
     expect(result.stderr).toContain('action: no vector file');
+  });
+
+  it.each([
+    ['double quotes', '"loading-forever"'],
+    ['backticks', '`loading-forever`'],
+  ])('catches a state added in %s', (_style, literal) => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    writeFileSync(
+      modified,
+      readFileSync(statesSource, 'utf8').replace(
+        "'loading-initial',",
+        `'loading-initial', ${literal},`,
+      ),
+    );
+    const result = check('--states', modified);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'screen: "loading-forever" has no conformance vector',
+    );
+  });
+
+  it('refuses a list it cannot read in full, such as one built with a spread', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    writeFileSync(
+      modified,
+      readFileSync(statesSource, 'utf8').replace(
+        "'loading-initial',",
+        "'loading-initial', ...MORE,",
+      ),
+    );
+    const result = check('--states', modified);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'holds something other than string literals',
+    );
+  });
+
+  it('stays linear on a file built to make a backtracking pattern crawl', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const hostile = join(dir, 'states.ts');
+    writeFileSync(hostile, 'export const A_STATES = [\n'.repeat(40_000));
+    const started = Date.now();
+    const result = check('--states', hostile);
+    expect(result.status).toBe(1);
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });
