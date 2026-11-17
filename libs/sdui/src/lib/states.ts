@@ -192,7 +192,7 @@ const SEMANTIC_FAILURES = [
   'forbidden',
   'not-yet-live',
   'expired',
-] as const satisfies readonly ScreenFailure[];
+] as const satisfies readonly (ScreenFailure & ScreenState)[];
 
 const TRANSPORT_FAILURES: Partial<Record<ScreenFailure, ScreenState>> = {
   network: 'error-network',
@@ -236,10 +236,11 @@ export function resolveScreenState(facts: ScreenFacts): {
     if (failure === 'moved') return { state: 'moved', source: 'server' };
     // A failure this client does not know is treated as the server's error, and never as a reason
     // to show the cached copy: only a failure known to be about transport may do that.
+    // Found in the list rather than cast to a state, so a failure can only become a state by being
+    // one: the list's type is checked against both.
     return {
-      state: (SEMANTIC_FAILURES as readonly string[]).includes(failure)
-        ? (failure as ScreenState)
-        : 'error-server',
+      state:
+        SEMANTIC_FAILURES.find((known) => known === failure) ?? 'error-server',
       source: 'system-state',
     };
   }

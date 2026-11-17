@@ -218,6 +218,58 @@ describe('check-state-matrix', () => {
     );
   });
 
+  it('refuses a cast, which could make a state of something that is in no list', () => {
+    const result = withStates((source) =>
+      source.replace(
+        /SEMANTIC_FAILURES\.find\(\(known\) => known === failure\) \?\?\s+'error-server'/,
+        '(failure as unknown as ScreenState)',
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('a cast ("as ScreenState")');
+    expect(result.stderr).toContain('a cast ("as unknown")');
+  });
+
+  it('refuses a resolver declared as returning more than its state type', () => {
+    const inline = withStates((source) =>
+      source.replace(
+        /(export function resolveScreenState\(facts: ScreenFacts\): \{\s+state: ScreenState)/,
+        "$1 | 'withdrawn'",
+      ),
+    );
+    expect(inline.status).toBe(1);
+    expect(inline.stderr).toContain(
+      'resolveScreenState must be declared as returning exactly {state:ScreenState;source:UiSource;}',
+    );
+    for (const [name, facts, returns] of [
+      ['resolveActionState', 'ActionFacts', 'ActionState'],
+      ['resolveNodeStates', 'NodeFacts', 'NodeState[]'],
+    ] as const) {
+      const widened = withStates((source) =>
+        source.replace(
+          `export function ${name}(facts: ${facts}): ${returns} {`,
+          `export function ${name}(facts: ${facts}): ${returns} | 'pulsing' {`,
+        ),
+      );
+      expect(widened.status).toBe(1);
+      expect(widened.stderr).toContain(
+        `${name} must be declared as returning exactly ${returns}`,
+      );
+    }
+  });
+
+  it('is not misled by a comment opener inside a string', () => {
+    const exact = 'export type ScreenState = (typeof SCREEN_STATES)[number];';
+    const result = withStates((source) =>
+      source.replace(
+        exact,
+        `const open = '/*';\n${exact.replace(';', " | 'withdrawn';")}\nconst close = '*/';`,
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('type ScreenState is not exactly');
+  });
+
   it('refuses a list declared twice', () => {
     const old = /export const ACTION_STATES = \[[\s\S]*?\] as const;/.exec(
       readFileSync(statesSource, 'utf8'),

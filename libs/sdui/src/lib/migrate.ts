@@ -9,7 +9,14 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
+import { deeperThan } from './internal.js';
 import { type Path, formatPath, lostSegments } from './paths.js';
+
+/**
+ * How deep a migrated payload may nest. A screen's props stop at 32; steps may wrap them further,
+ * but a result past this is no payload, and the functions that compare payloads recurse.
+ */
+export const MIGRATED_DEPTH_LIMIT = 64;
 
 /**
  * Moves one payload between two versions of one contract.
@@ -162,6 +169,12 @@ function walk(
       };
     }
   }
+  if (deeperThan(current, MIGRATED_DEPTH_LIMIT))
+    return {
+      ok: false,
+      reason: 'threw',
+      message: `"${doc.name}" v${from} → v${to} gives a value nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`,
+    };
   return { ok: true, value: current, derived: [...derived] };
 }
 

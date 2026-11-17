@@ -24,11 +24,6 @@ export function formatPath(path: Path): string {
   return out;
 }
 
-/** The kind of place a path is, whichever list element it is in: `items[].badge`. */
-export function shapeOf(path: Path): string {
-  return formatPath(path).replace(/\[\d+\]/g, '[]');
-}
-
 /**
  * Dot-paths at which two values differ. Arrays of the same length are compared element by
  * element (`items[2].badge`); arrays of different lengths differ as a whole.
@@ -125,9 +120,10 @@ export function withValuesFrom(
   source: unknown,
   paths: readonly Path[],
 ): unknown {
-  if (paths.some((path) => path.length === 0)) return structuredClone(source);
   const copy = structuredClone(target);
   for (const path of paths) {
+    // The root is not a place inside `target`; a caller that means "all of it" has `source`.
+    if (path.length === 0) continue;
     let into: unknown = copy;
     let from: unknown = source;
     for (let i = 0; i < path.length - 1 && into !== undefined; i++) {

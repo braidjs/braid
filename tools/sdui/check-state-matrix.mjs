@@ -12,8 +12,11 @@
  *   - every state has at least one vector (a state nobody specified), and
  *   - every vector names a state that exists (a specification for a state that was renamed away).
  *
- * It also insists that each state type is exactly its list, so a state cannot be added to the type
- * and left out of the list. It cannot see a state invented somewhere other than that file.
+ * It also insists that each state type is exactly its list, that the file has no cast, and that each
+ * resolver is declared as returning exactly its state type — so that the compiler, not this script,
+ * is what stops a resolver returning a state that is not in a list. It reads that one file: it
+ * cannot see a state invented in another, and it is a guard against mistakes, not against someone
+ * set on getting round it.
  *
  * This reads the source file rather than importing the built package, so it runs before a build
  * and cannot be satisfied by a stale `dist/`.
@@ -43,10 +46,34 @@ const LEVELS = {
 const failures = [];
 
 // Comments are removed first, so nothing in one can stand in for a declaration: a list or a type
-// left behind in a comment is not the list or the type.
-const source = readFileSync(statesPath, 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/^\s*\/\/.*$/gm, '');
+// left behind in a comment is not the list or the type. Strings are stepped over while doing it,
+// so a comment opener inside one hides nothing.
+function withoutComments(text) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote !== null) {
+      out += char;
+      if (char === '\\') out += text[++i] ?? '';
+      else if (char === quote) quote = null;
+    } else if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      out += char;
+    } else if (char === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (char === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end < 0 ? text.length : end + 1;
+      out += ' ';
+    } else {
+      out += char;
+    }
+  }
+  return out;
+}
+const source = withoutComments(readFileSync(statesPath, 'utf8'));
 const declared = new Map();
 // Found by position, not by one regex across the file: each list is located at its `export const`
 // and read up to the first `] as const`, which is linear however large the file is.
@@ -128,6 +155,32 @@ for (const [constant, type] of Object.entries(TYPES)) {
   else if (declared !== exact)
     failures.push(
       `type ${type} is not exactly (typeof ${constant})[number] — every state must be in the ${constant} list, where this check can see it`,
+    );
+}
+
+// A cast can make a value a state without it being in a list, and a resolver whose return type
+// names more than the state type can return one. Neither is needed in this file, so neither is
+// allowed: the only `as` is `as const`, and each resolver returns exactly its state type.
+const code = source.replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
+for (const cast of code.matchAll(/\bas\s+(?!const\b)([\w.]+)/g))
+  failures.push(
+    `a cast ("as ${cast[1]}") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
+  );
+const RESOLVERS = {
+  resolveSessionState: '{state:SessionState;source:UiSource;}',
+  resolveScreenState: '{state:ScreenState;source:UiSource;}',
+  resolveNodeStates: 'NodeState[]',
+  resolveActionState: 'ActionState',
+};
+for (const [name, returns] of Object.entries(RESOLVERS)) {
+  const signature = new RegExp(
+    `^export function ${name}\\(facts: \\w+\\):\\s*(\\{[^{}]*\\}|[^{}]*?)\\s*\\{\\n`,
+    'm',
+  ).exec(code);
+  const found = signature?.[1].replace(/\s+/g, '');
+  if (found !== returns)
+    failures.push(
+      `${name} must be declared as returning exactly ${returns} — ${found === undefined ? 'it was not found' : `it returns ${found}`}`,
     );
 }
 

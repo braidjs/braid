@@ -3,7 +3,10 @@ import {
   type ClientManifest,
   type Screen,
   type SduiCatalog,
+  CATALOG_LIMITS,
+  MIGRATED_DEPTH_LIMIT,
   SCREEN_LIMITS,
+  TRACE_BUDGET,
   applyVisibility,
   assignRollout,
   checkCatalog,
@@ -24,6 +27,7 @@ import {
   validateScreen,
 } from '../index.js';
 import { runSdui } from './cli.js';
+import { withValuesFrom } from './paths.js';
 import { catalog, manifest, readVector, screen } from './fixtures.spec-util.js';
 
 /**
@@ -782,7 +786,7 @@ describe('parseScreen refuses what would hurt later', () => {
     ).toThrow('string of more than');
     expect(
       broken((d) => (at(d, child(0)).props = { n: Number.POSITIVE_INFINITY })),
-    ).toThrow('not a finite number');
+    ).toThrow('a number that is not finite');
   });
 
   it('unknown keys and unvalidated analytics, which would otherwise be forwarded to devices', () => {
@@ -2511,8 +2515,8 @@ describe('loss tracing is bounded, and sees losses together', () => {
     expect(result.report[0]?.reason).toContain('cannot carry "legal"');
   });
 
-  it('refuses when the node without what it lost cannot be lifted at all', () => {
-    // Without `p.price` the later hoist has nothing to hoist from, so that copy cannot be lifted.
+  it('refuses when what was lost is where a later step takes a critical field from', () => {
+    // `cost` is hoisted out of `p.price` by the step above; without `p.price` it has no value.
     const steps: SkewContractDocument['steps'] = [
       {
         from: 1,
@@ -2541,7 +2545,7 @@ describe('loss tracing is bounded, and sees losses together', () => {
     expect(result).toMatchObject({ outcome: 'blocked', blockedBy: ['n'] });
   });
 
-  it('costs the same number of migrations for a list of 8,000 as for a list of 8', () => {
+  it('traces each loss on its own while the budget lasts, and assumes the worst past it', () => {
     const steps: SkewContractDocument['steps'] = [
       {
         from: 1,
@@ -2564,6 +2568,7 @@ describe('loss tracing is bounded, and sees losses together', () => {
       },
     ];
     const strict = only(doc('note', 3, steps), { criticalPaths: ['tone'] });
+    const lenient = only(doc('note', 3, steps));
     const list = (length: number) =>
       authored(2, {
         items: Array.from({ length }, (_, index) => ({
@@ -2571,14 +2576,24 @@ describe('loss tracing is bounded, and sees losses together', () => {
           badge: `b${index}`,
         })),
       });
+    // A hundred losses are each traced: none is near `tone`, so the node renders.
+    const small = project(list(100), strict);
+    expect(small.outcome).toBe('degraded');
+    expect(small.report[0]?.lossyPaths).toHaveLength(100);
+
+    // 8,000 would be 8,000 lifts of 24,000 values — a minute and a half. Past the budget they
+    // are not traced one by one: all are reported, and a component with critical paths refuses.
     const started = Date.now();
-    const result = project(list(8000), strict);
+    const refused = project(list(8000), strict);
+    const reported = project(list(8000), lenient);
     const elapsed = Date.now() - started;
-    expect(result.report[0]?.lossyPaths).toHaveLength(8000);
-    expect(result.root?.props).toMatchObject({ items: expect.any(Array) });
-    // One lift for everything and one per kind of field: four in all here. Tracing each of the
-    // 8,000 on its own took a minute and a half.
-    expect(elapsed).toBeLessThan(5000);
+    expect(refused.root).toBeNull();
+    expect(refused.report[0]?.reason).toContain(
+      'cannot carry "items[0].badge"',
+    );
+    expect(reported.outcome).toBe('degraded');
+    expect(reported.report[0]?.lossyPaths).toHaveLength(8000);
+    expect(elapsed).toBeLessThan(4000);
   });
 
   it('is not stalled, or misled, by a prop key spelled like an array index', () => {
@@ -2700,8 +2715,8 @@ describe('the fourth pass, the rest', () => {
   });
 });
 
-describe('more kinds of loss than can be traced one by one', () => {
-  it('reports them all, and refuses on a component with critical paths', () => {
+describe('many losses on one node', () => {
+  it('are each traced, however many kinds of field they are', () => {
     const fields = Array.from({ length: 40 }, (_, index) => `f${index}`);
     const steps: SkewContractDocument['steps'] = [
       {
@@ -2732,15 +2747,489 @@ describe('more kinds of loss than can be traced one by one', () => {
         props: Object.fromEntries(fields.map((field) => [field, 'set'])),
       },
     };
-    const lenient = projectScreen(node, only(), device({ note: 1 }));
-    expect(lenient.report[0]?.lossyPaths).toHaveLength(40);
-    expect(lenient.outcome).toBe('degraded');
+    for (const strict of [only(), only({ criticalPaths: ['tone'] })]) {
+      const result = projectScreen(node, strict, device({ note: 1 }));
+      expect(result.outcome).toBe('degraded');
+      expect(result.report[0]?.lossyPaths).toHaveLength(40);
+    }
     expect(
-      projectScreen(
-        node,
-        only({ criticalPaths: ['tone'] }),
-        device({ note: 1 }),
-      ).root,
-    ).toBeNull();
+      projectScreen(node, only({ criticalPaths: ['f7'] }), device({ note: 1 }))
+        .report[0]?.reason,
+    ).toContain('cannot carry "f7"');
+  });
+});
+
+describe('the fifth pass: a loss with no trace, wherever it hides', () => {
+  const only = (
+    steps: SkewContractDocument['steps'],
+    extra: object = {},
+  ): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: { contract: doc('note', steps.length + 1, steps), ...extra },
+      },
+    });
+  const authored = (props: object, extra: object = {}): Screen =>
+    parseScreen({
+      id: 's',
+      slug: 's',
+      root: { id: 'n', type: 'note', v: 2, props, ...extra },
+    });
+  const onV1 = (
+    node: Screen,
+    strict: SduiCatalog,
+    options: Parameters<typeof projectScreen>[3] = {},
+  ) => projectScreen(node, strict, device({ note: 1 }), options);
+
+  it('is not hidden by another loss of the same kind that does leave one', () => {
+    // v3 folds badge "A" and no badge into the same "x"; "B" becomes "y". So losing "A" leaves no
+    // trace in the newest shape, and losing "B" does.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'badges',
+        ops: [
+          {
+            map: {
+              path: 'items',
+              ops: [{ default: { path: 'badge', value: null } }],
+            },
+          },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'badge kinds, one way',
+        ops: [
+          {
+            map: {
+              path: 'items',
+              ops: [
+                {
+                  convert: {
+                    path: 'badge',
+                    to: 'string',
+                    via: { A: 'x', null: 'x', B: 'y' },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const strict = only(steps, { criticalPaths: ['price'] });
+    const alone = onV1(authored({ items: [{ badge: 'A' }] }), strict);
+    expect(alone.report[0]?.reason).toContain('cannot carry "items[0].badge"');
+    // The same loss, next to one that can be traced: still refused.
+    const beside = onV1(
+      authored({ items: [{ badge: 'A' }, { badge: 'B' }] }),
+      strict,
+    );
+    expect(beside.root).toBeNull();
+    expect(beside.report[0]?.reason).toContain('cannot carry "items[0].badge"');
+    // And with nothing critical to protect, both are reported.
+    expect(
+      onV1(authored({ items: [{ badge: 'A' }, { badge: 'B' }] }), only(steps))
+        .report[0]?.lossyPaths,
+    ).toEqual(['items[1].badge', 'items[0].badge']);
+  });
+
+  it('counts a loss whose copy cannot be lifted, though the losses together can', () => {
+    // With both losses put back the lift works. With `q` alone put back as the device has it,
+    // `b` keeps its authored "P", the rename brings `q`'s number over it, and the hoist fails.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'b is fixed, q is new',
+        ops: [
+          { const: { path: 'b', value: { k: 'Z' } } },
+          { drop: { path: 'q', restore: 0 } },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'snapshot b, then b from q, then unwrap',
+        ops: [
+          { wrap: { path: 'w', key: 'k', also: { snap: { $from: '/b' } } } },
+          { rename: { from: 'q', to: 'b' } },
+          { hoist: { path: 'b', key: 'k' } },
+        ],
+      },
+    ];
+    const node = { w: 'W', b: 'P', q: { k: 1 } };
+    const refused = onV1(
+      authored(node),
+      only(steps, { criticalPaths: ['price'] }),
+    );
+    expect(refused.root).toBeNull();
+    expect(refused.report[0]?.reason).toContain('cannot carry "q"');
+    // Nothing critical: it renders, and `q` is among what it reports, under its authored name.
+    const lenient = onV1(authored(node), only(steps));
+    expect(lenient.outcome).toBe('degraded');
+    expect(lenient.report[0]?.lossyPaths).toContain('q');
+  });
+
+  it('never reads an unliftable copy as "nothing lost"', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'a is fixed, b is new',
+        ops: [
+          { const: { path: 'a', value: 'S' } },
+          { drop: { path: 'b', restore: 0 } },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'snapshot a, a from b, unwrap a',
+        ops: [
+          { wrap: { path: 'w', key: 'k', also: { snap: { $from: '/a' } } } },
+          { rename: { from: 'b', to: 'a' } },
+          { hoist: { path: 'a', key: 'k' } },
+        ],
+      },
+    ];
+    const strict = only(steps, { criticalPaths: ['price'] });
+    const props = { w: 'W', a: { k: 1 }, b: { k: 2 } };
+    const optional = onV1(authored(props), strict);
+    expect(optional.root).toBeNull();
+    expect(optional.report[0]).toMatchObject({ outcome: 'omitted' });
+    expect(optional.report[0]?.reason).toContain('cannot carry');
+    expect(onV1(authored(props, { required: true }), strict)).toMatchObject({
+      outcome: 'blocked',
+      blockedBy: ['n'],
+    });
+    // Without critical paths it renders — and is not called exact.
+    const lenient = onV1(authored(props), only(steps));
+    expect(lenient.outcome).toBe('degraded');
+    expect(lenient.report[0]?.lossyPaths.length).toBeGreaterThan(0);
+  });
+
+  it('puts a lost value back as absent, not as null, so a later default can hide it', () => {
+    // `p.x` is dropped by the unwrap; lifted again, the v3 default fills in the very value the
+    // author wrote. Nothing shows in the newest shape, so the loss is untraced — and refused.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'wrap p',
+        ops: [{ wrap: { path: 'p', key: 'k' } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'p.x defaults to D',
+        ops: [{ default: { path: 'p.x', value: 'D' } }],
+      },
+    ];
+    const node = authored({ p: { k: 'K', x: 'D' } });
+    expect(
+      onV1(node, only(steps, { criticalPaths: ['price'] })).report[0]?.reason,
+    ).toContain('cannot carry "p.x"');
+    expect(onV1(node, only(steps)).report[0]?.lossyPaths).toEqual(['p.x']);
+  });
+
+  it('does not report a loss at "" when a step turns the copy into something else', () => {
+    // Without its `kind` the code step gives back a string, not props: the whole of the lifted
+    // copy differs. That says nothing about which field it was, so the loss keeps its name.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'kind',
+        ops: [{ default: { path: 'kind', value: null } }],
+      },
+      { from: 2, to: 3, description: 'by kind', code: 'by-kind' },
+    ];
+    const codeSteps = {
+      'by-kind': {
+        up: (props: { kind: string | null }) =>
+          props.kind === null ? 'nothing' : { ...props, known: true },
+      },
+    };
+    const node = authored({ kind: 'sale', title: 'x' });
+    const lenient = onV1(node, only(steps), { codeSteps });
+    expect(lenient.report[0]?.lossyPaths).toEqual(['kind']);
+    expect(
+      onV1(node, only(steps, { criticalPaths: ['price'] }), { codeSteps })
+        .report[0]?.reason,
+    ).toContain('cannot carry "kind"');
+  });
+
+  it('reports the props as a whole when a step gives back something that is not props', () => {
+    const steps: SkewContractDocument['steps'] = [
+      { from: 1, to: 2, description: 'opaque', code: 'opaque' },
+      {
+        from: 2,
+        to: 3,
+        description: 'tone',
+        ops: [{ default: { path: 'tone', value: 'plain' } }],
+      },
+    ];
+    const codeSteps = { opaque: { up: () => 'gone', down: () => ({}) } };
+    // A key that happens to be spelled "undefined" is content like any other, and stays put.
+    const node = authored({ undefined: 'kept', a: 1 });
+    expect(
+      onV1(node, only(steps), { codeSteps }).report[0]?.lossyPaths,
+    ).toEqual(['']);
+    expect(
+      onV1(node, only(steps, { criticalPaths: ['price'] }), { codeSteps })
+        .report[0]?.reason,
+    ).toContain('cannot carry its props as a whole');
+    expect(withValuesFrom({ undefined: 'kept', a: 1 }, 'gone', [[]])).toEqual({
+      undefined: 'kept',
+      a: 1,
+    });
+  });
+
+  it('shares one tracing budget across the nodes of a projection', () => {
+    const fields = Array.from({ length: 32 }, (_, index) => `f${index}`);
+    const strict = parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: doc('note', 3, [
+            {
+              from: 1,
+              to: 2,
+              description: 'fields',
+              ops: fields.map((field) => ({
+                default: { path: field, value: null },
+              })),
+            },
+            {
+              from: 2,
+              to: 3,
+              description: 'tone',
+              ops: [{ default: { path: 'tone', value: 'plain' } }],
+            },
+          ]),
+          criticalPaths: ['tone'],
+        },
+        stack: { contract: doc('stack', 1, []), slots: { children: {} } },
+      },
+    });
+    const notes = (count: number): Screen =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'root',
+          type: 'stack',
+          v: 1,
+          slots: {
+            children: Array.from({ length: count }, (_, index) => ({
+              id: `n${index}`,
+              type: 'note',
+              v: 2,
+              props: Object.fromEntries(fields.map((field) => [field, 'x'])),
+            })),
+          },
+        },
+      });
+    const on = device({ note: 1, stack: 1 });
+    // Each node costs 32 losses × (33 values + 32) = 2,080 of the budget.
+    const within = Math.floor(TRACE_BUDGET / 2080);
+    const result = projectScreen(notes(within + 5), strict, on);
+    const outcomes = result.report
+      .filter((entry) => entry.type === 'note')
+      .map((entry) => entry.outcome);
+    expect(outcomes.slice(0, within)).toEqual(
+      Array.from({ length: within }, () => 'downgraded'),
+    );
+    // Past the budget the losses are not traced, so a component with critical paths refuses.
+    expect(outcomes.slice(within)).toEqual(
+      Array.from({ length: 5 }, () => 'omitted'),
+    );
+    expect(reportOf(result, `n${within}`)[0]?.reason).toContain('cannot carry');
+    // The budget is the projection's, not the process's: the next one starts afresh.
+    expect(projectScreen(notes(3), strict, on).outcome).toBe('degraded');
+  });
+
+  it(
+    'projects a screen at the size limits in seconds, whatever it loses',
+    { timeout: 60_000 },
+    () => {
+      const steps: SkewContractDocument['steps'] = [
+        {
+          from: 1,
+          to: 2,
+          description: 'badges',
+          ops: [
+            {
+              map: {
+                path: 'items',
+                ops: [{ default: { path: 'badge', value: null } }],
+              },
+            },
+          ],
+        },
+        {
+          from: 2,
+          to: 3,
+          description: 'tone',
+          ops: [{ default: { path: 'tone', value: 'plain' } }],
+        },
+      ];
+      // 99,990 elements of one field each: just inside `SCREEN_LIMITS.values`, as `parseScreen`
+      // confirms, and every one of them loses its badge.
+      const node = authored({
+        items: Array.from(
+          { length: SCREEN_LIMITS.values / 2 - 10 },
+          (_, index) => ({ badge: `b${index}` }),
+        ),
+      });
+      const started = Date.now();
+      const refused = onV1(node, only(steps, { criticalPaths: ['tone'] }));
+      const reported = onV1(node, only(steps));
+      const elapsed = Date.now() - started;
+      expect(refused.root).toBeNull();
+      expect(reported.report[0]?.lossyPaths).toHaveLength(
+        SCREEN_LIMITS.values / 2 - 10,
+      );
+      // About a second and a half here. It was a minute when the losses were grouped by copying.
+      expect(elapsed).toBeLessThan(15_000);
+    },
+  );
+});
+
+describe('the fifth pass: nothing parsed can make a projection throw', () => {
+  const steps = (
+    ops: NonNullable<SkewContractDocument['steps'][number]['ops']>,
+  ): SkewContractDocument['steps'] => [
+    {
+      from: 1,
+      to: 2,
+      description: 'extras',
+      ops: [{ default: { path: 'note', value: null } }],
+    },
+    { from: 2, to: 3, description: 'deep', ops },
+  ];
+  const withSteps = (ops: Parameters<typeof steps>[0]): unknown => ({
+    sduiCatalog: '1',
+    components: { note: { contract: doc('note', 3, steps(ops)) } },
+  });
+  const authored = (props: unknown, id = 's'): Screen =>
+    parseScreen({
+      id,
+      slug: 's',
+      root: { id: 'n', type: 'note', v: 2, props },
+    });
+
+  it('refuses a catalog whose op names a path too long to be one', () => {
+    const path = (segments: number) =>
+      Array.from({ length: segments }, (_, index) => `a${index}`).join('.');
+    const at = (segments: number) =>
+      withSteps([{ default: { path: path(segments), value: 1 } }]);
+    expect(() => parseCatalog(at(3000))).toThrow(
+      `a path of more than ${CATALOG_LIMITS.pathSegments} segments`,
+    );
+    expect(() => parseCatalog(at(CATALOG_LIMITS.pathSegments + 1))).toThrow(
+      'segments',
+    );
+    expect(() => parseCatalog(at(CATALOG_LIMITS.pathSegments))).not.toThrow();
+    // Inside a `map`, and as the `to` of a rename.
+    expect(() =>
+      parseCatalog(
+        withSteps([
+          {
+            map: {
+              path: 'items',
+              ops: [{ rename: { from: 'a', to: path(40) } }],
+            },
+          },
+        ]),
+      ),
+    ).toThrow('segments');
+  });
+
+  it('refuses a catalog nested past its limit, without walking it', () => {
+    let value: unknown = 1;
+    for (let depth = 0; depth < 20_000; depth++) value = { k: value };
+    expect(() =>
+      parseCatalog(withSteps([{ default: { path: 'deep', value } }])),
+    ).toThrow(`more than ${CATALOG_LIMITS.depth} levels deep`);
+  });
+
+  it('gives a fallback, not a stack overflow, when steps nest a payload past walking', () => {
+    // No path is long and the document is shallow; the depth comes from running 20,000 ops.
+    const deep = parseCatalog(
+      withSteps(
+        Array.from({ length: 20_000 }, () => ({
+          wrap: { path: 'p', key: 'k' },
+        })),
+      ),
+    );
+    const down = projectScreen(
+      authored({ p: 'x', note: 'lost' }),
+      deep,
+      device({ note: 1 }),
+    );
+    // The loss could not be traced through the lift, so it is reported under its own name.
+    expect(down.report[0]?.lossyPaths).toEqual(['note']);
+    const up = projectScreen(authored({ p: 'x' }), deep, device({ note: 3 }));
+    expect(up.outcome).toBe('fallback');
+    expect(up.report[0]?.reason).toContain(
+      `nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`,
+    );
+    expect(() =>
+      diffScreens(authored({ p: 'x' }), authored({ p: 'y' }, 's2'), deep),
+    ).not.toThrow();
+    expect(() => validateScreen(authored({ p: 'x' }), deep)).not.toThrow();
+  });
+
+  it('refuses values that are not JSON, in a screen and in a catalog', () => {
+    const screenWith = (value: unknown) => () => authored({ a: value });
+    expect(screenWith(10n)).toThrow(
+      'root.props.a is a bigint, which is not JSON',
+    );
+    expect(screenWith(Symbol('x'))).toThrow('a symbol');
+    expect(screenWith(() => 1)).toThrow('a function');
+    expect(screenWith(undefined)).toThrow('undefined');
+    expect(screenWith(new Date(0))).toThrow('not plain data');
+    expect(screenWith(new Map())).toThrow('not plain data');
+    // A hole in a list is an `undefined` too.
+    expect(screenWith(new Array(3))).toThrow('root.props.a[0] is undefined');
+    expect(screenWith(Number.NaN)).toThrow('a number that is not finite');
+    expect(() =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'n',
+          type: 'note',
+          v: 2,
+          visibility: { flag: 'f', is: 10n },
+        },
+      }),
+    ).toThrow('a bigint');
+    expect(screenWith(Object.create(null))).not.toThrow();
+    expect(screenWith([1, 'two', null, true, { three: 3 }])).not.toThrow();
+
+    expect(() =>
+      parseCatalog(withSteps([{ default: { path: 'n', value: 10n } }])),
+    ).toThrow('is a bigint, which is not JSON');
+  });
+
+  it('refuses a reserved key anywhere in a catalog, not only where a name is', () => {
+    const reserved = JSON.parse('{"__proto__": 1}') as unknown;
+    expect(() =>
+      parseCatalog(withSteps([{ default: { path: 'n', value: reserved } }])),
+    ).toThrow('uses the reserved key "__proto__"');
+    const editor = withSteps([]) as {
+      components: { note: Record<string, unknown> };
+    };
+    editor.components.note['editor'] = { label: 'Note', constructor: 'x' };
+    expect(() => parseCatalog(editor)).toThrow(
+      'catalog.components.note.editor uses the reserved key "constructor"',
+    );
   });
 });

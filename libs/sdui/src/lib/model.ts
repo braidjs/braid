@@ -1,6 +1,6 @@
 import { parseVersion } from './conditions.js';
 import { contentAddress } from './hash.js';
-import { RESERVED_KEYS, isRecord, isSafeName } from './internal.js';
+import { RESERVED_KEYS, isRecord, isSafeName, notJson } from './internal.js';
 
 /**
  * The screen document — what an editor authors and a release carries.
@@ -136,19 +136,17 @@ function checkValue(
       );
     return;
   }
-  if (typeof value !== 'object' || value === null) {
-    if (typeof value === 'number' && !Number.isFinite(value))
-      fail(`${where} is not a finite number`);
-    return;
-  }
+  const problem = notJson(value);
+  if (problem !== null) fail(`${where} is ${problem}, which is not JSON`);
+  if (typeof value !== 'object' || value === null) return;
   if (depth >= SCREEN_LIMITS.valueDepth)
     fail(
       `${where} is nested more than ${SCREEN_LIMITS.valueDepth} levels deep`,
     );
   if (Array.isArray(value)) {
-    value.forEach((element, index) =>
-      checkValue(element, `${where}[${index}]`, depth + 1, budget, fail),
-    );
+    // By index, not `forEach`: that would step over a hole, and a hole is an `undefined`.
+    for (let index = 0; index < value.length; index++)
+      checkValue(value[index], `${where}[${index}]`, depth + 1, budget, fail);
     return;
   }
   for (const [key, inner] of Object.entries(value)) {

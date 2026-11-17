@@ -60,6 +60,44 @@ export function reservedKeyIn(value: unknown, depth = 0): string | null {
   return null;
 }
 
+/**
+ * What makes a value something other than JSON, or `null`: a bigint, a function, a symbol, an
+ * `undefined`, a number that is not finite, or an object that is not a plain one. Everything here
+ * is hashed, compared and serialised as JSON, and none of those survive it — some of them throw.
+ *
+ * Not recursive: the caller is already walking the value.
+ */
+export function notJson(value: unknown): string | null {
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return null;
+    case 'number':
+      return Number.isFinite(value) ? null : 'a number that is not finite';
+    case 'object': {
+      if (value === null || Array.isArray(value)) return null;
+      const prototype: unknown = Object.getPrototypeOf(value);
+      return prototype === Object.prototype || prototype === null
+        ? null
+        : 'an object that is not plain data';
+    }
+    default:
+      return typeof value === 'undefined' ? 'undefined' : `a ${typeof value}`;
+  }
+}
+
+/**
+ * Whether a value nests more than `limit` levels. It stops looking as soon as the answer is yes,
+ * so it is safe on a value far deeper than the stack.
+ */
+export function deeperThan(value: unknown, limit: number): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  if (limit <= 0) return true;
+  for (const inner of Array.isArray(value) ? value : Object.values(value))
+    if (deeperThan(inner, limit - 1)) return true;
+  return false;
+}
+
 /** Whether a dotted path has a reserved segment: `a.__proto__.b`, `constructor`. */
 export function hasReservedSegment(path: string): boolean {
   return path.split(/[.[\]]/).some((segment) => RESERVED_KEYS.has(segment));

@@ -27,7 +27,6 @@ import {
   formatPath,
   lostPaths,
   pathWithin,
-  shapeOf,
   withValuesFrom,
 } from './paths.js';
 
@@ -123,7 +122,8 @@ export interface NodeReport {
   /**
    * What a downgrade lost: prop paths in the component's newest shape — the one an author edits —
    * or `slots.<name>`. A loss the newest shape has no place for is listed under the name it had
-   * where the node was authored, so that nothing a device dropped goes unreported.
+   * where the node was authored, so that nothing a device dropped goes unreported. `""` is the
+   * props as a whole: a step gave back something that is not props at all.
    */
   readonly lossyPaths: readonly string[];
   /** Values that are the migration's guesses rather than what the author wrote. */
@@ -169,8 +169,26 @@ export interface ProjectionOptions {
   readonly unsupported?: readonly string[];
 }
 
-/** More kinds of lost field than this on one node, and every loss is treated as untraced. */
-const MAX_LOSS_KINDS = 32;
+/**
+ * How much work one projection may spend tracing losses one at a time — see `traceLoss`. Counted
+ * in values lifted one version: a lift of a payload of 100 values through 3 steps is 300, plus a
+ * fixed charge per step for the lift itself.
+ *
+ * Generous for anything authored — a hundred nodes each losing five of twenty fields use about a
+ * hundredth of it — and small enough that a screen at the size limits, losing something in every
+ * value, is not traced value by value.
+ */
+export const TRACE_BUDGET = 2_000_000;
+const LIFT_OVERHEAD = 32;
+
+/** Scalars, arrays and objects in a value: the measure `SCREEN_LIMITS.values` uses. */
+function countValues(value: unknown): number {
+  if (typeof value !== 'object' || value === null) return 1;
+  let count = 1;
+  for (const inner of Array.isArray(value) ? value : Object.values(value))
+    count += countValues(inner);
+  return count;
+}
 
 type Rendered =
   | {
@@ -187,6 +205,7 @@ export function projectScreen(
   options: ProjectionOptions = {},
 ): ProjectionResult {
   const killed = new Set(options.unsupported ?? []);
+  let tracing = TRACE_BUDGET;
   // One instant for the whole screen, so two nodes of one projection cannot disagree about "now".
   const instant = (options.context ?? defaultMigrationContext).now();
   const migrateOptions = {
@@ -333,11 +352,15 @@ export function projectScreen(
    * goes up, so a later step that cannot be inverted is no obstacle.
    *
    * That is done once for all the losses together, which is what the device actually gets and so
-   * catches losses that only matter in combination. It is done again per *kind* of lost field
-   * (`items[].badge` is one kind however long the list), to find a loss that leaves no trace: the
-   * newest version no longer has the field, or a later step folds the lost value and what
-   * replaced it into the same thing. Those are returned as `untraced`, under their authored
-   * names. The number of lifts is bounded by the number of kinds, not by the size of the payload.
+   * catches losses that only matter in combination. It is then done for each loss on its own, to
+   * find one that leaves no trace: the newest version no longer has the field, a later step folds
+   * the lost value and what replaced it into the same thing, or the copy cannot be lifted at all.
+   * Those are returned as `untraced`, under their authored names.
+   *
+   * One lift per loss is work in proportion to losses × payload, so it is done only while the
+   * projection's tracing budget lasts. Past it, the losses of that node are all untraced: nothing
+   * is left unreported, and a component with critical paths takes its fallback rather than the
+   * benefit of the doubt.
    */
   function traceLoss(
     contract: ComponentDefinition['contract'],
@@ -348,6 +371,7 @@ export function projectScreen(
     if (lost.length === 0) return { traced: [], untraced: [] };
     const names = lost.map(formatPath);
     if (node.v === contract.current) return { traced: names, untraced: [] };
+    const all = { traced: [], untraced: names };
     const props = node.props ?? {};
     const lifted = migrate(
       contract,
@@ -356,10 +380,9 @@ export function projectScreen(
       contract.current,
       migrateOptions,
     );
-    // Where the lift cannot be run — for the node itself or for a copy of it — nothing can be said
-    // about where the loss lands, so all of it is untraced.
+    if (!lifted.ok) return all;
+    // Where a copy cannot be lifted, nothing can be said about where its loss lands.
     const liftWithout = (paths: readonly Path[]): string[] | null => {
-      if (!lifted.ok) return null;
       const without = migrate(
         contract,
         withValuesFrom(props, roundTrip, paths),
@@ -372,17 +395,20 @@ export function projectScreen(
         : null;
     };
     const traced = liftWithout(lost);
-    if (traced === null) return { traced: [], untraced: names };
+    if (traced === null) return all;
+    if (lost.length === 1)
+      return { traced, untraced: traced.length === 0 ? names : [] };
 
-    const kinds = new Map<string, Path[]>();
-    for (const path of lost)
-      kinds.set(shapeOf(path), [...(kinds.get(shapeOf(path)) ?? []), path]);
-    if (kinds.size > MAX_LOSS_KINDS) return { traced, untraced: names };
+    const cost =
+      lost.length *
+      (countValues(props) + LIFT_OVERHEAD) *
+      (contract.current - node.v);
+    if (cost > tracing) return { traced, untraced: names };
+    tracing -= cost;
     const untraced: string[] = [];
-    for (const paths of kinds.values()) {
-      const found = liftWithout(paths);
-      if (found === null || found.length === 0)
-        for (const path of paths) untraced.push(formatPath(path));
+    for (const path of lost) {
+      const found = liftWithout([path]);
+      if (found === null || found.length === 0) untraced.push(formatPath(path));
     }
     return { traced, untraced };
   }
@@ -459,15 +485,15 @@ export function projectScreen(
     const criticalPaths = definition.criticalPaths ?? [];
     // A loss that could not be traced into the newest shape cannot be compared with the critical
     // paths by name. On a component that has critical paths it is treated as one: refusing a
-    // render that would have been fine costs a fallback; allowing one that drops a price does not
-    // bear thinking about.
+    // render that would have been fine costs a fallback — or the screen, on this device, if the
+    // node is required; allowing one that drops a price does not bear thinking about.
     const critical =
       traced.find((path) => criticalPaths.some((c) => pathWithin(path, c))) ??
       (criticalPaths.length > 0 ? untraced[0] : undefined);
     if (critical !== undefined) {
       return {
         ok: false,
-        reason: `"${node.type}" v${clientVersion} cannot carry "${critical}", which must not be lost`,
+        reason: `"${node.type}" v${clientVersion} cannot carry ${critical === '' ? 'its props as a whole' : `"${critical}"`}, which must not be lost`,
       };
     }
 

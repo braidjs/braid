@@ -831,14 +831,17 @@ Decisions the review forced, which the sections above should be read with:
   fallback. Inside a fallback it is conditional: it counts when that fallback is what is rendered.
 - **Loss is measured, not declared.** A downgrade's lost paths are what the node held that does not
   come back from a trip down and up, placed in the component's newest shape, which is the shape
-  `criticalPaths` are written in. A field the author left out was never lost. A loss that leaves
-  no trace in the newest shape is still reported, and on a component with critical paths it is
-  refused. The work is bounded by the kinds of field lost, not by the size of the node.
+  `criticalPaths` are written in. A field the author left out was never lost. Each loss is also
+  traced on its own; one that leaves no trace in the newest shape is still reported, and on a
+  component with critical paths it is refused. That tracing is rationed per projection: a node
+  whose losses would cost more than the budget has left has all of them treated as untraced.
 - **Conditions are three-valued.** Unknown is not true, and stays unknown through `not`.
 - **Every trust boundary has a parser** with size limits. The reserved keys `__proto__`,
-  `constructor` and `prototype` are refused in screens, manifests and handshake bodies, in a
-  catalog's names, paths and fallbacks, and in flag and rollout definitions. Two root causes were
-  fixed in `@braidlabs/skew` rather than worked around.
+  `constructor` and `prototype` are refused in screens, manifests and handshake bodies, anywhere
+  in a catalog, and in flag and rollout definitions; values that are not JSON are refused in
+  screens and catalogs. A catalog's depth is limited, and a migration whose result nests past
+  walking fails like any other step that fails. Two root causes were fixed in `@braidlabs/skew`
+  rather than worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
 Two things the tables above describe are left for P2, where their acceptance criteria are:
