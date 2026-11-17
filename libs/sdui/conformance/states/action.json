@@ -1,0 +1,186 @@
+{
+  "level": "action",
+  "resolver": "resolveActionState",
+  "vectors": [
+    {
+      "state": "idle",
+      "given": {
+        "supported": true,
+        "phase": "idle"
+      }
+    },
+    {
+      "state": "unsupported",
+      "given": {
+        "supported": false,
+        "phase": "idle"
+      }
+    },
+    {
+      "state": "confirming",
+      "given": {
+        "supported": true,
+        "phase": "confirming"
+      }
+    },
+    {
+      "state": "pending",
+      "given": {
+        "supported": true,
+        "phase": "pending"
+      }
+    },
+    {
+      "state": "succeeded",
+      "given": {
+        "supported": true,
+        "phase": "succeeded"
+      }
+    },
+    {
+      "state": "failed-retryable",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "retryable"
+      }
+    },
+    {
+      "state": "failed-terminal",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "terminal"
+      }
+    },
+    {
+      "state": "queued-offline",
+      "given": {
+        "supported": true,
+        "phase": "pending",
+        "queued": true
+      }
+    },
+    {
+      "state": "requires-auth",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "auth"
+      }
+    },
+    {
+      "state": "target-missing",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "target-missing"
+      }
+    },
+    {
+      "state": "blocked-url",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "blocked-url"
+      }
+    },
+    {
+      "state": "invalid",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "validation"
+      }
+    },
+    {
+      "state": "server-rejected",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "rejected"
+      }
+    },
+    {
+      "state": "draft-restored",
+      "given": {
+        "supported": true,
+        "phase": "idle",
+        "draftRestored": true
+      }
+    },
+    {
+      "state": "unsupported",
+      "description": "Unsupported wins over whatever phase is reported.",
+      "given": {
+        "supported": false,
+        "phase": "failed",
+        "failure": "retryable",
+        "draftRestored": true
+      }
+    },
+    {
+      "state": "failed-retryable",
+      "description": "A failure with no kind given is retryable.",
+      "given": {
+        "supported": true,
+        "phase": "failed"
+      }
+    },
+    {
+      "state": "failed-terminal",
+      "description": "A failure this client does not know is not retried on its own.",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "constructor"
+      }
+    },
+    {
+      "state": "server-rejected",
+      "description": "A failure wins over a restored draft and over queued.",
+      "given": {
+        "supported": true,
+        "phase": "failed",
+        "failure": "rejected",
+        "queued": true,
+        "draftRestored": true
+      }
+    },
+    {
+      "state": "pending",
+      "description": "Pending wins over a restored draft.",
+      "given": {
+        "supported": true,
+        "phase": "pending",
+        "draftRestored": true
+      }
+    },
+    {
+      "state": "idle",
+      "description": "Queued means nothing unless pending.",
+      "given": {
+        "supported": true,
+        "phase": "idle",
+        "queued": true
+      }
+    },
+    {
+      "state": "succeeded",
+      "given": {
+        "supported": true,
+        "phase": "succeeded",
+        "draftRestored": true
+      }
+    },
+    {
+      "state": "confirming",
+      "description": "Confirming wins over a restored draft.",
+      "given": {
+        "supported": true,
+        "phase": "confirming",
+        "draftRestored": true
+      }
+    }
+  ]
+}

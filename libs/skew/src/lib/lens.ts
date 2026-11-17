@@ -119,17 +119,36 @@ export interface CompiledLens {
 
 // --- path helpers -----------------------------------------------------------
 
+/**
+ * Segments no path may contain. Ops come from documents fetched over the network, and a path such
+ * as `__proto__.polluted` would walk off the payload onto `Object.prototype` — a write there
+ * changes every object in the process.
+ */
+const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function segmentsOf(path: string): string[] {
   if (typeof path !== 'string' || path.length === 0) {
     throw new TypeError(`lens: op path must be a non-empty string, got ${JSON.stringify(path)}`);
   }
-  return path.split('.');
+  const segments = path.split('.');
+  for (const segment of segments) {
+    if (FORBIDDEN_SEGMENTS.has(segment)) {
+      throw new TypeError(`lens: op path ${JSON.stringify(path)} may not contain "${segment}"`);
+    }
+  }
+  return segments;
 }
 
+function hasOwn(target: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+/** Reads own properties only: a payload never yields something it inherited. */
 function getAt(scope: unknown, segments: readonly string[]): unknown {
   let current: unknown = scope;
   for (const segment of segments) {
     if (typeof current !== 'object' || current === null) return undefined;
+    if (!hasOwn(current, segment)) return undefined;
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
@@ -139,7 +158,7 @@ function setAt(scope: unknown, segments: readonly string[], value: unknown): voi
   let current = scope as Record<string, unknown>;
   for (let i = 0; i < segments.length - 1; i++) {
     const segment = segments[i] as string;
-    const next = current[segment];
+    const next = hasOwn(current, segment) ? current[segment] : undefined;
     if (typeof next !== 'object' || next === null) {
       const created: Record<string, unknown> = {};
       current[segment] = created;
@@ -158,7 +177,8 @@ function deleteAt(scope: unknown, segments: readonly string[]): void {
   for (let i = 0; i < segments.length - 1; i++) {
     if (typeof current !== 'object' || current === null) return;
     parents.push(current as Record<string, unknown>);
-    current = (current as Record<string, unknown>)[segments[i] as string];
+    const segment = segments[i] as string;
+    current = hasOwn(current, segment) ? (current as Record<string, unknown>)[segment] : undefined;
   }
   if (typeof current !== 'object' || current === null) return;
   delete (current as Record<string, unknown>)[segments[segments.length - 1] as string];
@@ -260,6 +280,9 @@ function compileOp(op: LensOp): CompiledOp {
         .wrap;
       const segments = segmentsOf(path);
       if (typeof key !== 'string' || key.length === 0) fail(`wrap at "${path}" needs a non-empty key`);
+      for (const name of [key, ...Object.keys(also ?? {})]) {
+        if (FORBIDDEN_SEGMENTS.has(name)) fail(`wrap at "${path}" may not use the key "${name}"`);
+      }
       const alsoEntries = Object.entries(also ?? {}).map(
         ([alsoKey, spec]) => [alsoKey, compileValueSpec(spec)] as const,
       );
@@ -291,6 +314,7 @@ function compileOp(op: LensOp): CompiledOp {
       const { path, key } = (op as { hoist: { path: string; key: string } }).hoist;
       const segments = segmentsOf(path);
       if (typeof key !== 'string' || key.length === 0) fail(`hoist at "${path}" needs a non-empty key`);
+      if (FORBIDDEN_SEGMENTS.has(key)) fail(`hoist at "${path}" may not use the key "${key}"`);
       return {
         up: (scope) => {
           const source = getAt(scope, segments);
@@ -377,7 +401,10 @@ function compileOp(op: LensOp): CompiledOp {
           const current = getAt(scope, segments);
           if (current === undefined) return;
           if (table) {
-            const mapped = table[String(current)];
+            // Own entries only: a value of "constructor" has no mapping, it does not map to a
+            // function inherited from Object.prototype.
+            const key = String(current);
+            const mapped = hasOwn(table, key) ? table[key] : undefined;
             if (mapped === undefined) {
               throw new Error(`lens: convert at "${path}" has no mapping for ${JSON.stringify(current)}`);
             }
@@ -395,7 +422,7 @@ function compileOp(op: LensOp): CompiledOp {
       let inverseTable: Record<string, unknown> | null = null;
       let invertible = true;
       if (via) {
-        inverseTable = {};
+        inverseTable = Object.create(null) as Record<string, unknown>;
         for (const [key, mapped] of Object.entries(via)) {
           const inverseKey = String(mapped);
           if (inverseKey in inverseTable) {

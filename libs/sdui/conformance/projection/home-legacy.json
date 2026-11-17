@@ -1,0 +1,322 @@
+{
+  "name": "home-legacy",
+  "description": "The same screen on the oldest supported app: a critical field would be lost, and a step cannot be inverted — both take fallbacks, neither is guessed.",
+  "catalog": "catalog.json",
+  "screen": "screens/home.json",
+  "manifest": "manifests/legacy.json",
+  "expect": {
+    "outcome": "fallback",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "props": {
+        "gap": "md"
+      },
+      "slots": {
+        "children": [
+          {
+            "id": "n_hero",
+            "type": "hero-banner",
+            "v": 1,
+            "props": {
+              "title": "Summer sale",
+              "subtitle": "Up to 40% off outdoor",
+              "cta": "Shop the sale"
+            },
+            "actions": {
+              "press": {
+                "type": "navigate",
+                "v": 1,
+                "props": {
+                  "to": "sale"
+                }
+              }
+            },
+            "analytics": {
+              "name": "home_hero"
+            }
+          },
+          {
+            "id": "n_card_runner_fallback",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Trail Runner 2, now $99"
+            }
+          },
+          {
+            "id": "n_card_shell",
+            "type": "product-card",
+            "v": 1,
+            "props": {
+              "title": "Ridge Shell",
+              "price": 168
+            }
+          },
+          {
+            "id": "n_video_fallback",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "How we test our boots"
+            },
+            "actions": {
+              "press": {
+                "type": "open-url",
+                "v": 1,
+                "props": {
+                  "url": "https://acme.example/boots"
+                }
+              }
+            }
+          },
+          {
+            "id": "n_share",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Share this sale"
+            },
+            "disabled": true
+          },
+          {
+            "id": "n_promo",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Members get free shipping"
+            },
+            "visibility": {
+              "all": [
+                {
+                  "flag": "member-promo"
+                },
+                {
+                  "audience": "members"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n_legal",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Prices include tax."
+            }
+          },
+          {
+            "id": "n_returns_fallback",
+            "type": "text",
+            "v": 1,
+            "props": {
+              "text": "Free returns within 30 days."
+            }
+          }
+        ]
+      }
+    },
+    "states": {
+      "loading": "auto",
+      "empty": {
+        "id": "n_empty",
+        "type": "text",
+        "v": 1,
+        "props": {
+          "text": "Nothing picked for you yet"
+        }
+      },
+      "error": "system",
+      "offline": "system"
+    },
+    "report": [
+      {
+        "nodeId": "n_root",
+        "type": "stack",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 1,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_hero",
+        "type": "hero-banner",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 3,
+        "rendered": 1,
+        "lossyPaths": ["countdown"],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "navigate",
+            "outcome": "downgraded",
+            "lossyPaths": ["transition"]
+          }
+        ]
+      },
+      {
+        "nodeId": "n_card_runner",
+        "type": "product-card",
+        "authored": 3,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "\"product-card\" v1 cannot carry \"price.sale\", which must not be lost",
+        "outcome": "fallback-authored",
+        "rung": 3,
+        "replacedBy": {
+          "id": "n_card_runner_fallback",
+          "type": "text"
+        }
+      },
+      {
+        "nodeId": "n_card_runner_fallback",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "fallbackFor": "n_card_runner"
+      },
+      {
+        "nodeId": "n_card_shell",
+        "type": "product-card",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 3,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_video",
+        "type": "video-tile",
+        "authored": 1,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "this app version has no \"video-tile\" component",
+        "outcome": "fallback-authored",
+        "rung": 3,
+        "replacedBy": {
+          "id": "n_video_fallback",
+          "type": "text"
+        }
+      },
+      {
+        "nodeId": "n_video_fallback",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": ["style"],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "open-url",
+            "outcome": "exact",
+            "lossyPaths": []
+          }
+        ],
+        "fallbackFor": "n_video"
+      },
+      {
+        "nodeId": "n_share",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": ["style"],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "share",
+            "outcome": "disabled",
+            "lossyPaths": [],
+            "reason": "this app version has no \"share\" action"
+          }
+        ]
+      },
+      {
+        "nodeId": "n_promo",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_legal",
+        "type": "legal-note",
+        "authored": 2,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "\"sdui.component.legal-note\" v2 → v1 cannot be inverted",
+        "outcome": "fallback-catalog",
+        "rung": 4,
+        "replacedBy": {
+          "id": "n_legal",
+          "type": "text"
+        }
+      },
+      {
+        "nodeId": "n_legal",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": ["style"],
+        "derivedPaths": [],
+        "fallbackFor": "n_legal"
+      },
+      {
+        "nodeId": "n_returns",
+        "type": "legal-note",
+        "authored": 2,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "reason": "\"sdui.component.legal-note\" v2 → v1 cannot be inverted",
+        "outcome": "fallback-authored",
+        "rung": 3,
+        "replacedBy": {
+          "id": "n_returns_fallback",
+          "type": "text"
+        }
+      },
+      {
+        "nodeId": "n_returns_fallback",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "fallbackFor": "n_returns"
+      },
+      {
+        "nodeId": "n_empty",
+        "type": "text",
+        "outcome": "downgraded",
+        "rung": 2,
+        "authored": 2,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      }
+    ],
+    "blockedBy": []
+  }
+}

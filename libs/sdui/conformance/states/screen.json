@@ -1,0 +1,385 @@
+{
+  "level": "screen",
+  "resolver": "resolveScreenState",
+  "vectors": [
+    {
+      "state": "loading-initial",
+      "description": "No cached copy and a request in flight.",
+      "given": {
+        "fetch": "in-flight",
+        "cached": false
+      },
+      "source": "skeleton"
+    },
+    {
+      "state": "loading-initial",
+      "description": "Nothing requested yet and nothing cached.",
+      "given": {
+        "fetch": "idle",
+        "cached": false
+      },
+      "source": "skeleton"
+    },
+    {
+      "state": "loaded",
+      "given": {
+        "fetch": "ok",
+        "cached": false,
+        "projection": "exact"
+      },
+      "source": "server"
+    },
+    {
+      "state": "loaded",
+      "description": "Degraded is still loaded: the user sees a complete screen.",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "degraded"
+      },
+      "source": "server"
+    },
+    {
+      "state": "loaded-revalidating",
+      "description": "The cached copy is on screen while a fresh one is fetched.",
+      "given": {
+        "fetch": "in-flight",
+        "cached": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "loaded-stale",
+      "description": "A transport failure with a cached copy: show it, quietly.",
+      "given": {
+        "fetch": "failed",
+        "failure": "network",
+        "cached": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "loaded-stale",
+      "description": "A 5xx is a transport failure too.",
+      "given": {
+        "fetch": "failed",
+        "failure": "server",
+        "cached": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "refreshing",
+      "description": "The user pulled to refresh.",
+      "given": {
+        "fetch": "in-flight",
+        "cached": true,
+        "refreshing": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "paginating",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "exact",
+        "pagination": "loading"
+      },
+      "source": "server"
+    },
+    {
+      "state": "pagination-error",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "exact",
+        "pagination": "failed"
+      },
+      "source": "server"
+    },
+    {
+      "state": "end-of-list",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "exact",
+        "pagination": "end"
+      },
+      "source": "server"
+    },
+    {
+      "state": "partial",
+      "description": "Some nodes fell down the ladder. Invisible to the user, visible in telemetry.",
+      "given": {
+        "fetch": "ok",
+        "cached": false,
+        "projection": "fallback"
+      },
+      "source": "server"
+    },
+    {
+      "state": "empty",
+      "description": "The data source answered with nothing.",
+      "given": {
+        "fetch": "ok",
+        "cached": false,
+        "projection": "exact",
+        "dataEmpty": true
+      },
+      "source": "authored-state"
+    },
+    {
+      "state": "error-network",
+      "given": {
+        "fetch": "failed",
+        "failure": "network",
+        "cached": false
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "error-server",
+      "given": {
+        "fetch": "failed",
+        "failure": "server",
+        "cached": false
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "error-timeout",
+      "given": {
+        "fetch": "failed",
+        "failure": "timeout",
+        "cached": false
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "error-rate-limited",
+      "given": {
+        "fetch": "failed",
+        "failure": "rate-limited",
+        "cached": false
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "not-found",
+      "description": "A semantic failure never shows the cached copy.",
+      "given": {
+        "fetch": "failed",
+        "failure": "not-found",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "gone",
+      "given": {
+        "fetch": "failed",
+        "failure": "gone",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "moved",
+      "description": "Follow the redirect once.",
+      "given": {
+        "fetch": "failed",
+        "failure": "moved",
+        "cached": false
+      },
+      "source": "server"
+    },
+    {
+      "state": "forbidden",
+      "given": {
+        "fetch": "failed",
+        "failure": "forbidden",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "not-yet-live",
+      "given": {
+        "fetch": "failed",
+        "failure": "not-yet-live",
+        "cached": false
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "expired",
+      "given": {
+        "fetch": "failed",
+        "failure": "expired",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "incompatible",
+      "description": "A required node cannot be rendered by this binary.",
+      "given": {
+        "fetch": "ok",
+        "cached": false,
+        "projection": "blocked"
+      },
+      "source": "earlier-release"
+    },
+    {
+      "state": "decode-error",
+      "description": "The payload arrived and could not be decoded. Never a crash.",
+      "given": {
+        "fetch": "failed",
+        "failure": "decode",
+        "cached": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "decode-error",
+      "given": {
+        "fetch": "failed",
+        "failure": "decode",
+        "cached": false
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "render-error",
+      "description": "The root node threw while rendering.",
+      "given": {
+        "fetch": "ok",
+        "cached": false,
+        "projection": "exact",
+        "renderFailed": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "render-error",
+      "description": "A render failure wins over a failed fetch.",
+      "given": {
+        "fetch": "failed",
+        "failure": "network",
+        "cached": true,
+        "renderFailed": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "incompatible",
+      "description": "Blocked wins over pagination and emptiness.",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "blocked",
+        "pagination": "loading",
+        "dataEmpty": true
+      },
+      "source": "earlier-release"
+    },
+    {
+      "state": "paginating",
+      "description": "Loading more wins over empty.",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "fallback",
+        "pagination": "loading",
+        "dataEmpty": true
+      },
+      "source": "server"
+    },
+    {
+      "state": "pagination-error",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "fallback",
+        "pagination": "failed",
+        "dataEmpty": true
+      },
+      "source": "server"
+    },
+    {
+      "state": "empty",
+      "description": "Empty wins over end-of-list and over partial.",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "fallback",
+        "pagination": "end",
+        "dataEmpty": true
+      },
+      "source": "authored-state"
+    },
+    {
+      "state": "end-of-list",
+      "description": "End of list wins over partial.",
+      "given": {
+        "fetch": "ok",
+        "cached": true,
+        "projection": "fallback",
+        "pagination": "end"
+      },
+      "source": "server"
+    },
+    {
+      "state": "loaded",
+      "description": "A cached screen with nothing in flight is loaded, from the cache.",
+      "given": {
+        "fetch": "idle",
+        "cached": true,
+        "projection": "exact"
+      },
+      "source": "cache"
+    },
+    {
+      "state": "loading-initial",
+      "description": "A refresh with no cached copy is an initial load.",
+      "given": {
+        "fetch": "in-flight",
+        "cached": false,
+        "refreshing": true
+      },
+      "source": "skeleton"
+    },
+    {
+      "state": "error-server",
+      "description": "A failure this client does not know is the server's error, and never a reason to show the cache.",
+      "given": {
+        "fetch": "failed",
+        "failure": "teapot",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "error-server",
+      "description": "A failure named after something every object has is still unknown.",
+      "given": {
+        "fetch": "failed",
+        "failure": "constructor",
+        "cached": true
+      },
+      "source": "system-state"
+    },
+    {
+      "state": "forbidden",
+      "description": "A semantic failure with a cached copy still hides it.",
+      "given": {
+        "fetch": "failed",
+        "failure": "forbidden",
+        "cached": true,
+        "refreshing": true
+      },
+      "source": "system-state"
+    }
+  ]
+}

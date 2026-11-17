@@ -1,0 +1,127 @@
+{
+  "name": "edited",
+  "description": "A title change, two fields edited on one card, one card removed and a note added.",
+  "catalog": "catalog.json",
+  "before": {
+    "id": "screen-picks",
+    "slug": "picks",
+    "title": "Picked for you",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "slots": {
+        "children": [
+          {
+            "id": "n_head",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Picked for you",
+              "style": "title"
+            }
+          },
+          {
+            "id": "n_shell",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Ridge Shell",
+              "price": {
+                "amount": 168,
+                "sale": null
+              },
+              "badge": null
+            }
+          },
+          {
+            "id": "n_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": null
+              },
+              "badge": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  "after": {
+    "id": "screen-picks",
+    "slug": "picks",
+    "title": "Picks",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "slots": {
+        "children": [
+          {
+            "id": "n_head",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Picked for you",
+              "style": "title"
+            }
+          },
+          {
+            "id": "n_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": 99
+              },
+              "badge": "New"
+            }
+          },
+          {
+            "id": "n_note",
+            "type": "legal-note",
+            "v": 2,
+            "props": {
+              "text": "Prices include tax."
+            }
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "unchanged": false,
+    "changes": [
+      {
+        "kind": "screen",
+        "paths": ["title"]
+      },
+      {
+        "kind": "content",
+        "nodeId": "n_runner",
+        "type": "product-card",
+        "paths": ["badge", "price.sale"]
+      },
+      {
+        "kind": "added",
+        "nodeId": "n_note",
+        "type": "legal-note",
+        "parentId": "n_root",
+        "slot": "children",
+        "index": 2
+      },
+      {
+        "kind": "removed",
+        "nodeId": "n_shell",
+        "type": "product-card"
+      }
+    ],
+    "catalogUpgrades": []
+  }
+}

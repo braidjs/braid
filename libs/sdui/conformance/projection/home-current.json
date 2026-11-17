@@ -1,0 +1,290 @@
+{
+  "name": "home-current",
+  "description": "One screen on the newest app: every node renders exactly as authored.",
+  "catalog": "catalog.json",
+  "screen": "screens/home.json",
+  "manifest": "manifests/current.json",
+  "expect": {
+    "outcome": "exact",
+    "root": {
+      "id": "n_root",
+      "type": "stack",
+      "v": 1,
+      "props": {
+        "gap": "md"
+      },
+      "slots": {
+        "children": [
+          {
+            "id": "n_hero",
+            "type": "hero-banner",
+            "v": 3,
+            "props": {
+              "title": "Summer sale",
+              "subtitle": "Up to 40% off outdoor",
+              "cta": {
+                "label": "Shop the sale"
+              },
+              "countdown": {
+                "endsAt": "2026-11-20T00:00:00Z"
+              }
+            },
+            "actions": {
+              "press": {
+                "type": "navigate",
+                "v": 2,
+                "props": {
+                  "to": "sale",
+                  "transition": "modal"
+                }
+              }
+            },
+            "analytics": {
+              "name": "home_hero"
+            }
+          },
+          {
+            "id": "n_card_runner",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Trail Runner 2",
+              "price": {
+                "amount": 129,
+                "sale": 99
+              },
+              "badge": "New"
+            },
+            "actions": {
+              "press": {
+                "type": "navigate",
+                "v": 2,
+                "props": {
+                  "to": "product/trail-runner-2",
+                  "transition": "push"
+                }
+              }
+            }
+          },
+          {
+            "id": "n_card_shell",
+            "type": "product-card",
+            "v": 3,
+            "props": {
+              "title": "Ridge Shell",
+              "price": {
+                "amount": 168,
+                "sale": null
+              },
+              "badge": null
+            }
+          },
+          {
+            "id": "n_video",
+            "type": "video-tile",
+            "v": 1,
+            "props": {
+              "title": "How we test our boots",
+              "seconds": 42,
+              "src": "asset_boots_test"
+            }
+          },
+          {
+            "id": "n_share",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Share this sale",
+              "style": "link"
+            },
+            "actions": {
+              "press": {
+                "type": "share",
+                "v": 1,
+                "props": {
+                  "text": "Summer sale at Acme"
+                }
+              }
+            }
+          },
+          {
+            "id": "n_promo",
+            "type": "text",
+            "v": 2,
+            "props": {
+              "content": "Members get free shipping",
+              "style": "body"
+            },
+            "visibility": {
+              "all": [
+                {
+                  "flag": "member-promo"
+                },
+                {
+                  "audience": "members"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n_legal",
+            "type": "legal-note",
+            "v": 2,
+            "props": {
+              "text": "Prices include tax."
+            }
+          },
+          {
+            "id": "n_returns",
+            "type": "legal-note",
+            "v": 2,
+            "props": {
+              "text": "Free returns within 30 days."
+            }
+          }
+        ]
+      }
+    },
+    "states": {
+      "loading": "auto",
+      "empty": {
+        "id": "n_empty",
+        "type": "text",
+        "v": 2,
+        "props": {
+          "content": "Nothing picked for you yet",
+          "style": "body"
+        }
+      },
+      "error": "system",
+      "offline": "system"
+    },
+    "report": [
+      {
+        "nodeId": "n_root",
+        "type": "stack",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 1,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_hero",
+        "type": "hero-banner",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 3,
+        "rendered": 3,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "navigate",
+            "outcome": "exact",
+            "lossyPaths": []
+          }
+        ]
+      },
+      {
+        "nodeId": "n_card_runner",
+        "type": "product-card",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 3,
+        "rendered": 3,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "navigate",
+            "outcome": "exact",
+            "lossyPaths": []
+          }
+        ]
+      },
+      {
+        "nodeId": "n_card_shell",
+        "type": "product-card",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 3,
+        "rendered": 3,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_video",
+        "type": "video-tile",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 1,
+        "rendered": 1,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_share",
+        "type": "text",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": [],
+        "actions": [
+          {
+            "name": "press",
+            "type": "share",
+            "outcome": "exact",
+            "lossyPaths": []
+          }
+        ]
+      },
+      {
+        "nodeId": "n_promo",
+        "type": "text",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_legal",
+        "type": "legal-note",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_returns",
+        "type": "legal-note",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      },
+      {
+        "nodeId": "n_empty",
+        "type": "text",
+        "outcome": "exact",
+        "rung": 1,
+        "authored": 2,
+        "rendered": 2,
+        "lossyPaths": [],
+        "derivedPaths": []
+      }
+    ],
+    "blockedBy": []
+  }
+}

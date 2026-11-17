@@ -29,6 +29,7 @@ flowchart TD
     Contract["@braidlabs/contract"]
     Build["@braidlabs/build"]
     Studio["@braidlabs/studio"]
+    Sdui["@braidlabs/sdui"]
   end
 
   subgraph AngularSuite ["4. Angular Skew Suite"]
@@ -44,6 +45,8 @@ flowchart TD
   FDC3 -. realmGlobals .-> Core
   Core --> Skew
   Data --> Skew
+  Sdui --> Contract
+  Sdui --> Skew
   AngData --> Data
   AngCore --> Skew
   AngRouter --> Skew
@@ -91,6 +94,7 @@ Framework-agnostic primitives for handling independent deployment lifecycles, sc
 | [`@braidlabs/contract`](./contract.md) | Data-driven schema migrations resolved dynamically from declarative API contracts. | `resolveContract`, `migratePayload` |
 | [`@braidlabs/build`](./build.md) | Build-time identity stamping and manifest generation for stale-origin detection. | `skew-stamp`, `emitManifest` |
 | [`@braidlabs/studio`](./studio.md) | Interactive debugger for inspecting versioned payloads and testing migration chains. | `<SkewStudio>`, `diffPayloads` |
+| [`@braidlabs/sdui`](./sdui.md) | Server-driven UI for native apps: screens projected through component contracts to each binary's versions, with a fallback ladder, handshake, flags, rollouts and a state specification. | `projectScreen`, `resolveHandshake`, `diffScreens`, `sdui` |
 
 ---
 

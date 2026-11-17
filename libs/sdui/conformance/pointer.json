@@ -1,0 +1,226 @@
+{
+  "resolver": "decidePointer",
+  "vectors": [
+    {
+      "name": "nothing known: adopt",
+      "known": null,
+      "offered": {
+        "release": "rel_b",
+        "seq": 7
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": true,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "same move again: keep",
+      "known": {
+        "release": "rel_b",
+        "seq": 7
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 7
+      },
+      "expect": {
+        "action": "keep",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a newer release: adopt",
+      "known": {
+        "release": "rel_b",
+        "seq": 7
+      },
+      "offered": {
+        "release": "rel_c",
+        "seq": 8,
+        "kind": "promote"
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": true,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a rollback is a new move with a higher seq pointing at an older release: follow it",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 9,
+        "kind": "rollback"
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": true,
+        "rolledBack": true
+      }
+    },
+    {
+      "name": "a lagging replica offers a lower seq: never go back",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 7
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a lower seq is ignored even when it claims to be a rollback",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 7,
+        "kind": "rollback"
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a higher seq naming the same release: adopt the seq, nothing to change on screen",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_c",
+        "seq": 10
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "the same seq naming a different release should not happen: keep and report",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_x",
+        "seq": 8
+      },
+      "expect": {
+        "action": "conflict",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a higher seq naming the same release, labelled a rollback: nothing to roll back on this device",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_c",
+        "seq": 10,
+        "kind": "rollback"
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "an offered seq that is a string is not a pointer: never adopted",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": "11"
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "an offered seq that is missing is never adopted",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b"
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a fractional seq is never adopted",
+      "known": {
+        "release": "rel_c",
+        "seq": 8
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 8.5
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a malformed offer is not adopted even by a device that knows nothing",
+      "known": null,
+      "offered": {
+        "release": "",
+        "seq": 3
+      },
+      "expect": {
+        "action": "ignore-stale",
+        "changed": false,
+        "rolledBack": false
+      }
+    },
+    {
+      "name": "a device whose own record is unreadable adopts a well-formed offer",
+      "known": {
+        "release": "rel_c",
+        "seq": "8"
+      },
+      "offered": {
+        "release": "rel_b",
+        "seq": 2
+      },
+      "expect": {
+        "action": "adopt",
+        "changed": true,
+        "rolledBack": false
+      }
+    }
+  ]
+}

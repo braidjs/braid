@@ -39,6 +39,7 @@
       "@braidlabs/skew": ["./libs/skew/src/index.ts"],
       "@braidlabs/data": ["./libs/data/src/index.ts"],
       "@braidlabs/studio": ["./libs/studio/src/index.ts"],
+      "@braidlabs/sdui": ["./libs/sdui/src/index.ts"],
       "@braidlabs/angular-core": ["./libs/angular/core/src/index.ts"]
     }
   },

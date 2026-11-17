@@ -210,3 +210,42 @@ describe('ops-authored chain steps', () => {
     expect(downWritten.payload).toEqual({ id: 'a', currency: 'EUR' });
   });
 });
+
+describe('compileLens — paths and keys from untrusted documents', () => {
+  const ctx = { now: () => new Date('2026-01-01T00:00:00Z') };
+
+  it.each([
+    [{ rename: { from: 'title', to: '__proto__.polluted' } }],
+    [{ move: { from: 'constructor.prototype.x', to: 'y' } }],
+    [{ default: { path: 'a.prototype.b', value: 1 } }],
+    [{ const: { path: '__proto__', value: {} } }],
+    [{ drop: { path: 'x.__proto__' } }],
+    [{ map: { path: 'items', ops: [{ default: { path: '__proto__.y', value: 1 } }] } }],
+    [{ wrap: { path: 'price', key: '__proto__' } }],
+    [{ wrap: { path: 'price', key: 'amount', also: { constructor: 1 } } }],
+    [{ wrap: { path: 'price', key: 'amount', also: { at: { $from: '__proto__.x' } } } }],
+    [{ hoist: { path: 'image', key: 'prototype' } }],
+  ] as const)('refuses %j at compile time', (op) => {
+    expect(() => compileLens([op as never])).toThrow(TypeError);
+  });
+
+  it('never writes to Object.prototype, whatever the payload holds', () => {
+    const lens = compileLens([{ convert: { path: 'size', to: 'number', via: { small: 1, large: 2 } } }, { default: { path: 'size.unit', value: 'PWNED' } }]);
+    // "__proto__" is not a key of the table, so it has no mapping — it does not map to
+    // Object.prototype for the next op to write into.
+    expect(() => lens.up({ size: '__proto__' }, ctx)).toThrow('no mapping');
+    expect(({} as Record<string, unknown>)['unit']).toBeUndefined();
+  });
+
+  it('treats a value that names an inherited member as unmapped, not as the member', () => {
+    const lens = compileLens([{ convert: { path: 'size', to: 'number', via: { small: 1 } } }]);
+    expect(() => lens.up({ size: 'constructor' }, ctx)).toThrow('no mapping');
+    expect(() => lens.up({ size: 'toString' }, ctx)).toThrow('no mapping');
+  });
+
+  it('reads own properties only', () => {
+    const lens = compileLens([{ rename: { from: 'toString', to: 'label' } }]);
+    expect(lens.up({ other: 1 }, ctx)).toEqual({ other: 1 });
+    expect(lens.up({ toString: 'mine' }, ctx)).toEqual({ label: 'mine' });
+  });
+});

@@ -43,9 +43,17 @@ function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (typeof value === 'object' && value !== null) {
     const source = value as Record<string, unknown>;
+    // Defined, not assigned: `sorted['__proto__'] = x` would set the copy's prototype and drop the
+    // key, so two documents that differ only under an own `__proto__` key would serialize — and
+    // fingerprint — identically.
     const sorted: Record<string, unknown> = {};
     for (const key of Object.keys(source).sort()) {
-      sorted[key] = sortKeys(source[key]);
+      Object.defineProperty(sorted, key, {
+        value: sortKeys(source[key]),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return sorted;
   }

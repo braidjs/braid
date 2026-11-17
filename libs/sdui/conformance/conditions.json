@@ -1,0 +1,596 @@
+{
+  "resolver": "evaluateCondition",
+  "note": "Three-valued: a term about something the context does not say is unknown, unknown survives `not`, and only a condition known to hold is true. `all` is false as soon as one term is known false; `any` is true as soon as one is known true.",
+  "vectors": [
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {
+        "flags": {
+          "a": true
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {
+        "flags": {
+          "a": false
+        }
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "flag": "a"
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "flag": "layout",
+        "is": "b"
+      },
+      "context": {
+        "flags": {
+          "layout": "b"
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "flag": "layout",
+        "is": "b"
+      },
+      "context": {
+        "flags": {
+          "layout": "a"
+        }
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {
+        "platform": "android"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "platform": ["ios"]
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.10.0"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.7.9"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "5.8",
+          "max": "5.8"
+        }
+      },
+      "context": {
+        "appVersion": "5.8.0"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "audience": "members"
+      },
+      "context": {
+        "audiences": ["members", "staff"]
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "audience": "members"
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "locale": ["fr"]
+      },
+      "context": {
+        "locale": "fr-CA"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "locale": ["fr-CA"]
+      },
+      "context": {
+        "locale": "fr"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "locale": ["en"]
+      },
+      "context": {
+        "locale": "EN-gb"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z",
+          "until": "2026-11-20T00:00:00Z"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z",
+          "until": "2026-11-20T00:00:00Z"
+        }
+      },
+      "context": {
+        "now": "2026-11-20T00:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "2026-11-01T00:00:00Z"
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": true
+        },
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": true
+        },
+        "platform": "android"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "flag": "a"
+          },
+          {
+            "platform": ["ios"]
+          }
+        ]
+      },
+      "context": {
+        "flags": {
+          "a": false
+        },
+        "platform": "ios"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "audience": "members"
+        }
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": []
+      },
+      "context": {},
+      "expect": true
+    },
+    {
+      "condition": {
+        "any": []
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "platform": ["ios"]
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "flag": "kill-checkout"
+        }
+      },
+      "context": {
+        "flags": {}
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "flag": "kill-checkout"
+        }
+      },
+      "context": {
+        "flags": {
+          "kill-checkout": false
+        }
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "audience": "banned"
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "6.0"
+          }
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "6.0"
+          }
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "6.0"
+        }
+      },
+      "context": {
+        "appVersion": "garbage"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "max": "5.0"
+        }
+      },
+      "context": {
+        "appVersion": "garbage"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "schedule": {
+            "from": "2026-11-01T00:00:00Z"
+          }
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "all": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "any": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "all": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "all": [
+            {
+              "platform": ["ios"]
+            },
+            {
+              "audience": "members"
+            }
+          ]
+        }
+      },
+      "context": {
+        "audiences": ["members"]
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "any": [
+          {
+            "platform": ["ios"]
+          },
+          {
+            "audience": "members"
+          }
+        ]
+      },
+      "context": {
+        "audiences": []
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "locale": ["fr"]
+        }
+      },
+      "context": {},
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "locale": ["fr"]
+        }
+      },
+      "context": {
+        "locale": "en-CA"
+      },
+      "expect": true
+    },
+    {
+      "condition": {
+        "not": {
+          "platform": ["ios"]
+        }
+      },
+      "context": {
+        "platform": ""
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "appVersion": {
+            "min": "v6.0"
+          }
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "not": {
+          "schedule": {
+            "from": "soon"
+          }
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "min": "v6.0"
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "appVersion": {
+          "max": "six"
+        }
+      },
+      "context": {
+        "appVersion": "5.8"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "from": "soon"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
+    },
+    {
+      "condition": {
+        "schedule": {
+          "until": "later"
+        }
+      },
+      "context": {
+        "now": "2026-11-17T10:00:00Z"
+      },
+      "expect": false
+    }
+  ]
+}

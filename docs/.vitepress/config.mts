@@ -139,6 +139,7 @@ export default defineConfig({
               { text: '@braidlabs/contract', link: '/packages/contract' },
               { text: '@braidlabs/build', link: '/packages/build' },
               { text: '@braidlabs/studio', link: '/packages/studio' },
+              { text: '@braidlabs/sdui', link: '/packages/sdui' },
             ],
           },
           {

@@ -1,0 +1,409 @@
+{
+  "level": "session",
+  "resolver": "resolveSessionState",
+  "vectors": [
+    {
+      "state": "first-launch-online",
+      "description": "A first launch with a connection: nothing is cached, the handshake answered.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": false,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        }
+      },
+      "source": "skeleton"
+    },
+    {
+      "state": "first-launch-offline",
+      "description": "A first launch with no connection: only the baseline shipped in the binary exists.",
+      "given": {
+        "handshake": "unreachable",
+        "hasCache": false
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "first-launch-offline",
+      "description": "A cache written under another manifest is unreadable, so it does not count as a cache.",
+      "given": {
+        "handshake": "timed-out",
+        "hasCache": true,
+        "manifestChanged": true
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "handshake-pending",
+      "description": "Inside the splash budget.",
+      "given": {
+        "handshake": "pending",
+        "hasCache": true
+      },
+      "source": "native"
+    },
+    {
+      "state": "handshake-pending",
+      "description": "The server does not know this manifest; the device resends it. Still the splash to the user.",
+      "given": {
+        "handshake": "manifest-unknown",
+        "hasCache": false
+      },
+      "source": "native"
+    },
+    {
+      "state": "handshake-timeout",
+      "description": "The budget ran out; the app proceeds on its cached release.",
+      "given": {
+        "handshake": "timed-out",
+        "hasCache": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "ok",
+      "description": "Nothing to report.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "pointer": {
+          "action": "keep",
+          "changed": false,
+          "rolledBack": false
+        }
+      },
+      "source": "server"
+    },
+    {
+      "state": "update-recommended",
+      "description": "Renders, and is nudged.",
+      "given": {
+        "handshake": "update-recommended",
+        "hasCache": true,
+        "pointer": {
+          "action": "keep",
+          "changed": false,
+          "rolledBack": false
+        }
+      },
+      "source": "server"
+    },
+    {
+      "state": "update-required",
+      "description": "Below the floor. The screen for this is native: a retired binary is served nothing.",
+      "given": {
+        "handshake": "update-required",
+        "hasCache": true
+      },
+      "source": "native"
+    },
+    {
+      "state": "protocol-unsupported",
+      "description": "No wire-protocol version in common.",
+      "given": {
+        "handshake": "protocol-unsupported",
+        "hasCache": true
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "maintenance",
+      "description": "The global kill switch.",
+      "given": {
+        "handshake": "maintenance",
+        "hasCache": true
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "principal-changed",
+      "description": "Someone signed in or out; the personalised cache partition switches.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "principalChanged": true,
+        "pointer": {
+          "action": "keep",
+          "changed": false,
+          "rolledBack": false
+        }
+      },
+      "source": "server"
+    },
+    {
+      "state": "token-expired",
+      "description": "The token was rejected; the app refreshes once and meanwhile shows what it has.",
+      "given": {
+        "handshake": "unauthorized",
+        "hasCache": true
+      },
+      "source": "cache"
+    },
+    {
+      "state": "release-superseded",
+      "description": "A newer release arrived mid-session; the pinned one stays until the apply boundary.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "midSession": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        }
+      },
+      "source": "cache"
+    },
+    {
+      "state": "rolled-back",
+      "description": "A higher sequence number pointing at an older release: follow it.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "midSession": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": true
+        }
+      },
+      "source": "server"
+    },
+    {
+      "state": "stale-origin",
+      "description": "A lower sequence number than the device has seen: a lagging replica. Keep the pin.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "pointer": {
+          "action": "ignore-stale",
+          "changed": false,
+          "rolledBack": false
+        }
+      },
+      "source": "cache"
+    },
+    {
+      "state": "clock-skewed",
+      "description": "The device clock is fifteen minutes off server time.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "pointer": {
+          "action": "keep",
+          "changed": false,
+          "rolledBack": false
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "server"
+    },
+    {
+      "state": "app-updated",
+      "description": "The binary changed, so its manifest did; the old cache partition is unreadable by design.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "manifestChanged": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        }
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "consent-changed",
+      "description": "Analytics consent was revoked; the event queue is purged.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "consentRevoked": true,
+        "pointer": {
+          "action": "keep",
+          "changed": false,
+          "rolledBack": false
+        }
+      },
+      "source": "server"
+    },
+    {
+      "state": "update-required",
+      "description": "A terminal answer wins over everything the app has noticed about itself.",
+      "given": {
+        "handshake": "update-required",
+        "hasCache": true,
+        "manifestChanged": true,
+        "consentRevoked": true,
+        "principalChanged": true,
+        "clockSkewMs": 900000
+      },
+      "source": "native"
+    },
+    {
+      "state": "maintenance",
+      "given": {
+        "handshake": "maintenance",
+        "hasCache": false,
+        "manifestChanged": true
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "token-expired",
+      "description": "A rejected token with a cache written under another manifest: that cache is unreadable.",
+      "given": {
+        "handshake": "unauthorized",
+        "hasCache": true,
+        "manifestChanged": true
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "app-updated",
+      "description": "A changed manifest is acted on before consent, principal or pointer.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "manifestChanged": true,
+        "consentRevoked": true,
+        "principalChanged": true,
+        "pointer": {
+          "action": "ignore-stale",
+          "changed": false,
+          "rolledBack": false
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "bundled"
+    },
+    {
+      "state": "consent-changed",
+      "description": "Consent before principal.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "consentRevoked": true,
+        "principalChanged": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": true
+        },
+        "midSession": true
+      },
+      "source": "server"
+    },
+    {
+      "state": "principal-changed",
+      "description": "Principal before anything about the pointer.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "principalChanged": true,
+        "pointer": {
+          "action": "ignore-stale",
+          "changed": false,
+          "rolledBack": false
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "server"
+    },
+    {
+      "state": "stale-origin",
+      "description": "A stale pointer before clock skew.",
+      "given": {
+        "handshake": "update-recommended",
+        "hasCache": true,
+        "pointer": {
+          "action": "ignore-stale",
+          "changed": false,
+          "rolledBack": false
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "cache"
+    },
+    {
+      "state": "rolled-back",
+      "description": "A rollback before a superseded release and before clock skew.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "midSession": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": true
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "server"
+    },
+    {
+      "state": "release-superseded",
+      "description": "A superseded release before clock skew and before the update nudge.",
+      "given": {
+        "handshake": "update-recommended",
+        "hasCache": true,
+        "midSession": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        },
+        "clockSkewMs": 900000
+      },
+      "source": "cache"
+    },
+    {
+      "state": "clock-skewed",
+      "description": "Clock skew before first launch and before the update nudge.",
+      "given": {
+        "handshake": "update-recommended",
+        "hasCache": false,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        },
+        "clockSkewMs": -900000
+      },
+      "source": "server"
+    },
+    {
+      "state": "first-launch-online",
+      "description": "First launch before the update nudge.",
+      "given": {
+        "handshake": "update-recommended",
+        "hasCache": false,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        }
+      },
+      "source": "skeleton"
+    },
+    {
+      "state": "ok",
+      "description": "A new release adopted outside a session is simply the release.",
+      "given": {
+        "handshake": "ok",
+        "hasCache": true,
+        "pointer": {
+          "action": "adopt",
+          "changed": true,
+          "rolledBack": false
+        },
+        "midSession": false,
+        "clockSkewMs": 60000
+      },
+      "source": "server"
+    }
+  ]
+}
