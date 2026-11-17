@@ -145,12 +145,15 @@ describe('names that collide with Object.prototype', () => {
     ).toThrow('no component or action by that name');
   });
 
-  it("does not copy a prototype member through a catalog fallback's $from", () => {
+  it('refuses a catalog fallback that reads from a reserved path, and copies nothing through one that skipped the parser', () => {
     const base = readVector('catalog.json');
     base.components['video-tile'].fallback = {
       type: 'text',
       props: { content: { $from: 'constructor' }, style: 'body' },
     };
+    expect(() => parseCatalog(structuredClone(base))).toThrow(
+      'read from a reserved path "constructor"',
+    );
     const screen: Screen = {
       id: 's',
       slug: 's',
@@ -161,12 +164,7 @@ describe('names that collide with Object.prototype', () => {
         props: { title: 't', src: 's' },
       },
     };
-    const result = projectScreen(
-      screen,
-      parseCatalog(base),
-      manifest('one-behind'),
-    );
-    expect(result.root).toEqual({
+    expect(projectScreen(screen, base, manifest('one-behind')).root).toEqual({
       id: 'n',
       type: 'text',
       v: 2,

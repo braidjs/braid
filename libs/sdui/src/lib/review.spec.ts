@@ -2048,3 +2048,375 @@ describe('fixes whose tests did not hold them', () => {
     ).toThrow('app has an unknown key');
   });
 });
+
+/**
+ * Third verification pass.
+ */
+describe('loss, for a node authored below the newest version', () => {
+  const only = (
+    contract: SkewContractDocument,
+    extra: object = {},
+  ): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: { ...contract, name: 'sdui.component.note' },
+          ...extra,
+        },
+      },
+    });
+  const authored = (v: number, props: object, extra: object = {}): Screen => ({
+    id: 's',
+    slug: 's',
+    root: { id: 'n', type: 'note', v, props, ...extra },
+  });
+  const project = (node: Screen, strict: SduiCatalog) =>
+    projectScreen(node, strict, device({ note: 1 }));
+
+  it('reports nothing for a field its author left out — the lift runs here', () => {
+    // v3 exists only so that these nodes, authored at v2, are below the newest version.
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'badges and style',
+        ops: [
+          {
+            map: {
+              path: 'items',
+              ops: [{ default: { path: 'badge', value: 'new' } }],
+            },
+          },
+          { default: { path: 'style', value: 'body' } },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'tone',
+        ops: [{ default: { path: 'tone', value: 'plain' } }],
+      },
+    ];
+    const strict = only(doc('note', 3, steps), {
+      criticalPaths: ['items', 'style'],
+    });
+    const result = project(
+      authored(2, { items: [{}] }, { required: true }),
+      strict,
+    );
+    expect(result).toMatchObject({
+      outcome: 'exact',
+      blockedBy: [],
+      root: { props: { items: [{}] } },
+    });
+    expect(result.report[0]).toMatchObject({
+      outcome: 'downgraded',
+      lossyPaths: [],
+    });
+    // And an authored value in the same place is a loss, named in the newest shape.
+    expect(
+      project(
+        authored(2, { items: [{ badge: 'SALE' }] }),
+        only(doc('note', 3, steps)),
+      ).report[0],
+    ).toMatchObject({ lossyPaths: ['items[0].badge'] });
+    expect(
+      project(authored(2, { items: [{ badge: 'SALE' }] }), strict).root,
+    ).toBeNull();
+  });
+
+  it('is not fooled by a later default that fills an absent field but not a null one', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'legal',
+        ops: [{ default: { path: 'legal', value: null } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'rename',
+        ops: [{ rename: { from: 'legal', to: 'legalNote' } }],
+      },
+      {
+        from: 3,
+        to: 4,
+        description: 'standard terms',
+        ops: [{ default: { path: 'legalNote', value: 'Standard terms' } }],
+      },
+    ];
+    const strict = only(doc('note', 4, steps), {
+      criticalPaths: ['legalNote'],
+    });
+    // The author wrote no legal text at all. Nothing is lost on a v1 device.
+    for (const props of [{ title: 'x' }, { title: 'x', legal: null }]) {
+      expect(
+        project(authored(2, props, { required: true }), strict),
+      ).toMatchObject({ outcome: 'exact', blockedBy: [] });
+    }
+    // The author did write some: that is lost, under the name it has now.
+    const lost = project(
+      authored(2, { title: 'x', legal: 'Terms apply' }, { required: true }),
+      strict,
+    );
+    expect(lost).toMatchObject({ outcome: 'blocked', blockedBy: ['n'] });
+    expect(lost.report[0]?.reason).toContain('cannot carry "legalNote"');
+  });
+
+  const dropped: SkewContractDocument['steps'] = [
+    {
+      from: 1,
+      to: 2,
+      description: 'subtitle',
+      ops: [{ default: { path: 'subtitle', value: null } }],
+    },
+    {
+      from: 2,
+      to: 3,
+      description: 'subtitle is retired',
+      ops: [{ drop: { path: 'subtitle' } }],
+    },
+  ];
+
+  it('still reports a loss the newest shape has no place for, under its authored name', () => {
+    const result = project(
+      authored(2, { title: 'x', subtitle: 'Hello' }),
+      only(doc('note', 3, dropped)),
+    );
+    expect(result.outcome).toBe('degraded');
+    expect(result.report[0]).toMatchObject({
+      outcome: 'downgraded',
+      lossyPaths: ['subtitle'],
+    });
+  });
+
+  it('refuses a loss it cannot trace when the component has critical paths', () => {
+    const strict = only(doc('note', 3, dropped), { criticalPaths: ['price'] });
+    const result = project(
+      authored(2, { title: 'x', subtitle: 'Hello' }),
+      strict,
+    );
+    expect(result.root).toBeNull();
+    expect(result.report[0]?.reason).toContain('cannot carry "subtitle"');
+    expect(project(authored(2, { title: 'x' }), strict).root).not.toBeNull();
+  });
+
+  it('refuses when a later one-way step folds the lost value and its replacement into one', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'legal',
+        ops: [{ default: { path: 'legal', value: null } }],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'rename',
+        ops: [{ rename: { from: 'legal', to: 'legalNote' } }],
+      },
+      {
+        from: 3,
+        to: 4,
+        description: 'kinds of terms',
+        ops: [
+          {
+            convert: {
+              path: 'legalNote',
+              to: 'string',
+              via: { 'Terms apply': 'standard', null: 'standard' },
+            },
+          },
+        ],
+      },
+    ];
+    const strict = only(doc('note', 4, steps), {
+      criticalPaths: ['legalNote'],
+    });
+    expect(
+      project(authored(2, { title: 'x', legal: 'Terms apply' }), strict).root,
+    ).toBeNull();
+  });
+
+  it('judges each loss on its own: one that traces to something harmless does not cover for one that does not trace', () => {
+    const steps: SkewContractDocument['steps'] = [
+      {
+        from: 1,
+        to: 2,
+        description: 'badge and subtitle',
+        ops: [
+          { default: { path: 'badge', value: null } },
+          { default: { path: 'subtitle', value: null } },
+        ],
+      },
+      {
+        from: 2,
+        to: 3,
+        description: 'subtitle is retired',
+        ops: [{ drop: { path: 'subtitle' } }],
+      },
+    ];
+    const strict = only(doc('note', 3, steps), { criticalPaths: ['price'] });
+    const lenient = only(doc('note', 3, steps));
+    const node = authored(2, { title: 'x', badge: 'New', subtitle: 'Hello' });
+    expect(project(node, lenient).report[0]).toMatchObject({
+      lossyPaths: ['badge', 'subtitle'],
+    });
+    expect(project(node, strict).root).toBeNull();
+    // With only the traceable, non-critical loss it renders.
+    expect(
+      project(authored(2, { title: 'x', badge: 'New' }), strict).report[0],
+    ).toMatchObject({ outcome: 'downgraded', lossyPaths: ['badge'] });
+  });
+});
+
+describe('reserved keys, where the plan says they are refused', () => {
+  const clone = (): any => structuredClone(readVector('catalog.json'));
+  const broken = (mutate: (draft: any) => void) => () => {
+    const draft = clone();
+    mutate(draft);
+    return parseCatalog(draft);
+  };
+
+  it('in a catalog: critical and localizable paths, slot accepts', () => {
+    expect(
+      broken(
+        (d) => (d.components['product-card'].criticalPaths = ['__proto__']),
+      ),
+    ).toThrow('criticalPaths must be an array of paths');
+    expect(
+      broken(
+        (d) =>
+          (d.components['product-card'].criticalPaths = [
+            'constructor.prototype',
+          ]),
+      ),
+    ).toThrow('criticalPaths');
+    expect(
+      broken(
+        (d) =>
+          (d.components['product-card'].localizable = ['items[0].constructor']),
+      ),
+    ).toThrow('localizable');
+    expect(
+      broken(
+        (d) => (d.components['stack'].slots.children.accepts = ['__proto__']),
+      ),
+    ).toThrow('accepts must be an array of component types');
+    expect(
+      broken(
+        (d) =>
+          (d.components['stack'].slots.children.accepts = [
+            'text',
+            'product-card',
+          ]),
+      ),
+    ).not.toThrow();
+  });
+
+  it('in flag definitions and rollout plans', () => {
+    expect(() =>
+      parseFlagDefinitions([
+        { key: 'a', default: JSON.parse('{"__proto__":{"admin":true}}') },
+      ]),
+    ).toThrow('its default uses the reserved key "__proto__"');
+    expect(() =>
+      parseFlagDefinitions([
+        {
+          key: 'a',
+          default: 1,
+          rules: [{ value: { deep: [{ constructor: 1 }] } }],
+        },
+      ]),
+    ).toThrow('its value uses the reserved key "constructor"');
+    expect(() =>
+      parseFlagDefinitions([
+        JSON.parse('{"key":"a","default":1,"__proto__":{"x":1}}'),
+      ]),
+    ).toThrow('unknown key "__proto__"');
+    expect(() =>
+      parseFlagDefinitions([
+        { key: 'a', default: 1, rules: [{ value: 2, extra: 1 }] },
+      ]),
+    ).toThrow('rule 0 has an unknown key "extra"');
+    expect(() =>
+      parseRolloutPlan(
+        JSON.parse(
+          '{"stable":"a","candidate":"b","stages":[100],"stage":0,"salt":"s","__proto__":{"x":1}}',
+        ),
+      ),
+    ).toThrow('unknown key "__proto__"');
+  });
+
+  it('in what a device says it knows', () => {
+    const valid = {
+      protocol: [1, 1],
+      manifest: 'cm_x',
+      app: { id: 'a', platform: 'ios', version: '6.2.0' },
+    };
+    expect(() =>
+      parseHandshakeRequest({
+        ...valid,
+        known: { release: 'rel_a', seq: 1, extra: 1 },
+      }),
+    ).toThrow('known takes release and seq');
+    expect(() =>
+      parseHandshakeRequest({
+        ...valid,
+        known: JSON.parse('{"release":"rel_a","seq":1,"__proto__":{"x":1}}'),
+      }),
+    ).toThrow('known takes release and seq');
+  });
+});
+
+describe('the rest of the third pass', () => {
+  it('validateScreen says that required on a fallback has no effect', () => {
+    const odd: Screen = {
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'n',
+        type: 'video-tile',
+        v: 1,
+        props: { title: 't', src: 's' },
+        fallback: {
+          id: 'fb',
+          type: 'text',
+          v: 2,
+          required: true,
+          props: { content: 'x' },
+        },
+      },
+    };
+    expect(validateScreen(odd, catalog())).toEqual([
+      {
+        nodeId: 'fb',
+        message:
+          '"required" on a fallback has no effect — mark "n", the node it stands in for',
+      },
+    ]);
+  });
+
+  it('resolveHandshake tells a retired binary to update even when what it sent is not a manifest', () => {
+    const request = {
+      protocol: [1, 1],
+      manifest: { junk: 1 },
+      app: { id: 'a', platform: 'ios', version: '4.0' },
+    } as never;
+    expect(
+      resolveHandshake(request, {
+        authorized: true,
+        knowsManifest: () => false,
+        requiredVersion: '5.2.0',
+      }).status,
+    ).toBe('update-required');
+    expect(
+      resolveHandshake(request, {
+        authorized: true,
+        knowsManifest: () => false,
+      }),
+    ).toMatchObject({ status: 'manifest-unknown', httpStatus: 400 });
+  });
+});

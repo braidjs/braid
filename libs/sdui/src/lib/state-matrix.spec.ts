@@ -132,4 +132,39 @@ describe('check-state-matrix', () => {
       'type ActionState is not exactly (typeof ACTION_STATES)[number]',
     );
   });
+
+  it('catches a state type widened through an alias', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    const source = readFileSync(statesSource, 'utf8');
+    const exact = 'export type NodeState = (typeof NODE_STATES)[number];';
+    expect(source).toContain(exact);
+    writeFileSync(
+      modified,
+      source.replace(
+        exact,
+        "export type ListedNodeState = (typeof NODE_STATES)[number];\nexport type NodeState = ListedNodeState | 'pulsing';",
+      ),
+    );
+    const result = check('--states', modified);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'type NodeState is not exactly (typeof NODE_STATES)[number]',
+    );
+  });
+
+  it('catches a state type that has gone missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdui-states-'));
+    const modified = join(dir, 'states.ts');
+    writeFileSync(
+      modified,
+      readFileSync(statesSource, 'utf8').replace(
+        'export type ScreenState =',
+        'export type PageState =',
+      ),
+    );
+    const result = check('--states', modified);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('type ScreenState is not declared');
+  });
 });

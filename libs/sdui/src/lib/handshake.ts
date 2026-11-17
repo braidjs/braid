@@ -161,11 +161,12 @@ export function resolveHandshake(
   // function is the one that decides, and must not decide `ok` for something that is not a
   // manifest because a caller skipped the parser.
   let sent: ClientManifest | null = null;
+  let malformed = false;
   if (typeof request.manifest !== 'string') {
     try {
       sent = parseClientManifest(request.manifest);
     } catch {
-      return { status: 'manifest-unknown', httpStatus: 400, protocol };
+      malformed = true;
     }
   }
   const version =
@@ -177,6 +178,9 @@ export function resolveHandshake(
   };
   if (below(policy.requiredVersion))
     return { status: 'update-required', httpStatus: 200, protocol, update };
+  // After the floor, as the order above says: a retired binary is told to update whatever it sent.
+  if (malformed)
+    return { status: 'manifest-unknown', httpStatus: 400, protocol };
 
   const fingerprint = sent
     ? manifestFingerprint(sent)
@@ -404,6 +408,11 @@ export function parseHandshakeRequest(raw: unknown): HandshakeRequest {
       !isSeq(known['seq'])
     )
       fail('known must be { release, seq } with a non-negative integer seq');
+    if (
+      isRecord(known) &&
+      Object.keys(known).some((key) => key !== 'release' && key !== 'seq')
+    )
+      fail('known takes release and seq, and nothing else');
   }
   return raw as unknown as HandshakeRequest;
 }

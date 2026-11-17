@@ -22,7 +22,7 @@ import {
   type SduiNode,
 } from './model.js';
 import { isRecord, own } from './internal.js';
-import { lostPaths, pathWithin } from './paths.js';
+import { lostPaths, pathWithin, withValueFrom } from './paths.js';
 
 /**
  * Projection — one authored screen, turned into what one binary can render.
@@ -46,7 +46,8 @@ import { lostPaths, pathWithin } from './paths.js';
  *
  * Deterministic for a given clock: the same screen, catalog and manifest give the same result,
  * which is why a projection can be computed once per release and manifest and cached by their
- * ids. Only a catalog that uses `$now` reads the clock at all; pin `context` to fix it.
+ * ids. The clock is read once per call, and only a catalog that uses `$now` puts what it returns
+ * into a result; pin `context` to fix it.
  */
 
 export type NodeOutcome =
@@ -114,7 +115,8 @@ export interface NodeReport {
   readonly rendered?: number;
   /**
    * What a downgrade lost: prop paths in the component's newest shape — the one an author edits —
-   * or `slots.<name>`.
+   * or `slots.<name>`. A loss the newest shape has no place for is listed under the name it had
+   * where the node was authored, so that nothing a device dropped goes unreported.
    */
   readonly lossyPaths: readonly string[];
   /** Values that are the migration's guesses rather than what the author wrote. */
@@ -312,6 +314,56 @@ export function projectScreen(
     };
   }
 
+  /**
+   * Puts what a downgrade lost into the component's newest shape.
+   *
+   * Each lost value is traced separately: take the node as authored, put back at that one path
+   * what the trip down and up left there, lift both copies to the newest version, and see where
+   * they differ. Lifting only goes up, so a later step that cannot be inverted is no obstacle;
+   * and because everything else in the two copies is identical, a field the author never wrote
+   * cannot show up as a difference.
+   *
+   * A loss with no trace — the newest version no longer has the field, or a later step folds the
+   * lost value and what replaced it into the same thing, or the lift cannot be run at all — is
+   * returned as `untraced`, under the name it had where it was authored.
+   */
+  function traceLoss(
+    contract: ComponentDefinition['contract'],
+    node: SduiNode,
+    lossyPaths: readonly string[],
+    roundTrip: unknown,
+  ): { traced: string[]; untraced: string[] } {
+    if (lossyPaths.length === 0) return { traced: [], untraced: [] };
+    if (node.v === contract.current)
+      return { traced: [...lossyPaths], untraced: [] };
+    const props = node.props ?? {};
+    const lifted = migrate(
+      contract,
+      props,
+      node.v,
+      contract.current,
+      migrateOptions,
+    );
+    if (!lifted.ok) return { traced: [], untraced: [...lossyPaths] };
+    const traced = new Set<string>();
+    const untraced: string[] = [];
+    for (const path of lossyPaths) {
+      const without = migrate(
+        contract,
+        withValueFrom(props, roundTrip, path),
+        node.v,
+        contract.current,
+        migrateOptions,
+      );
+      const found = without.ok
+        ? lostPaths(lifted.value, without.value).filter((at) => at !== '')
+        : [];
+      if (found.length === 0) untraced.push(path);
+      else for (const at of found) traced.add(at);
+    }
+    return { traced: [...traced], untraced };
+  }
+
   /** Rungs 1 and 2: this node, as itself, at the client's version — or why not. */
   function render(
     node: SduiNode,
@@ -352,37 +404,22 @@ export function projectScreen(
     if (!migrated.ok) return { ok: false, reason: migrated.message };
 
     // What was lost, in the component's newest shape: that is the shape `criticalPaths` are
-    // written in and the one an author sees. Both the node and the node as it came back from the
-    // device's version are lifted to the newest version and compared there, so a field a later
-    // step renamed is found under its current name — and lifting only ever goes up, so a later
-    // step that cannot be inverted does not get in the way.
-    let lossy = [...migrated.lossyPaths];
-    let inNewestShape = true;
-    if (clientVersion < node.v && node.v < contract.current) {
-      const lifted = migrate(
-        contract,
-        node.props ?? {},
-        node.v,
-        contract.current,
-        migrateOptions,
-      );
-      const liftedBack = migrate(
-        contract,
-        migrated.roundTrip,
-        node.v,
-        contract.current,
-        migrateOptions,
-      );
-      if (lifted.ok && liftedBack.ok)
-        lossy = lostPaths(lifted.value, liftedBack.value);
-      else inNewestShape = false;
-    }
+    // written in and the one an author sees. `migrated.lossyPaths` is in the shape the node was
+    // authored at, so for a node authored below the newest version each lost value is traced up
+    // on its own — see `traceLoss`. What cannot be traced is kept, under its authored name.
+    const { traced, untraced } =
+      clientVersion < node.v
+        ? traceLoss(contract, node, migrated.lossyPaths, migrated.roundTrip)
+        : { traced: [], untraced: [] };
+    const lossy = [...traced, ...untraced];
 
     const keptSlots: [string, readonly SduiNode[]][] = [];
     const droppedSlots: [string, readonly SduiNode[]][] = [];
     for (const [slot, children] of Object.entries(node.slots ?? {})) {
       if ((own(definition.slots, slot)?.since ?? 1) > clientVersion) {
         if (children.length > 0) {
+          // A slot is named the same in every version, so its loss is already in the newest shape.
+          traced.push(`slots.${slot}`);
           lossy.push(`slots.${slot}`);
           droppedSlots.push([slot, children]);
         }
@@ -392,16 +429,13 @@ export function projectScreen(
     }
 
     const criticalPaths = definition.criticalPaths ?? [];
-    // If the loss could not be put in the newest shape (a code step above this node has no
-    // implementation here), its paths cannot be compared with the critical ones by name. Then
-    // any loss at all on a component that has critical paths is treated as critical: refusing a
+    // A loss that could not be traced into the newest shape cannot be compared with the critical
+    // paths by name. On a component that has critical paths it is treated as one: refusing a
     // render that would have been fine costs a fallback; allowing one that drops a price does not
     // bear thinking about.
-    const critical = inNewestShape
-      ? lossy.find((path) => criticalPaths.some((c) => pathWithin(path, c)))
-      : criticalPaths.length > 0
-        ? lossy[0]
-        : undefined;
+    const critical =
+      traced.find((path) => criticalPaths.some((c) => pathWithin(path, c))) ??
+      (criticalPaths.length > 0 ? untraced[0] : undefined);
     if (critical !== undefined) {
       return {
         ok: false,

@@ -90,23 +90,30 @@ for (const [constant, level] of Object.entries(LEVELS)) {
 }
 
 // The lists are only the whole truth if the state types are exactly the lists. A type widened on
-// the side — `(typeof ACTION_STATES)[number] | 'cancelled'` — adds a state this check never sees.
-for (const constant of Object.keys(LEVELS)) {
-  const aliases = [...source.matchAll(/^export type (\w+) =([^;]*);/gm)].filter(
-    (alias) => alias[2].includes(constant),
-  );
-  const exact = `(typeof ${constant})[number]`;
-  if (aliases.length === 0)
+// the side — directly, or through an alias — adds a state this check never sees. So each of the
+// four state types must be declared as exactly its list, and nothing else.
+const TYPES = {
+  SESSION_STATES: 'SessionState',
+  SCREEN_STATES: 'ScreenState',
+  NODE_STATES: 'NodeState',
+  ACTION_STATES: 'ActionState',
+};
+const typeAliases = new Map(
+  [...source.matchAll(/^export type (\w+)(?:<[^>]*>)? =([^;]*);/gm)].map(
+    (alias) => [alias[1], alias[2].replace(/\s+/g, '')],
+  ),
+);
+for (const [constant, type] of Object.entries(TYPES)) {
+  const exact = `(typeof${constant})[number]`;
+  const declared = typeAliases.get(type);
+  if (declared === undefined)
     failures.push(
-      `no exported type is derived from ${constant} — a state type must be exactly ${exact}`,
+      `type ${type} is not declared in ${statesPath} — it must be exactly (typeof ${constant})[number]`,
     );
-  for (const alias of aliases) {
-    if (alias[2].replace(/\s+/g, '') !== exact.replace(/\s+/g, '')) {
-      failures.push(
-        `type ${alias[1]} is not exactly ${exact} — every state must be in the ${constant} list, where this check can see it`,
-      );
-    }
-  }
+  else if (declared !== exact)
+    failures.push(
+      `type ${type} is not exactly (typeof ${constant})[number] — every state must be in the ${constant} list, where this check can see it`,
+    );
 }
 
 let stateCount = 0;

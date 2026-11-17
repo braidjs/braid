@@ -39,6 +39,33 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The first reserved key found anywhere in a value, or `null`. Bounded in depth: past it the
+ * answer is "yes", since a value that deep is not configuration.
+ */
+export function reservedKeyIn(value: unknown, depth = 0): string | null {
+  if (typeof value !== 'object' || value === null) return null;
+  if (depth > 64) return '(nested too deeply)';
+  if (Array.isArray(value)) {
+    for (const element of value) {
+      const found = reservedKeyIn(element, depth + 1);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  for (const [key, inner] of Object.entries(value)) {
+    if (RESERVED_KEYS.has(key)) return key;
+    const found = reservedKeyIn(inner, depth + 1);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/** Whether a dotted path has a reserved segment: `a.__proto__.b`, `constructor`. */
+export function hasReservedSegment(path: string): boolean {
+  return path.split(/[.[\]]/).some((segment) => RESERVED_KEYS.has(segment));
+}
+
+/**
  * Printable text for a log line: control characters and line separators, which could forge one,
  * are replaced with "?".
  */

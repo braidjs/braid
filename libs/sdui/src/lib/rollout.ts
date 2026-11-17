@@ -4,7 +4,7 @@ import {
   flagsIn,
 } from './conditions.js';
 import { hash32 } from './hash.js';
-import { isRecord, isSafeName } from './internal.js';
+import { isRecord, isSafeName, reservedKeyIn } from './internal.js';
 import { type Condition, parseCondition } from './model.js';
 
 /**
@@ -125,6 +125,20 @@ export function parseRolloutPlan(raw: unknown): RolloutPlan {
   const isText = (value: unknown): value is string =>
     typeof value === 'string' && value.length > 0 && value.length <= 128;
   if (!isRecord(raw)) return fail('plan must be an object');
+  const strayPlan = Object.keys(raw).find(
+    (key) =>
+      ![
+        'stable',
+        'candidate',
+        'stages',
+        'stage',
+        'salt',
+        'audience',
+        'halted',
+        'apply',
+      ].includes(key),
+  );
+  if (strayPlan !== undefined) fail(`unknown key "${strayPlan.slice(0, 40)}"`);
   for (const key of ['stable', 'candidate', 'salt'] as const) {
     if (!isText(raw[key]))
       fail(`${key} must be a non-empty string of at most 128 characters`);
@@ -244,6 +258,25 @@ export function parseFlagDefinitions(raw: unknown): FlagDefinition[] {
       fail(
         `flag "${key}" needs a default — what a device gets when it cannot ask`,
       );
+    const strayFlag = Object.keys(definition).find(
+      (name) =>
+        ![
+          'key',
+          'default',
+          'rules',
+          'off',
+          'salt',
+          'owner',
+          'expires',
+        ].includes(name),
+    );
+    if (strayFlag !== undefined)
+      fail(`flag "${key}" has an unknown key "${strayFlag.slice(0, 40)}"`);
+    const reservedDefault = reservedKeyIn(definition['default']);
+    if (reservedDefault !== null)
+      fail(
+        `flag "${key}": its default uses the reserved key "${reservedDefault}"`,
+      );
     if (
       definition['off'] !== undefined &&
       typeof definition['off'] !== 'boolean'
@@ -262,6 +295,18 @@ export function parseFlagDefinitions(raw: unknown): FlagDefinition[] {
     rules.forEach((rule, at) => {
       if (!isRecord(rule) || !('value' in rule))
         return fail(`flag "${key}" rule ${at} needs a value`);
+      const strayRule = Object.keys(rule).find(
+        (name) => !['when', 'percent', 'value'].includes(name),
+      );
+      if (strayRule !== undefined)
+        fail(
+          `flag "${key}" rule ${at} has an unknown key "${strayRule.slice(0, 40)}"`,
+        );
+      const reservedValue = reservedKeyIn(rule['value']);
+      if (reservedValue !== null)
+        fail(
+          `flag "${key}" rule ${at}: its value uses the reserved key "${reservedValue}"`,
+        );
       const percent = rule['percent'];
       if (
         percent !== undefined &&

@@ -6,7 +6,7 @@ import {
 } from '@braidlabs/contract';
 import { contentAddress } from './hash.js';
 import { type Screen, type SduiAction, type SduiNode } from './model.js';
-import { isRecord, isSafeName, own } from './internal.js';
+import { hasReservedSegment, isRecord, isSafeName, own } from './internal.js';
 
 /**
  * The catalog — an app's UI vocabulary, owned by engineering.
@@ -172,7 +172,12 @@ export function parseCatalog(raw: unknown): SduiCatalog {
           if (
             accepts !== undefined &&
             (!Array.isArray(accepts) ||
-              !accepts.every((t) => typeof t === 'string'))
+              !accepts.every(
+                (t) =>
+                  typeof t === 'string' &&
+                  TYPE_NAME.test(t) &&
+                  !RESERVED.has(t),
+              ))
           )
             fail(
               `${where}: slot "${slot}" accepts must be an array of component types`,
@@ -206,6 +211,17 @@ export function parseCatalog(raw: unknown): SduiCatalog {
           const reserved = Object.keys(props).find((key) => RESERVED.has(key));
           if (reserved !== undefined)
             fail(`${where}: fallback props use the reserved key "${reserved}"`);
+          for (const spec of Object.values(props)) {
+            if (
+              isRecord(spec) &&
+              typeof spec['$from'] === 'string' &&
+              hasReservedSegment(spec['$from'])
+            ) {
+              fail(
+                `${where}: fallback props read from a reserved path "${spec['$from']}"`,
+              );
+            }
+          }
         }
       }
       for (const key of ['criticalPaths', 'localizable'] as const) {
@@ -213,7 +229,10 @@ export function parseCatalog(raw: unknown): SduiCatalog {
         if (
           list !== undefined &&
           (!Array.isArray(list) ||
-            !list.every((p) => typeof p === 'string' && p.length > 0))
+            !list.every(
+              (p) =>
+                typeof p === 'string' && p.length > 0 && !hasReservedSegment(p),
+            ))
         ) {
           fail(`${where}: ${key} must be an array of paths`);
         }
@@ -501,7 +520,14 @@ export function validateScreen(
       checkAction(node.id, name, action);
     for (const children of Object.values(node.slots ?? {}))
       children.forEach(checkNode);
-    if (node.fallback) checkNode(node.fallback);
+    if (node.fallback) {
+      if (node.fallback.required)
+        problems.push({
+          nodeId: node.fallback.id,
+          message: `"required" on a fallback has no effect — mark "${node.id}", the node it stands in for`,
+        });
+      checkNode(node.fallback);
+    }
   };
 
   checkNode(screen.root);

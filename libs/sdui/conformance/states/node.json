@@ -1,7 +1,7 @@
 {
   "level": "node",
   "resolver": "resolveNodeStates",
-  "note": "`state` is the first state returned, the one that decides what is drawn; `also` is the rest, in order.",
+  "note": "`state` is the first state returned, the one that decides what is drawn; `also` is the rest, in order. The order is fixed: deferred, then data loading or failed, then asset (unsupported format, failed, loading), then stale data, then a fallback, disabled, a missing string, truncated, a variant, and last the plain outcome. The vectors with every fact set at once are that order, pair by pair.",
   "vectors": [
     {
       "state": "exact",
@@ -260,6 +260,1194 @@
         "disabled": true
       },
       "also": ["disabled", "exact"]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-loading",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "loading",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-error",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "failed",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "loading",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-loading",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-loading",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-error",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "failed",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "data-error",
+        "asset-format-unsupported",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "loading",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-loading",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "failed",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-error",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "fallback-catalog",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "fallback-catalog",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant"
+      ]
+    },
+    {
+      "state": "deferred-empty",
+      "given": {
+        "outcome": "downgraded",
+        "deferred": "empty",
+        "data": "stale",
+        "asset": "unsupported-format",
+        "disabled": true,
+        "stringMissing": true,
+        "truncated": true,
+        "variant": "b"
+      },
+      "also": [
+        "asset-format-unsupported",
+        "data-stale",
+        "disabled",
+        "string-missing",
+        "truncated",
+        "variant",
+        "downgraded"
+      ]
     }
   ]
 }

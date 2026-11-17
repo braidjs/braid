@@ -150,10 +150,11 @@ On an app whose `product-card` is v1 (and which has the `text` component the fal
 
 ### How loss is measured
 
-`lossyPaths` is not read off the ops. The node is taken down to the device's version and straight back up, and whatever does not come back is what was lost. Two consequences:
+`lossyPaths` is not read off the ops. The node is taken down to the device's version and straight back up, and what it held that does not come back is what was lost.
 
 - A field the author left out, or left at the value a default would give it, is not a loss; a value that was there and did not come back is.
-- Paths are in the component's **newest** shape, the one an author edits and `criticalPaths` are written in. Both the node and the node as it came back are lifted to the newest version and compared there, so a field that a later step renamed is found under its current name. If that lift cannot be run (a `code` step above the node has no implementation here), paths cannot be compared by name, and any loss at all on a component with critical paths is treated as critical.
+- Paths are in the component's **newest** shape, the one an author edits and `criticalPaths` are written in. For a node authored below the newest version, each lost value is traced up on its own: the node as authored, and the node with that one value as the round trip left it, are both lifted to the newest version and compared. A field a later step renamed is found under its current name, and a later step that cannot be inverted is no obstacle, because lifting only goes up.
+- A loss that leaves no trace in the newest shape — the newest version no longer has the field, a later step folds the lost value and its replacement into one, or the lift cannot be run — is still reported, under the name it had where the node was authored. On a component that has critical paths, such a loss is treated as critical: it cannot be compared with them by name, and refusing a render that would have been fine costs only a fallback.
 
 Migrating _up_ never reports a loss: what a newer version of a component no longer has is the catalog's decision. If the way back up cannot be run, the loss cannot be measured, and the node is treated as unsupported.
 
@@ -296,7 +297,7 @@ A transport failure shows the cached copy when there is one. A semantic failure 
 
 `source` says where the pixels come from (`server`, `cache`, `skeleton`, `authored-state`, `system-state`, `earlier-release`, `bundled`, `native`), so a state whose interface the server cannot supply is one the server is not needed for.
 
-`tools/sdui/check-state-matrix.mjs` fails when a state is listed without a conformance vector, and when a state type is anything but exactly its list. The vectors set several facts at once where order matters, so the precedence between states is part of the specification.
+`tools/sdui/check-state-matrix.mjs` fails when a state is listed without a conformance vector, and when one of the four state types is declared as anything but exactly its list. The vectors set several facts at once where order matters, so the precedence between states is part of the specification.
 
 ---
 

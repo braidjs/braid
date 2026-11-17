@@ -56,9 +56,13 @@ export interface SduiNode {
   /** What a device that cannot render this node gets instead, before the catalog's own fallback. */
   readonly fallback?: SduiNode;
   /**
-   * A required node must reach the screen — as itself or as its own fallback. If it does not, for
-   * any reason, including an ancestor that could not be rendered, the screen is blocked for that
-   * device.
+   * A required node in the screen's tree must reach the screen — as itself or as its own
+   * fallback. If it does not, for any reason, including an ancestor that was omitted or replaced
+   * by a fallback, the screen is blocked for that device.
+   *
+   * Inside a fallback it is conditional: it counts when that fallback is the thing rendered, and
+   * a fallback that is passed over asks nothing of the screen. On a fallback node itself it has
+   * no effect — the node it stands in for is the one that is or is not required.
    */
   readonly required?: boolean;
   readonly analytics?: { readonly name?: string };
