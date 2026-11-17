@@ -1,6 +1,6 @@
 # A CMS for server-driven native UI, on Braid contracts — plan
 
-Status: proposed · Packages: `@braidlabs/sdui` (new), `@braidlabs/cms` (new) · Builds on: `@braidlabs/skew`,
+Status: approved — P1 built, P2–P7 to do · Packages: `@braidlabs/sdui` (new), `@braidlabs/cms` (new) · Builds on: `@braidlabs/skew`,
 `@braidlabs/contract`, `@braidlabs/build`, `@braidlabs/studio` · Borrows patterns from: `@braidlabs/registry`,
 `@braidlabs/console`, `@braidlabs/data`
 
@@ -88,13 +88,13 @@ That gives four things no hand-rolled SDUI stack has:
                                    events ◄── census, projection outcomes, product analytics
 ```
 
-| Package                                                | What it is                                                                                                                                                                                                                                                                                                            | Depends on                                            |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `@braidlabs/sdui`                                      | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.                                                             | `skew`, `contract`                                    |
-| `@braidlabs/sdui/server`                               | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                                                               | core; optional peer `jose`                            |
-| `@braidlabs/sdui/client`                               | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                                                                       | core                                                  |
-| `@braidlabs/cms`                                       | The CMS: WYSIWYG editor, web and emulator preview, history and compare, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Includes a web preview renderer for the starter catalog. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
-| `skew-contract` / new `sdui` bin in `@braidlabs/build` | `sdui catalog check\|publish`, `sdui manifest gen\|register`, `sdui bundle`.                                                                                                                                                                                                                                          | —                                                     |
+| Package                          | What it is                                                                                                                                                                                                                                                                                                            | Depends on                                            |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `@braidlabs/sdui`                | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.                                                             | `skew`, `contract`                                    |
+| `@braidlabs/sdui/server`         | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                                                               | core; optional peer `jose`                            |
+| `@braidlabs/sdui/client`         | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                                                                       | core                                                  |
+| `@braidlabs/cms`                 | The CMS: WYSIWYG editor, web and emulator preview, history and compare, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Includes a web preview renderer for the starter catalog. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
+| `sdui` bin, in `@braidlabs/sdui` | `sdui catalog check\|id`, `sdui manifest gen\|fingerprint` (P1); `catalog publish`, `manifest register` and `bundle` arrive with the server in P2. Lives here, not in `@braidlabs/build`, which stays dependency-free.                                                                                                | —                                                     |
 
 Subpath exports with optional peers are this repo's existing convention (`@braidlabs/registry/oidc`),
 and keep the count at two new packages.
@@ -260,7 +260,7 @@ a real phone needs the server to serve the draft. Drafts are stored through
 | step not invertible / `code` step missing (`gap`)                | `unsupported`                                      | go down the ladder                                     |
 | client lacks the component, or an operator kill switch covers it | `unsupported`                                      | go down the ladder                                     |
 | action not supported                                             | per action: `hide` \| `disable` \| fallback action | control stays honest: never a dead button              |
-| projected props fail the client version's JSON Schema            | `unsupported`                                      | defence in depth; reported as a server bug             |
+| projected props fail the client version's JSON Schema (P2)       | `unsupported`                                      | defence in depth; reported as a server bug             |
 
 **The ladder** — each rung is tried only when the one above cannot be honest. Each rung emits
 telemetry naming itself, so "how far down are people falling" is a chart.
@@ -346,29 +346,30 @@ top — `VersionedOptions.base` as designed.
 
 These tables are the specification. Each `id` is a member of a const union in
 `libs/sdui/src/lib/states.ts`; `tools/sdui/check-state-matrix.mjs` fails the build if an id lacks a
-conformance vector, a reference-client test, or a case in the editor's state switcher.
+conformance vector. The same check gains the reference client's tests in P3 and the editor's state
+switcher in P4, as each comes to exist.
 
 ### Session
 
-| id                         | Trigger                            | User sees                                                                                                      | UI comes from            |
-| -------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `first-launch-online`      | no cache, handshake succeeds       | skeleton from bundled routes → content                                                                         | bundled → server         |
-| `first-launch-offline`     | no cache, no network               | bundled baseline, quiet offline notice                                                                         | bundled                  |
-| `handshake-pending`        | within splash budget               | native splash                                                                                                  | native                   |
-| `handshake-timeout`        | budget exceeded                    | cached pin, revalidating                                                                                       | cache                    |
-| `ok`                       | —                                  | content                                                                                                        | server                   |
-| `update-recommended`       | see handshake                      | content + dismissible prompt                                                                                   | server + authored prompt |
-| `update-required`          | below floor                        | force-update screen                                                                                            | native                   |
-| `protocol-unsupported`     | 426                                | baseline                                                                                                       | bundled                  |
-| `maintenance`              | kill switch                        | baseline or maintenance screen                                                                                 | bundled                  |
-| `signed-out` → `signed-in` | auth change                        | re-handshake; personalised cache partition switches                                                            | server                   |
-| `token-expired`            | 401 mid-session                    | nothing, if refresh succeeds; else anonymous content                                                           | server                   |
-| `release-superseded`       | new `seq` mid-session              | nothing until the `apply` boundary                                                                             | pinned release           |
-| `rolled-back`              | higher `seq`, older release        | per `apply`; urgent replaces the screen in place                                                               | server                   |
-| `stale-origin`             | lower `seq` offered                | nothing; keep pin; report                                                                                      | pinned release           |
-| `clock-skewed`             | device clock far from `serverTime` | nothing; schedules evaluated on server time                                                                    | server                   |
-| `app-updated`              | manifest fingerprint changed       | cache partition for the old fingerprint is unreadable by design → baseline of the new binary until first fetch | bundled → server         |
-| `consent-changed`          | analytics consent revoked          | nothing; event queue purged                                                                                    | —                        |
+| id                     | Trigger                            | User sees                                                                                                      | UI comes from            |
+| ---------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `first-launch-online`  | no cache, handshake succeeds       | skeleton from bundled routes → content                                                                         | bundled → server         |
+| `first-launch-offline` | no cache, no network               | bundled baseline, quiet offline notice                                                                         | bundled                  |
+| `handshake-pending`    | within splash budget               | native splash                                                                                                  | native                   |
+| `handshake-timeout`    | budget exceeded                    | cached pin, revalidating                                                                                       | cache                    |
+| `ok`                   | —                                  | content                                                                                                        | server                   |
+| `update-recommended`   | see handshake                      | content + dismissible prompt                                                                                   | server + authored prompt |
+| `update-required`      | below floor                        | force-update screen                                                                                            | native                   |
+| `protocol-unsupported` | 426                                | baseline                                                                                                       | bundled                  |
+| `maintenance`          | kill switch                        | baseline or maintenance screen                                                                                 | bundled                  |
+| `principal-changed`    | someone signed in or out           | re-handshake; personalised cache partition switches                                                            | server                   |
+| `token-expired`        | 401 mid-session                    | nothing, if refresh succeeds; else anonymous content                                                           | server                   |
+| `release-superseded`   | new `seq` mid-session              | nothing until the `apply` boundary                                                                             | pinned release           |
+| `rolled-back`          | higher `seq`, older release        | per `apply`; urgent replaces the screen in place                                                               | server                   |
+| `stale-origin`         | lower `seq` offered                | nothing; keep pin; report                                                                                      | pinned release           |
+| `clock-skewed`         | device clock far from `serverTime` | nothing; schedules evaluated on server time                                                                    | server                   |
+| `app-updated`          | manifest fingerprint changed       | cache partition for the old fingerprint is unreadable by design → baseline of the new binary until first fetch | bundled → server         |
+| `consent-changed`      | analytics consent revoked          | nothing; event queue purged                                                                                    | —                        |
 
 ### Screen
 
@@ -800,27 +801,32 @@ Each phase is shippable and is locked with `/goal-set` on its own. Criteria are 
 
 ### P1 — Core and protocol (`@braidlabs/sdui`)
 
-- [ ] `nx test sdui` passes a conformance suite driven by JSON vectors in `libs/sdui/conformance/`:
+- [x] `nx test sdui` passes a conformance suite driven by JSON vectors in `libs/sdui/conformance/`:
       one authored screen projected to three manifests yields `exact`; `downgraded` with the expected
       `lossyPaths`; and the authored fallback where a step is not invertible or a critical path would
       be lost — never a guessed value.
-- [ ] `sdui catalog check` exits non-zero, naming the step, when a published step is edited or
+- [x] `sdui catalog check` exits non-zero, naming the step, when a published step is edited or
       reordered, and zero when a step is appended.
-- [ ] Over 100,000 synthetic installs a 5% stage assigns 5% ± 0.3%, assignment is identical across
+- [x] Over 100,000 synthetic installs a 5% stage assigns 5% ± 0.3%, assignment is identical across
       calls, and widening 5% → 25% moves no install from candidate to stable.
-- [ ] Handshake resolution returns each outcome in the handshake table for a fixture row, and the
+- [x] Handshake resolution returns each outcome in the handshake table for a fixture row, and the
       sequence rule holds: lower `seq` is ignored, higher `seq` with an older release is followed.
-- [ ] `tools/sdui/check-state-matrix.mjs` passes, and fails when a state id is added without a
+- [x] `tools/sdui/check-state-matrix.mjs` passes, and fails when a state id is added without a
       vector.
-- [ ] `diffScreens` vectors pass: a moved node reports one move (not a delete and an add); two
+- [x] `diffScreens` vectors pass: a moved node reports one move (not a delete and an add); two
       sides authored at different contract versions with the same content report no content change
       and one "upgraded by the catalog" entry; an unchanged screen is detected by equal `scr_` ids
       without walking it.
 
 Tasks: model and validators · catalog and manifest fingerprints · projection and report · ladder ·
 flag and rollout evaluation · handshake resolution · state unions · screen content addresses and
-the contract-aware semantic diff · `sdui` bin in `@braidlabs/build`
-· nx project, tsconfig path, publishable check · `docs/packages/sdui.md`.
+the contract-aware semantic diff · the `sdui` bin · nx project, tsconfig path, publishable check ·
+`docs/packages/sdui.md`.
+
+Built. Two things the tables above describe are left for P2, where their acceptance criteria are:
+validating projected props against the client version's JSON Schema, and enforcing a manifest's
+`limits`. Projection reports four screen outcomes — `exact`, `degraded`, `fallback`, `blocked` —
+and `blocked` is what the `incompatible` screen state is resolved from.
 
 ### P2 — Delivery and control plane (`@braidlabs/sdui/server`)
 
