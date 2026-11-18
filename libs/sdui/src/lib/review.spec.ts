@@ -32,7 +32,12 @@ import {
 } from '../index.js';
 import { runSdui } from './cli.js';
 import { measure, outgrows } from './internal.js';
-import { withValuesFrom, withinAny } from './paths.js';
+import {
+  changedPaths,
+  formatPath,
+  withValuesFrom,
+  withinAny,
+} from './paths.js';
 import { catalog, manifest, readVector, screen } from './fixtures.spec-util.js';
 
 /**
@@ -4466,5 +4471,81 @@ describe('the text of paths is bounded too', () => {
     expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
     expect(allowance.paths).toBe(0);
     expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(false);
+  });
+});
+
+describe('the tenth pass: a key that is the empty string', () => {
+  it('is refused in props, where no path could show it', () => {
+    const withProps = (props: unknown) => () =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: { id: 'n', type: 'note', v: 1, props },
+      });
+    expect(withProps({ '': { b: 1 } })).toThrow(
+      'root.props has a key that is the empty string',
+    );
+    expect(withProps({ a: [{ '': 1 }] })).toThrow(
+      'root.props.a[0] has a key that is the empty string',
+    );
+    expect(() =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'n',
+          type: 'note',
+          v: 1,
+          visibility: { flag: 'f', is: { '': 1 } },
+        },
+      }),
+    ).toThrow('has a key that is the empty string');
+  });
+
+  it('is refused in a catalog: as a key, and as a segment of any path it names', () => {
+    const catalogWith =
+      (ops: unknown[], extra: object = {}) =>
+      () =>
+        parseCatalog({
+          sduiCatalog: '1',
+          components: {
+            note: {
+              contract: doc('note', 2, [
+                { from: 1, to: 2, description: 'd', ops: ops as never },
+              ]),
+              ...extra,
+            },
+          },
+        });
+    expect(catalogWith([], { criticalPaths: ['.b'] })).toThrow(
+      'criticalPaths must be an array of paths',
+    );
+    for (const path of ['.b', 'a..b', 'a.'])
+      expect(catalogWith([{ default: { path, value: 1 } }])).toThrow(
+        'with an empty segment',
+      );
+    expect(catalogWith([{ default: { path: 'd', value: { '': 1 } } }])).toThrow(
+      'has a key that is the empty string',
+    );
+    expect(
+      catalogWith([
+        { wrap: { path: 'p', key: 'k', also: { c: { $from: '/a//b' } } } },
+      ]),
+    ).toThrow('with an empty segment');
+    expect(
+      catalogWith(
+        [{ wrap: { path: 'p', key: 'k', also: { c: { $from: '/a/b' } } } }],
+        { criticalPaths: ['price.sale', 'items[].badge'] },
+      ),
+    ).not.toThrow();
+  });
+
+  it('would still be written with its dot, so two paths are never one text', () => {
+    expect(formatPath(['', 'b'])).toBe('.b');
+    expect(formatPath(['b'])).toBe('b');
+    expect(formatPath(['a', 0, '', 'c'])).toBe('a[0]..c');
+    expect(changedPaths({ '': { b: 1 } }, { '': { b: 2 } })).toEqual(['.b']);
+    expect(changedPaths({ b: 1 }, { b: 2 })).toEqual(['b']);
+    expect(changedPaths({ b: 1 }, { b: 2 }, 'props')).toEqual(['props.b']);
   });
 });

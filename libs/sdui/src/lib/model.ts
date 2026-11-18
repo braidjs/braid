@@ -194,6 +194,8 @@ function checkValue(
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
+    // A key that is the empty string names nothing a path could show or a critical path match.
+    if (key === '') fail(`${where} has a key that is the empty string`);
     if (key.length > SCREEN_LIMITS.key)
       fail(
         `${where} has a key of more than ${SCREEN_LIMITS.key} characters ("${key.slice(0, 20)}…")`,

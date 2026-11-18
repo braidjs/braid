@@ -122,16 +122,22 @@ export const CATALOG_LIMITS = Object.freeze({
 });
 
 /**
- * Whether a path is longer than a path may be: more segments than the limit, or more characters.
- * Every separator counts, so a path of nothing but dots is as long as it looks; a pointer's
- * leading "/" is not a segment. A path's segments become keys in a payload, and a report names a
- * lost value by every key above it, so their length is bounded too.
+ * Whether a path is one a catalog may not name: more segments than the limit, more characters,
+ * or a segment that is empty. Every separator counts, so a path of nothing but dots is as long
+ * as it looks; a pointer's leading "/" is not a segment. A path's segments become keys in a
+ * payload, and a report names a lost value by every key above it — which is why their length is
+ * bounded, and why none may be the empty string, which a report cannot show.
  */
-const tooLong = (path: unknown): path is string =>
-  typeof path === 'string' &&
-  (path.length > CATALOG_LIMITS.pathLength ||
-    path.split(/[./]/).length - (path.startsWith('/') ? 1 : 0) >
-      CATALOG_LIMITS.pathSegments);
+const tooLong = (path: unknown): path is string => {
+  if (typeof path !== 'string') return false;
+  const segments = path.split(/[./]/);
+  if (path.startsWith('/')) segments.shift();
+  return (
+    path.length > CATALOG_LIMITS.pathLength ||
+    segments.length > CATALOG_LIMITS.pathSegments ||
+    segments.includes('')
+  );
+};
 
 /** A `$from` anywhere under a value that reads a path longer than the limit. */
 function overlongSource(value: unknown): string | null {
@@ -197,6 +203,8 @@ function documentProblem(
     // adds beside the value it wraps — and is then part of every path under it.
     if (!reserved && key.length > CATALOG_LIMITS.pathLength)
       return `${where} has a key of more than ${CATALOG_LIMITS.pathLength} characters ("${key.slice(0, 20)}…")`;
+    if (!reserved && key === '')
+      return `${where} has a key that is the empty string`;
     const found = documentProblem(
       inner,
       `${where}.${key.slice(0, 64)}`,
@@ -271,7 +279,7 @@ export function parseCatalog(raw: unknown): SduiCatalog {
         const overlong = overlongPath(step.ops);
         if (overlong !== null)
           fail(
-            `${where}: step v${step.from} → v${step.to} names a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters ("${overlong.slice(0, 40)}…")`,
+            `${where}: step v${step.from} → v${step.to} names a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters, or with an empty segment ("${overlong.slice(0, 40)}…")`,
           );
         try {
           compileLens(step.ops);
@@ -358,7 +366,7 @@ export function parseCatalog(raw: unknown): SduiCatalog {
                 );
               if (tooLong(spec['$from']))
                 fail(
-                  `${where}: fallback prop "${prop}" reads a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters`,
+                  `${where}: fallback prop "${prop}" reads a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters, or with an empty segment`,
                 );
               if (hasReservedSegment(spec['$from'] as string))
                 fail(
@@ -388,7 +396,7 @@ export function parseCatalog(raw: unknown): SduiCatalog {
             ))
         ) {
           fail(
-            `${where}: ${key} must be an array of paths, each of at most ${CATALOG_LIMITS.pathSegments} segments and ${CATALOG_LIMITS.pathLength} characters`,
+            `${where}: ${key} must be an array of paths, each of at most ${CATALOG_LIMITS.pathSegments} segments and ${CATALOG_LIMITS.pathLength} characters, none of them empty`,
           );
         }
       }

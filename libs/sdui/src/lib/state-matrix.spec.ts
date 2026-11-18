@@ -377,7 +377,7 @@ describe('check-state-matrix', () => {
       'a "@ts-" directive',
     ],
     [
-      'the same directive in capitals, which the compiler reads all the same',
+      'the same directive in capitals, whether or not the compiler would honour it',
       "// @TS-IGNORE\n  states.push('clipped');",
       'a "@ts-" directive',
     ],

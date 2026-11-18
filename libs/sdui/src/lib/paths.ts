@@ -10,17 +10,21 @@ import { canonicalJson } from '@braidlabs/skew';
 export type PathSegment = string | number;
 export type Path = readonly PathSegment[];
 
-/** A path as it is shown: `items[2].badge`. */
+/**
+ * A path as it is shown: `items[2].badge`. A key has a dot before it unless it is the path's
+ * first segment — decided by where it stands, not by what has been written so far, so a key
+ * that is the empty string still leaves its dot.
+ */
 export function formatPath(path: Path): string {
   let out = '';
-  for (const segment of path) {
+  path.forEach((segment, position) => {
     out +=
       typeof segment === 'number'
         ? `[${segment}]`
-        : out === ''
+        : position === 0
           ? segment
           : `.${segment}`;
-  }
+  });
   return out;
 }
 
@@ -29,19 +33,30 @@ export function formatPath(path: Path): string {
  * element (`items[2].badge`); arrays of different lengths differ as a whole.
  */
 export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
+  return changedUnder(a, b, prefix, prefix === '');
+}
+
+/** `atRoot` says whether nothing has been written yet, which an empty `prefix` alone cannot. */
+function changedUnder(
+  a: unknown,
+  b: unknown,
+  prefix: string,
+  atRoot: boolean,
+): string[] {
   if (isPlainRecord(a) && isPlainRecord(b)) {
     const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
     return keys.flatMap((key) =>
-      changedPaths(
+      changedUnder(
         ownValue(a, key),
         ownValue(b, key),
-        prefix ? `${prefix}.${key}` : key,
+        atRoot ? key : `${prefix}.${key}`,
+        false,
       ),
     );
   }
   if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
     return a.flatMap((element, position) =>
-      changedPaths(element, b[position], `${prefix}[${position}]`),
+      changedUnder(element, b[position], `${prefix}[${position}]`, false),
     );
   }
   return canonicalJson(a ?? null) === canonicalJson(b ?? null) ? [] : [prefix];
