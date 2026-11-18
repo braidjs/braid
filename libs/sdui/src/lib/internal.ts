@@ -126,7 +126,7 @@ const NOTHING: Measured = Object.freeze({
   paths: 0,
 });
 
-/** What a key adds to the path of everything under it: itself and a dot. */
+/** What a key adds to the path of everything under it: itself and the dot before it. */
 export const keySegment = (key: string): number => key.length + 1;
 /** What a list index adds: its digits and two brackets. */
 export const indexSegment = (index: number): number => String(index).length + 2;
@@ -185,13 +185,15 @@ export function measure(value: unknown, limits: MeasureLimits): Measure | Over {
   try {
     const whole = visit(value, limits.depth);
     if (whole.characters > limits.characters) return 'characters';
-    if (whole.paths > (limits.paths ?? Number.POSITIVE_INFINITY))
-      return 'paths';
-    return {
-      values: whole.values,
-      characters: whole.characters,
-      paths: whole.paths,
-    };
+    // Counted so far as if the value sat under something: every key with a dot before it. At
+    // the root of a payload the first key has none, and every value under an object root is
+    // reached through exactly one such key.
+    const paths =
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? whole.paths - (whole.values - 1)
+        : whole.paths;
+    if (paths > (limits.paths ?? Number.POSITIVE_INFINITY)) return 'paths';
+    return { values: whole.values, characters: whole.characters, paths };
   } catch (reason) {
     if (reason instanceof TooMuch) return reason.over;
     throw reason;

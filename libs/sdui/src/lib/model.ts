@@ -211,7 +211,8 @@ function checkValue(
       depth + 1,
       budget,
       fail,
-      pathLength + keySegment(key),
+      // The first key of a path has no dot before it.
+      pathLength + (depth === 0 ? key.length : keySegment(key)),
     );
   }
 }

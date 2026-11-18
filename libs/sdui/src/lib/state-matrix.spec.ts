@@ -381,6 +381,11 @@ describe('check-state-matrix', () => {
       "// @TS-IGNORE\n  states.push('clipped');",
       'a "@ts-" directive',
     ],
+    [
+      'the same directive spelled with a Kelvin sign, which lowercases to k',
+      "// @ts-nochec\u212A\n  states.push('clipped');",
+      'a "@ts-" directive',
+    ],
   ])('refuses %s', (_label, statement, message) => {
     const result = withStates((source) =>
       source.replace(TRUNCATED, `${TRUNCATED}\n  ${statement}`),
@@ -410,6 +415,11 @@ describe('check-state-matrix', () => {
       'a helper with an overload its implementation need not honour',
       'function asNodeState(value: string): NodeState;\nfunction asNodeState(value: string): string { return value; }',
       'a function signature with no body ("asNodeState")',
+    ],
+    [
+      'a class, whose interface of the same name can promise what its methods do not',
+      "interface Caster { to(value: 'pulsing'): NodeState }\nclass Caster { to(value: string): string { return value; } }",
+      'a class ("Caster")',
     ],
     [
       'a second signature for a resolver',

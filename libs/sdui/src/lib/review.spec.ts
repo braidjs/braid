@@ -3711,7 +3711,7 @@ describe('the seventh pass: what migrations may produce, in all', () => {
     const thrice = { a: [long, long], b: long };
     expect(
       measure(thrice, { depth: 8, values: 100, characters: 300_002 }),
-    ).toEqual({ values: 5, characters: 300_002, paths: 14 });
+    ).toEqual({ values: 5, characters: 300_002, paths: 10 });
     expect(
       measure(thrice, { depth: 8, values: 100, characters: 300_001 }),
     ).toBe('characters');
@@ -3758,9 +3758,15 @@ describe('the seventh pass: what migrations may produce, in all', () => {
       // catalog's doing, and the arithmetic of each is pinned on small payloads below.
       expect(rendered).toBeGreaterThan(0);
       expect(rendered).toBeLessThan(40);
-      expect(() =>
-        diffScreens(screen('s', 'a'), screen('s2', 'b'), catalog),
-      ).not.toThrow();
+      // A diff has the same allowance. Every card changed; the first are compared at the newest
+      // version, leaf by leaf, and those the allowance does not reach are compared as authored.
+      const diff = diffScreens(screen('s', 'a'), screen('s2', 'b'), catalog);
+      const changed = (id: string) =>
+        diff.changes.find(
+          (change) => change.kind === 'content' && change.nodeId === id,
+        );
+      expect(changed('n39')).toMatchObject({ paths: ['p'] });
+      expect(changed('n0')).not.toMatchObject({ paths: ['p'] });
 
       // A migration on its own has no allowance unless it is given one; given one, it draws on it.
       const allowance = { values: 10, characters: 1000 };
@@ -3892,6 +3898,8 @@ describe('the seventh pass: what migrations may produce, in all', () => {
         },
       });
     expect(withPath(`${'.'.repeat(1000)}x`)).toThrow('segments');
+    // Forty dots are forty-one segments in forty-one characters: short, and still too many.
+    expect(withPath(`${'.'.repeat(40)}x`)).toThrow('segments');
     const segments = (count: number) =>
       Array.from({ length: count }, (_, index) => `a${index}`);
     const reading = (from: string) => () =>
@@ -4190,43 +4198,64 @@ describe('the eighth pass: limits that fit what is legitimate, and close what is
     ).toHaveLength(200);
   });
 
-  it('spends the tracing budget to the last unit, and never on a node with one loss', () => {
-    // Sixteen losses on a node that is 18 values at its newest version: 16 × (18 + 32) = 800, and
-    // 2,500 of those are the budget exactly.
-    const card = (id: string, lost: number) => ({
-      id,
-      type: 'card',
-      v: 2,
-      props: lostFields(lost),
-    });
-    expect(TRACE_BUDGET / 800).toBe(2500);
-    const screen = parseScreen({
-      id: 's',
-      slug: 's',
-      root: {
-        id: 'root',
-        type: 'stack',
-        v: 1,
-        slots: {
-          children: [
-            ...Array.from({ length: 2501 }, (_, index) =>
-              card(`c${index}`, 16),
-            ),
-            card('single', 1),
-          ],
+  // Sixteen losses on a node that is 18 values at its newest version. With 255 characters of
+  // text that is 16 × (18 + 0 + 32) = 800, and 2,500 of those are the budget exactly. One more
+  // character makes the text count for one value: 16 × 51 = 816, and 2,450 fit.
+  it.each([
+    [255, 2500],
+    [256, 2450],
+  ])(
+    'spends the tracing budget to the last unit, counting %i characters of text as they are, and never on a node with one loss',
+    (characters, fit) => {
+      const padded = (id: string, lost: number) => {
+        const props: Record<string, string> = lostFields(lost);
+        const newest = { ...props, tone: 'plain' };
+        const size = measure(newest, {
+          depth: 8,
+          values: 1000,
+          characters: 10_000,
+        });
+        const short = typeof size === 'string' ? 0 : size.characters;
+        // Only the sixteen-loss cards are padded; the single-loss one is left as it is.
+        if (lost === 16)
+          props['f0'] = 'set'.padEnd(3 + characters - short, 'x');
+        return { id, type: 'card', v: 2, props };
+      };
+      const one = padded('probe', 16);
+      expect(
+        measure(
+          { ...one.props, tone: 'plain' },
+          { depth: 8, values: 1000, characters: 10_000 },
+        ),
+      ).toMatchObject({ values: 18, characters });
+      const screen = parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'root',
+          type: 'stack',
+          v: 1,
+          slots: {
+            children: [
+              ...Array.from({ length: fit + 1 }, (_, index) =>
+                padded(`c${index}`, 16),
+              ),
+              padded('single', 1),
+            ],
+          },
         },
-      },
-    });
-    const result = projectScreen(
-      screen,
-      cardsWith(16, { criticalPaths: ['tone'] }),
-      on,
-    );
-    expect(reportOf(result, 'c2499')[0]?.outcome).toBe('downgraded');
-    expect(reportOf(result, 'c2500')[0]?.outcome).toBe('omitted');
-    // One loss is settled by the lift that places all of a node's losses together.
-    expect(reportOf(result, 'single')[0]?.outcome).toBe('downgraded');
-  });
+      });
+      const result = projectScreen(
+        screen,
+        cardsWith(16, { criticalPaths: ['tone'] }),
+        on,
+      );
+      expect(reportOf(result, `c${fit - 1}`)[0]?.outcome).toBe('downgraded');
+      expect(reportOf(result, `c${fit}`)[0]?.outcome).toBe('omitted');
+      // One loss is settled by the lift that places all of a node's losses together.
+      expect(reportOf(result, 'single')[0]?.outcome).toBe('downgraded');
+    },
+  );
 
   it('does not run a migration once the allowance stands at nothing', () => {
     const small = doc('card', 2, [
@@ -4262,17 +4291,27 @@ describe('the text of paths is bounded too', () => {
 
   it('measures the paths to a value as they would be written, a key once for each value under it', () => {
     const limits = { depth: 8, values: 100, characters: 100 };
-    // `ab` is 3 with its dot; each of the two elements under it is that and "[0]".
+    // As a report writes them: `ab` is 2, and `ab[0]` and `ab[1]` are 5 each.
     expect(measure({ ab: [1, 2] }, limits)).toEqual({
       values: 4,
       characters: 2,
-      paths: 15,
+      paths: 12,
     });
-    expect(measure({ ab: [1, 2] }, { ...limits, paths: 15 })).not.toBe('paths');
-    expect(measure({ ab: [1, 2] }, { ...limits, paths: 14 })).toBe('paths');
-    // An index of two digits is one character longer.
-    const eleven = measure({ a: numbers(11) }, limits);
-    expect(eleven).toMatchObject({ paths: 2 + 10 * 5 + 6 });
+    expect(measure({ ab: [1, 2] }, { ...limits, paths: 12 })).not.toBe('paths');
+    expect(measure({ ab: [1, 2] }, { ...limits, paths: 11 })).toBe('paths');
+    // An index of two digits is one character longer: `a`, ten of `a[0]`, and `a[10]`.
+    expect(measure({ a: numbers(11) }, limits)).toMatchObject({
+      paths: 1 + 10 * 4 + 5,
+    });
+    // The docs' own example, and a key below the first, which has its dot.
+    expect(measure({ items: [0, 0, { badge: 1 }] }, limits)).toMatchObject({
+      paths: 'items'.length + 'items[0]'.length * 3 + 'items[2].badge'.length,
+    });
+    expect('items[2].badge').toHaveLength(14);
+    // A list at the root has no key to drop a dot from.
+    expect(measure([[1]], limits)).toMatchObject({
+      paths: '[0]'.length + '[0][0]'.length,
+    });
   });
 
   it('refuses a screen whose paths come to more than a report could hold', () => {
@@ -4307,6 +4346,53 @@ describe('the text of paths is bounded too', () => {
     while (pathsOf(fits + 1) <= SCREEN_LIMITS.paths) fits++;
     expect(screen(fits)).not.toThrow();
     expect(screen(fits + 1)).toThrow('paths');
+  });
+
+  it('holds the path limits to the character: a screen at 16,000,000 and a migrated payload at 32,000,000', () => {
+    const wide = { depth: 64, values: 10_000_000, characters: 100_000_000 };
+    const pathsOf = (value: unknown): number => {
+      const size = measure(value, wide);
+      return typeof size === 'string' ? Number.NaN : size.paths;
+    };
+    // A long list under one long key, then scalars under keys cut to make up the difference.
+    const withPaths = (target: number): Record<string, unknown> => {
+      const props: Record<string, unknown> = {};
+      props['a'.padEnd(SCREEN_LIMITS.key, 'x')] = numbers(
+        Math.floor((target - 4000) / (SCREEN_LIMITS.key + 8)),
+      );
+      let gap = target - pathsOf(props);
+      for (let index = 0; gap > 0; index++) {
+        const length = gap > 136 ? 128 : gap > 128 ? gap - 8 : gap;
+        props[
+          length < 8 ? 'z'.repeat(length) : `c${index}`.padEnd(length, 'y')
+        ] = 0;
+        gap -= length;
+      }
+      return props;
+    };
+    const atLimit = withPaths(SCREEN_LIMITS.paths);
+    expect(pathsOf(atLimit)).toBe(SCREEN_LIMITS.paths);
+    const screenOf = (props: object) => () =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: { id: 'n', type: 'note', v: 1, props },
+      });
+    expect(screenOf(atLimit)).not.toThrow();
+    expect(screenOf({ ...atLimit, q: 0 })).toThrow('paths');
+
+    const grown = doc('note', 2, [
+      { from: 1, to: 2, description: 'g', code: 'grow' },
+    ]);
+    const giving = (value: object) =>
+      migrate(grown, {}, 1, 2, { codeSteps: { grow: { up: () => value } } });
+    const migratedAtLimit = withPaths(MIGRATED_PATH_LIMIT);
+    expect(pathsOf(migratedAtLimit)).toBe(MIGRATED_PATH_LIMIT);
+    expect(giving(migratedAtLimit).ok).toBe(true);
+    const over = giving({ ...migratedAtLimit, q: 0 });
+    expect(over.ok ? '' : over.message).toContain(
+      `whose paths come to more than ${MIGRATED_PATH_LIMIT} characters`,
+    );
   });
 
   it('fails a migration that puts a list under enough long keys, and keeps long keys out of a catalog', () => {
@@ -4375,8 +4461,8 @@ describe('the text of paths is bounded too', () => {
         ops: [{ wrap: { path: 'p', key: 'k' } }],
       },
     ]);
-    // { p: { k: 'x' } }: `p` is 2, and `p.k` is 4.
-    const allowance = { values: 100, characters: 100, paths: 6 };
+    // { p: { k: 'x' } }: `p` is 1, and `p.k` is 3.
+    const allowance = { values: 100, characters: 100, paths: 4 };
     expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
     expect(allowance.paths).toBe(0);
     expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(false);

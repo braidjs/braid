@@ -16,7 +16,7 @@
  * file to a shape in which the compiler guarantees that: each state type is exactly its list, each
  * resolver is declared as returning exactly its state type, and the file has none of the things
  * that tell the compiler to take a value's type on trust — a cast, `any`, a type predicate, an
- * overload, a `declare`, a `@ts-` directive.
+ * overload, a class, a `declare`, a `@ts-` directive.
  *
  * It reads the file with the TypeScript parser, so it sees what the compiler sees: a declaration
  * in a comment or a string is not one. It reads that one file. A state invented in another is
@@ -109,8 +109,10 @@ if (file.parseDiagnostics.length > 0) {
   );
   finish();
 }
-// The compiler reads these whatever their case, so this does too.
-if (/@ts-(?:ignore|expect-error|nocheck)/i.test(raw))
+// The compiler lowercases a directive's name before it reads it, so this does exactly that —
+// which also folds the few characters that are not letters of this alphabet and lowercase to
+// one, as the Kelvin sign does to "k".
+if (/@ts-(?:ignore|expect-error|nocheck)/.test(raw.toLowerCase()))
   failures.push(
     `a "@ts-" directive in ${statesPath} — it tells the compiler not to check a line, and this check relies on the compiler`,
   );
@@ -180,6 +182,10 @@ const visit = (node) => {
   )
     failures.push(
       `a function signature with no body ("${node.name ? text(node.name) : 'function'}") in ${statesPath} — an overload promises a return type its implementation is not held to`,
+    );
+  if (ts.isClassDeclaration(node) || ts.isClassExpression(node))
+    failures.push(
+      `a class ("${node.name ? text(node.name) : 'class'}") in ${statesPath} — a class merges with an interface of its name, whose signatures it is not held to; this file is lists, types and plain functions`,
     );
   if (node.kind === ts.SyntaxKind.DeclareKeyword)
     failures.push(
