@@ -1,6 +1,13 @@
 import { parseVersion } from './conditions.js';
 import { contentAddress } from './hash.js';
-import { RESERVED_KEYS, isRecord, isSafeName, notJson } from './internal.js';
+import {
+  RESERVED_KEYS,
+  indexSegment,
+  isRecord,
+  isSafeName,
+  keySegment,
+  notJson,
+} from './internal.js';
 
 /**
  * The screen document — what an editor authors and a release carries.
@@ -115,12 +122,18 @@ export const SCREEN_LIMITS = Object.freeze({
   key: 128,
   /** Characters in all the strings and keys of all props together. */
   characters: 4_000_000,
+  /**
+   * Characters in the paths to all the values in props, were each written out. A report names
+   * what was lost or changed by path, and a path repeats every key above its value.
+   */
+  paths: 16_000_000,
 });
 
 type Fail = (message: string) => never;
 interface Budget {
   values: number;
   characters: number;
+  paths: number;
 }
 const spend = (budget: Budget, characters: number, fail: Fail): void => {
   budget.characters -= characters;
@@ -141,9 +154,16 @@ function checkValue(
   depth: number,
   budget: Budget,
   fail: Fail,
+  /** How long the path to this value is, from the root of the props it is in. */
+  pathLength = 0,
 ): void {
   if (--budget.values < 0)
     fail(`the document holds more than ${SCREEN_LIMITS.values} values`);
+  budget.paths -= pathLength;
+  if (budget.paths < 0)
+    fail(
+      `the paths to the document's values come to more than ${SCREEN_LIMITS.paths} characters — long keys, deep, over many values`,
+    );
   if (typeof value === 'string') {
     if (value.length > SCREEN_LIMITS.string)
       fail(
@@ -162,7 +182,14 @@ function checkValue(
   if (Array.isArray(value)) {
     // By index, not `forEach`: that would step over a hole, and a hole is an `undefined`.
     for (let index = 0; index < value.length; index++)
-      checkValue(value[index], `${where}[${index}]`, depth + 1, budget, fail);
+      checkValue(
+        value[index],
+        `${where}[${index}]`,
+        depth + 1,
+        budget,
+        fail,
+        pathLength + indexSegment(index),
+      );
     return;
   }
   for (const [key, inner] of Object.entries(value)) {
@@ -178,7 +205,14 @@ function checkValue(
       fail(
         `${where} has a key ${JSON.stringify(key.slice(0, 40))} containing ".", "[" or "]"`,
       );
-    checkValue(inner, `${where}.${key}`, depth + 1, budget, fail);
+    checkValue(
+      inner,
+      `${where}.${key}`,
+      depth + 1,
+      budget,
+      fail,
+      pathLength + keySegment(key),
+    );
   }
 }
 
@@ -309,7 +343,11 @@ export function parseCondition(raw: unknown): Condition {
     raw,
     'condition',
     0,
-    { values: SCREEN_LIMITS.values, characters: SCREEN_LIMITS.characters },
+    {
+      values: SCREEN_LIMITS.values,
+      characters: SCREEN_LIMITS.characters,
+      paths: SCREEN_LIMITS.paths,
+    },
     (message) => {
       throw new TypeError(`sdui condition: ${message}`);
     },
@@ -347,6 +385,7 @@ export function parseScreen(raw: unknown): Screen {
   const budget = {
     values: SCREEN_LIMITS.values,
     characters: SCREEN_LIMITS.characters,
+    paths: SCREEN_LIMITS.paths,
   };
 
   const checkProps = (props: unknown, where: string): void => {

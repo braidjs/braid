@@ -100,25 +100,36 @@ export interface Measure {
   readonly values: number;
   /** Characters in its strings and its keys. */
   readonly characters: number;
+  /**
+   * Characters in the paths to all its values, were each written out: `items[2].badge` for one.
+   * A report names what was lost or changed by path, so this is how large one can get — and it
+   * is not bounded by the count above, where a key counts once however many values sit under it.
+   */
+  readonly paths: number;
 }
 
 export interface MeasureLimits {
   readonly depth: number;
   readonly values: number;
   readonly characters: number;
+  readonly paths?: number;
 }
 
-type Over = 'depth' | 'values' | 'characters';
-interface Measured {
+type Over = 'depth' | 'values' | 'characters' | 'paths';
+interface Measured extends Measure {
   readonly height: number;
-  readonly values: number;
-  readonly characters: number;
 }
 const NOTHING: Measured = Object.freeze({
   height: 0,
   values: 1,
   characters: 0,
+  paths: 0,
 });
+
+/** What a key adds to the path of everything under it: itself and a dot. */
+export const keySegment = (key: string): number => key.length + 1;
+/** What a list index adds: its digits and two brackets. */
+export const indexSegment = (index: number): number => String(index).length + 2;
 
 /**
  * What a value comes to once written out — which is how it is hashed, compared and sent — or
@@ -135,7 +146,7 @@ export function measure(value: unknown, limits: MeasureLimits): Measure | Over {
   const measured = new Map<object, Measured>();
   const visit = (inner: unknown, room: number): Measured => {
     if (typeof inner === 'string')
-      return { height: 0, values: 1, characters: inner.length };
+      return { height: 0, values: 1, characters: inner.length, paths: 0 };
     if (typeof inner !== 'object' || inner === null) return NOTHING;
     const known = measured.get(inner);
     if (known !== undefined) {
@@ -146,29 +157,41 @@ export function measure(value: unknown, limits: MeasureLimits): Measure | Over {
     let height = 1;
     let values = 1;
     let characters = 0;
-    const add = (child: unknown): void => {
+    let paths = 0;
+    const add = (child: unknown, segment: number): void => {
       const below = visit(child, room - 1);
       height = Math.max(height, below.height + 1);
       values += below.values;
       characters += below.characters;
-      // Stops a walk of something enormous early. Characters need no such stop: they are
-      // counted, not walked, and are checked once at the end.
+      // Every value under the child is one segment further from the root than it was from the
+      // child.
+      paths += below.paths + segment * below.values;
+      // Stops a walk of something enormous early. The other counts need no such stop: they are
+      // added up, not walked, and are checked once at the end.
       if (values > limits.values) throw new TooMuch('values');
     };
-    if (Array.isArray(inner)) for (const child of inner) add(child);
+    if (Array.isArray(inner))
+      for (let index = 0; index < inner.length; index++)
+        add(inner[index], indexSegment(index));
     else
       for (const [key, child] of Object.entries(inner)) {
         characters += key.length;
-        add(child);
+        add(child, keySegment(key));
       }
-    const result = { height, values, characters };
+    const result = { height, values, characters, paths };
     measured.set(inner, result);
     return result;
   };
   try {
     const whole = visit(value, limits.depth);
     if (whole.characters > limits.characters) return 'characters';
-    return { values: whole.values, characters: whole.characters };
+    if (whole.paths > (limits.paths ?? Number.POSITIVE_INFINITY))
+      return 'paths';
+    return {
+      values: whole.values,
+      characters: whole.characters,
+      paths: whole.paths,
+    };
   } catch (reason) {
     if (reason instanceof TooMuch) return reason.over;
     throw reason;

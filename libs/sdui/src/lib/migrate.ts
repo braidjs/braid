@@ -29,6 +29,13 @@ export const MIGRATED_VALUE_LIMIT = 400_000;
 export const MIGRATED_CHARACTER_LIMIT = 8_000_000;
 
 /**
+ * How many characters the paths to all of a migrated payload's values may come to: twice a
+ * screen's. Steps that nest a long list under key after key leave its size alone and multiply
+ * the length of every path into it, and a report names what was lost by path.
+ */
+export const MIGRATED_PATH_LIMIT = 32_000_000;
+
+/**
  * What the migrations of one projection, or one diff, may produce between them.
  *
  * The limits above are per payload, and a screen has thousands. A catalog that makes each of them
@@ -37,7 +44,7 @@ export const MIGRATED_CHARACTER_LIMIT = 8_000_000;
  * is spent, the migrations that remain fail like a step that failed, and their nodes go down the
  * ladder.
  *
- * Forty times a screen at its limits in values, and sixteen times in characters. A projection
+ * Forty times a screen at its limits in values, and sixteen times in characters and in paths. A projection
  * migrates each node a handful of times — down, back up to measure the loss, and up to the newest
  * version twice to place it — so a screen at its limits, under a catalog that does not grow its
  * payloads, uses a fraction of this. The lifts that trace losses one at a time are not counted
@@ -46,12 +53,15 @@ export const MIGRATED_CHARACTER_LIMIT = 8_000_000;
 export const MIGRATION_ALLOWANCE = Object.freeze({
   values: 8_000_000,
   characters: 64_000_000,
+  paths: 256_000_000,
 });
 
 /** A {@link MIGRATION_ALLOWANCE} being spent. Mutable: every migration given it draws on it. */
 export interface MigrationAllowance {
   values: number;
   characters: number;
+  /** Optional, so that an allowance may ration size alone. */
+  paths?: number;
 }
 
 /**
@@ -156,7 +166,12 @@ function walk(
   ctx: MigrationContext,
 ): Walk {
   const allowance = options.allowance;
-  if (allowance && (allowance.values <= 0 || allowance.characters <= 0))
+  if (
+    allowance &&
+    (allowance.values <= 0 ||
+      allowance.characters <= 0 ||
+      (allowance.paths !== undefined && allowance.paths <= 0))
+  )
     return {
       ok: false,
       reason: 'threw',
@@ -222,6 +237,7 @@ function walk(
     depth: MIGRATED_DEPTH_LIMIT,
     values: MIGRATED_VALUE_LIMIT,
     characters: MIGRATED_CHARACTER_LIMIT,
+    paths: MIGRATED_PATH_LIMIT,
   });
   if (typeof size === 'string')
     return {
@@ -232,12 +248,15 @@ function walk(
           ? `nested more than ${MIGRATED_DEPTH_LIMIT} levels deep`
           : size === 'values'
             ? `of more than ${MIGRATED_VALUE_LIMIT} values`
-            : `of more than ${MIGRATED_CHARACTER_LIMIT} characters`
+            : size === 'characters'
+              ? `of more than ${MIGRATED_CHARACTER_LIMIT} characters`
+              : `whose paths come to more than ${MIGRATED_PATH_LIMIT} characters`
       }`,
     };
   if (allowance) {
     allowance.values -= size.values;
     allowance.characters -= size.characters;
+    if (allowance.paths !== undefined) allowance.paths -= size.paths;
   }
   return { ok: true, value: current, derived: [...derived] };
 }

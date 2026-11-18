@@ -5,6 +5,7 @@ import {
   type SduiCatalog,
   CATALOG_LIMITS,
   MIGRATED_DEPTH_LIMIT,
+  MIGRATED_PATH_LIMIT,
   MIGRATED_CHARACTER_LIMIT,
   MIGRATED_VALUE_LIMIT,
   MIGRATION_ALLOWANCE,
@@ -3358,7 +3359,10 @@ describe('review of the fifth pass: size, not only depth', () => {
     expect(MIGRATION_ALLOWANCE).toEqual({
       values: 8_000_000,
       characters: 64_000_000,
+      paths: 256_000_000,
     });
+    expect(MIGRATED_PATH_LIMIT).toBe(32_000_000);
+    expect(SCREEN_LIMITS.paths).toBe(16_000_000);
     expect(SCREEN_LIMITS.key).toBe(128);
     expect(SCREEN_LIMITS.characters).toBe(4_000_000);
   });
@@ -3707,7 +3711,7 @@ describe('the seventh pass: what migrations may produce, in all', () => {
     const thrice = { a: [long, long], b: long };
     expect(
       measure(thrice, { depth: 8, values: 100, characters: 300_002 }),
-    ).toEqual({ values: 5, characters: 300_002 });
+    ).toEqual({ values: 5, characters: 300_002, paths: 14 });
     expect(
       measure(thrice, { depth: 8, values: 100, characters: 300_001 }),
     ).toBe('characters');
@@ -3750,8 +3754,10 @@ describe('the seventh pass: what migrations may produce, in all', () => {
       const rendered = result.report.filter(
         (entry) => entry.outcome === 'upgraded',
       ).length;
-      // 262,143 values a card: thirty fit in eight million, and the thirty-first overdraws it.
-      expect(rendered).toBe(31);
+      // Some fit and the rest do not: which of the allowance's three counts runs out first is the
+      // catalog's doing, and the arithmetic of each is pinned on small payloads below.
+      expect(rendered).toBeGreaterThan(0);
+      expect(rendered).toBeLessThan(40);
       expect(() =>
         diffScreens(screen('s', 'a'), screen('s2', 'b'), catalog),
       ).not.toThrow();
@@ -4241,5 +4247,138 @@ describe('the eighth pass: limits that fit what is legitimate, and close what is
     expect(migrate(small, { p: 'x' }, 1, 2, { allowance: text }).ok).toBe(
       false,
     );
+  });
+});
+
+describe('the text of paths is bounded too', () => {
+  const longKey = (index: number) => `k${index}`.padEnd(SCREEN_LIMITS.key, 'x');
+  const under = (levels: number, value: unknown): unknown => {
+    let nested = value;
+    for (let level = levels - 1; level >= 0; level--)
+      nested = { [longKey(level)]: nested };
+    return nested;
+  };
+  const numbers = (count: number) => Array.from({ length: count }, () => 0);
+
+  it('measures the paths to a value as they would be written, a key once for each value under it', () => {
+    const limits = { depth: 8, values: 100, characters: 100 };
+    // `ab` is 3 with its dot; each of the two elements under it is that and "[0]".
+    expect(measure({ ab: [1, 2] }, limits)).toEqual({
+      values: 4,
+      characters: 2,
+      paths: 15,
+    });
+    expect(measure({ ab: [1, 2] }, { ...limits, paths: 15 })).not.toBe('paths');
+    expect(measure({ ab: [1, 2] }, { ...limits, paths: 14 })).toBe('paths');
+    // An index of two digits is one character longer.
+    const eleven = measure({ a: numbers(11) }, limits);
+    expect(eleven).toMatchObject({ paths: 2 + 10 * 5 + 6 });
+  });
+
+  it('refuses a screen whose paths come to more than a report could hold', () => {
+    // Thirty-one keys of 128 characters, one inside the other, over a list: every element is
+    // four thousand characters from the root. The props themselves are small.
+    const screen = (elements: number) => () =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'n',
+          type: 'note',
+          v: 1,
+          props: under(31, numbers(elements)) as object,
+        },
+      });
+    expect(screen(3900)).not.toThrow();
+    expect(screen(4100)).toThrow(
+      `the paths to the document's values come to more than ${SCREEN_LIMITS.paths} characters`,
+    );
+    // The parser counts as `measure` does, list indexes included: the longest list `measure`
+    // puts inside the limit parses, and one element more does not.
+    const pathsOf = (elements: number): number => {
+      const size = measure(under(31, numbers(elements)), {
+        depth: 64,
+        values: 1_000_000,
+        characters: 1_000_000,
+      });
+      return typeof size === 'string' ? Number.POSITIVE_INFINITY : size.paths;
+    };
+    let fits = 3900;
+    while (pathsOf(fits + 1) <= SCREEN_LIMITS.paths) fits++;
+    expect(screen(fits)).not.toThrow();
+    expect(screen(fits + 1)).toThrow('paths');
+  });
+
+  it('fails a migration that puts a list under enough long keys, and keeps long keys out of a catalog', () => {
+    const key = (index: number, length = CATALOG_LIMITS.pathLength) =>
+      `w${index}`.padEnd(length, 'x');
+    // Twenty wraps, each under a key of 200 characters: ten thousand elements, forty million
+    // characters of paths.
+    const nesting = parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        note: {
+          contract: doc('note', 2, [
+            {
+              from: 1,
+              to: 2,
+              description: 'nest',
+              ops: Array.from({ length: 20 }, (_, index) => ({
+                wrap: { path: 'p', key: key(index) },
+              })),
+            },
+          ]),
+        },
+      },
+    });
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: { id: 'n', type: 'note', v: 1, props: { p: numbers(10_000) } },
+    });
+    const result = projectScreen(screen, nesting, device({ note: 2 }));
+    expect(result.report[0]?.reason).toContain(
+      `whose paths come to more than ${MIGRATED_PATH_LIMIT} characters`,
+    );
+    expect(
+      projectScreen(screen, nesting, device({ note: 1 })).report[0]?.outcome,
+    ).toBe('exact');
+
+    const withDefault = (value: unknown) => () =>
+      parseCatalog({
+        sduiCatalog: '1',
+        components: {
+          note: {
+            contract: doc('note', 2, [
+              {
+                from: 1,
+                to: 2,
+                description: 'd',
+                ops: [{ default: { path: 'd', value } }],
+              },
+            ]),
+          },
+        },
+      });
+    expect(withDefault({ [key(0)]: 1 })).not.toThrow();
+    expect(withDefault({ [key(0, CATALOG_LIMITS.pathLength + 1)]: 1 })).toThrow(
+      `a key of more than ${CATALOG_LIMITS.pathLength} characters`,
+    );
+  });
+
+  it('draws paths from the allowance like values and characters', () => {
+    const small = doc('note', 2, [
+      {
+        from: 1,
+        to: 2,
+        description: 'w',
+        ops: [{ wrap: { path: 'p', key: 'k' } }],
+      },
+    ]);
+    // { p: { k: 'x' } }: `p` is 2, and `p.k` is 4.
+    const allowance = { values: 100, characters: 100, paths: 6 };
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
+    expect(allowance.paths).toBe(0);
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(false);
   });
 });

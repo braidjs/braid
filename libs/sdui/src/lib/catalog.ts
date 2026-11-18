@@ -193,6 +193,10 @@ function documentProblem(
   for (const [key, inner] of Object.entries(value)) {
     if (reserved && RESERVED_KEYS.has(key))
       return `${where} uses the reserved key "${key}"`;
+    // A key in a catalog can become a key in a payload — through a default value, or what a wrap
+    // adds beside the value it wraps — and is then part of every path under it.
+    if (!reserved && key.length > CATALOG_LIMITS.pathLength)
+      return `${where} has a key of more than ${CATALOG_LIMITS.pathLength} characters ("${key.slice(0, 20)}…")`;
     const found = documentProblem(
       inner,
       `${where}.${key.slice(0, 64)}`,
