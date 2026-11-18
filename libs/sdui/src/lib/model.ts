@@ -1,6 +1,13 @@
 import { parseVersion } from './conditions.js';
 import { contentAddress } from './hash.js';
-import { RESERVED_KEYS, isRecord, isSafeName, notJson } from './internal.js';
+import {
+  RESERVED_KEYS,
+  indexSegment,
+  isRecord,
+  isSafeName,
+  keySegment,
+  notJson,
+} from './internal.js';
 
 /**
  * The screen document — what an editor authors and a release carries.
@@ -111,9 +118,30 @@ export const SCREEN_LIMITS = Object.freeze({
   values: 200_000,
   /** Characters in any one string. */
   string: 100_000,
+  /** Characters in any one key inside props. A path in a report repeats every key above it. */
+  key: 128,
+  /** Characters in all the strings and keys of all props together. */
+  characters: 4_000_000,
+  /**
+   * Characters in the paths to all the values in props, were each written out. A report names
+   * what was lost or changed by path, and a path repeats every key above its value.
+   */
+  paths: 16_000_000,
 });
 
 type Fail = (message: string) => never;
+interface Budget {
+  values: number;
+  characters: number;
+  paths: number;
+}
+const spend = (budget: Budget, characters: number, fail: Fail): void => {
+  budget.characters -= characters;
+  if (budget.characters < 0)
+    fail(
+      `the document's strings and keys come to more than ${SCREEN_LIMITS.characters} characters`,
+    );
+};
 
 /**
  * Walks an arbitrary JSON value an editor supplied — props, a flag's `is` — and refuses what
@@ -124,16 +152,24 @@ function checkValue(
   value: unknown,
   where: string,
   depth: number,
-  budget: { values: number },
+  budget: Budget,
   fail: Fail,
+  /** How long the path to this value is, from the root of the props it is in. */
+  pathLength = 0,
 ): void {
   if (--budget.values < 0)
     fail(`the document holds more than ${SCREEN_LIMITS.values} values`);
+  budget.paths -= pathLength;
+  if (budget.paths < 0)
+    fail(
+      `the paths to the document's values come to more than ${SCREEN_LIMITS.paths} characters — long keys, deep, over many values`,
+    );
   if (typeof value === 'string') {
     if (value.length > SCREEN_LIMITS.string)
       fail(
         `${where} is a string of more than ${SCREEN_LIMITS.string} characters`,
       );
+    spend(budget, value.length, fail);
     return;
   }
   const problem = notJson(value);
@@ -146,18 +182,40 @@ function checkValue(
   if (Array.isArray(value)) {
     // By index, not `forEach`: that would step over a hole, and a hole is an `undefined`.
     for (let index = 0; index < value.length; index++)
-      checkValue(value[index], `${where}[${index}]`, depth + 1, budget, fail);
+      checkValue(
+        value[index],
+        `${where}[${index}]`,
+        depth + 1,
+        budget,
+        fail,
+        pathLength + indexSegment(index),
+      );
     return;
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
+    // A key that is the empty string names nothing a path could show or a critical path match.
+    if (key === '') fail(`${where} has a key that is the empty string`);
+    if (key.length > SCREEN_LIMITS.key)
+      fail(
+        `${where} has a key of more than ${SCREEN_LIMITS.key} characters ("${key.slice(0, 20)}…")`,
+      );
+    spend(budget, key.length, fail);
     // A key with path punctuation in it could not be told, in a report or a critical path, from
     // a nesting or a list index.
     if (/[.[\]]/.test(key))
       fail(
         `${where} has a key ${JSON.stringify(key.slice(0, 40))} containing ".", "[" or "]"`,
       );
-    checkValue(inner, `${where}.${key}`, depth + 1, budget, fail);
+    checkValue(
+      inner,
+      `${where}.${key}`,
+      depth + 1,
+      budget,
+      fail,
+      // The first key of a path has no dot before it.
+      pathLength + (depth === 0 ? key.length : keySegment(key)),
+    );
   }
 }
 
@@ -177,7 +235,7 @@ function checkCondition(
   value: unknown,
   where: string,
   depth: number,
-  budget: { values: number },
+  budget: Budget,
   fail: Fail,
 ): void {
   if (--budget.values < 0)
@@ -288,7 +346,11 @@ export function parseCondition(raw: unknown): Condition {
     raw,
     'condition',
     0,
-    { values: SCREEN_LIMITS.values },
+    {
+      values: SCREEN_LIMITS.values,
+      characters: SCREEN_LIMITS.characters,
+      paths: SCREEN_LIMITS.paths,
+    },
     (message) => {
       throw new TypeError(`sdui condition: ${message}`);
     },
@@ -323,7 +385,11 @@ export function parseScreen(raw: unknown): Screen {
     fail('title must be a string of at most 512 characters');
 
   const seen = new Set<string>();
-  const budget = { values: SCREEN_LIMITS.values };
+  const budget = {
+    values: SCREEN_LIMITS.values,
+    characters: SCREEN_LIMITS.characters,
+    paths: SCREEN_LIMITS.paths,
+  };
 
   const checkProps = (props: unknown, where: string): void => {
     if (props === undefined) return;

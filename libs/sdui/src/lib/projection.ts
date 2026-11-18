@@ -14,14 +14,14 @@ import {
   hiddenByFlagsAlone,
 } from './conditions.js';
 import type { ClientManifest } from './manifest.js';
-import { type CodeSteps, migrate } from './migrate.js';
+import { type CodeSteps, MIGRATION_ALLOWANCE, migrate } from './migrate.js';
 import {
   type Condition,
   type Screen,
   type SduiAction,
   type SduiNode,
 } from './model.js';
-import { isRecord, own } from './internal.js';
+import { isRecord, measure, own } from './internal.js';
 import {
   type Path,
   formatPath,
@@ -171,8 +171,9 @@ export interface ProjectionOptions {
 
 /**
  * How much work one projection may spend tracing losses one at a time — see `traceLoss`. Counted
- * in values lifted one version: a lift of a payload of 100 values through 3 steps is 300, plus a
- * fixed charge per step for the lift itself.
+ * in values lifted one version: tracing a node's losses costs, for each loss and each version
+ * lifted, the size of the node at its newest version — its values, plus one for every 256
+ * characters of its strings and keys — and a fixed charge of 32 for the lift itself.
  *
  * Generous for anything authored — a hundred nodes each losing five of twenty fields use about a
  * hundredth of it — and small enough that a screen at the size limits, losing something in every
@@ -180,15 +181,13 @@ export interface ProjectionOptions {
  */
 export const TRACE_BUDGET = 2_000_000;
 const LIFT_OVERHEAD = 32;
-
-/** Scalars, arrays and objects in a value: the measure `SCREEN_LIMITS.values` uses. */
-function countValues(value: unknown): number {
-  if (typeof value !== 'object' || value === null) return 1;
-  let count = 1;
-  for (const inner of Array.isArray(value) ? value : Object.values(value))
-    count += countValues(inner);
-  return count;
-}
+/** How many characters of text cost as much to lift as one value. */
+const CHARACTERS_PER_VALUE = 256;
+const UNLIMITED = Object.freeze({
+  depth: Number.POSITIVE_INFINITY,
+  values: Number.POSITIVE_INFINITY,
+  characters: Number.POSITIVE_INFINITY,
+});
 
 type Rendered =
   | {
@@ -224,6 +223,12 @@ export function projectScreen(
   const migrateOptions = {
     codeSteps: options.codeSteps,
     context: { ...(options.context ?? {}), now: () => instant },
+    // One allowance for every migration of this projection — see `MIGRATION_ALLOWANCE`.
+    allowance: { ...MIGRATION_ALLOWANCE },
+  };
+  const tracingOptions = {
+    codeSteps: migrateOptions.codeSteps,
+    context: migrateOptions.context,
   };
 
   const isRequired = (
@@ -398,32 +403,42 @@ export function projectScreen(
     );
     if (!lifted.ok) return all;
     // Where a copy cannot be lifted, nothing can be said about where its loss lands.
-    const liftWithout = (paths: readonly Path[]): string[] | null => {
+    const liftWithout = (
+      paths: readonly Path[],
+      options: typeof migrateOptions | typeof tracingOptions,
+    ): string[] | null => {
       const without = migrate(
         contract,
         withValuesFrom(props, roundTrip, paths),
         node.v,
         contract.current,
-        migrateOptions,
+        options,
       );
       return without.ok
         ? lostPaths(lifted.value, without.value).filter((at) => at !== '')
         : null;
     };
-    const traced = liftWithout(lost);
+    const traced = liftWithout(lost, migrateOptions);
     if (traced === null) return all;
     if (lost.length === 1)
       return { traced, untraced: traced.length === 0 ? names : [] };
 
+    // What one more lift costs is what the lift gives back — the node at its newest version,
+    // which is where a catalog that grows payloads shows — with long text counted at a fraction
+    // of a value per character, since it is copied and compared rather than walked.
+    const size = measure(lifted.value, UNLIMITED);
+    const weight =
+      typeof size === 'string'
+        ? Number.POSITIVE_INFINITY
+        : size.values + Math.floor(size.characters / CHARACTERS_PER_VALUE);
     const cost =
-      lost.length *
-      (countValues(props) + LIFT_OVERHEAD) *
-      (contract.current - node.v);
+      lost.length * (weight + LIFT_OVERHEAD) * (contract.current - node.v);
     if (cost > tracing) return { traced, untraced: names };
     tracing -= cost;
     const untraced: string[] = [];
     for (const path of lost) {
-      const found = liftWithout([path]);
+      // Rationed by the budget just spent, so not drawn from the migration allowance as well.
+      const found = liftWithout([path], tracingOptions);
       if (found === null || found.length === 0) untraced.push(formatPath(path));
     }
     return { traced, untraced };

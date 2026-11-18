@@ -834,15 +834,19 @@ Decisions the review forced, which the sections above should be read with:
   `criticalPaths` are written in. A field the author left out was never lost. Each loss is also
   traced on its own; one that leaves no trace in the newest shape is still reported, and on a
   component with critical paths it is refused. That tracing is rationed per projection: a node
-  whose losses would cost more than the budget has left has all of them treated as untraced.
+  with more than one loss, whose losses would cost more than the budget has left, has all of them
+  treated as untraced.
 - **Conditions are three-valued.** Unknown is not true, and stays unknown through `not`.
 - **Every trust boundary has a parser** with size limits. The reserved keys `__proto__`,
   `constructor` and `prototype` are refused in screens, manifests and handshake bodies, anywhere
   in a catalog, and in flag and rollout definitions; values that are not JSON are refused in
-  screens and catalogs. A catalog's depth and size are limited, and a migration whose result is
-  too deep or too large to write out fails like any other step that fails. The parsers vouch for
-  data as `JSON.parse` gives it, not for a live object that changes after it is read. Two root
-  causes were fixed in `@braidlabs/skew` rather than worked around.
+  screens and catalogs. Screens and catalogs are limited in depth, values and characters. So is
+  what a migration gives back, measured as it would be written out; and the migrations of one
+  projection or one diff share an allowance, so that a catalog cannot multiply a screen past what
+  memory holds. Keys and paths are limited in length, because a report names a lost value by
+  every key above it. The parsers vouch for data as `JSON.parse` gives it, not for a live object
+  that changes after it is read. Two root causes were fixed in `@braidlabs/skew` rather than
+  worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
 Two things the tables above describe are left for P2, where their acceptance criteria are:
