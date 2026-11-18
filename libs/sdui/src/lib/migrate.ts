@@ -37,12 +37,15 @@ export const MIGRATED_CHARACTER_LIMIT = 8_000_000;
  * is spent, the migrations that remain fail like a step that failed, and their nodes go down the
  * ladder.
  *
- * Forty times a screen at its limits in values, and eight times in characters: a projection
- * migrates each node a handful of times, and traces its losses within `TRACE_BUDGET`.
+ * Forty times a screen at its limits in values, and sixteen times in characters. A projection
+ * migrates each node a handful of times — down, back up to measure the loss, and up to the newest
+ * version twice to place it — so a screen at its limits, under a catalog that does not grow its
+ * payloads, uses a fraction of this. The lifts that trace losses one at a time are not counted
+ * here: `TRACE_BUDGET` rations those.
  */
 export const MIGRATION_ALLOWANCE = Object.freeze({
   values: 8_000_000,
-  characters: 32_000_000,
+  characters: 64_000_000,
 });
 
 /** A {@link MIGRATION_ALLOWANCE} being spent. Mutable: every migration given it draws on it. */

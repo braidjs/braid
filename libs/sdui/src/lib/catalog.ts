@@ -115,18 +115,23 @@ export const CATALOG_LIMITS = Object.freeze({
   values: 1_000_000,
   /** Characters in all its strings and keys. */
   characters: 8_000_000,
-  /** Segments in any one path an op or a fallback names: `a.b.c` is three. */
+  /** Segments in any one path the catalog names: `a.b.c` is three. */
   pathSegments: 32,
+  /** Characters in any one such path, and in a key an op names. */
+  pathLength: 200,
 });
 
 /**
- * Whether a path has more segments than the limit. Every separator counts, so a path of nothing
- * but dots is as long as it looks; a pointer's leading "/" is not a segment.
+ * Whether a path is longer than a path may be: more segments than the limit, or more characters.
+ * Every separator counts, so a path of nothing but dots is as long as it looks; a pointer's
+ * leading "/" is not a segment. A path's segments become keys in a payload, and a report names a
+ * lost value by every key above it, so their length is bounded too.
  */
 const tooLong = (path: unknown): path is string =>
   typeof path === 'string' &&
-  path.split(/[./]/).length - (path.startsWith('/') ? 1 : 0) >
-    CATALOG_LIMITS.pathSegments;
+  (path.length > CATALOG_LIMITS.pathLength ||
+    path.split(/[./]/).length - (path.startsWith('/') ? 1 : 0) >
+      CATALOG_LIMITS.pathSegments);
 
 /** A `$from` anywhere under a value that reads a path longer than the limit. */
 function overlongSource(value: unknown): string | null {
@@ -149,7 +154,7 @@ function overlongPath(ops: unknown): string | null {
     if (!isRecord(op)) continue;
     for (const body of Object.values(op)) {
       if (!isRecord(body)) continue;
-      for (const key of ['path', 'from', 'to']) {
+      for (const key of ['path', 'from', 'to', 'key']) {
         const path = own(body, key);
         if (tooLong(path)) return path;
       }
@@ -262,7 +267,7 @@ export function parseCatalog(raw: unknown): SduiCatalog {
         const overlong = overlongPath(step.ops);
         if (overlong !== null)
           fail(
-            `${where}: step v${step.from} → v${step.to} names a path of more than ${CATALOG_LIMITS.pathSegments} segments ("${overlong.slice(0, 40)}…")`,
+            `${where}: step v${step.from} → v${step.to} names a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters ("${overlong.slice(0, 40)}…")`,
           );
         try {
           compileLens(step.ops);
@@ -349,7 +354,7 @@ export function parseCatalog(raw: unknown): SduiCatalog {
                 );
               if (tooLong(spec['$from']))
                 fail(
-                  `${where}: fallback prop "${prop}" reads a path of more than ${CATALOG_LIMITS.pathSegments} segments`,
+                  `${where}: fallback prop "${prop}" reads a path of more than ${CATALOG_LIMITS.pathSegments} segments or ${CATALOG_LIMITS.pathLength} characters`,
                 );
               if (hasReservedSegment(spec['$from'] as string))
                 fail(
@@ -372,10 +377,15 @@ export function parseCatalog(raw: unknown): SduiCatalog {
           (!Array.isArray(list) ||
             !list.every(
               (p) =>
-                typeof p === 'string' && p.length > 0 && !hasReservedSegment(p),
+                typeof p === 'string' &&
+                p.length > 0 &&
+                !tooLong(p) &&
+                !hasReservedSegment(p),
             ))
         ) {
-          fail(`${where}: ${key} must be an array of paths`);
+          fail(
+            `${where}: ${key} must be an array of paths, each of at most ${CATALOG_LIMITS.pathSegments} segments and ${CATALOG_LIMITS.pathLength} characters`,
+          );
         }
       }
     }

@@ -111,6 +111,8 @@ export const SCREEN_LIMITS = Object.freeze({
   values: 200_000,
   /** Characters in any one string. */
   string: 100_000,
+  /** Characters in any one key inside props. A path in a report repeats every key above it. */
+  key: 128,
   /** Characters in all the strings and keys of all props together. */
   characters: 4_000_000,
 });
@@ -165,6 +167,10 @@ function checkValue(
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
+    if (key.length > SCREEN_LIMITS.key)
+      fail(
+        `${where} has a key of more than ${SCREEN_LIMITS.key} characters ("${key.slice(0, 20)}…")`,
+      );
     spend(budget, key.length, fail);
     // A key with path punctuation in it could not be told, in a report or a critical path, from
     // a nesting or a list index.

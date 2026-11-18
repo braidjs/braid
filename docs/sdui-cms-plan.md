@@ -843,9 +843,10 @@ Decisions the review forced, which the sections above should be read with:
   screens and catalogs. Screens and catalogs are limited in depth, values and characters. So is
   what a migration gives back, measured as it would be written out; and the migrations of one
   projection or one diff share an allowance, so that a catalog cannot multiply a screen past what
-  memory holds. The parsers vouch for data as `JSON.parse` gives it, not for a live object that
-  changes after it is read. Two root causes were fixed in `@braidlabs/skew` rather than worked
-  around.
+  memory holds. Keys and paths are limited in length, because a report names a lost value by
+  every key above it. The parsers vouch for data as `JSON.parse` gives it, not for a live object
+  that changes after it is read. Two root causes were fixed in `@braidlabs/skew` rather than
+  worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
 Two things the tables above describe are left for P2, where their acceptance criteria are:

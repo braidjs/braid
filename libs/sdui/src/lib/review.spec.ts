@@ -3042,8 +3042,11 @@ describe('the fifth pass: a loss with no trace, wherever it hides', () => {
           },
         });
       const on = device({ note: 1, stack: 1 });
-      // Each node costs 32 losses × (33 values + 32) = 2,080 of the budget per version lifted.
-      const within = Math.floor(TRACE_BUDGET / (2080 * above));
+      // At its newest version a node is 33 values, and one more for each `tone` a step above
+      // adds. Each costs 32 losses × (that + 32) of the budget per version lifted.
+      const within = Math.floor(
+        TRACE_BUDGET / (32 * (33 + above + 32) * above),
+      );
       const result = projectScreen(notes(within + 5), strict, on);
       const outcomes = result.report
         .filter((entry) => entry.type === 'note')
@@ -3349,12 +3352,14 @@ describe('review of the fifth pass: size, not only depth', () => {
       values: 1_000_000,
       characters: 8_000_000,
       pathSegments: 32,
+      pathLength: 200,
     });
     expect(MIGRATED_CHARACTER_LIMIT).toBe(8_000_000);
     expect(MIGRATION_ALLOWANCE).toEqual({
       values: 8_000_000,
-      characters: 32_000_000,
+      characters: 64_000_000,
     });
+    expect(SCREEN_LIMITS.key).toBe(128);
     expect(SCREEN_LIMITS.characters).toBe(4_000_000);
   });
 
@@ -3990,5 +3995,251 @@ describe('the seventh pass: what migrations may produce, in all', () => {
     expect(past).toHaveLength(4000);
     expect(past).toContain('items[0].tag');
     expect(past).toContain('items[0].badge');
+  });
+});
+
+describe('the eighth pass: limits that fit what is legitimate, and close what is not', () => {
+  const fieldsStep = (
+    count: number,
+  ): SkewContractDocument['steps'][number] => ({
+    from: 1,
+    to: 2,
+    description: 'optional fields',
+    ops: Array.from({ length: count }, (_, index) => ({
+      default: { path: `f${index}`, value: null },
+    })),
+  });
+  const toneStep: SkewContractDocument['steps'][number] = {
+    from: 2,
+    to: 3,
+    description: 'tone',
+    ops: [{ default: { path: 'tone', value: 'plain' } }],
+  };
+  const cardsWith = (lost: number, extra: object = {}): SduiCatalog =>
+    parseCatalog({
+      sduiCatalog: '1',
+      components: {
+        card: {
+          contract: doc('card', 3, [fieldsStep(lost), toneStep]),
+          ...extra,
+        },
+        stack: { contract: doc('stack', 1, []), slots: { children: {} } },
+      },
+    });
+  const lostFields = (count: number) =>
+    Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [`f${index}`, 'set']),
+    );
+  const on = device({ card: 1, stack: 1 });
+
+  it('refuses a prop key long enough to make every path under it a payload', () => {
+    const keyed = (length: number) => () =>
+      parseScreen({
+        id: 's',
+        slug: 's',
+        root: {
+          id: 'n',
+          type: 'card',
+          v: 1,
+          props: { [`k${'x'.repeat(length - 1)}`]: [1] },
+        },
+      });
+    expect(keyed(SCREEN_LIMITS.key)).not.toThrow();
+    expect(keyed(SCREEN_LIMITS.key + 1)).toThrow(
+      `a key of more than ${SCREEN_LIMITS.key} characters`,
+    );
+  });
+
+  it('refuses a catalog path, key or critical path too long to name a place in a payload', () => {
+    const catalogWith =
+      (ops: unknown[], extra: object = {}) =>
+      () =>
+        parseCatalog({
+          sduiCatalog: '1',
+          components: {
+            card: {
+              contract: doc('card', 2, [
+                {
+                  from: 1,
+                  to: 2,
+                  description: 'd',
+                  ops: ops as never,
+                },
+              ]),
+              ...extra,
+            },
+          },
+        });
+    const long = (length: number) => 'p'.repeat(length);
+    expect(
+      catalogWith([
+        { default: { path: long(CATALOG_LIMITS.pathLength), value: 1 } },
+      ]),
+    ).not.toThrow();
+    expect(
+      catalogWith([
+        { default: { path: long(CATALOG_LIMITS.pathLength + 1), value: 1 } },
+      ]),
+    ).toThrow(`or ${CATALOG_LIMITS.pathLength} characters`);
+    expect(
+      catalogWith([
+        { wrap: { path: 'p', key: long(CATALOG_LIMITS.pathLength + 1) } },
+      ]),
+    ).toThrow('characters');
+    expect(
+      catalogWith([], { criticalPaths: [`${'.'.repeat(100_000)}x`] }),
+    ).toThrow('criticalPaths must be an array of paths');
+    expect(
+      catalogWith([], {
+        criticalPaths: [
+          Array.from(
+            { length: CATALOG_LIMITS.pathSegments + 1 },
+            () => 'a',
+          ).join('.'),
+        ],
+      }),
+    ).toThrow('criticalPaths must be an array of paths');
+    expect(catalogWith([], { criticalPaths: ['price.sale'] })).not.toThrow();
+  });
+
+  it('leaves a screen at its limits whole: thousands of cards of text, each losing fields', () => {
+    // 4,999 cards of about 800 characters, each losing five optional fields on a v1 device.
+    const text = 'x'.repeat(760);
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'root',
+        type: 'stack',
+        v: 1,
+        slots: {
+          children: Array.from({ length: 4999 }, (_, index) => ({
+            id: `c${index}`,
+            type: 'card',
+            v: 2,
+            props: { body: text, ...lostFields(5) },
+          })),
+        },
+      },
+    });
+    const result = projectScreen(screen, cardsWith(5), on);
+    expect(
+      result.report.filter((entry) => entry.outcome === 'downgraded'),
+    ).toHaveLength(4999);
+    expect(result.outcome).toBe('degraded');
+  });
+
+  it('traces a node of two megabytes of text that loses forty fields, and none of them critical', () => {
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'c',
+        type: 'card',
+        v: 2,
+        props: {
+          price: 5,
+          text: Array.from({ length: 20 }, () => 'x'.repeat(100_000)),
+          ...lostFields(40),
+        },
+      },
+    });
+    // Forty-four lifts of two megabytes would overdraw the migration allowance if tracing drew
+    // on it. It does not: the tracing budget rations those.
+    const result = projectScreen(
+      screen,
+      cardsWith(40, { criticalPaths: ['price'] }),
+      on,
+    );
+    expect(result.report[0]).toMatchObject({ outcome: 'downgraded' });
+    expect(result.report[0]?.lossyPaths).toHaveLength(40);
+  });
+
+  it('counts text in what tracing costs, so megabytes are not lifted hundreds of times', () => {
+    // 3.9 million characters and 200 losses: each lift would cost fifteen thousand, and two
+    // hundred of them are past the budget. So the losses are not traced one by one, and a
+    // component with critical paths refuses.
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'c',
+        type: 'card',
+        v: 2,
+        props: {
+          price: 5,
+          text: Array.from({ length: 39 }, () => 'x'.repeat(100_000)),
+          ...lostFields(200),
+        },
+      },
+    });
+    const strict = projectScreen(
+      screen,
+      cardsWith(200, { criticalPaths: ['price'] }),
+      on,
+    );
+    expect(strict.report[0]?.reason).toContain('could not be traced');
+    expect(
+      projectScreen(screen, cardsWith(200), on).report[0]?.lossyPaths,
+    ).toHaveLength(200);
+  });
+
+  it('spends the tracing budget to the last unit, and never on a node with one loss', () => {
+    // Sixteen losses on a node that is 18 values at its newest version: 16 × (18 + 32) = 800, and
+    // 2,500 of those are the budget exactly.
+    const card = (id: string, lost: number) => ({
+      id,
+      type: 'card',
+      v: 2,
+      props: lostFields(lost),
+    });
+    expect(TRACE_BUDGET / 800).toBe(2500);
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: {
+        id: 'root',
+        type: 'stack',
+        v: 1,
+        slots: {
+          children: [
+            ...Array.from({ length: 2501 }, (_, index) =>
+              card(`c${index}`, 16),
+            ),
+            card('single', 1),
+          ],
+        },
+      },
+    });
+    const result = projectScreen(
+      screen,
+      cardsWith(16, { criticalPaths: ['tone'] }),
+      on,
+    );
+    expect(reportOf(result, 'c2499')[0]?.outcome).toBe('downgraded');
+    expect(reportOf(result, 'c2500')[0]?.outcome).toBe('omitted');
+    // One loss is settled by the lift that places all of a node's losses together.
+    expect(reportOf(result, 'single')[0]?.outcome).toBe('downgraded');
+  });
+
+  it('does not run a migration once the allowance stands at nothing', () => {
+    const small = doc('card', 2, [
+      {
+        from: 1,
+        to: 2,
+        description: 'w',
+        ops: [{ wrap: { path: 'p', key: 'k' } }],
+      },
+    ]);
+    // { p: { k: 'x' } } is three values and three characters.
+    const allowance = { values: 3, characters: 100 };
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(true);
+    expect(allowance).toEqual({ values: 0, characters: 97 });
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance }).ok).toBe(false);
+    const text = { values: 100, characters: 3 };
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance: text }).ok).toBe(true);
+    expect(migrate(small, { p: 'x' }, 1, 2, { allowance: text }).ok).toBe(
+      false,
+    );
   });
 });

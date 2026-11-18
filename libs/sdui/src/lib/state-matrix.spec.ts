@@ -376,6 +376,11 @@ describe('check-state-matrix', () => {
       "// @ts-ignore\n  states.push('clipped');",
       'a "@ts-" directive',
     ],
+    [
+      'the same directive in capitals, which the compiler reads all the same',
+      "// @TS-IGNORE\n  states.push('clipped');",
+      'a "@ts-" directive',
+    ],
   ])('refuses %s', (_label, statement, message) => {
     const result = withStates((source) =>
       source.replace(TRUNCATED, `${TRUNCATED}\n  ${statement}`),
@@ -401,6 +406,11 @@ describe('check-state-matrix', () => {
       'a type predicate ("asserts value is NodeState")',
     ],
     ['a declared value', 'declare const clipped: NodeState;', 'a "declare"'],
+    [
+      'a helper with an overload its implementation need not honour',
+      'function asNodeState(value: string): NodeState;\nfunction asNodeState(value: string): string { return value; }',
+      'a function signature with no body ("asNodeState")',
+    ],
     [
       'a second signature for a resolver',
       'export function resolveActionState(facts: ActionFacts): ActionState;',

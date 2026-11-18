@@ -80,6 +80,9 @@ export function lostSegments(
       lostSegments(element, back[position], [...prefix, position]),
     );
   }
+  // The same scalar is the same without being written out, which for a long string is most of
+  // the work of comparing a payload.
+  if (original === back) return [];
   return canonicalJson(original) === canonicalJson(back ?? null)
     ? []
     : [prefix];

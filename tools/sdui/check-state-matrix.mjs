@@ -15,13 +15,15 @@
  * The lists are only the whole truth if nothing else can produce a state, so this also holds the
  * file to a shape in which the compiler guarantees that: each state type is exactly its list, each
  * resolver is declared as returning exactly its state type, and the file has none of the things
- * that tell the compiler to take a value's type on trust — a cast, `any`, a type predicate, a
- * `declare`, a `@ts-` directive.
+ * that tell the compiler to take a value's type on trust — a cast, `any`, a type predicate, an
+ * overload, a `declare`, a `@ts-` directive.
  *
  * It reads the file with the TypeScript parser, so it sees what the compiler sees: a declaration
  * in a comment or a string is not one. It reads that one file. A state invented in another is
- * outside its view, and so is a value typed `any` by a library, as `JSON.parse` gives. It is a
- * guard against mistakes, not against someone set on getting round it.
+ * outside its view, and so is a value typed `any` by a library, as `JSON.parse` gives. And the
+ * compiler it leans on is not sound: a list of states can be handed to something that takes a
+ * list of strings, and written to through that. It is a guard against mistakes, not against
+ * someone set on getting round it.
  *
  * It reads the source rather than importing the built package, so it runs before a build and
  * cannot be satisfied by a stale `dist/`.
@@ -107,7 +109,8 @@ if (file.parseDiagnostics.length > 0) {
   );
   finish();
 }
-if (/@ts-(?:ignore|expect-error|nocheck)/.test(raw))
+// The compiler reads these whatever their case, so this does too.
+if (/@ts-(?:ignore|expect-error|nocheck)/i.test(raw))
   failures.push(
     `a "@ts-" directive in ${statesPath} — it tells the compiler not to check a line, and this check relies on the compiler`,
   );
@@ -170,6 +173,13 @@ const visit = (node) => {
   if (ts.isTypePredicateNode(node))
     failures.push(
       `a type predicate ("${text(node)}") in ${statesPath} — it tells the compiler a value is a state on the function's say-so`,
+    );
+  if (
+    (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+    !node.body
+  )
+    failures.push(
+      `a function signature with no body ("${node.name ? text(node.name) : 'function'}") in ${statesPath} — an overload promises a return type its implementation is not held to`,
     );
   if (node.kind === ts.SyntaxKind.DeclareKeyword)
     failures.push(
