@@ -60,6 +60,8 @@ function kindOf(code: number): Kind {
       within(code, 0x61, 0x7a)
       ? kind(LATIN, 1)
       : PLAIN;
+  // C1 controls: line breaks and font changes nobody types
+  if (code < 0xa0) return RUN;
   if (code < 0xc0) return PLAIN;
   if (code <= 0x02ff || within(code, 0x1e00, 0x1eff)) return kind(LATIN, 1);
   if (code <= 0x036f) return MARK; // combining marks go with their base
@@ -84,7 +86,9 @@ function kindOf(code: number): Kind {
     within(code, 0x2066, 0x2069)
   )
     return RUN;
-  if (code === 0x200d || within(code, 0xfe00, 0xfe0f)) return MARK; // joiners, selectors
+  // An emoji presentation selector turns the character before it into an emoji: a run.
+  if (code === 0xfe0f) return RUN;
+  if (code === 0x200d || within(code, 0xfe00, 0xfe0e)) return MARK; // joiners, text selectors
   if (within(code, 0x20d0, 0x20ff)) return MARK;
   if (
     within(code, 0x2600, 0x27bf) ||
@@ -92,11 +96,15 @@ function kindOf(code: number): Kind {
     within(code, 0xe0020, 0xe007f)
   )
     return kind(EMOJI, COMPLEX_COST);
-  if (within(code, 0x2000, 0x2bff) || within(code, 0x3000, 0x303f))
-    return PLAIN; // punctuation, symbols, arrows; CJK punctuation
+  // General punctuation, super- and subscripts and currency are in every text font.
+  if (within(code, 0x2000, 0x20cf)) return PLAIN;
+  // Symbols — letterlike, arrows, maths, technical, box drawing, shapes, Braille, and the emoji
+  // among them — often come from fonts of their own: each block is a group, and a change a run.
+  if (within(code, 0x2100, 0x2bff))
+    return kind(2_000 + (code >> 7), COMPLEX_COST);
   if (
     within(code, 0x2e80, 0x2fff) ||
-    within(code, 0x3040, 0x31ff) ||
+    within(code, 0x3000, 0x31ff) || // CJK punctuation with the scripts it is set in
     within(code, 0x3400, 0x4dbf) ||
     within(code, 0x4e00, 0x9fff) ||
     within(code, 0xf900, 0xfaff) ||
@@ -114,6 +122,11 @@ function kindOf(code: number): Kind {
   return kind(1_000 + (code >> 7), UNMEASURED_COST);
 }
 
+/** Characters a browser pairs and mirrors in right-to-left text: brackets. */
+const MIRRORED = new Set([
+  0x28, 0x29, 0x3c, 0x3e, 0x5b, 0x5d, 0x7b, 0x7d, 0xab, 0xbb,
+]);
+
 export function layoutCost(text: string): number {
   let ascii = true;
   for (let index = 0; index < text.length; index++)
@@ -124,6 +137,8 @@ export function layoutCost(text: string): number {
   if (ascii) return text.length;
   let cost = 0;
   let last = NEUTRAL;
+  let rtl = false;
+  let brackets = 0;
   for (let index = 0; index < text.length; index++) {
     let code = text.charCodeAt(index);
     // a pair is one character
@@ -134,7 +149,9 @@ export function layoutCost(text: string): number {
         index++;
       }
     }
+    if (MIRRORED.has(code)) brackets++;
     const { group, cost: each } = kindOf(code);
+    if (group === HEBREW || group === ARABIC) rtl = true;
     cost += each;
     if (group === NEUTRAL) continue;
     if (group === CONTROL) {
@@ -144,5 +161,6 @@ export function layoutCost(text: string): number {
     if (last !== NEUTRAL && group !== last) cost += RUN_COST;
     last = group;
   }
-  return cost;
+  // In right-to-left text, brackets are paired and mirrored: that costs per bracket.
+  return rtl ? cost + brackets * UNMEASURED_COST : cost;
 }

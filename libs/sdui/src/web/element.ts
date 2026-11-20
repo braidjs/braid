@@ -110,6 +110,8 @@ class Bucket {
 
 /** Milliseconds of messages an element applies before it lets the page run. */
 const SLICE_MS = 8;
+/** Characters of one POST: past this, an action goes without its surface's data model. */
+const MAX_POST_CHARS = 4_000_000;
 /** Milliseconds a draw's layout may take before the element draws less text. */
 const LAYOUT_MS = 100;
 
@@ -285,6 +287,18 @@ export function defineA2uiSurface(
     /** One line of JSON Lines: one bad line is one error, not the loss of its neighbours. */
     #line(line: string, origin: Origin): void {
       if (line.trim() === '') return;
+      // A line is a message, or a list of them, of at most one message's length.
+      if (line.length > A2UI_LIMITS.messageChars) {
+        this.#refuse(
+          new A2uiError(
+            'VALIDATION_FAILED',
+            `a line is longer than ${A2UI_LIMITS.messageChars} characters`,
+            '',
+          ),
+          origin,
+        );
+        return;
+      }
       let list: readonly unknown[] = [];
       try {
         list = parseA2uiStream(line);
@@ -523,7 +537,7 @@ export function defineA2uiSurface(
           // limit comes back as the page does.
           if (layout > LAYOUT_MS)
             this.#textScale = Math.max(
-              0.01,
+              0.0005,
               (this.#textScale * LAYOUT_MS) / layout,
             );
           else if (layout < LAYOUT_MS / 2)
@@ -566,18 +580,24 @@ export function defineA2uiSurface(
         ?.surfaceId;
       const surface = acted ? this.surfaces.get(acted) : undefined;
       if (surface?.sendDataModel) dataModels[surface.id] = surface.dataModel;
-      void fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const body = (withModel: boolean) =>
+        JSON.stringify({
           message,
           metadata: {
             a2uiRendererCapabilities: this.capabilities,
-            ...(Object.keys(dataModels).length > 0
+            ...(withModel && Object.keys(dataModels).length > 0
               ? { a2uiRendererDataModel: dataModels }
               : {}),
           },
-        }),
+        });
+      let text = body(true);
+      // Written out, a data model can be several times its characters (a control character is
+      // six); past this the message goes without it.
+      if (text.length > MAX_POST_CHARS) text = body(false);
+      void fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: text,
       })
         .then((response) => (response.ok ? response.text() : ''))
         .then((text) => {

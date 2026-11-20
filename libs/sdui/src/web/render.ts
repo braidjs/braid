@@ -480,8 +480,24 @@ export function renderSurface(
         context.scope,
       );
       // A copy: what was read from the data model goes on changing with it, and a listener may
-      // keep the message.
-      const contextValue = isRecord(resolved) ? structuredClone(resolved) : {};
+      // keep the message. And a bounded one: an action is a request, not a way to make a click
+      // copy and send everything a surface holds, as many times as it names it.
+      let contextValue: Record<string, unknown> = {};
+      if (isRecord(resolved)) {
+        const weight = options.evaluator.measure(resolved);
+        const json =
+          weight !== null && weight.chars <= MAX_ACTION_CONTEXT
+            ? JSON.stringify(resolved)
+            : undefined;
+        if (json !== undefined && json.length <= 6 * MAX_ACTION_CONTEXT)
+          contextValue = JSON.parse(json) as Record<string, unknown>;
+        else
+          options.report({
+            code: 'VALIDATION_FAILED',
+            message: `the action's context is larger than ${MAX_ACTION_CONTEXT} characters; it is sent empty`,
+            path: `/components/${context.id}`,
+          });
+      }
       const userMessage =
         event['userMessage'] !== undefined
           ? options.evaluator.text(event['userMessage'], context.scope)
@@ -674,6 +690,8 @@ function childProps(catalog: SduiCatalog, type: string): string[] {
 
 /** Characters of one prop a host element may be handed. */
 const MAX_HOST_PROP = 16_000;
+/** Characters an action's context may carry. */
+const MAX_ACTION_CONTEXT = 100_000;
 /** Props a host element may be handed: a component of more hands over none. */
 const MAX_HOST_PROPS = 256;
 

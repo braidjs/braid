@@ -217,7 +217,43 @@ const EXPENSIVE: Record<string, string> = {
   Ethiopic: '\u1230\u120b\u121d ',
   'combining marks': 'a\u0301\u0302\u0303',
   Arabic: '\u0645\u0631\u062d\u0628\u0627 ',
+  // from the seventh audit: characters a browser draws from fonts of their own
+  'stars between letters': 'a\u2b50',
+  'watches between letters': 'a\u231a',
+  'box drawing between letters': 'a\u2500',
+  'maths between letters': 'a\u2200',
+  'Braille between letters': 'a\u2801',
+  'emoji-presented copyright signs': '\u00a9\ufe0fa',
+  keycaps: '1\ufe0f\u20e3a',
+  'C1 controls between letters': 'a\u0085',
+  'CJK punctuation between letters': 'a\u3001',
+  'brackets in Hebrew': '\u05d0(((((',
 };
+/** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
+const texts19 = (unit: string): Line[] => [
+  create({
+    dataModel: {
+      t: Object.fromEntries(
+        Array.from({ length: 19 }, (_, i) => [
+          `b${i}`,
+          unit.repeat(Math.ceil(20_000 / unit.length)).slice(0, 20_000),
+        ]),
+      ),
+    },
+  }),
+  update([
+    {
+      id: 'root',
+      component: 'Column',
+      children: Array.from({ length: 19 }, (_, i) => `t${i}`),
+    },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      id: `t${i}`,
+      component: 'Text',
+      text: { '@path': `/t/b${i}` },
+    })),
+  ]),
+];
 /** `unit` repeated until `copies` of it would cost just under a draw's text budget. */
 function atBudget(unit: string, copies = 1): string {
   const room = (DRAW_LIMITS.chars * 0.98) / copies;
@@ -582,6 +618,36 @@ const CASES: Record<string, () => Line[]> = {
       { component: 'FlightCard', flight: 'TP 1351', status: 'x', gate: 'B12' },
       4_990,
     ),
+  ...Object.fromEntries(
+    [
+      'a\u2b50',
+      'a\u231a',
+      'a\u2b50 ',
+      'a\u2500',
+      'a\u2200',
+      '\u00a9\ufe0fa',
+      'a\u2801',
+      'a\u0085',
+      'a\u3001',
+      '1\ufe0f\u20e3a',
+      '\u05d0(((((',
+    ].map((unit) => [
+      `19 Texts of 20,000 characters of ${JSON.stringify(unit)}`,
+      () => texts19(unit),
+    ]),
+  ),
+  'one Text of stars between letters, changed by 6 messages': () => [
+    create({ dataModel: { s: '' } }),
+    update([{ id: 'root', component: 'Text', text: { '@path': '/s' } }]),
+    ...Array.from({ length: 6 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: {
+        surfaceId: H,
+        path: '/s',
+        value: `${n}${'a\u2b50'.repeat(10_000)}`,
+      },
+    })),
+  ],
   'a Text of 20,000 characters alternating direction': () => [
     create(),
     update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(10_000) }]),
@@ -824,6 +890,78 @@ describe('a host pushing a lot at once leaves the page responsive', () => {
       });
       expect(outcome.errors).toEqual([]);
       expect(block).toBeLessThan(BLOCK_MS);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a click sends a bounded message', () => {
+  it('a Button whose context names 1.9 M characters of control characters 150 times', async () => {
+    const lines: Line[] = [
+      create({ sendDataModel: true }),
+      ...Array.from({ length: 19 }, (_, i) => ({
+        version: '1.0',
+        updateDataModel: {
+          surfaceId: H,
+          path: `/s${i}`,
+          value: '\u0001'.repeat(100_000),
+        },
+      })),
+      update([
+        {
+          id: 'root',
+          component: 'Button',
+          child: 'l',
+          action: {
+            event: {
+              name: 'go',
+              context: Object.fromEntries(
+                Array.from({ length: 150 }, (_, i) => [
+                  `k${i}`,
+                  { '@path': `/s${i % 19}` },
+                ]),
+              ),
+            },
+          },
+        },
+        { id: 'l', component: 'Text', text: 'go' },
+      ]),
+    ];
+    let largest = 0;
+    const outcome = await stream(
+      withinLimits(lines),
+      ROOT,
+      60_000,
+      (posted) => {
+        largest = Math.max(largest, posted.length);
+        return (
+          JSON.stringify(
+            update([
+              { id: 'l', component: 'Text', text: `go ${posted.length}` },
+            ]),
+          ) + '\n'
+        );
+      },
+    );
+    try {
+      responsive(outcome);
+      for (let i = 0; i < 3; i++) {
+        await outcome.page.evaluate(() => {
+          const w = window as unknown as {
+            __hb: { max: number; last: number };
+          };
+          w.__hb.max = 0;
+          w.__hb.last = performance.now();
+        });
+        await outcome.page.click(`${ROOT} button`);
+        await settle(outcome.page);
+        const block = await outcome.page.evaluate(
+          () => (window as unknown as { __hb: { max: number } }).__hb.max,
+        );
+        expect(block).toBeLessThan(BLOCK_MS);
+      }
+      expect(largest).toBeLessThan(13_000_000);
     } finally {
       await outcome.close();
     }

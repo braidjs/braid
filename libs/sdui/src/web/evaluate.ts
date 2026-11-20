@@ -674,7 +674,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       }
       case 'formatNumber': {
         const d = decimals(args['decimals']);
-        return new Intl.NumberFormat(locale, {
+        return numberFormat(locale, {
           ...(d !== undefined
             ? { minimumFractionDigits: d, maximumFractionDigits: d }
             : {}),
@@ -687,7 +687,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         if (!/^[A-Z]{3}$/.test(currency))
           fail('formatCurrency: currency must be an ISO 4217 code');
         const d = decimals(args['decimals']);
-        return new Intl.NumberFormat(locale, {
+        return numberFormat(locale, {
           style: 'currency',
           currency,
           ...(d !== undefined
@@ -708,9 +708,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
           options.timeZone,
         );
       case 'pluralize': {
-        const category = new Intl.PluralRules(locale).select(
-          num(args['value'], 'value'),
-        );
+        const category = plurals(locale).select(num(args['value'], 'value'));
         const chosen =
           args[category] ??
           (category !== 'other' && num(args['value'], 'value') === 0
@@ -1026,6 +1024,30 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
  * Date formatters, kept: building one is costly, and a format string of many letters asks for
  * one per letter. Bounded, as keys come partly from content (the locale, the time zone).
  */
+/** Number formatters and plural rules, kept as date formatters are: building one is costly. */
+const numberFormats = new Map<string, Intl.NumberFormat>();
+function numberFormat(
+  locale: string,
+  options: Intl.NumberFormatOptions,
+): Intl.NumberFormat {
+  const key = `${locale}\u0000${JSON.stringify(options)}`;
+  let format = numberFormats.get(key);
+  if (!format) {
+    if (numberFormats.size > 256) numberFormats.clear();
+    numberFormats.set(key, (format = new Intl.NumberFormat(locale, options)));
+  }
+  return format;
+}
+const pluralRules = new Map<string, Intl.PluralRules>();
+function plurals(locale: string): Intl.PluralRules {
+  let rules = pluralRules.get(locale);
+  if (!rules) {
+    if (pluralRules.size > 64) pluralRules.clear();
+    pluralRules.set(locale, (rules = new Intl.PluralRules(locale)));
+  }
+  return rules;
+}
+
 const formatters = new Map<string, Intl.DateTimeFormat>();
 function formatter(
   locale: string,

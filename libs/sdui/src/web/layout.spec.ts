@@ -59,4 +59,35 @@ describe('a text is priced by what laying it out costs', () => {
     const family = '👨‍👩‍👧';
     expect(layoutCost(family)).toBe(5 * COMPLEX_COST);
   });
+
+  // from the seventh audit: characters a browser draws from fonts of their own
+  it('symbols between letters are runs: a star, a watch, box drawing, maths, Braille', () => {
+    for (const symbol of [0x2b50, 0x231a, 0x2500, 0x2200, 0x2801]) {
+      const text = `a${String.fromCodePoint(symbol)}`.repeat(1_000);
+      expect(layoutCost(text) / text.length).toBeGreaterThan(RUN_COST / 2);
+    }
+  });
+
+  it('a run of one kind of symbol is one run', () => {
+    expect(layoutCost('\u2500'.repeat(100))).toBe(100 * COMPLEX_COST);
+  });
+
+  it('C1 controls and emoji presentation selectors are runs', () => {
+    expect(layoutCost(`a${String.fromCharCode(0x85)}`)).toBe(2 + RUN_COST);
+    expect(layoutCost(`\u00a9${String.fromCharCode(0xfe0f)}`)).toBe(
+      2 + RUN_COST,
+    );
+  });
+
+  it('CJK punctuation between letters is a run; within CJK text it is not', () => {
+    expect(layoutCost('a\u3001'.repeat(10))).toBeGreaterThan(19 * RUN_COST);
+    expect(layoutCost('\u4e2d\u3001\u6587')).toBe(3 * COMPLEX_COST);
+  });
+
+  it('brackets in right-to-left text cost more; in left-to-right text they do not', () => {
+    expect(layoutCost('(a)')).toBe(3);
+    expect(layoutCost('\u05d0(((')).toBe(
+      COMPLEX_COST + 3 + 3 * UNMEASURED_COST,
+    );
+  });
 });
