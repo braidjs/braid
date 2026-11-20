@@ -23,6 +23,11 @@ export interface ClientManifest {
   /** Component type → the contract version this binary renders. */
   readonly components: Readonly<Record<string, number>>;
   readonly actions?: Readonly<Record<string, number>>;
+  /**
+   * The catalog functions this binary implements, for bound values. Absent means the manifest
+   * predates functions and says nothing about them; present, a call to any other is unsupported.
+   */
+  readonly functions?: readonly string[];
   /** Asset formats this binary decodes. */
   readonly assets?: readonly string[];
   readonly limits?: { readonly depth?: number; readonly bytes?: number };
@@ -49,6 +54,7 @@ const MANIFEST_KEYS = [
   'build',
   'components',
   'actions',
+  'functions',
   'assets',
   'limits',
 ];
@@ -128,6 +134,17 @@ export function parseClientManifest(raw: unknown): ClientManifest {
   versions('components', true);
   versions('actions', false);
 
+  const functions = raw['functions'];
+  if (
+    functions !== undefined &&
+    (!Array.isArray(functions) ||
+      functions.length > MANIFEST_LIMITS.types ||
+      !functions.every((name) => isName(name) && !RESERVED.has(name)))
+  )
+    fail(
+      `functions must be an array of at most ${MANIFEST_LIMITS.types} function names`,
+    );
+
   const assets = raw['assets'];
   if (
     assets !== undefined &&
@@ -165,6 +182,11 @@ export interface CreateManifestOptions {
   readonly assets?: readonly string[];
   readonly limits?: ClientManifest['limits'];
   readonly protocol?: readonly [number, number];
+  /**
+   * The catalog functions this binary implements. Defaults to every function the catalog has,
+   * when it has any.
+   */
+  readonly functions?: readonly string[];
 }
 
 /**
@@ -208,6 +230,13 @@ export function createClientManifest(
     }
   }
   const actions = pick('action', catalog.actions);
+  const functions =
+    options.functions ?? Object.keys(catalog.functions ?? {}).sort();
+  for (const name of options.functions ?? [])
+    if (own(catalog.functions, name) === undefined)
+      throw new TypeError(
+        `sdui manifest: "${name}" is not a function in the catalog`,
+      );
   return parseClientManifest({
     sduiManifest: '1',
     protocol: options.protocol ?? [
@@ -220,6 +249,7 @@ export function createClientManifest(
     ...(options.build !== undefined ? { build: options.build } : {}),
     components: pick('component', catalog.components),
     ...(Object.keys(actions).length > 0 ? { actions } : {}),
+    ...(functions.length > 0 ? { functions: [...functions] } : {}),
     ...(options.assets ? { assets: [...options.assets] } : {}),
     ...(options.limits ? { limits: options.limits } : {}),
   });

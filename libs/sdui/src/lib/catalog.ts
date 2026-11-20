@@ -51,6 +51,14 @@ export interface SlotDefinition {
   readonly max?: number;
   /** The component version that introduced this slot. Older clients do not have it. */
   readonly since?: number;
+  /**
+   * How the slot is written in A2UI. By default a slot is the prop of its name: `max: 1` makes it
+   * a single component id (`child`), anything else a list of ids or a template (`children`).
+   * `{ list, key }` is for a list of objects that each name one child — Tabs'
+   * `tabs: [{ title, child }]` is `{ list: "tabs", key: "child" }`: the slot holds the children
+   * in the list's order, and the rest of each object stays in the props.
+   */
+  readonly a2ui?: { readonly list: string; readonly key: string };
 }
 
 export interface ComponentDefinition {
@@ -68,6 +76,33 @@ export interface ComponentDefinition {
   readonly skeleton?: unknown;
   /** Presentation in the CMS. Opaque to this package. */
   readonly editor?: Readonly<Record<string, unknown>>;
+  /**
+   * How the component is written in A2UI. `actions` names the props that hold an A2UI action
+   * (`Button.action`); in the SDUI model they are the node's `actions` of the same names.
+   */
+  readonly a2ui?: { readonly actions?: readonly string[] };
+}
+
+/**
+ * A function bound values may call — A2UI's catalog functions. Closed: a renderer implements the
+ * ones it supports, a manifest lists them, and a call to any other is refused or projected away.
+ */
+export interface CatalogFunction {
+  readonly returnType:
+    | 'string'
+    | 'number'
+    | 'boolean'
+    | 'array'
+    | 'object'
+    | 'validationResult'
+    | 'any'
+    | 'void';
+  /** A JSON Schema for `args`. Emitted into A2UI catalog definitions; opaque here. */
+  readonly args?: unknown;
+  readonly allowedCallers?: 'rendererOnly' | 'agentOnly' | 'rendererOrAgent';
+  /** Only callable from a user gesture — `openUrl`. */
+  readonly requiresUserActivation?: boolean;
+  readonly description?: string;
 }
 
 export interface ContractEntry {
@@ -79,6 +114,17 @@ export interface SduiCatalog {
   readonly components: Readonly<Record<string, ComponentDefinition>>;
   readonly actions?: Readonly<Record<string, ContractEntry>>;
   readonly events?: Readonly<Record<string, ContractEntry>>;
+  readonly functions?: Readonly<Record<string, CatalogFunction>>;
+  /**
+   * The catalog as A2UI knows it. `catalogId` is the id agents author against — always the
+   * newest version of every component; each registered manifest gets an id of its own derived
+   * from it (see `a2uiCatalogId`). `instructions` is the guidance an agent is given.
+   */
+  readonly a2ui?: {
+    readonly catalogId: string;
+    readonly title?: string;
+    readonly instructions?: string;
+  };
 }
 
 export const CATALOG_ID_PREFIX = 'cat_';
@@ -97,7 +143,11 @@ export function catalogId(catalog: SduiCatalog): string {
   return contentAddress(CATALOG_ID_PREFIX, catalog);
 }
 
-const TYPE_NAME = /^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$/;
+/**
+ * Lowercase words joined by `-` or `.` (`product-card`), or an A2UI component name
+ * (`TextField`): an identifier that starts with a letter.
+ */
+const TYPE_NAME = /^(?:[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*|[A-Z][A-Za-z0-9]*)$/;
 const RESERVED = RESERVED_KEYS;
 
 /**
@@ -231,10 +281,14 @@ export function parseCatalog(raw: unknown): SduiCatalog {
       const where = `${kind} "${type}"`;
       if (type.length > 128 || !TYPE_NAME.test(type) || RESERVED.has(type))
         fail(
-          `${where}: type names are lowercase words joined by "-" or ".", and not a reserved word`,
+          `${where}: type names are lowercase words joined by "-" or ".", or an A2UI name such as "TextField", and not a reserved word`,
         );
       if (kind === 'component' && type === PLACEHOLDER_TYPE)
         fail(`"${PLACEHOLDER_TYPE}" is reserved by the protocol`);
+      if (kind === 'component' && type === 'Surface')
+        fail(
+          `"Surface" is reserved by A2UI: it is the container every surface has`,
+        );
       if (!isRecord(entry)) return fail(`${where} must be an object`);
       let contract: SkewContractDocument;
       try {
@@ -307,7 +361,31 @@ export function parseCatalog(raw: unknown): SduiCatalog {
             (!Number.isInteger(max) || (max as number) < 0)
           )
             fail(`${where}: slot "${slot}" max must be a whole number`);
+          const a2ui = definition['a2ui'];
+          if (
+            a2ui !== undefined &&
+            (!isRecord(a2ui) ||
+              !isSafeName(a2ui['list']) ||
+              !isSafeName(a2ui['key']) ||
+              Object.keys(a2ui).some((key) => key !== 'list' && key !== 'key'))
+          )
+            fail(
+              `${where}: slot "${slot}" a2ui must be { list, key }, each a plain prop name`,
+            );
         }
+      }
+      const a2uiEntry = entry['a2ui'];
+      if (a2uiEntry !== undefined) {
+        const actions = isRecord(a2uiEntry) ? a2uiEntry['actions'] : null;
+        if (
+          !isRecord(a2uiEntry) ||
+          Object.keys(a2uiEntry).some((key) => key !== 'actions') ||
+          (actions !== undefined &&
+            (!Array.isArray(actions) || !actions.every(isSafeName)))
+        )
+          fail(
+            `${where}: a2ui must be { actions }, a list of the prop names that hold an action`,
+          );
       }
       const fallback = entry['fallback'];
       if (
@@ -372,6 +450,46 @@ export function parseCatalog(raw: unknown): SduiCatalog {
   section('component', raw['components']);
   section('action', raw['actions']);
   section('event', raw['events']);
+
+  const functions = raw['functions'];
+  if (functions !== undefined) {
+    if (!isRecord(functions))
+      fail('functions must be an object keyed by function name');
+    for (const [name, definition] of Object.entries(
+      functions as Record<string, unknown>,
+    )) {
+      if (!isSafeName(name) || name.startsWith('@'))
+        fail(
+          `function ${JSON.stringify(name.slice(0, 40))}: a function name is a short plain word, and "@" names are the protocol's`,
+        );
+      if (
+        !isRecord(definition) ||
+        ![
+          'string',
+          'number',
+          'boolean',
+          'array',
+          'object',
+          'validationResult',
+          'any',
+          'void',
+        ].includes(definition['returnType'] as string)
+      )
+        fail(`function "${name}" must declare a returnType`);
+    }
+  }
+  const a2ui = raw['a2ui'];
+  if (a2ui !== undefined) {
+    if (
+      !isRecord(a2ui) ||
+      typeof a2ui['catalogId'] !== 'string' ||
+      a2ui['catalogId'].length === 0 ||
+      a2ui['catalogId'].length > 400
+    )
+      fail(
+        'a2ui must be { catalogId } — the id agents author against, at most 400 characters',
+      );
+  }
 
   // A fallback names another component; one that names nothing fails here, not on a device.
   for (const [type, entry] of Object.entries(raw['components'])) {

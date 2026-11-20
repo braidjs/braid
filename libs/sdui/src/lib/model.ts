@@ -66,7 +66,34 @@ export interface SduiNode {
    */
   readonly required?: boolean;
   readonly analytics?: { readonly name?: string };
+  /**
+   * Makes this node a template: it is rendered once for each item of the list at this path in the
+   * surface's data model, and bound values in it that are relative paths read that item. A2UI's
+   * `children: { path, componentId }`. A slot that holds a template holds nothing else.
+   */
+  readonly repeat?: string;
+  /**
+   * Envelope keys this node carries through projection untouched — A2UI's `@accessibility`,
+   * `@checks` and `@metadata`. They describe the node to its renderer, not its props to a
+   * migration, so no step ever sees them.
+   */
+  readonly annotations?: Readonly<Partial<Record<NodeAnnotation, unknown>>>;
+  /**
+   * This node is a second appearance of the node with this id. A2UI lets two parents reference
+   * one component — a template shared by two lists, a button both in a column and a modal's
+   * trigger — and a tree cannot, so the second is a copy, with ids of its own, that is written
+   * back to A2UI as a reference to the first.
+   */
+  readonly copyOf?: string;
 }
+
+/** The envelope keys a node may carry in {@link SduiNode.annotations}. */
+export const NODE_ANNOTATIONS = [
+  '@accessibility',
+  '@checks',
+  '@metadata',
+] as const;
+export type NodeAnnotation = (typeof NODE_ANNOTATIONS)[number];
 
 export interface ScreenStates {
   /** `auto` derives a skeleton from each component's declared shape. */
@@ -83,6 +110,12 @@ export interface Screen {
   readonly title?: string;
   readonly root: SduiNode;
   readonly states?: ScreenStates;
+  /**
+   * The data model the screen starts with: what its bound values (`{ "@path": … }`) read until
+   * the app or an agent updates it. Not versioned by any component contract — it is the
+   * surface's data, not a component's props.
+   */
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 export const SCREEN_ID_PREFIX = 'scr_';
@@ -126,6 +159,12 @@ function checkValue(
   depth: number,
   budget: { values: number },
   fail: Fail,
+  /**
+   * Whether keys may hold path punctuation. Props may not: a key is named in reports and critical
+   * paths, as a dotted path. The data model may: it is addressed by JSON Pointer, which has no
+   * trouble with a key such as `"price.usd"`.
+   */
+  anyKey = false,
 ): void {
   if (--budget.values < 0)
     fail(`the document holds more than ${SCREEN_LIMITS.values} values`);
@@ -146,18 +185,25 @@ function checkValue(
   if (Array.isArray(value)) {
     // By index, not `forEach`: that would step over a hole, and a hole is an `undefined`.
     for (let index = 0; index < value.length; index++)
-      checkValue(value[index], `${where}[${index}]`, depth + 1, budget, fail);
+      checkValue(
+        value[index],
+        `${where}[${index}]`,
+        depth + 1,
+        budget,
+        fail,
+        anyKey,
+      );
     return;
   }
   for (const [key, inner] of Object.entries(value)) {
     if (RESERVED_KEYS.has(key)) fail(`${where} uses the reserved key "${key}"`);
     // A key with path punctuation in it could not be told, in a report or a critical path, from
     // a nesting or a list index.
-    if (/[.[\]]/.test(key))
+    if (!anyKey && /[.[\]]/.test(key))
       fail(
         `${where} has a key ${JSON.stringify(key.slice(0, 40))} containing ".", "[" or "]"`,
       );
-    checkValue(inner, `${where}.${key}`, depth + 1, budget, fail);
+    checkValue(inner, `${where}.${key}`, depth + 1, budget, fail, anyKey);
   }
 }
 
@@ -309,7 +355,7 @@ export function parseScreen(raw: unknown): Screen {
   };
   if (!isRecord(raw)) return fail('document must be an object');
   const extra = Object.keys(raw).find(
-    (key) => !['id', 'slug', 'title', 'root', 'states'].includes(key),
+    (key) => !['id', 'slug', 'title', 'root', 'states', 'data'].includes(key),
   );
   if (extra !== undefined) fail(`unknown key "${extra}"`);
   if (!isShortString(raw['id']))
@@ -364,6 +410,9 @@ export function parseScreen(raw: unknown): Screen {
     'fallback',
     'required',
     'analytics',
+    'repeat',
+    'annotations',
+    'copyOf',
   ];
 
   const checkNode = (value: unknown, where: string, depth: number): void => {
@@ -406,6 +455,31 @@ export function parseScreen(raw: unknown): Screen {
           `${where}.analytics.name must be a non-empty string of at most 128 characters`,
         );
     }
+    if (value['repeat'] !== undefined) {
+      const repeat = value['repeat'];
+      if (
+        typeof repeat !== 'string' ||
+        repeat.length === 0 ||
+        repeat.length > 512 ||
+        repeat.split('/').some((segment) => RESERVED_KEYS.has(segment))
+      )
+        fail(
+          `${where}.repeat must be a data model path (a JSON Pointer such as "/items") of at most 512 characters`,
+        );
+    }
+    if (value['copyOf'] !== undefined && !isShortString(value['copyOf']))
+      fail(`${where}.copyOf must be a node id`);
+    if (value['annotations'] !== undefined) {
+      const annotations = value['annotations'];
+      if (!isRecord(annotations))
+        return fail(`${where}.annotations must be an object`);
+      for (const key of Object.keys(annotations))
+        if (!(NODE_ANNOTATIONS as readonly string[]).includes(key))
+          fail(
+            `${where}.annotations has an unknown key "${key}" — it takes ${NODE_ANNOTATIONS.join(', ')}`,
+          );
+      checkValue(annotations, `${where}.annotations`, 0, budget, fail);
+    }
     if (value['slots'] !== undefined) {
       const slots = value['slots'];
       if (!isRecord(slots)) return fail(`${where}.slots must be an object`);
@@ -416,6 +490,13 @@ export function parseScreen(raw: unknown): Screen {
           );
         if (!Array.isArray(children))
           return fail(`${where}.slots.${slot} must be an array`);
+        if (
+          children.length > 1 &&
+          children.some((child) => isRecord(child) && 'repeat' in child)
+        )
+          fail(
+            `${where}.slots.${slot} holds a template (a node with "repeat") and something else — a template is a slot's only child`,
+          );
         // By index: `forEach` steps over a hole, and a hole is not a node.
         for (let index = 0; index < children.length; index++)
           checkNode(
@@ -449,6 +530,10 @@ export function parseScreen(raw: unknown): Screen {
   };
 
   checkNode(raw['root'], 'root', 0);
+  if (raw['data'] !== undefined) {
+    if (!isRecord(raw['data'])) fail('data must be an object');
+    checkValue(raw['data'], 'data', 0, budget, fail, true);
+  }
 
   if (raw['states'] !== undefined) {
     const states = raw['states'];

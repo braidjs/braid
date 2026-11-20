@@ -9,6 +9,7 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
+import { boundConflict, changedBinding, hasDynamicValues } from './dynamic.js';
 import { outgrows } from './internal.js';
 import { type Path, formatPath, lostSegments } from './paths.js';
 
@@ -123,6 +124,9 @@ function walk(
   const derived = new Set<string>();
   let current = value;
   const up = to > from;
+  // A payload with values bound to data has each step checked against them before it runs: a
+  // step that would need their value is a gap, not a mangled binding. See `dynamic.ts`.
+  const bound = hasDynamicValues(value);
 
   for (let v = up ? from + 1 : from; up ? v <= to : v > to; up ? v++ : v--) {
     const step = doc.steps[v - 2] as SkewContractStep;
@@ -132,6 +136,16 @@ function walk(
       // Compiling is inside the try: a catalog that was never run through `parseCatalog` may
       // carry ops the lens compiler refuses, and that must cost one node, not the whole screen.
       const lens = lensOf(step);
+      if (bound && step.ops) {
+        const conflict = boundConflict(step.ops, current, up);
+        if (conflict !== null)
+          return {
+            ok: false,
+            reason: 'gap',
+            step: span,
+            message: `${label} ${conflict}`,
+          };
+      }
       const code = step.code
         ? ownStep(options.codeSteps, step.code)
         : undefined;
@@ -219,6 +233,17 @@ export function migrate(
 
   const forward = walk(doc, value, from, to, options, ctx);
   if (!forward.ok) return forward;
+  // The backstop for what the per-step check sees only approximately, and for code steps, which
+  // it cannot see into at all: a binding comes out of a migration unchanged, or not at all.
+  const altered = hasDynamicValues(forward.value)
+    ? changedBinding(value, forward.value)
+    : null;
+  if (altered !== null)
+    return {
+      ok: false,
+      reason: 'gap',
+      message: `"${doc.name}" v${from} → v${to} changes "${altered}", a value bound to data that is only known when it is rendered`,
+    };
   if (to >= from)
     return {
       ok: true,
