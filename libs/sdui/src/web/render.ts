@@ -331,6 +331,21 @@ export function renderSurface(
     override: Exclude<ComponentOverride, ComponentRenderer>,
     context: RenderContext,
   ): ViewElement => {
+    // A fragment is a realm of its own: a draw boots only so many.
+    if (
+      'fragment' in override &&
+      ++budget().fragments > DRAW_LIMITS.fragments
+    ) {
+      if (!budget().reported.has('fragments')) {
+        budget().reported.add('fragments');
+        options.report({
+          code: 'VALIDATION_FAILED',
+          message: `the surface draws more than ${DRAW_LIMITS.fragments} fragments; the rest are not drawn`,
+          path: `/components/${context.id}`,
+        });
+      }
+      return h('div', { class: 'a2ui-placeholder', 'data-a2ui-truncated': '' });
+    }
     const props: Record<string, unknown> = {};
     const children: View[] = [];
     const slotProps = new Set<string>();
@@ -514,13 +529,28 @@ export function renderSurface(
       childById: (id) => draw(id, scope, String(id), key, ancestry),
       children(name) {
         const value = raw(name);
-        if (Array.isArray(value))
+        if (Array.isArray(value)) {
           // No more than could be drawn: a list naming one component 100,000 times is 100,000
           // placeholders otherwise.
+          // A component named twice in one list is two drawings, kept apart by occurrence:
+          // otherwise only one of them is matched to what was drawn last time.
+          const seen = new Map<string, number>();
           return value
             .slice(0, MAX_DRAWS + 1)
-            .map((id) => draw(id, scope, String(id), key, ancestry))
+            .map((id) => {
+              const name = String(id);
+              const n = seen.get(name) ?? 0;
+              seen.set(name, n + 1);
+              return draw(
+                id,
+                scope,
+                n === 0 ? name : `${name}#${n}`,
+                key,
+                ancestry,
+              );
+            })
             .filter((v): v is View => v !== null);
+        }
         if (
           isRecord(value) &&
           typeof value['path'] === 'string' &&

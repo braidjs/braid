@@ -105,3 +105,78 @@ describe('what the sixth audit found', () => {
     }
   });
 });
+
+describe('what the sixth verification found', () => {
+  it('one push() of many large messages lets the page run between them', async () => {
+    const { element } = mount();
+    const wide = (n: number) =>
+      Object.fromEntries(
+        Array.from({ length: 45_000 }, (_, i) => [`k${n}_${i}`, i]),
+      );
+    const messages = [
+      create('s'),
+      ...Array.from({ length: 20 }, (_, n) => ({
+        version: '1.0',
+        updateDataModel: { surfaceId: 's', path: `/d${n}`, value: wide(n) },
+      })),
+    ];
+    const started = performance.now();
+    element.push(messages);
+    const returned = performance.now() - started;
+    // twenty of these, applied at once, would take many times this
+    expect(returned).toBeLessThan(250);
+    expect(
+      Object.keys(element.surfaces.get('s')?.dataModel ?? {}).length,
+    ).toBeLessThan(20);
+    for (let i = 0; i < 200; i++) {
+      if (Object.keys(element.surfaces.get('s')!.dataModel).length === 4) break;
+      await flush();
+    }
+    // the data model's own limit stops it at four of them, in order
+    expect(Object.keys(element.surfaces.get('s')!.dataModel)).toEqual([
+      'd0',
+      'd1',
+      'd2',
+      'd3',
+    ]);
+  });
+
+  it('a draw boots only so many fragments', async () => {
+    const { DRAW_LIMITS } = await import('./evaluate.js');
+    const { html, errors } = renderA2uiHtml(
+      [
+        create('s'),
+        update('s', [
+          { id: 'root', component: 'Column', children: Array(200).fill('f') },
+          { id: 'f', component: 'Flight' },
+        ]),
+      ],
+      {
+        registry: { Flight: { fragment: { name: 'flight', entry: '/f.js' } } },
+      },
+    );
+    expect((html.match(/<fragment-slot/g) ?? []).length).toBe(
+      DRAW_LIMITS.fragments,
+    );
+    expect(errors.map((e) => e.message).join('\n')).toMatch(
+      /more than 32 fragments/,
+    );
+  });
+
+  it('a component named twice in one list is drawn under two keys', () => {
+    const { html } = renderA2uiHtml([
+      create('s'),
+      update('s', [
+        { id: 'root', component: 'Column', children: ['t', 't', 't'] },
+        { id: 't', component: 'Text', text: 'x' },
+      ]),
+    ]);
+    const keys = [
+      ...html.matchAll(
+        /data-a2ui-id="t"[^>]*data-a2ui-key="([^"]+)"|data-a2ui-key="([^"]+)"[^>]*data-a2ui-id="t"/g,
+      ),
+    ].map((m) => m[1] ?? m[2]);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(3);
+  });
+});

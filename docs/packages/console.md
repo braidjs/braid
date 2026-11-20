@@ -19,13 +19,13 @@ file to import.
 
 ## What it does
 
-| View | Needs | What it is for |
-| :--- | :--- | :--- |
-| **Fragments** | the gateway's `/__braid/registry` | every registered fragment, filterable with the query syntax below |
-| **Topology** | the same | shells → routes → fragments → origins: the only real couplings between fragments |
-| **Shells** | the registry write API | list, design, generate code for, publish and delete shells |
-| **History** | the write API | who published what, rollback by re-pinning, and promotion through environments with approvals |
-| **Edit fragments** | the write API | add, change and remove fragment manifests, with a diff and an access preview |
+| View               | Needs                             | What it is for                                                                                |
+| :----------------- | :-------------------------------- | :-------------------------------------------------------------------------------------------- |
+| **Fragments**      | the gateway's `/__braid/registry` | every registered fragment, filterable with the query syntax below                             |
+| **Topology**       | the same                          | shells → routes → fragments → origins: the only real couplings between fragments              |
+| **Shells**         | the registry write API            | list, design, generate code for, publish and delete shells                                    |
+| **History**        | the write API                     | who published what, rollback by re-pinning, and promotion through environments with approvals |
+| **Edit fragments** | the write API                     | add, change and remove fragment manifests, with a diff and an access preview                  |
 
 Viewing fragments needs nothing deployed. Everything else needs `createRegistryApi` from
 [`@braidlabs/registry`](./registry.md) mounted beside the gateway. Without it those views explain
@@ -61,12 +61,12 @@ third-party code next to an operator's token.
 
 The **Code** tab generates the host for each framework a shell can be:
 
-| Framework | You get |
-| :--- | :--- |
-| React | route components with `<BraidFragment>` in a grid, the layout CSS, and `index.html` with the head |
-| Angular | standalone components and `app.routes.ts` with `<braid-fragment>` |
-| Angular SSR | the Angular files plus `server.ts` with the gateway mounted in front of the SSR handler |
-| Plain JS | one HTML page per route with `<fragment-slot>`s |
+| Framework   | You get                                                                                           |
+| :---------- | :------------------------------------------------------------------------------------------------ |
+| React       | route components with `<BraidFragment>` in a grid, the layout CSS, and `index.html` with the head |
+| Angular     | standalone components and `app.routes.ts` with `<braid-fragment>`                                 |
+| Angular SSR | the Angular files plus `server.ts` with the gateway mounted in front of the SSR handler           |
+| Plain JS    | one HTML page per route with `<fragment-slot>`s                                                   |
 
 A route may also have one **workspace** area: see [The workspace](#the-workspace) below.
 
@@ -118,9 +118,9 @@ const workspace = createWorkspace();
 initBraid({ realmGlobals: workspace.realmGlobals() });
 
 workspace.open('chart', { props: { symbol: 'AAPL' } }); // launch an app into the area
-await workspace.layouts.save('morning');                // the area's apps, in order, with their state
-await workspace.layouts.restore('morning');             // replaces the area's apps; nothing outside it
-await workspace.layouts.list();                         // ['morning']
+await workspace.layouts.save('morning'); // the area's apps, in order, with their state
+await workspace.layouts.restore('morning'); // replaces the area's apps; nothing outside it
+await workspace.layouts.list(); // ['morning']
 await workspace.layouts.delete('morning');
 ```
 
@@ -131,16 +131,23 @@ state the app gives.
 
 ```ts
 workspace.place(slot, { columns: 2, rows: 1 }); // 1 to 12 each; {} goes back to the default
-workspace.placementOf(slot);                    // { columns: 2, rows: 1 }
-workspace.move(slot, 0);                        // to the front, counting apps only; the app keeps running
+workspace.placementOf(slot); // { columns: 2, rows: 1 }
+workspace.move(slot, 0); // to the front, counting apps only; the app keeps running
 ```
 
 A span is written to the slot as `data-braid-columns` / `data-braid-rows` and as the custom
 properties `--braid-columns` / `--braid-rows`, so the host's CSS says what it means:
 
 ```css
-[data-braid-workspace] { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 200px; }
-[data-braid-workspace] > fragment-slot { grid-column: span var(--braid-columns, 1); grid-row: span var(--braid-rows, 2); }
+[data-braid-workspace] {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 200px;
+}
+[data-braid-workspace] > fragment-slot {
+  grid-column: span var(--braid-columns, 1);
+  grid-row: span var(--braid-rows, 2);
+}
 ```
 
 A slot that moves within the page keeps its fragment running (see
@@ -155,7 +162,7 @@ without saving; for an app still booting, the state it was opened with. Another 
 
 ```ts
 const { appId, ...rest } = await workspace.snapshot(slot); // in the desk
-other.open(appId, rest);                                  // in a window of its own
+other.open(appId, rest); // in a window of its own
 ```
 
 ### Tiles: move, resize, pop out
@@ -188,7 +195,7 @@ Each tile gets:
   close button. `describe(slot, head)` is called as a tile is set up, and again when its span or
   `state` changes. It is the place to add your own parts.
 - **Moving**: drag the grip by mouse or touch, or press Alt and an arrow on it. A click on the grip
-  opens *Move earlier / later*. The app keeps running.
+  opens _Move earlier / later_. The app keeps running.
 - **Resizing**: drag the right edge to change columns, the bottom edge to change rows, or the corner
   for both. An outline shows the size it will snap to, in whole tracks of the area's grid. The tile
   takes that size when you let go, so the grid doesn't reflow under the pointer, and Escape cancels.
@@ -205,7 +212,9 @@ Each tile gets:
   if (appId && appId in directory) {
     // this page arranges its tiles without popOut: nothing pops out of a popped-out window
     const { fromDesk, dockBack } = await acceptPopOut(workspace, {
-      key: `desk${location.pathname}`, appId, handoff: params.get('handoff'),
+      key: `desk${location.pathname}`,
+      appId,
+      handoff: params.get('handoff'),
     });
     backButton.onclick = dockBack; // closing the window docks it back too
   }
@@ -252,9 +261,9 @@ layout is the page's call, so a "restore my last layout on load" is one line in 
 
 ```ts
 await braidDesktop.settings.set('columns', ['due', 'amount']); // this app's, for this user
-await braidDesktop.settings.get('columns');                    // after a reload too
+await braidDesktop.settings.get('columns'); // after a reload too
 
-braidDesktop.onSaveLayout(() => ({ tab: currentTab }));        // JSON, within 2 seconds
+braidDesktop.onSaveLayout(() => ({ tab: currentTab })); // JSON, within 2 seconds
 if (braidDesktop.restoredState) showTab(braidDesktop.restoredState.tab);
 ```
 
@@ -281,11 +290,11 @@ delivery: an app that is the only one able to take an intent still gets it.
 **Where it is kept.** Under keys such as `host`, `intents/{intent}/{contextType}`,
 `apps/{appId}/{key}` and `layouts/{name}`, in the `store`:
 
-| Store | Kept | Per |
-| :--- | :--- | :--- |
-| `localStorageStore()` (default) | in `localStorage`, under `braid.workspace/` | origin and browser profile |
-| `serverStore({ url })` | on the gateway, `createGateway({ preferences })` | signed-in user, in any browser |
-| `memoryStore()` | in memory, until reload | page |
+| Store                           | Kept                                             | Per                            |
+| :------------------------------ | :----------------------------------------------- | :----------------------------- |
+| `localStorageStore()` (default) | in `localStorage`, under `braid.workspace/`      | origin and browser profile     |
+| `serverStore({ url })`          | on the gateway, `createGateway({ preferences })` | signed-in user, in any browser |
+| `memoryStore()`                 | in memory, until reload                          | page                           |
 
 Any object with `get`, `set`, `delete` and `list` is a `PreferenceStore`. The gateway side is
 described under [Per-user preferences](./gateway.md#per-user-preferences-opt-in).
@@ -314,9 +323,9 @@ The console is a static bundle, so it can be served from a bucket or a CDN. Its 
 the gateway in a service worker ([`@braidlabs/sw/gateway`](./sw.md#the-gateway-in-the-worker-static-hosting))
 on the same origin:
 
-| View | With the in-worker gateway |
-| :--- | :--- |
-| Fragments, Topology | Work as they are, with `discovery` on: the worker answers `/__braid/registry` |
+| View                            | With the in-worker gateway                                                                |
+| :------------------------------ | :---------------------------------------------------------------------------------------- |
+| Fragments, Topology             | Work as they are, with `discovery` on: the worker answers `/__braid/registry`             |
 | Shells, History, Edit fragments | Work once the registry write API is composed into the worker, over a store in the browser |
 
 ```js
@@ -324,7 +333,7 @@ on the same origin:
 import { braidGatewayHandler } from '@braidlabs/sw/gateway';
 import { cacheSnapshotStore, createRegistryApi, shellDocuments, snapshotRegistry } from '@braidlabs/registry';
 
-const store = cacheSnapshotStore();              // snapshots in Cache Storage: they outlive the worker
+const store = cacheSnapshotStore(); // snapshots in Cache Storage: they outlive the worker
 const registry = snapshotRegistry({ store });
 // fragments may only be served from this origin, so a publish cannot point the page at another
 const api = createRegistryApi({ store, authorize: () => true, endpointOrigins: [self.location.origin] });
@@ -386,15 +395,15 @@ Know what this is before relying on it:
 
 The filter boxes take free text, or terms:
 
-| Term | Matches |
-| :--- | :--- |
-| `tag:finance` | has the tag |
-| `type:shell`, `type:fragment` | kind |
-| `framework:angular-ssr` | a shell's framework |
-| `adapter:custom-element` | a fragment's adapter |
+| Term                                      | Matches                                            |
+| :---------------------------------------- | :------------------------------------------------- |
+| `tag:finance`                             | has the tag                                        |
+| `type:shell`, `type:fragment`             | kind                                               |
+| `framework:angular-ssr`                   | a shell's framework                                |
+| `adapter:custom-element`                  | a fragment's adapter                               |
 | `route:/billing/*` or `route:/billing/42` | a pattern as written, or a concrete path it serves |
-| `is:gated` | listed, but you may not load it |
-| `is:unrouted` | pierces no route (a widget) |
+| `is:gated`                                | listed, but you may not load it                    |
+| `is:unrouted`                             | pierces no route (a widget)                        |
 
 Terms are ANDed. `-` negates (`-is:gated`, `-legacy`), quotes keep spaces (`"customer reviews"`), and
 unknown keys are searched as text. Clicking a tag chip filters by it. A tag has the same color

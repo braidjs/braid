@@ -1125,12 +1125,14 @@ Folded in above; listed so the removals are visible.
 - **A2UI is young.** v1.0 is current and v1.1 is on its roadmap. The upstream schemas, basic
   catalog and examples are vendored at a pinned commit and everything is checked against them;
   moving to a new version is replacing those files and fixing what the round-trip tests say.
-- **An agent can keep a surface busy.** The web renderer runs on the page's main thread. Every
-  value a draw reads is charged by what it holds, text by what laying it out costs the browser (a
-  change of direction costs a thousand characters), a draw in a browser ends after 100 ms, messages
-  are applied in slices, and what a renderer holds is counted in characters — so a hostile stream
-  costs a surface, not the page. A renderer that must draw agents it does not trust at all, with
-  nothing of the host's at stake, can still put `<a2ui-surface>` in a frame of its own origin.
+- **Pricing layout is measurement.** The web renderer runs on the page's main thread. Every
+  value a draw reads is charged by what it holds, text by what laying it out costs the browser
+  (each change of script or direction a thousand characters, scripts not measured fifty), a draw
+  in a browser ends after 100 ms, messages are applied in slices, and what a renderer holds is
+  counted in characters. Every hostile stream six review rounds found now stays under 300 ms at
+  once in Chromium. But layout is the browser's, and a kind of content nobody has measured may
+  cost more than it is charged: an element draws less text after a slow layout, which bounds how
+  often, not whether. Agents nobody trusts at all belong in a frame of their own origin.
 - **The projector re-projects a whole surface per agent message**, so a long stream of small
   updates to a large surface costs the server messages × surface. The server phase (P4) should
   project incrementally or batch messages.

@@ -6,7 +6,7 @@ sw, data, skew, fdc3, angular, registry, console
 ## Problem
 
 A composed page is several teams' apps on one screen, served through one gateway. When it is slow
-or broken, the question is always *whose part*. Braid already answers a slice of that:
+or broken, the question is always _whose part_. Braid already answers a slice of that:
 
 - `libs/braid-gateway/src/telemetry.ts` emits `fragment-fetch`, `breaker` and `registry` events
   and, with `webVitals: true`, collects LCP/CLS/INP/FCP/TTFB in the browser attributed to the

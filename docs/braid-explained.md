@@ -200,15 +200,15 @@ Every realm is an iframe, and every iframe needs a document to start from. **Blo
 the two ways of giving it one** — and the difference between them explains a URL you will see in the
 network tab, so it is worth ten lines.
 
-| | HTTP boot (`compat-http`) | Blob boot (`contract-blob`) |
-| --- | --- | --- |
-| The iframe's `src` is | `/__braid/realm/billing/…` on your origin | `blob:https://yoursite/8f3e…` |
+|                             | HTTP boot (`compat-http`)                            | Blob boot (`contract-blob`)       |
+| --------------------------- | ---------------------------------------------------- | --------------------------------- |
+| The iframe's `src` is       | `/__braid/realm/billing/…` on your origin            | `blob:https://yoursite/8f3e…`     |
 | Getting that document costs | a request to the gateway, and waiting for the answer | nothing — it is already in memory |
-| Can rewrite its own URL | yes | no |
-| Touches session history | yes, so it has to be careful not to corrupt it | never |
+| Can rewrite its own URL     | yes                                                  | no                                |
+| Touches session history     | yes, so it has to be careful not to corrupt it       | never                             |
 
 **How the blob comes to exist.** No server is involved at any point. The client runtime builds the
-realm document as a *string*, in the browser, at boot:
+realm document as a _string_, in the browser, at boot:
 
 ```ts
 const html =
@@ -237,7 +237,7 @@ map; `createRealm()` accepts one, but nothing exposes it to fragment authors yet
 **Why compat fragments cannot use it.** A compat fragment's code believes it owns the browser: it
 reads `location.pathname` expecting its own route, and calls `history.pushState`. The realm keeps
 that belief truthful by loading a real URL and then calling `history.replaceState` to make the
-realm's URL *look* like the fragment's route. **You cannot `replaceState` a `blob:` document to an
+realm's URL _look_ like the fragment's route. **You cannot `replaceState` a `blob:` document to an
 `http:` URL** — the browser refuses, since that would let any page rewrite an opaque URL into
 something that looks like a real address.
 
@@ -266,7 +266,7 @@ or Vue app running as a fragment gets exactly the same thing, for the same reaso
 `braid-poc-remote` (Angular) and `braid-poc-react-remote` (React) both boot this way.
 
 **`@braidlabs/angular` is a host-side package**, and it does not pick a realm at all. It gives an
-Angular *host* a `<braid-fragment>` component to render slots with typed inputs and outputs, and
+Angular _host_ a `<braid-fragment>` component to render slots with typed inputs and outputs, and
 `provideBraid()` to tell Braid when the router navigates. If your Angular app is the shell, that is
 the package you want; if it is the fragment, you need nothing at all.
 
@@ -410,15 +410,15 @@ Each path segment after it names _what kind_ of thing you are asking for, then _
    └────────────────────────────── reserved namespace
 ```
 
-| URL                              | Who asks                 | When                                         | What comes back                                                                                                                                                                                                                            |
-| -------------------------------- | ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/__braid/realm/:id/`            | the slot, in the browser | every fragment boot                          | A tiny HTML stub for the hidden iframe: protocol version, adapter name, and a `<base>` pointing into the fragment's asset namespace. One URL per fragment, cacheable for an hour, varies on nothing.                                       |
-| `/__braid/doc/:id/:route`        | the slot, in the browser | only when the page was **not** pierced       | The fragment's HTML, already prepared for the host's DOM: singletons renamed, scripts made inert, subresource URLs re-rooted. Identical to what piercing injects. `204 No Content` for fragments that ship a script instead of a document. |
-| `/__braid/frag/:id/*`            | the fragment's own code  | constantly, after boot                       | Whatever the fragment's server returns, forwarded verbatim with the prefix stripped — JS, CSS, images, API calls, WebSocket upgrades.                                                                                                      |
-| `/__braid/registry`              | anyone (opt-in)          | when a shell builds its UI from the registry | A paginated JSON list of fragments, filtered by who is asking. Off unless configured: a registry describes internal topology.                                                                                                              |
-| `/__braid/registry/appd/v2/apps` | FDC3 tooling (opt-in)    | app-directory lookups                        | The same list in FDC3 App Directory shape, under the same access rules.                                                                                                                                                                    |
+| URL                              | Who asks                                | When                                         | What comes back                                                                                                                                                                                                                            |
+| -------------------------------- | --------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/__braid/realm/:id/`            | the slot, in the browser                | every fragment boot                          | A tiny HTML stub for the hidden iframe: protocol version, adapter name, and a `<base>` pointing into the fragment's asset namespace. One URL per fragment, cacheable for an hour, varies on nothing.                                       |
+| `/__braid/doc/:id/:route`        | the slot, in the browser                | only when the page was **not** pierced       | The fragment's HTML, already prepared for the host's DOM: singletons renamed, scripts made inert, subresource URLs re-rooted. Identical to what piercing injects. `204 No Content` for fragments that ship a script instead of a document. |
+| `/__braid/frag/:id/*`            | the fragment's own code                 | constantly, after boot                       | Whatever the fragment's server returns, forwarded verbatim with the prefix stripped — JS, CSS, images, API calls, WebSocket upgrades.                                                                                                      |
+| `/__braid/registry`              | anyone (opt-in)                         | when a shell builds its UI from the registry | A paginated JSON list of fragments, filtered by who is asking. Off unless configured: a registry describes internal topology.                                                                                                              |
+| `/__braid/registry/appd/v2/apps` | FDC3 tooling (opt-in)                   | app-directory lookups                        | The same list in FDC3 App Directory shape, under the same access rules.                                                                                                                                                                    |
 | `/__braid/preferences/*`         | `@braidlabs/console/workspace` (opt-in) | a workspace saves or reads                   | The signed-in user's own JSON entries: remembered intent choices, app settings, saved layouts. Same-origin only, never cached, `401` without a signed-in user.                                                                             |
-| `/__braid/sw.js`                 | the browser              | once, if the shell registers it              | The generated service worker, with the `Service-Worker-Allowed` header that lets it claim the whole origin.                                                                                                                                |
+| `/__braid/sw.js`                 | the browser                             | once, if the shell registers it              | The generated service worker, with the `Service-Worker-Allowed` header that lets it claim the whole origin.                                                                                                                                |
 
 You may also see paths under `/__braid/` that the gateway knows nothing about — the POC mounts its
 registry console at `/__braid/console`, for instance. The prefix is reserved for Braid-shaped things

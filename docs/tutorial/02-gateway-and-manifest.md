@@ -29,6 +29,7 @@ Create `apps/billing/braid.manifest.json`:
 ```
 
 ### Explanation of Manifest Fields
+
 - **`id`**: Unique name for the fragment.
 - **`endpoint`**: The upstream URL where the billing application is served.
 - **`pierce`**: Route patterns that trigger server-side HTML composition. When a user requests `/billing` or `/billing/*`, the gateway fetches both the shell and billing fragment concurrently and stitches them together.
@@ -85,6 +86,7 @@ app.listen(port, () => {
 ## 4. Test Server-Side Piercing
 
 Start all three servers:
+
 1. `npx nx serve shell --port=4200` (Angular Shell)
 2. `npx nx serve billing --port=4201` (React Billing)
 3. `node apps/gateway/server.mjs` (Gateway on Port 3000)
@@ -96,6 +98,7 @@ curl -i http://localhost:3000/billing
 ```
 
 Notice what happens:
+
 1. The gateway makes parallel fetches to `http://localhost:4200/billing` and `http://localhost:4201/billing`.
 2. The gateway automatically rewrites the fragment's `<script>` tags to `<script type="inert">` so they do not execute globally on the host window.
 3. The gateway streams a single, unified response containing the shell and the Declarative Shadow Root (`<template shadowrootmode="open">`).

@@ -69,9 +69,9 @@ export class UserProfileComponent {
 
 ## API Reference
 
-| Function / Token | Description |
-| :--- | :--- |
-| `createSkewStoreToken<T>(name)` | Creates a typed `InjectionToken<VersionedStore<T>>`. |
-| `provideSkewStore(token, schema, options)` | Registers a versioned store in Angular DI. |
-| `injectSkewSignal(token, key)` | Injects a reactive signal tuple `{ data, error, loading, set, reload }`. |
-| `injectSkewStore(token)` | Injects the raw `VersionedStore<T>` instance for services and guards. |
+| Function / Token                           | Description                                                              |
+| :----------------------------------------- | :----------------------------------------------------------------------- |
+| `createSkewStoreToken<T>(name)`            | Creates a typed `InjectionToken<VersionedStore<T>>`.                     |
+| `provideSkewStore(token, schema, options)` | Registers a versioned store in Angular DI.                               |
+| `injectSkewSignal(token, key)`             | Injects a reactive signal tuple `{ data, error, loading, set, reload }`. |
+| `injectSkewStore(token)`                   | Injects the raw `VersionedStore<T>` instance for services and guards.    |

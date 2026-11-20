@@ -6,7 +6,7 @@ browser, or a test.
 
 You are going to build a versioned `Draft` record and walk it through the
 whole life of a schema: the first shape, a rename, a structural promotion,
-data arriving *from the future*, and the storage layer that makes all of it
+data arriving _from the future_, and the storage layer that makes all of it
 survive a redeploy. At every step you will see exactly what would have broken
 without the envelope.
 
@@ -18,7 +18,7 @@ npm install @braidlabs/skew
 
 ## Step 1 — Declare the shape you have today
 
-A schema starts from your *current* shape. There is nothing to migrate yet —
+A schema starts from your _current_ shape. There is nothing to migrate yet —
 the point is to start writing envelopes now, so every future reader can tell
 what it is looking at.
 
@@ -28,7 +28,7 @@ import { versioned } from '@braidlabs/skew';
 interface DraftV1 {
   id: string;
   title: string;
-  author: string;   // a plain string — this will matter in step 3
+  author: string; // a plain string — this will matter in step 3
   body: string;
 }
 
@@ -39,9 +39,9 @@ Two things deserve attention:
 
 - `'draft'` is the **contract name**, not a variable name. It is how a reader
   on a different build — or a different application entirely — recognises
-  that an envelope belongs to this schema. Envelopes that name a *different*
+  that an envelope belongs to this schema. Envelopes that name a _different_
   contract are refused instead of being misread.
-- The type parameter is your *live* interface, and that is fine — for now.
+- The type parameter is your _live_ interface, and that is fine — for now.
   The moment you add a second version (step 3), the old shape gets frozen.
 
 Write and read a record:
@@ -58,11 +58,11 @@ console.log(envelope);
 // { v: 1, n: 'draft', payload: { id: 'demo-1', ... } }
 
 const result = Draft.read(envelope);
-if (result.ok) console.log(result.value.title);  // typed as DraftV1
+if (result.ok) console.log(result.value.title); // typed as DraftV1
 ```
 
 The envelope is the entire mechanism: `v` is the version the payload was
-*authored* under, `n` is the contract it belongs to, and both sit outside the
+_authored_ under, `n` is the contract it belongs to, and both sit outside the
 payload so a reader can decide what to do before trusting a single field.
 
 Here is what that looks like on disk in the demo's shared-store panel — note
@@ -82,13 +82,13 @@ const result = Draft.read(whatever);
 
 if (!result.ok) {
   switch (result.reason) {
-    case 'ahead':    // written by a NEWER build; see step 4
+    case 'ahead': // written by a NEWER build; see step 4
       return refetch();
-    case 'gap':      // a migration step is missing — a bug, be loud
+    case 'gap': // a migration step is missing — a bug, be loud
       return reportBug(result.message);
-    case 'invalid':  // not this contract's data at all
+    case 'invalid': // not this contract's data at all
       return discard();
-    case 'threw':    // a migration blew up on this input
+    case 'threw': // a migration blew up on this input
       return reportBug(result.message);
   }
 }
@@ -134,19 +134,16 @@ step's identity, and the only thing two independently built bundles can
 compare a code step by:
 
 ```ts
-export const Draft = versioned<DraftV1>('draft').next<DraftV2>(
-  'structure the author and derive a summary',
-  {
-    up: (v1) => ({
-      id: v1.id,
-      title: v1.title,
-      author: { name: v1.author, email: '' },   // email: a guess
-      body: v1.body,
-      summary: v1.body.slice(0, 60),            // summary: derived
-    }),
-    derives: ['author.email', 'summary'],
-  },
-);
+export const Draft = versioned<DraftV1>('draft').next<DraftV2>('structure the author and derive a summary', {
+  up: (v1) => ({
+    id: v1.id,
+    title: v1.title,
+    author: { name: v1.author, email: '' }, // email: a guess
+    body: v1.body,
+    summary: v1.body.slice(0, 60), // summary: derived
+  }),
+  derives: ['author.email', 'summary'],
+});
 ```
 
 Each step is typed against the previous version — a migration that does not
@@ -156,9 +153,9 @@ produce the next shape is a **compile error**. Now read a v1 envelope:
 const result = Draft.read({ v: 1, payload: oldRecord });
 
 if (result.ok) {
-  result.value;         // typed DraftV2 — migrated on the way out
-  result.migratedFrom;  // 1
-  result.derivedPaths;  // ['author.email', 'summary']
+  result.value; // typed DraftV2 — migrated on the way out
+  result.migratedFrom; // 1
+  result.derivedPaths; // ['author.email', 'summary']
 }
 ```
 
@@ -181,36 +178,35 @@ Your deploy pipeline does not pause the world. While one tab runs yesterday's
 build, a colleague's tab writes with today's — same storage key, newer
 envelope. What should yesterday's build do with `{ v: 2, … }`?
 
-Plainly declared, the honest answer is *refuse*:
+Plainly declared, the honest answer is _refuse_:
 
 ```ts
-const OldReader = versioned<DraftV1>('draft');   // yesterday's build
+const OldReader = versioned<DraftV1>('draft'); // yesterday's build
 
 const result = OldReader.read({ v: 2, payload: v2Record });
 // result.ok === false, result.reason === 'ahead'
 // "data was written by a newer build (v2) than this one (v1)…"
 ```
 
-The fields v2 added were never sent to a v1 reader — *guessing* them away
+The fields v2 added were never sent to a v1 reader — _guessing_ them away
 would silently discard data. But refusal is a diagnosis, not always a dead
 end. Renames and structural promotions are honestly invertible, and a step
 can say so by declaring its **down** direction:
 
 ```ts
-export const Draft = versioned<DraftV1>('draft').next<DraftV2>(
-  'structure the author and derive a summary',
-  {
-    up:   (v1) => ({ /* as above */ }),
-    down: (v2) => ({
-      id: v2.id,
-      title: v2.title,
-      author: v2.author.name,   // the projection back
-      body: v2.body,
-    }),
-    derives: ['author.email', 'summary'],
-    lossy:   ['author.email', 'summary'],   // what the projection drops
-  },
-);
+export const Draft = versioned<DraftV1>('draft').next<DraftV2>('structure the author and derive a summary', {
+  up: (v1) => ({
+    /* as above */
+  }),
+  down: (v2) => ({
+    id: v2.id,
+    title: v2.title,
+    author: v2.author.name, // the projection back
+    body: v2.body,
+  }),
+  derives: ['author.email', 'summary'],
+  lossy: ['author.email', 'summary'], // what the projection drops
+});
 ```
 
 With a down direction available, the same read succeeds as an **explicitly
@@ -219,15 +215,15 @@ lossy projection**:
 ```ts
 const result = Draft.read(newerEnvelope);
 if (result.ok) {
-  result.downgradedFrom;  // 2 — this value is a projection, not the record
-  result.lossyPaths;      // ['author.email', 'summary'] — its price, named
+  result.downgradedFrom; // 2 — this value is a projection, not the record
+  result.lossyPaths; // ['author.email', 'summary'] — its price, named
 }
 ```
 
-And the *writer* can be polite to a reader it knows is older:
+And the _writer_ can be polite to a reader it knows is older:
 
 ```ts
-Draft.write(v2Value, { as: 1 });   // down-migrates, emits { v: 1, … }
+Draft.write(v2Value, { as: 1 }); // down-migrates, emits { v: 1, … }
 ```
 
 This is the demo's Basics walkthrough, steps 3–5: the newer build writes v2,
@@ -237,7 +233,7 @@ same read returns the projection — with the dropped fields labeled **LOST**:
 ![The boundary inspector showing a v2 record downgraded to v1, with lost fields named](assets/core-inspector-downgraded.png)
 
 (The sharing mechanism — `registerSchema` and the page-wide registry — is
-what lets two *separately built bundles* lend each other migration knowledge.
+what lets two _separately built bundles_ lend each other migration knowledge.
 It matters most under module federation; see the walkthrough's step 5 and
 `libs/skew/src/lib/registry.ts` when you get there.)
 
@@ -268,12 +264,12 @@ const pinned = { now: () => new Date('2026-08-10T12:00:00.000Z') };
 it('migrates deterministically', () => {
   const a = Draft.read(stored, { context: pinned });
   const b = Draft.read(stored, { context: pinned });
-  expect(a).toEqual(b);   // exactly — including derived timestamps
+  expect(a).toEqual(b); // exactly — including derived timestamps
 });
 ```
 
 (A real-world case from this repo: an idempotency key derived from
-`Date.now()` minted a *new* identity on every retry — the one property an
+`Date.now()` minted a _new_ identity on every retry — the one property an
 idempotency key must not have. `ctx.seed` exists for exactly that value.)
 
 ---
@@ -282,21 +278,20 @@ idempotency key must not have. `ctx.seed` exists for exactly that value.)
 
 `JSON.parse(raw) as Draft` is an assertion, not a check. The day the model
 changes, every cached record on every user's machine has the old shape while
-being *typed* as the new one. Route storage through the schema instead:
+being _typed_ as the new one. Route storage through the schema instead:
 
 ```ts
 import { createVersionedStore, webStorageDriver } from '@braidlabs/skew';
 
 const drafts = createVersionedStore(Draft, {
   driver: webStorageDriver('local'),
-  onReadFailure: (key, failure) =>
-    telemetry.warn('stale draft', { key, reason: failure.reason }),
+  onReadFailure: (key, failure) => telemetry.warn('stale draft', { key, reason: failure.reason }),
 });
 
-await drafts.set('demo-1', draft);        // writes the envelope
+await drafts.set('demo-1', draft); // writes the envelope
 const result = await drafts.get('demo-1'); // migrated on the way out
 
-const now = drafts.peek('demo-1');         // sync — no flash of empty state
+const now = drafts.peek('demo-1'); // sync — no flash of empty state
 ```
 
 Three details worth knowing:
@@ -319,22 +314,16 @@ same migration declared as **ops** is data — mechanically invertible, with
 `down`, `derives`, and `lossy` computed instead of hand-written:
 
 ```ts
-export const Draft = versioned<DraftV1>('draft').next<DraftV2>(
-  'structure the author and derive a summary',
-  {
-    ops: [
-      { wrap: { path: 'author', key: 'name', also: { email: { $value: '' } } } },
-      { default: { path: 'summary', value: '' } },
-    ],
-  },
-);
+export const Draft = versioned<DraftV1>('draft').next<DraftV2>('structure the author and derive a summary', {
+  ops: [{ wrap: { path: 'author', key: 'name', also: { email: { $value: '' } } } }, { default: { path: 'summary', value: '' } }],
+});
 ```
 
 The op set is closed and non-Turing-complete on purpose: `rename`, `move`,
 `wrap`, `hoist`, `map`, `default`, `drop`, `convert`, `const`. Structural
 evolution fits it; semantic transforms (deriving `summary` from `body`, say)
 deliberately do not — those stay as code. This split is what makes it safe
-for an API to *publish* its migrations as a document a client can fetch at
+for an API to _publish_ its migrations as a document a client can fetch at
 runtime (`@braidlabs/contract`), which is where the `ahead` story gets its
 final act. That is its own tutorial's worth of material — see the
 [`@braidlabs/contract` README](https://github.com/braidjs/braid/blob/main/libs/contract/README.md) when you are
@@ -350,4 +339,4 @@ refuses what it cannot honestly read, stores durably, and is reproducible
 under test. The deploy stopped being an event your data has to fear.
 
 **Next:** [Tutorial 3 — Give your build a name](03-build.md), where the
-*code* gets the same treatment the data just got.
+_code_ gets the same treatment the data just got.

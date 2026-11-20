@@ -191,9 +191,15 @@ export const DRAW_LIMITS = Object.freeze({
   /**
    * Text produced — every label, title, value and paragraph — priced by what laying it out
    * costs a browser ({@link layoutCost}): its length, and much more for each change of direction
-   * or script. 2,000,000 is about 100 ms of layout, whatever the text is.
+   * or script. At 2,000,000, every kind of text measured drew and laid out in under 200 ms. An element
+   * also lowers its own limit after a draw whose layout ran long, so text priced wrong is drawn
+   * less each time rather than slowly every time.
    */
   chars: 2_000_000,
+  /**
+   * Braid fragments drawn: each is a realm of its own (a frame), costly to boot and to keep.
+   */
+  fragments: 32,
   /**
    * Components and repeated parts drawn — template items, tabs, options — and the elements a
    * text's markup makes. What a draw puts in the page is bounded by this: 5,000 is a long page.
@@ -247,9 +253,15 @@ export class DrawBudget {
   ticks = 0;
   /** Whether the draw ended on its deadline rather than its units: what it is reported as. */
   timedOut = false;
+  fragments = 0;
+  /** What this draw's text may cost: `DRAW_LIMITS.chars`, or less on a page that lays out slowly. */
+  readonly textLimit: number;
 
-  constructor(options: { readonly ms?: number } = {}) {
+  constructor(
+    options: { readonly ms?: number; readonly textLimit?: number } = {},
+  ) {
     this.deadline = options.ms === undefined ? undefined : now() + options.ms;
+    this.textLimit = options.textLimit ?? DRAW_LIMITS.chars;
   }
 
   /** Whether the draw has spent its work, or run out of time: the rest of it is not drawn. */
@@ -438,7 +450,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
   const spendText = (text: string): string => {
     const budget = draw();
     budget.chars += layoutCost(text);
-    if (budget.chars > DRAW_LIMITS.chars) {
+    if (budget.chars > budget.textLimit) {
       if (!budget.reported.has('text')) {
         budget.reported.add('text');
         options.report({

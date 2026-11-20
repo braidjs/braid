@@ -110,6 +110,8 @@ class Bucket {
 
 /** Milliseconds of messages an element applies before it lets the page run. */
 const SLICE_MS = 8;
+/** Milliseconds a draw's layout may take before the element draws less text. */
+const LAYOUT_MS = 100;
 
 const now = (): number => performance.now();
 const yieldToPage = (): Promise<void> =>
@@ -155,6 +157,8 @@ export function defineA2uiSurface(
     #reported = new Set<string>();
     /** How long the last draw took: the next one waits at least as long. */
     #lastDrawMs = 0;
+    /** The share of `DRAW_LIMITS.chars` this element's draws may use: less after slow layouts. */
+    #textScale = 1;
     readonly #errors = new Bucket(ERROR_LIMITS.burst, ERROR_LIMITS.perSecond);
     readonly #calls = new Bucket(CALL_LIMITS.burst, CALL_LIMITS.perSecond);
 
@@ -176,7 +180,7 @@ export function defineA2uiSurface(
       if (script) {
         const text = script.textContent ?? '[]';
         script.remove();
-        this.push(text);
+        this.#push(text, true);
         this.#draw(); // at once: the prerendered markup is adopted in this task, not the next
       } else if (this.surfaces.ids().length > 0) this.#schedule(); // pushed while detached
       this.#load();
@@ -191,53 +195,89 @@ export function defineA2uiSurface(
     }
 
     push(messages: string | readonly unknown[]): void {
-      const origin: Origin = {
-        refused: 0,
-        stopped: () => origin.refused > ERROR_LIMITS.refusedPerStream,
-      };
-      if (typeof messages !== 'string') {
-        for (const raw of messages) {
-          if (origin.stopped?.()) break;
-          this.#take(raw, origin);
-        }
-      } else if (messages.trimStart().startsWith('[')) {
+      this.#push(messages, false);
+    }
+
+    /**
+     * Messages from the host, as a list or text. Applied through the queue, a little at a time,
+     * like a stream's — or, for the prerendered messages adopted as the element connects, at once.
+     */
+    #push(messages: string | readonly unknown[], now: boolean): void {
+      const origin: Origin = { refused: 0 };
+      const steps: (() => void)[] = [];
+      if (typeof messages !== 'string')
+        for (const raw of messages) steps.push(() => this.#take(raw, origin));
+      else if (messages.trimStart().startsWith('[')) {
         let list: readonly unknown[] = [];
         try {
           list = parseA2uiStream(messages);
         } catch (error) {
           this.#refuse(error, origin);
         }
-        for (const raw of list) {
-          if (origin.stopped?.()) break;
-          this.#take(raw, origin);
-        }
+        for (const raw of list) steps.push(() => this.#take(raw, origin));
       } else
-        for (const line of messages.split(/\r?\n/)) {
-          if (origin.stopped?.()) break;
-          this.#line(line, origin);
+        for (const line of messages.split(/\r?\n/))
+          steps.push(() => this.#line(line, origin));
+      if (now) {
+        for (const step of steps) {
+          if (origin.refused > ERROR_LIMITS.refusedPerStream) break;
+          step();
         }
-      this.#schedule();
+        return;
+      }
+      void this.#enqueue(steps, origin);
+    }
+
+    /** JSON Lines from a stream or an action's answer, through the queue; resolves once applied. */
+    #feed(lines: Iterable<string>, origin: Origin): Promise<void> {
+      const steps: (() => void)[] = [];
+      for (const line of lines) steps.push(() => this.#line(line, origin));
+      return this.#enqueue(steps, origin);
+    }
+
+    /** Work waiting to be applied, in arrival order: a message or a line each. */
+    #queue: { readonly step: () => void; readonly origin: Origin | null }[] =
+      [];
+    #head = 0;
+    #pumping = false;
+
+    #enqueue(steps: readonly (() => void)[], origin: Origin): Promise<void> {
+      for (const step of steps) this.#queue.push({ step, origin });
+      const applied = new Promise<void>((resolve) =>
+        this.#queue.push({ step: resolve, origin: null }),
+      );
+      void this.#pump();
+      return applied;
     }
 
     /**
-     * JSON Lines a little at a time, letting the page run between slices: a stream of a million
-     * lines is a busy surface, not a frozen page.
+     * Applies what is queued, letting the page run every few milliseconds: a million lines, or one
+     * `push()` of many large messages, is a busy surface, not a frozen page. It starts in the task
+     * that queued the work, so a small push is applied before `push()` returns.
      */
-    async #feed(lines: Iterable<string>, origin: Origin): Promise<void> {
+    async #pump(): Promise<void> {
+      if (this.#pumping) return;
+      this.#pumping = true;
       let slice = now();
       try {
-        for (const line of lines) {
-          if (origin.stopped?.()) return;
-          if (origin.refused > ERROR_LIMITS.refusedPerStream) return;
-          this.#line(line, origin);
+        while (this.#head < this.#queue.length) {
+          const { step, origin } = this.#queue[this.#head++]!;
+          const stopped =
+            origin !== null &&
+            (origin.stopped?.() === true ||
+              origin.refused > ERROR_LIMITS.refusedPerStream);
+          if (!stopped) step();
           if (now() - slice > SLICE_MS) {
             this.#schedule();
             await yieldToPage();
             slice = now();
           }
         }
+        this.#queue = [];
+        this.#head = 0;
       } finally {
-        // what was applied is drawn, however the feed ended
+        this.#pumping = false;
+        // what was applied is drawn, however it ended
         this.#schedule();
       }
     }
@@ -434,7 +474,10 @@ export function defineA2uiSurface(
 
     #draw(): void {
       const started = now();
-      this.#budget = new DrawBudget({ ms: DRAW_LIMITS.ms });
+      this.#budget = new DrawBudget({
+        ms: DRAW_LIMITS.ms,
+        textLimit: DRAW_LIMITS.chars * this.#textScale,
+      });
       this.#reportedThisDraw = 0;
       const views = this.surfaces.ids().map((id) => {
         const surface = this.surfaces.get(id)!;
@@ -476,6 +519,15 @@ export function defineA2uiSurface(
           // a frame's own wait is not layout
           if (layout > 50 && layout > this.#lastDrawMs)
             this.#lastDrawMs = layout;
+          // Text priced too cheaply shows here: the next draw may lay out less of it, and the
+          // limit comes back as the page does.
+          if (layout > LAYOUT_MS)
+            this.#textScale = Math.max(
+              0.01,
+              (this.#textScale * LAYOUT_MS) / layout,
+            );
+          else if (layout < LAYOUT_MS / 2)
+            this.#textScale = Math.min(1, this.#textScale * 1.5);
         }, 0),
       );
       // What runs between draws — a click, a check — gets a budget of its own, with no deadline:

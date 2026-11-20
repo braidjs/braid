@@ -20,7 +20,7 @@ export default toFetchHandler(gateway, appHandler); // Workers, Deno, Bun, h3/Ni
 There is no extra process, port, container, or deployment. The [gateway
 README](https://github.com/braidjs/braid/blob/main/libs/braid-gateway/README.md) has the binding for each framework.
 
-If you *cannot* modify the origin server — the classic legacy-monolith case — run the gateway as
+If you _cannot_ modify the origin server — the classic legacy-monolith case — run the gateway as
 an edge worker or reverse proxy in front of it instead. The monolith stays untouched; the gateway
 just needs to see requests before it does. That is the arrangement the architecture calls
 "origin-front middleware", and it is the same library either way.
@@ -40,11 +40,11 @@ URL means something must serve it.
 
 What the gateway serves that the client cannot manufacture:
 
-| Need | Why the client can't do it |
-| ---- | -------------------------- |
-| The realm stub at `/__braid/frag/:id/…` | must be a real same-origin URL (above), carrying the protocol version and the fragment's `<base>` |
-| The fragment's document, prepared | singleton renaming, script neutralization, and subresource re-rooting must happen before the markup reaches the host's DOM |
-| Namespace routing | strips `/__braid/frag/:id` and forwards to the fragment's endpoint, so the endpoint sees the paths it serves standalone |
+| Need                                    | Why the client can't do it                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| The realm stub at `/__braid/frag/:id/…` | must be a real same-origin URL (above), carrying the protocol version and the fragment's `<base>`                          |
+| The fragment's document, prepared       | singleton renaming, script neutralization, and subresource re-rooting must happen before the markup reaches the host's DOM |
+| Namespace routing                       | strips `/__braid/frag/:id` and forwards to the fragment's endpoint, so the endpoint sees the paths it serves standalone    |
 
 Without them the client fails loudly rather than half-working: the realm stub check produces a
 named `BraidError { stage: 'realm-boot' }` telling you the gateway is not mounted.
@@ -117,13 +117,13 @@ apps are exactly the ones that cannot be handed an `env`.
 
 ## Choosing
 
-| You want to… | Gateway needed? | How |
-| ------------ | --------------- | --- |
-| Compose an unmodified legacy app | Yes, as middleware or an edge proxy | compat adapter, the default |
-| Avoid a separate deployment | Not a separate one | mount the library in your existing server |
-| Compose an app whose server you can't touch | Yes, in front of it | edge worker / reverse proxy |
-| Skip server-side rendering of fragments | No — piercing is optional | omit `pierce` from the manifest; the slot fetches instead |
-| Load a modern app with no gateway | No | contract mode: `defineAngularFragment()` / `defineReactFragment()` and `<fragment-slot adapter="contract" entry="…">` |
+| You want to…                                | Gateway needed?                     | How                                                                                                                   |
+| ------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Compose an unmodified legacy app            | Yes, as middleware or an edge proxy | compat adapter, the default                                                                                           |
+| Avoid a separate deployment                 | Not a separate one                  | mount the library in your existing server                                                                             |
+| Compose an app whose server you can't touch | Yes, in front of it                 | edge worker / reverse proxy                                                                                           |
+| Skip server-side rendering of fragments     | No — piercing is optional           | omit `pierce` from the manifest; the slot fetches instead                                                             |
+| Load a modern app with no gateway           | No                                  | contract mode: `defineAngularFragment()` / `defineReactFragment()` and `<fragment-slot adapter="contract" entry="…">` |
 
 Piercing being optional is worth restating: dropping `pierce` from a manifest costs you the
 server-rendered first paint and nothing else. The fragment boots client-side and everything in

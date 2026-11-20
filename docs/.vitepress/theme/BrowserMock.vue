@@ -16,16 +16,31 @@ const props = defineProps<{
   caption?: string;
 }>();
 
-const titles = computed(() => (props.tabs ?? '').split(',').map((tab) => tab.trim()).filter(Boolean));
+const titles = computed(() =>
+  (props.tabs ?? '')
+    .split(',')
+    .map((tab) => tab.trim())
+    .filter(Boolean),
+);
 const current = computed(() => Number(props.active ?? 0));
 </script>
 
 <template>
-  <figure class="bm" role="group" :aria-label="caption ?? `Mock browser window at ${url}`">
+  <figure
+    class="bm"
+    role="group"
+    :aria-label="caption ?? `Mock browser window at ${url}`"
+  >
     <div class="bm-window">
       <div class="bm-chrome" aria-hidden="true">
         <span class="bm-dots"><i></i><i></i><i></i></span>
-        <span v-for="(title, index) in titles" :key="title" class="bm-tab" :class="{ 'is-active': index === current }">{{ title }}</span>
+        <span
+          v-for="(title, index) in titles"
+          :key="title"
+          class="bm-tab"
+          :class="{ 'is-active': index === current }"
+          >{{ title }}</span
+        >
       </div>
       <div class="bm-address" aria-hidden="true">
         <span class="bm-nav">‹ › ↻</span>

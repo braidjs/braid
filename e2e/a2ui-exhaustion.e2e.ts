@@ -9,6 +9,8 @@ import { launch } from './harness.js';
 import { build } from '../examples/concierge/build.mjs';
 import { start } from '../examples/concierge/server.mjs';
 import { A2UI_LIMITS, parseA2uiMessage } from '../libs/sdui/src/a2ui.js';
+import { DRAW_LIMITS } from '../libs/sdui/src/web/evaluate.js';
+import { layoutCost } from '../libs/sdui/src/web/layout.js';
 
 /**
  * What an agent can make a page do by sending a lot: every stream the verification rounds used to
@@ -201,6 +203,32 @@ function responsive(outcome: Outcome, maxPosts = MAX_POSTS): void {
   expect(outcome.errors).toEqual([]);
   expect(outcome.blockMs).toBeLessThan(BLOCK_MS);
   expect(outcome.posts).toBeLessThanOrEqual(maxPosts);
+}
+
+/** Text of each kind the text budget prices above its length, as a unit to repeat. */
+const EXPENSIVE: Record<string, string> = {
+  'bidi words': '\u05e9\u05dc\u05d5\u05dd hello ',
+  'alternating direction': 'a\u05d0',
+  'rotating scripts':
+    '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000',
+  'emoji families':
+    '\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 ',
+  Thai: '\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35 ',
+  Ethiopic: '\u1230\u120b\u121d ',
+  'combining marks': 'a\u0301\u0302\u0303',
+  Arabic: '\u0645\u0631\u062d\u0628\u0627 ',
+};
+/** `unit` repeated until `copies` of it would cost just under a draw's text budget. */
+function atBudget(unit: string, copies = 1): string {
+  const room = (DRAW_LIMITS.chars * 0.98) / copies;
+  let low = 1;
+  let high = Math.floor(A2UI_LIMITS.string / unit.length);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (layoutCost(unit.repeat(middle)) <= room) low = middle;
+    else high = middle - 1;
+  }
+  return unit.repeat(low);
 }
 
 /** 19 TextFields, each labelled with a 99,000-character string from the data model. */
@@ -488,30 +516,72 @@ const CASES: Record<string, () => Line[]> = {
     ),
   'TextFields labelled with rotating scripts, x 19': () =>
     textFields(() => 'a\u03b1\u0431\u05d0\u4e2d\u0905'.repeat(16_500)),
-  // as much as a draw's text budget allows: what it costs is what the budget is for
-  'one Text of bidi words just inside the text budget': () => [
-    create(),
+  // As much as a draw's text budget allows, of each kind of text it prices: what layout costs
+  // the browser at the budget is what the budget is for.
+  ...Object.fromEntries(
+    Object.entries(EXPENSIVE).flatMap(([kind, unit]) => [
+      [
+        `one Text of ${kind}, just inside the text budget`,
+        () => [
+          create(),
+          update([{ id: 'root', component: 'Text', text: atBudget(unit) }]),
+        ],
+      ],
+      [
+        `1,000 Texts of ${kind}, together just inside the text budget`,
+        () =>
+          templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
+            w: atBudget(unit, 1_000),
+          }),
+      ],
+    ]),
+  ),
+  // from the sixth verification: text in many fonts, and Braid fragments, each a realm
+  'Texts of 20,000 characters rotating through seventeen scripts, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000'
+        .repeat(1_200)
+        .slice(0, 20_000),
+    }),
+  'Texts of 20,000 characters of emoji families, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: '\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66'
+        .repeat(1_819)
+        .slice(0, 20_000),
+    }),
+  'Texts of 20,000 characters of combining marks, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: 'a\u0301\u0302\u0303'.repeat(5_000),
+    }),
+  'longText TextFields of 99,000 characters rotating scripts, x 20': () => [
+    create({
+      dataModel: {
+        v: '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000'
+          .repeat(6_000)
+          .slice(0, 99_000),
+      },
+    }),
     update([
+      { id: 'root', component: 'Column', children: Array(20).fill('f') },
       {
-        id: 'root',
-        component: 'Text',
-        text: '\u05e9\u05dc\u05d5\u05dd hello '.repeat(990),
+        id: 'f',
+        component: 'TextField',
+        label: 'x',
+        variant: 'longText',
+        value: { '@path': '/v' },
       },
     ]),
   ],
-  'one Text alternating direction just inside the text budget': () => [
-    create(),
-    update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(990) }]),
-  ],
-  '1,000 Texts of bidi words, together just inside the text budget': () =>
-    templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
-      w: '\u05e9\u05dc\u05d5\u05dd ok '.repeat(1),
-    }),
-  '1,000 Texts alternating direction, together just inside the text budget':
-    () =>
-      templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
-        w: 'a\u05d0'.repeat(1),
-      }),
+  'FlightCard (a registry fragment) x 1,000': () =>
+    templated(
+      { component: 'FlightCard', flight: 'TP 1351', status: 'x', gate: 'B12' },
+      1_000,
+    ),
+  'FlightCard (a registry fragment) x 4,990': () =>
+    templated(
+      { component: 'FlightCard', flight: 'TP 1351', status: 'x', gate: 'B12' },
+      4_990,
+    ),
   'a Text of 20,000 characters alternating direction': () => [
     create(),
     update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(10_000) }]),
@@ -703,6 +773,57 @@ describe('a hostile stream within A2UI_LIMITS leaves the page responsive', () =>
         expect(block).toBeLessThan(BLOCK_MS);
       }
       expect(await input.inputValue()).toBe('abcdef');
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a host pushing a lot at once leaves the page responsive', () => {
+  it('one push() of 60 updates of the widest object a message may carry', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create(),
+        update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ]),
+      ROOT,
+    );
+    try {
+      // the host builds its messages in a task of its own
+      await outcome.page.evaluate((V) => {
+        (window as unknown as { __messages: unknown[] }).__messages =
+          Array.from({ length: 60 }, (_, n) => ({
+            version: '1.0',
+            updateDataModel: {
+              surfaceId: 'h',
+              path: `/d${n}`,
+              value: Object.fromEntries(
+                Array.from({ length: V }, (_, i) => [`k${i}`, i]),
+              ),
+            },
+          }));
+      }, V);
+      // and pushes them in another: from here, what the page waits on is the renderer
+      await outcome.page.evaluate(() => {
+        const w = window as unknown as {
+          __hb: { max: number; last: number };
+          __messages: unknown[];
+        };
+        w.__hb.max = 0;
+        w.__hb.last = performance.now();
+        (
+          document.querySelector('#assistant') as unknown as {
+            push(messages: unknown[]): void;
+          }
+        ).push(w.__messages);
+      });
+      await settle(outcome.page);
+      const block = await outcome.page.evaluate(() => {
+        const w = window as unknown as { __hb: { max: number; last: number } };
+        return Math.max(w.__hb.max, performance.now() - w.__hb.last);
+      });
+      expect(outcome.errors).toEqual([]);
+      expect(block).toBeLessThan(BLOCK_MS);
     } finally {
       await outcome.close();
     }

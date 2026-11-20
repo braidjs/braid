@@ -23,7 +23,7 @@ you, that is a bug on our side, not yours.
 
 That order is itself the lesson, so it is worth saying why before you write any code.
 
-**Tenancy is the first real decision.** Every record this library stores lands in a *partition*, and
+**Tenancy is the first real decision.** Every record this library stores lands in a _partition_, and
 the partition is derived from who is signed in. Decide that late and you will have written a pile of
 code whose data all landed in the wrong place — or worse, in one place shared by two people who used
 the same laptop.
@@ -159,7 +159,7 @@ customer who genuinely has no orders, including to your own error handling.
 
 ## Step 4 — Point the client at the partition
 
-The client does not own the partition; it *asks* for it on every access:
+The client does not own the partition; it _asks_ for it on every access:
 
 ```ts
 import { createDataClient, createOutbox } from '@braidlabs/data';
@@ -204,8 +204,8 @@ product.subscribe((state) => {
 });
 ```
 
-Open the product page a second time — from another component, another route, or another *application
-on the same page* — and nothing hits the network. The cache lives in storage rather than in one
+Open the product page a second time — from another component, another route, or another _application
+on the same page_ — and nothing hits the network. The cache lives in storage rather than in one
 app's memory, so the second reader finds what the first one stored:
 
 ```ts
@@ -230,7 +230,7 @@ still on disk, untouched.
 
 Nothing happens to it automatically, and that is the design rather than an omission. A partition is
 fully self-contained — no read crosses the boundary — which is what makes purge complete and tenant
-switching cheap. But *"the guest just signed in"* is a real event with a real answer, so there is a
+switching cheap. But _"the guest just signed in"_ is a real event with a real answer, so there is a
 first-class way to carry their records across:
 
 ```ts
@@ -254,7 +254,7 @@ whatever the last guest left in it. Pass `'overwrite'` when you genuinely mean t
 newer.
 
 **Records move as stored bytes, envelope untouched.** Reading each one through a typed store and
-writing it back would re-envelope it at *this* build's version — silently down-projecting a record
+writing it back would re-envelope it at _this_ build's version — silently down-projecting a record
 written by a newer tab, or refusing it outright. Copying the bytes means a v3 record arrives as a v3
 record.
 
@@ -353,12 +353,12 @@ result.remaining; // 1 — still queued, waiting for a build that knows what it 
 
 ### What the drain guarantees
 
-| | |
-| --- | --- |
-| **Sequential, stopping at the first failure** | Orders depend on each other. Replaying in parallel, or skipping a failure, applies them out of order. |
-| **One drain per origin** | Five tabs coming back online do not place the same order five times. A tab that finds the lock taken reports `skipped: true` instead of waiting. |
-| **Give up loudly** | After `maxAttempts` the entry is abandoned *and reported*. The customer left believing it was placed. |
-| **Only your own entries** | Another app on the origin has its own `owner`; its queue is left where it is. |
+|                                               |                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Sequential, stopping at the first failure** | Orders depend on each other. Replaying in parallel, or skipping a failure, applies them out of order.                                            |
+| **One drain per origin**                      | Five tabs coming back online do not place the same order five times. A tab that finds the lock taken reports `skipped: true` instead of waiting. |
+| **Give up loudly**                            | After `maxAttempts` the entry is abandoned _and reported_. The customer left believing it was placed.                                            |
+| **Only your own entries**                     | Another app on the origin has its own `owner`; its queue is left where it is.                                                                    |
 
 ---
 
@@ -427,7 +427,7 @@ one's staleness reaches the other.
 
 One thing deliberately does **not** follow it: the **queue**. A write queued offline belongs to the
 session, not to whichever client was on screen when it was made, so it flushes from whichever tab is
-open. Only its *prediction* is tenant-scoped.
+open. Only its _prediction_ is tenant-scoped.
 
 ```ts
 // tab one
@@ -497,7 +497,7 @@ the others.
 
 The good news is that most of it already works, for one reason: **Braid composes fragments onto a
 single origin.** One origin means one IndexedDB, one `navigator.locks` manager, one
-`BroadcastChannel` namespace. The cache is shared because of *where it lives*, not because anybody
+`BroadcastChannel` namespace. The cache is shared because of _where it lives_, not because anybody
 coordinated.
 
 The bad news is one specific thing that does not work by default, and it fails silently. It is the
@@ -559,7 +559,7 @@ replaying under the next person's session on a shared device.
 
 The queue is one store; ownership is what keeps it safe. Each fragment replays only its own entries,
 so checkout cannot send — or drop — an entry the account panel queued, and the flush lock is per
-owner so the two do not wait on each other. Both can still *count* the page's unsent work honestly,
+owner so the two do not wait on each other. Both can still _count_ the page's unsent work honestly,
 which is what an "unsaved changes" indicator should report.
 
 Give two fragments the same owner and they will replay each other's writes. That is the collision
@@ -584,7 +584,7 @@ const client = createDataClient({
 });
 ```
 
-The flag is named for *contexts* rather than tabs precisely because of this: the two cases are one
+The flag is named for _contexts_ rather than tabs precisely because of this: the two cases are one
 mechanism, and only the tab one is obvious. Leave it off on a composed page and staleness is
 invisible — the fragment that never heard looks exactly like one that is working, which is the worst
 property a bug can have.
@@ -616,7 +616,7 @@ that ended.
 
 ### 6. Eventing between fragments
 
-Tag invalidation says "this went stale". When fragments need to tell each other *things*, there is a
+Tag invalidation says "this went stale". When fragments need to tell each other _things_, there is a
 bus in the same package:
 
 ```ts
@@ -626,7 +626,7 @@ const orders = bus.channel('orders', { scope: 'origin' });
 await orders.emit('order.placed', order, { delivery: 'at-least-once' });
 ```
 
-Three points that matter on a composed page. **`scope: 'origin'`** reaches other realms *and* other
+Three points that matter on a composed page. **`scope: 'origin'`** reaches other realms _and_ other
 tabs, for the same reason `crossContextInvalidation` has to be on. **`at-least-once`** means a
 fragment that had not mounted yet still gets the event when it arrives — it is queued in the same
 outbox your mutations use. And **`entity`** gives one channel name a separate context per thing:
@@ -649,10 +649,14 @@ reads and writes.
 The fetch runs inside a per-key lock, and the lock is re-checked from the other side:
 
 ```ts
-withLock(`skew:data:fetch:${partition}:${key}`, async () => {
-  if (await readView()) return; // someone else fetched it while we waited
-  // …only now go to the network
-}, { ifAvailable: false }); // wait for our turn rather than declining
+withLock(
+  `skew:data:fetch:${partition}:${key}`,
+  async () => {
+    if (await readView()) return; // someone else fetched it while we waited
+    // …only now go to the network
+  },
+  { ifAvailable: false },
+); // wait for our turn rather than declining
 ```
 
 Two details make that work between fragments specifically. `ifAvailable: false` means the second
@@ -660,7 +664,7 @@ fragment **waits** instead of giving up and fetching anyway. And `navigator.lock
 **origin**, so the lock spans realms and tabs — which is precisely why the code uses it instead of a
 module-level map, since a map lives in one JavaScript context and a realm is another one.
 
-*Where it degrades:* on a runtime with no `navigator.locks`, the lock falls back to an in-process one
+_Where it degrades:_ on a runtime with no `navigator.locks`, the lock falls back to an in-process one
 that cannot see other realms, and both fragments fetch. They then store the same server response, so
 this costs a duplicate request rather than correctness. `hasCrossContextLocks()` tells you which mode
 you are in.
@@ -676,7 +680,7 @@ you do get:
   the outbox stores one record per entry: appending is a `put`, so two fragments queueing at the same
   moment cannot overwrite each other's queue.
 - **The server is the arbiter, not the store.** Writes go through `mutate`, which stores the server's
-  *response* rather than your optimistic patch. Neither fragment invents an ordering; each keeps what
+  _response_ rather than your optimistic patch. Neither fragment invents an ordering; each keeps what
   the server handed back to it.
 
 The residual race is real, and naming it is more useful than implying it away: if checkout confirms
@@ -691,8 +695,8 @@ someone's order.
 
 **One subtlety, for completeness.** Sequence numbers are allocated per store instance, so two
 contexts can hand out the same one. For entity records that is harmless — nothing derives meaning
-from consecutive numbers. For the outbox it means the relative order of entries queued by two *tabs
-of the same fragment* is ambiguous. The flush lock still guarantees only one drains at a time, so
+from consecutive numbers. For the outbox it means the relative order of entries queued by two _tabs
+of the same fragment_ is ambiguous. The flush lock still guarantees only one drains at a time, so
 this is ordering ambiguity rather than double-sending, and it does not arise between two fragments,
 which have different owners by construction.
 
@@ -702,16 +706,16 @@ whole, and concurrent queue appends keeping every entry.
 
 ### The setup, in one table
 
-| Piece | Same across fragments? | Why |
-| --- | --- | --- |
-| Origin | yes, always | Braid composes onto one — this is what makes any of it possible |
-| Database name | yes, for shared data | different databases share nothing |
-| Collection | yes, for shared data | private data belongs in the fragment's own |
-| Key | yes, for shared records | this is what "the same record" means |
-| Partition | yes, derived | same identity in, same partition out |
-| Schema version | **no** | each reader projects to its own — that is the point |
-| Outbox `owner` | **no** | ownership is what stops one fragment replaying another's writes |
-| `crossContextInvalidation` | on, everywhere | a realm is a separate context, exactly as a tab is |
+| Piece                      | Same across fragments?  | Why                                                             |
+| -------------------------- | ----------------------- | --------------------------------------------------------------- |
+| Origin                     | yes, always             | Braid composes onto one — this is what makes any of it possible |
+| Database name              | yes, for shared data    | different databases share nothing                               |
+| Collection                 | yes, for shared data    | private data belongs in the fragment's own                      |
+| Key                        | yes, for shared records | this is what "the same record" means                            |
+| Partition                  | yes, derived            | same identity in, same partition out                            |
+| Schema version             | **no**                  | each reader projects to its own — that is the point             |
+| Outbox `owner`             | **no**                  | ownership is what stops one fragment replaying another's writes |
+| `crossContextInvalidation` | on, everywhere          | a realm is a separate context, exactly as a tab is              |
 
 One line to keep from the section above: **reads are serialized between fragments, writes are not.**
 Concurrent writes to one record end in last-write-wins, and the server is the only thing that can
@@ -741,7 +745,7 @@ decide otherwise.
     context, so without it one fragment's invalidation never reaches another — and staleness is
     invisible.
 11. **Reads are serialized between fragments; writes are not.** Two fragments asking for the same
-    record produce one fetch. Two fragments *writing* it end in last-write-wins — if the order
+    record produce one fetch. Two fragments _writing_ it end in last-write-wins — if the order
     matters, the server has to reject the stale one.
 
 ## Where to go next

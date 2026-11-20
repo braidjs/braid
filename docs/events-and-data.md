@@ -5,8 +5,8 @@ separate JavaScript realms. They still have to tell each other things. Braid has
 mechanisms for that, and each one answers a different question. This guide starts from the
 problem you have and shows which one solves it, what it guarantees, and what it costs.
 
-**The rule that decides most cases:** send *state* ("row 7 is selected") with something that keeps
-the last value, and send an *event* ("the order was placed") with something that does not. Mixing
+**The rule that decides most cases:** send _state_ ("row 7 is selected") with something that keeps
+the last value, and send an _event_ ("the order was placed") with something that does not. Mixing
 them up is the most common mistake: a late-mounting fragment either misses the state it needed,
 or replays an event that already happened.
 
@@ -16,20 +16,20 @@ or replays an event that already happened.
 
 The same choice as a table:
 
-| The problem | Use | Reaches | If the receiver is not there |
-| --- | --- | --- | --- |
-| The host configures one fragment | [Slot props](#host-to-one-fragment-slot-props) | that fragment | gets the current props when it mounts |
-| A fragment reports to its host | [Slot events](#fragment-to-its-host-slot-events) | the host | nobody hears it |
-| Every fragment needs the user, locale, theme | [Context bus](#host-to-every-fragment-the-context-bus) | every fragment the host allows | gets the current value when it mounts |
-| Fragments share a selection or filter | [Channel state](#fragment-to-fragment-what-is-true-channel-state) | page, or every tab | caught up when it subscribes |
-| "Order placed" — react if you are listening | [Channel events](#fragment-to-fragment-what-happened-channel-events) | page, or every tab | misses it, on purpose |
-| "Order placed" — nobody may miss it | [Durable events](#an-event-nobody-may-miss-durable-events) | every registered consumer | queued on disk until it mounts |
-| "Somebody open this invoice" and tell me how it went | [Intents](#ask-and-get-an-answer-intents) | one capable fragment on the page | the raise rejects |
-| Sign-out, or stale data, in every tab | [Across tabs](#across-tabs) | every tab on the origin | a tab opened later reads current state |
-| It must be there after a reload or a deploy | [Persisted state and records](#across-reloads-and-deploys) | this browser | read from disk, at the reader's version |
-| A write the server must get, even offline | [Outbox](#to-the-server-even-offline-the-outbox) | the server | kept on disk and retried |
-| A third-party widget you do not trust | [Untrusted fragments](#untrusted-fragments) | only what the host grants | gets granted context when it connects |
-| Apps written to the FDC3 standard | [FDC3](#apps-written-to-a-standard-fdc3) | apps in the directory, on the page | an intent can launch the app |
+| The problem                                          | Use                                                                  | Reaches                            | If the receiver is not there            |
+| ---------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------- | --------------------------------------- |
+| The host configures one fragment                     | [Slot props](#host-to-one-fragment-slot-props)                       | that fragment                      | gets the current props when it mounts   |
+| A fragment reports to its host                       | [Slot events](#fragment-to-its-host-slot-events)                     | the host                           | nobody hears it                         |
+| Every fragment needs the user, locale, theme         | [Context bus](#host-to-every-fragment-the-context-bus)               | every fragment the host allows     | gets the current value when it mounts   |
+| Fragments share a selection or filter                | [Channel state](#fragment-to-fragment-what-is-true-channel-state)    | page, or every tab                 | caught up when it subscribes            |
+| "Order placed" — react if you are listening          | [Channel events](#fragment-to-fragment-what-happened-channel-events) | page, or every tab                 | misses it, on purpose                   |
+| "Order placed" — nobody may miss it                  | [Durable events](#an-event-nobody-may-miss-durable-events)           | every registered consumer          | queued on disk until it mounts          |
+| "Somebody open this invoice" and tell me how it went | [Intents](#ask-and-get-an-answer-intents)                            | one capable fragment on the page   | the raise rejects                       |
+| Sign-out, or stale data, in every tab                | [Across tabs](#across-tabs)                                          | every tab on the origin            | a tab opened later reads current state  |
+| It must be there after a reload or a deploy          | [Persisted state and records](#across-reloads-and-deploys)           | this browser                       | read from disk, at the reader's version |
+| A write the server must get, even offline            | [Outbox](#to-the-server-even-offline-the-outbox)                     | the server                         | kept on disk and retried                |
+| A third-party widget you do not trust                | [Untrusted fragments](#untrusted-fragments)                          | only what the host grants          | gets granted context when it connects   |
+| Apps written to the FDC3 standard                    | [FDC3](#apps-written-to-a-standard-fdc3)                             | apps in the directory, on the page | an intent can launch the app            |
 
 ```mermaid
 flowchart TD
@@ -93,17 +93,17 @@ Three facts about this page shape everything below:
 
 ## The words this guide uses
 
-| Word | Meaning here |
-| --- | --- |
-| **State** | What is true now. Only the latest value matters, and a newcomer needs it. |
-| **Event** | Something that happened once. A newcomer usually must *not* get it. |
-| **Request** | An event that expects one answer back: a result or an error. |
-| **Reach** | How far a message travels: one slot, the page, every tab on the origin, or the server. |
-| **At-most-once** | Delivered zero or one times. Nothing is stored; a receiver that is absent, or whose handler throws, loses it. |
-| **At-least-once** | Stored until the receiver's handler succeeds. It can arrive twice, so the handler must be idempotent. |
-| **Durable** | Written to disk (IndexedDB), so it outlives a reload, a crash and a closed tab. |
-| **Late subscriber** | A fragment that mounts after the message was sent. |
-| **Skew** | Sender and receiver are different builds and disagree about a payload's shape. |
+| Word                | Meaning here                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **State**           | What is true now. Only the latest value matters, and a newcomer needs it.                                     |
+| **Event**           | Something that happened once. A newcomer usually must _not_ get it.                                           |
+| **Request**         | An event that expects one answer back: a result or an error.                                                  |
+| **Reach**           | How far a message travels: one slot, the page, every tab on the origin, or the server.                        |
+| **At-most-once**    | Delivered zero or one times. Nothing is stored; a receiver that is absent, or whose handler throws, loses it. |
+| **At-least-once**   | Stored until the receiver's handler succeeds. It can arrive twice, so the handler must be idempotent.         |
+| **Durable**         | Written to disk (IndexedDB), so it outlives a reload, a crash and a closed tab.                               |
+| **Late subscriber** | A fragment that mounts after the message was sent.                                                            |
+| **Skew**            | Sender and receiver are different builds and disagree about a payload's shape.                                |
 
 There is no exactly-once delivery in a browser, as anywhere else. What you can have is
 at-least-once delivery plus a handler that is safe to run twice.
@@ -153,15 +153,15 @@ defineFragment({
 });
 ```
 
-| | |
-| --- | --- |
-| Direction | Host to the one fragment in that slot |
-| Kind | State. The object is replaced whole; there are no partial updates |
-| Timing | Asynchronous. Setting `props` returns before the fragment has seen it |
-| Late subscriber | Covered: `env.props` is the current value at mount |
-| Durability | None. The host sets it again after a reload |
-| Payload | Structured clone: no functions, DOM nodes or class instances |
-| Trust | Works for trusted and untrusted fragments |
+|                 |                                                                       |
+| --------------- | --------------------------------------------------------------------- |
+| Direction       | Host to the one fragment in that slot                                 |
+| Kind            | State. The object is replaced whole; there are no partial updates     |
+| Timing          | Asynchronous. Setting `props` returns before the fragment has seen it |
+| Late subscriber | Covered: `env.props` is the current value at mount                    |
+| Durability      | None. The host sets it again after a reload                           |
+| Payload         | Structured clone: no functions, DOM nodes or class instances          |
+| Trust           | Works for trusted and untrusted fragments                             |
 
 **Use it when** the value belongs to the host and concerns one fragment. **Do not** pass callbacks
 (they cannot be cloned) or use props for something every fragment needs: that is context.
@@ -213,14 +213,14 @@ slot.addEventListener('braid:event', (event) => {
 A fragment that is a custom element lists its own DOM events in its manifest (`"events":
 ["rating:change"]`) and they are forwarded the same way, with no Braid code in the element.
 
-| | |
-| --- | --- |
-| Direction | Fragment to its host only. Sibling fragments do not hear it |
-| Kind | Event, at-most-once |
-| Timing | Asynchronous, and fire-and-forget: `emit` returns nothing |
-| Late subscriber | Not covered. A listener added later hears only later events |
-| Durability | None |
-| Trust | Works for trusted and untrusted fragments. Treat `detail` from an untrusted one as input to validate |
+|                 |                                                                                                      |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| Direction       | Fragment to its host only. Sibling fragments do not hear it                                          |
+| Kind            | Event, at-most-once                                                                                  |
+| Timing          | Asynchronous, and fire-and-forget: `emit` returns nothing                                            |
+| Late subscriber | Not covered. A listener added later hears only later events                                          |
+| Durability      | None                                                                                                 |
+| Trust           | Works for trusted and untrusted fragments. Treat `detail` from an untrusted one as input to validate |
 
 **From an unmodified app.** A compat fragment has no `env` to emit with. Braid delivers the events
 it dispatches on its `window` to its own shadow root, so an event marked `composed` crosses into
@@ -293,15 +293,15 @@ and each fragment receives the value projected to the version it declares with `
 older fragment gets the older shape, and a chain that cannot be projected is refused when the
 fragment subscribes, not in the middle of a broadcast.
 
-| | |
-| --- | --- |
-| Direction | Host to fragments. Fragments read; they do not write |
-| Kind | State, last value per key |
-| Timing | The replay inside `subscribe` is synchronous. Later changes reach a fragment's realm as messages |
-| Late subscriber | Covered. This is what the bus is for |
-| Durability | None. The host sets it again after a reload |
-| Skew | Per-subscriber projection, when a schema is registered |
-| Trust | An untrusted fragment reads only the keys the host grants it |
+|                 |                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| Direction       | Host to fragments. Fragments read; they do not write                                             |
+| Kind            | State, last value per key                                                                        |
+| Timing          | The replay inside `subscribe` is synchronous. Later changes reach a fragment's realm as messages |
+| Late subscriber | Covered. This is what the bus is for                                                             |
+| Durability      | None. The host sets it again after a reload                                                      |
+| Skew            | Per-subscriber projection, when a schema is registered                                           |
+| Trust           | An untrusted fragment reads only the keys the host grants it                                     |
 
 **Use it when** the host is the source of truth. **Do not** use it for fragment-to-fragment
 traffic: fragments cannot publish to it, by design.
@@ -351,20 +351,20 @@ import { createEventBus } from '@braidlabs/data';
 const bus = createEventBus({ consumer: 'blotter' });
 const selection = bus.channel<{ orderId: string }>('selection'); // scope: 'page' by default
 
-selection.broadcast({ orderId: 'ORD-7' });          // blotter
+selection.broadcast({ orderId: 'ORD-7' }); // blotter
 selection.subscribe(({ orderId }) => load(orderId)); // billing: the current value now, then changes
 ```
 
-| | |
-| --- | --- |
-| Direction | Any fragment to every other. Any of them may publish |
-| Kind | State. Last value wins |
-| Timing | `broadcast` returns at once. Other realms hear it asynchronously, over a `BroadcastChannel` |
-| Late subscriber | Covered, asynchronously: it asks the realms already there, and `subscribe` fires when one answers |
-| Ordering | Per publisher. Two publishers that disagree raise a conflict you can read with `conflict()`; pick a policy with `onConflict` |
-| Durability | None by default. `persist: true` keeps it across reloads ([below](#across-reloads-and-deploys)) |
-| Skew | `bus.register(name, schema)` projects per subscriber, as the context bus does |
-| Trust | Trusted fragments only. An untrusted fragment is not reached |
+|                 |                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Direction       | Any fragment to every other. Any of them may publish                                                                         |
+| Kind            | State. Last value wins                                                                                                       |
+| Timing          | `broadcast` returns at once. Other realms hear it asynchronously, over a `BroadcastChannel`                                  |
+| Late subscriber | Covered, asynchronously: it asks the realms already there, and `subscribe` fires when one answers                            |
+| Ordering        | Per publisher. Two publishers that disagree raise a conflict you can read with `conflict()`; pick a policy with `onConflict` |
+| Durability      | None by default. `persist: true` keeps it across reloads ([below](#across-reloads-and-deploys))                              |
+| Skew            | `bus.register(name, schema)` projects per subscriber, as the context bus does                                                |
+| Trust           | Trusted fragments only. An untrusted fragment is not reached                                                                 |
 
 **Use it when** the state belongs to a fragment, or to nobody in particular. **Give the channel
 one writer** where you can: a channel two fragments both write to needs a conflict policy.
@@ -414,20 +414,20 @@ sequenceDiagram
 ```ts
 const orders = bus.channel('orders');
 
-await orders.emit('order.placed', { id: 'ORD-8' });      // blotter
+await orders.emit('order.placed', { id: 'ORD-8' }); // blotter
 orders.addEventListener('order.placed', ({ payload }) => refresh(payload.id)); // billing
 ```
 
-| | |
-| --- | --- |
-| Direction | Any fragment to every listener |
-| Kind | Event, at-most-once by default |
-| Timing | Asynchronous. Handlers in the emitting realm start at once; other realms hear it as a message |
-| Late subscriber | Not replayed, deliberately |
-| Ordering | Events from one emitter arrive in the order it sent them. There is no order across emitters |
-| Failure | A handler that throws is reported to `onEventError` and not retried. One bad handler does not stop the others |
-| Durability | None |
-| Trust | Trusted fragments only |
+|                 |                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------- |
+| Direction       | Any fragment to every listener                                                                                |
+| Kind            | Event, at-most-once by default                                                                                |
+| Timing          | Asynchronous. Handlers in the emitting realm start at once; other realms hear it as a message                 |
+| Late subscriber | Not replayed, deliberately                                                                                    |
+| Ordering        | Events from one emitter arrive in the order it sent them. There is no order across emitters                   |
+| Failure         | A handler that throws is reported to `onEventError` and not retried. One bad handler does not stop the others |
+| Durability      | None                                                                                                          |
+| Trust           | Trusted fragments only                                                                                        |
 
 **The test for state versus event:** would a fragment that mounts in five minutes need this? If
 yes, it is state — `broadcast` it. If it would be wrong to act on it then, it is an event.
@@ -531,13 +531,13 @@ What "at-least-once" means here, precisely:
 - **No driver, no durability.** Without a `driver` the emit is refused rather than quietly
   downgraded to at-most-once.
 
-| | |
-| --- | --- |
-| Kind | Event, at-least-once |
-| Timing | Asynchronous. `emit` resolves when the event is on disk, not when it has been handled |
-| Late subscriber | Covered: delivered when the consumer next mounts and drains |
-| Durability | IndexedDB, per origin and tenant partition. Survives reload, crash and a closed tab. Does not leave this browser |
-| Cost | One copy of the payload per consumer, and a handler you must write to be idempotent |
+|                 |                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Kind            | Event, at-least-once                                                                                             |
+| Timing          | Asynchronous. `emit` resolves when the event is on disk, not when it has been handled                            |
+| Late subscriber | Covered: delivered when the consumer next mounts and drains                                                      |
+| Durability      | IndexedDB, per origin and tenant partition. Survives reload, crash and a closed tab. Does not leave this browser |
+| Cost            | One copy of the payload per consumer, and a handler you must write to be idempotent                              |
 
 **Use it when** missing the event would be a defect. **Do not** use it for anything a late
 fragment should ignore, or as a way to reach a server: that is the [outbox](#to-the-server-even-offline-the-outbox).
@@ -594,17 +594,17 @@ try {
 }
 ```
 
-| | |
-| --- | --- |
-| Direction | One caller to one handler (or all of them, with `resolve: 'all'`), and back |
-| Kind | Request and response |
-| Timing | Asynchronous. A handler in another realm must answer within `intentTimeoutMs`, 30 seconds by default |
+|                 |                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Direction       | One caller to one handler (or all of them, with `resolve: 'all'`), and back                                                       |
+| Kind            | Request and response                                                                                                              |
+| Timing          | Asynchronous. A handler in another realm must answer within `intentTimeoutMs`, 30 seconds by default                              |
 | Late subscriber | Not covered. With no handler, the raise rejects; a raise in a bus's first 100 ms waits once for the others to announce themselves |
-| Delivery | At-most-once. An intent is not queued or retried; retry in the caller if it is safe to |
-| Skew | Decided where the intent is raised: a handler that cannot read the payload's version is not offered it |
-| Payload | Arguments, results and errors cross as structured clones. An error arrives as its message |
-| Reach | This page only. A handler in another tab is not a candidate |
-| Trust | Trusted fragments only, and they trust each other: a call to a handler is code running on the caller's behalf |
+| Delivery        | At-most-once. An intent is not queued or retried; retry in the caller if it is safe to                                            |
+| Skew            | Decided where the intent is raised: a handler that cannot read the payload's version is not offered it                            |
+| Payload         | Arguments, results and errors cross as structured clones. An error arrives as its message                                         |
+| Reach           | This page only. A handler in another tab is not a candidate                                                                       |
+| Trust           | Trusted fragments only, and they trust each other: a call to a handler is code running on the caller's behalf                     |
 
 **Intents or events?** If the sender does not care whether anyone acted, emit an event. If it
 needs to know that it was done, or needs a value back, raise an intent.
@@ -638,7 +638,7 @@ Two different problems hide under "tell the other tabs", and they want different
 // reach is chosen per channel: a selection is page state, a sign-out is origin-wide
 const session = bus.channel<{ signedIn: boolean }>('session', { scope: 'origin' });
 
-session.broadcast({ signedIn: false });                       // the tab where it happened
+session.broadcast({ signedIn: false }); // the tab where it happened
 session.subscribe(({ signedIn }) => signedIn || lockScreen()); // every tab, and any opened later
 ```
 
@@ -669,8 +669,11 @@ import { sharedInvalidator } from '@braidlabs/data';
 // crossContext is off by default: turn it on to reach other realms and tabs
 const invalidator = sharedInvalidator({ partition: 'tenant_acme', crossContext: true });
 
-invalidator.invalidate('orders');                         // where the write happened
-invalidator.subscribe(() => ['orders'], () => refetch());  // wherever the list is shown
+invalidator.invalidate('orders'); // where the write happened
+invalidator.subscribe(
+  () => ['orders'],
+  () => refetch(),
+); // wherever the list is shown
 ```
 
 No data crosses, only tag names. That makes it immune to skew — each tab fetches at its own
@@ -691,12 +694,12 @@ if (!result.acquired) {
 }
 ```
 
-| | Origin channel state | Invalidation tags | Durable events |
-| --- | --- | --- | --- |
-| Carries | the value | a tag name | the event |
-| A tab opened later | asks the others | fetches for itself | drains its consumer's queue |
-| Skew between tabs | projected, with a registered schema | none: no payload | projected, with a registered schema |
-| Typical use | sign-out, theme, feature switches | lists and caches | must-not-miss events |
+|                    | Origin channel state                | Invalidation tags  | Durable events                      |
+| ------------------ | ----------------------------------- | ------------------ | ----------------------------------- |
+| Carries            | the value                           | a tag name         | the event                           |
+| A tab opened later | asks the others                     | fetches for itself | drains its consumer's queue         |
+| Skew between tabs  | projected, with a registered schema | none: no payload   | projected, with a registered schema |
+| Typical use        | sign-out, theme, feature switches   | lists and caches   | must-not-miss events                |
 
 Not across tabs: slot props and events, the context bus, intents and FDC3 are all scoped to one
 page.
@@ -728,9 +731,9 @@ keep working.
 const driver = indexedDbRecordDriver({ database: 'portal', collections: [...EVENT_BUS_COLLECTIONS] });
 const bus = createEventBus({ consumer: 'blotter', driver });
 
-bus.register('selection', SelectionSchema);                 // a @braidlabs/skew schema: v1 → v2
+bus.register('selection', SelectionSchema); // a @braidlabs/skew schema: v1 → v2
 const selection = bus.channel('selection', { persist: true });
-selection.subscribe((value) => highlight(value));           // after a reload: what was selected before it
+selection.subscribe((value) => highlight(value)); // after a reload: what was selected before it
 ```
 
 - **Restoring is asynchronous.** `state()` is `undefined` until the stored value has been read;
@@ -744,14 +747,14 @@ selection.subscribe((value) => highlight(value));           // after a reload: w
 
 The durability ladder, from least to most:
 
-| Lives in | Survives | Mechanisms |
-| --- | --- | --- |
-| Memory of one realm | nothing | slot props, slot events, at-most-once events |
-| Memory of the page's realms | a fragment remounting | context bus, channel state, FDC3 channels |
-| Memory of every tab | one tab closing | origin-scoped channel state |
-| IndexedDB in this browser | reload, crash, deploy | `persist: true`, record store, durable events, outbox |
-| The gateway, per signed-in user | a different browser | workspace `serverStore` ([console](./packages/console.md)) |
-| Your server | everything | whatever the outbox delivered |
+| Lives in                        | Survives              | Mechanisms                                                 |
+| ------------------------------- | --------------------- | ---------------------------------------------------------- |
+| Memory of one realm             | nothing               | slot props, slot events, at-most-once events               |
+| Memory of the page's realms     | a fragment remounting | context bus, channel state, FDC3 channels                  |
+| Memory of every tab             | one tab closing       | origin-scoped channel state                                |
+| IndexedDB in this browser       | reload, crash, deploy | `persist: true`, record store, durable events, outbox      |
+| The gateway, per signed-in user | a different browser   | workspace `serverStore` ([console](./packages/console.md)) |
+| Your server                     | everything            | whatever the outbox delivered                              |
 
 ---
 
@@ -786,10 +789,7 @@ const entryId = await outbox.enqueue({ mutationId: 'payInvoice', input: { id: 'I
 await drainOutbox({
   outbox,
   owner: 'billing',
-  runnerFor: (mutationId) =>
-    mutationId === 'payInvoice'
-      ? (input, entry) => api.pay(input, { idempotencyKey: entry.id })
-      : undefined,
+  runnerFor: (mutationId) => (mutationId === 'payInvoice' ? (input, entry) => api.pay(input, { idempotencyKey: entry.id }) : undefined),
 });
 ```
 
@@ -843,13 +843,13 @@ session.context.subscribe('locale', setLocale); // granted keys only
 session.emit('impression', { slot: 'sidebar' }); // arrives on the host as braid:event
 ```
 
-| Mechanism | Trusted fragment | Untrusted fragment |
-| --- | --- | --- |
-| Slot props, slot events | yes | yes, over a pinned message port |
-| Context bus | reads every key | reads only granted keys; an ungranted key sends no change notice |
-| `@braidlabs/data` channels, durable events, intents | yes | no: a different origin, so a different `BroadcastChannel` and a different IndexedDB |
-| FDC3 | yes, if in the directory | no |
-| Shares storage with the page | yes | no |
+| Mechanism                                           | Trusted fragment         | Untrusted fragment                                                                  |
+| --------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
+| Slot props, slot events                             | yes                      | yes, over a pinned message port                                                     |
+| Context bus                                         | reads every key          | reads only granted keys; an ungranted key sends no change notice                    |
+| `@braidlabs/data` channels, durable events, intents | yes                      | no: a different origin, so a different `BroadcastChannel` and a different IndexedDB |
+| FDC3                                                | yes, if in the directory | no                                                                                  |
+| Shares storage with the page                        | yes                      | no                                                                                  |
 
 Two consequences worth designing for:
 
@@ -903,19 +903,19 @@ const resolution = await fdc3.raiseIntent('ViewChart', instrument);
 
 How it lines up with the rest of this guide:
 
-| FDC3 | Closest Braid mechanism | The difference that matters |
-| --- | --- | --- |
-| `broadcast` on a user or app channel | channel state | FDC3's `broadcast` is state *and* event at once: a channel keeps the last context of each type, and an app that joins a user channel later is handed it (on an app channel it asks, with `getCurrentContext`). Do not broadcast something with a verb |
-| `raiseIntent` | intents | Resolved against the app directory. With a `container`, an app that is not running is launched and the intent is held until its listener is added. Several candidates go to a resolver, which is the user's choice |
-| private channels | — | A channel only the two parties hold |
+| FDC3                                 | Closest Braid mechanism | The difference that matters                                                                                                                                                                                                                           |
+| ------------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `broadcast` on a user or app channel | channel state           | FDC3's `broadcast` is state _and_ event at once: a channel keeps the last context of each type, and an app that joins a user channel later is handed it (on an app channel it asks, with `getCurrentContext`). Do not broadcast something with a verb |
+| `raiseIntent`                        | intents                 | Resolved against the app directory. With a `container`, an app that is not running is launched and the intent is held until its listener is added. Several candidates go to a resolver, which is the user's choice                                    |
+| private channels                     | —                       | A channel only the two parties hold                                                                                                                                                                                                                   |
 
-| | |
-| --- | --- |
-| Reach | The page: one agent, its apps. Not other tabs |
-| Timing | Asynchronous. A request is answered within 10 seconds or fails with a timeout; an intent has 20 seconds to be handled |
+|                 |                                                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Reach           | The page: one agent, its apps. Not other tabs                                                                                             |
+| Timing          | Asynchronous. A request is answered within 10 seconds or fails with a timeout; an intent has 20 seconds to be handled                     |
 | Late subscriber | User channels: caught up with the last context on joining. App channels: `getCurrentContext()`. Intents: held for an app that is starting |
-| Durability | None in the agent. Saved layouts and remembered choices are the [console workspace](./packages/console.md) |
-| Trust | Trusted fragments with a directory record. Each can speak only as itself |
+| Durability      | None in the agent. Saved layouts and remembered choices are the [console workspace](./packages/console.md)                                |
+| Trust           | Trusted fragments with a directory record. Each can speak only as itself                                                                  |
 
 **Use FDC3 when** the apps are written to it, or must also run on another FDC3 desktop. **Use
 `@braidlabs/data` when** they are your own fragments: it separates state from events, offers
@@ -926,20 +926,20 @@ The two can run on one page.
 
 ## Every mechanism, side by side
 
-| Mechanism | Direction | Kind | Reach | Delivery | Late subscriber | Durable | Skew-aware | Untrusted |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Slot props | host → fragment | state | one slot | latest value | yes | no | no | yes |
-| Slot events | fragment → host | event | one slot | at-most-once | no | no | no | yes |
-| Composed DOM event | compat fragment → host | event | the slot and its ancestors | at-most-once, synchronous | no | no | no | no |
-| Context bus | host → fragments | state | page | latest value | yes | no | yes | granted keys |
-| Channel state | any ↔ any | state | page or origin | latest value | yes, async | with `persist` | yes | no |
-| Channel events | any → any | event | page or origin | at-most-once | no | no | yes | no |
-| Durable events | any → consumers | event | origin | at-least-once | yes | yes | yes | no |
-| Intents | caller ↔ handler | request | page | at-most-once, answered | no | no | yes | no |
-| Invalidation tags | any → any | event | page or origin | at-most-once | n/a | no | n/a | no |
-| Outbox | browser → server | request | server | at-least-once | n/a | yes | yes | no |
-| FDC3 channels | app ↔ app | state + event | page | latest value | yes | no | no | no |
-| FDC3 intents | app ↔ app | request | page | answered, or held | launches the app | no | no | no |
+| Mechanism          | Direction              | Kind          | Reach                      | Delivery                  | Late subscriber  | Durable        | Skew-aware | Untrusted    |
+| ------------------ | ---------------------- | ------------- | -------------------------- | ------------------------- | ---------------- | -------------- | ---------- | ------------ |
+| Slot props         | host → fragment        | state         | one slot                   | latest value              | yes              | no             | no         | yes          |
+| Slot events        | fragment → host        | event         | one slot                   | at-most-once              | no               | no             | no         | yes          |
+| Composed DOM event | compat fragment → host | event         | the slot and its ancestors | at-most-once, synchronous | no               | no             | no         | no           |
+| Context bus        | host → fragments       | state         | page                       | latest value              | yes              | no             | yes        | granted keys |
+| Channel state      | any ↔ any             | state         | page or origin             | latest value              | yes, async       | with `persist` | yes        | no           |
+| Channel events     | any → any              | event         | page or origin             | at-most-once              | no               | no             | yes        | no           |
+| Durable events     | any → consumers        | event         | origin                     | at-least-once             | yes              | yes            | yes        | no           |
+| Intents            | caller ↔ handler      | request       | page                       | at-most-once, answered    | no               | no             | yes        | no           |
+| Invalidation tags  | any → any              | event         | page or origin             | at-most-once              | n/a              | no             | n/a        | no           |
+| Outbox             | browser → server       | request       | server                     | at-least-once             | n/a              | yes            | yes        | no           |
+| FDC3 channels      | app ↔ app             | state + event | page                       | latest value              | yes              | no             | no         | no           |
+| FDC3 intents       | app ↔ app             | request       | page                       | answered, or held         | launches the app | no             | no         | no           |
 
 ## Things that apply to all of them
 
@@ -965,12 +965,12 @@ loop turn at the earliest. Concretely:
 The page is never "fully loaded": fragments mount on scroll, on click, after a lazy route. Every
 design has to say what a fragment that arrives late should see.
 
-| It should see | Mechanism |
-| --- | --- |
-| What is true now | props, context, channel state, FDC3 channels |
-| Nothing from before | channel events, slot events |
-| Everything it missed, in order | durable events |
-| Whatever it fetches itself | invalidation tags |
+| It should see                  | Mechanism                                    |
+| ------------------------------ | -------------------------------------------- |
+| What is true now               | props, context, channel state, FDC3 channels |
+| Nothing from before            | channel events, slot events                  |
+| Everything it missed, in order | durable events                               |
+| Whatever it fetches itself     | invalidation tags                            |
 
 ### Ordering
 
@@ -1025,29 +1025,29 @@ That is also a design rule: if you want to send a callback, you want an intent.
 
 Real features use two or three together. The combinations that come up most:
 
-| Feature | Combination |
-| --- | --- |
-| Select a row here, show its details there, and keep it after a reload | channel state with `persist: true` |
-| Place an order: update other panels now, and guarantee the inbox records it | a channel event for the panels, plus a durable event for the inbox |
-| Save a form offline, then tell other tabs the list changed | outbox to the server, then an invalidation tag when the drain succeeds |
-| A host-owned filter that fragments may also change | context for the value, and a slot event (or an intent) to ask the host to change it |
-| An untrusted widget reacts to the selection | the host subscribes to the channel and passes the value down as a prop |
-| A server push that every fragment should see | one connection in the host, re-published as channel state or an event |
-| FDC3 apps and your own fragments share a selection | the host bridges: listen on the FDC3 channel, broadcast on the data channel, and the reverse |
+| Feature                                                                     | Combination                                                                                  |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Select a row here, show its details there, and keep it after a reload       | channel state with `persist: true`                                                           |
+| Place an order: update other panels now, and guarantee the inbox records it | a channel event for the panels, plus a durable event for the inbox                           |
+| Save a form offline, then tell other tabs the list changed                  | outbox to the server, then an invalidation tag when the drain succeeds                       |
+| A host-owned filter that fragments may also change                          | context for the value, and a slot event (or an intent) to ask the host to change it          |
+| An untrusted widget reacts to the selection                                 | the host subscribes to the channel and passes the value down as a prop                       |
+| A server push that every fragment should see                                | one connection in the host, re-published as channel state or an event                        |
+| FDC3 apps and your own fragments share a selection                          | the host bridges: listen on the FDC3 channel, broadcast on the data channel, and the reverse |
 
 ## What to avoid
 
-| Tempting | Why it fails | Instead |
-| --- | --- | --- |
-| A shared singleton store imported by every fragment | each realm gets its own copy; nothing is shared | channel state |
-| `window.dispatchEvent` between fragments | each fragment has its own `window` | channel events |
-| `window.postMessage` with a hand-rolled protocol | every fragment hears every message; no versioning, no late join, origin checks left to you | channels or intents |
-| `localStorage` and the `storage` event as a bus | synchronous, strings only, no partitioning, fires only in *other* documents | origin-scoped channels |
-| Broadcasting a command as state ("open-dialog") | replayed to every late subscriber, forever | an event or an intent |
-| Emitting state as an event ("selection-changed") | a late fragment never learns the selection | channel state |
-| Durable delivery "to be safe" | a late fragment acts on stale events; every handler must be idempotent | at-most-once, unless a miss is a defect |
-| Passing a callback in props | cannot be cloned | a slot event up, or an intent |
-| One connection to the server per fragment | N sockets, N reconnect storms | one connection, fanned out on the page |
+| Tempting                                            | Why it fails                                                                               | Instead                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------- |
+| A shared singleton store imported by every fragment | each realm gets its own copy; nothing is shared                                            | channel state                           |
+| `window.dispatchEvent` between fragments            | each fragment has its own `window`                                                         | channel events                          |
+| `window.postMessage` with a hand-rolled protocol    | every fragment hears every message; no versioning, no late join, origin checks left to you | channels or intents                     |
+| `localStorage` and the `storage` event as a bus     | synchronous, strings only, no partitioning, fires only in _other_ documents                | origin-scoped channels                  |
+| Broadcasting a command as state ("open-dialog")     | replayed to every late subscriber, forever                                                 | an event or an intent                   |
+| Emitting state as an event ("selection-changed")    | a late fragment never learns the selection                                                 | channel state                           |
+| Durable delivery "to be safe"                       | a late fragment acts on stale events; every handler must be idempotent                     | at-most-once, unless a miss is a defect |
+| Passing a callback in props                         | cannot be cloned                                                                           | a slot event up, or an intent           |
+| One connection to the server per fragment           | N sockets, N reconnect storms                                                              | one connection, fanned out on the page  |
 
 ## A checklist before you ship a new message
 

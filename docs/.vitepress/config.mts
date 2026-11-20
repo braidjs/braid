@@ -70,7 +70,10 @@ export default defineConfig({
       {
         text: 'Guides',
         items: [
-          { text: 'Events and data: which mechanism', link: '/events-and-data' },
+          {
+            text: 'Events and data: which mechanism',
+            link: '/events-and-data',
+          },
         ],
       },
       {

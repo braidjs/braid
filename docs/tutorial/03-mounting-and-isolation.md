@@ -60,11 +60,7 @@ import { BraidFragment } from '@braidlabs/angular';
 
     <main style="padding: 1.5rem;">
       <!-- Mount the React Billing Microfrontend -->
-      <braid-fragment
-        name="billing"
-        (ready)="onFragmentReady($event)"
-        (failed)="onFragmentFailed($event)"
-      />
+      <braid-fragment name="billing" (ready)="onFragmentReady($event)" (failed)="onFragmentFailed($event)" />
     </main>
   `,
 })
@@ -86,19 +82,23 @@ export class AppComponent {
 Open your browser to `http://localhost:3000/billing` and open Chrome DevTools:
 
 ### 1. The Declarative Shadow DOM
+
 Look at the Elements panel under `<fragment-slot name="billing">`:
+
 - Inside is `#shadow-root (open)`.
 - The React application's DOM is mounted inside this Shadow Root.
 - Any CSS defined inside the React app cannot leak out and affect the Angular shell's headers or fonts.
 
 ### 2. The Hidden Execution Realm
+
 Look at the bottom of `<body>`:
+
 - You will see a hidden `<iframe>` with `display: none`.
 - The React application's JavaScript is executing entirely inside this iframe realm.
 - Open the DevTools Console:
   ```js
   // In the host window:
-  window.React // undefined!
+  window.React; // undefined!
   ```
   The host window global scope remains completely pure and unpolluted.
 

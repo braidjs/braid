@@ -19,12 +19,18 @@ defineProps<{
 </script>
 
 <template>
-  <section class="mfe" :class="[`mfe--${kind ?? 'trusted'}`, { 'is-absent': absent }]" :style="flex ? { flex } : undefined">
+  <section
+    class="mfe"
+    :class="[`mfe--${kind ?? 'trusted'}`, { 'is-absent': absent }]"
+    :style="flex ? { flex } : undefined"
+  >
     <header class="mfe-head">
       <strong>{{ name }}</strong>
       <span v-if="tech" class="mfe-tag">{{ tech }}</span>
       <span v-if="team" class="mfe-tag mfe-tag--team">{{ team }}</span>
-      <span v-if="kind === 'untrusted'" class="mfe-tag mfe-tag--warn">untrusted · cross-origin</span>
+      <span v-if="kind === 'untrusted'" class="mfe-tag mfe-tag--warn"
+        >untrusted · cross-origin</span
+      >
       <span v-if="absent" class="mfe-tag mfe-tag--warn">not mounted</span>
     </header>
     <div class="mfe-body"><slot /></div>

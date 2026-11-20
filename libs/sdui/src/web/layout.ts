@@ -1,87 +1,148 @@
 /**
  * What a browser pays to lay a text out, in characters of plain Latin.
  *
- * Length is a fair price for most text, but not all: each change of direction (Latin to Hebrew
- * and back) or of script starts a run the browser shapes on its own, and a run costs it as much
- * as hundreds of plain characters. Thai, Lao, Khmer and Myanmar are broken into lines by
- * dictionary, character by character. Measured in Chromium, 20,000 characters alternating Latin
- * and Hebrew take ~450 ms to lay out, where 380,000 of plain Latin take ~25 ms. An agent choosing
- * its text can choose the expensive kind, so a draw's text budget is charged this, not the length.
+ * Length is a fair price for Latin text, but not for all text: a browser shapes each run of one
+ * script and direction on its own, and finds a font for it — a change of script can be a change
+ * of font, and a run costs it as much as hundreds of plain characters. Some scripts are broken
+ * into lines by dictionary. An agent choosing its text can choose the expensive kind. Measured in
+ * Chromium, 20,000 characters alternating Latin and Hebrew took ~450 ms to lay out, and 20,000
+ * rotating through seventeen scripts ~300 ms, where 380,000 of plain Latin took ~25 ms.
  *
- * Ordinary text in any one script — a Hebrew paragraph, Thai a line long, English with an emoji —
- * costs about its length.
+ * So a text costs:
+ * - 1 for each character of Latin, Greek or Cyrillic, punctuation and symbols;
+ * - {@link COMPLEX_COST} for each character of the scripts measured to cost more but not much
+ *   more — Hebrew, Arabic, Devanagari, Chinese, Japanese, Korean, emoji, combining marks;
+ * - {@link UNMEASURED_COST} for each character of a script broken into lines by dictionary (Thai,
+ *   Lao, Khmer, Myanmar), and of every script not listed here, which is priced as if it were;
+ * - {@link RUN_COST} for each change from one script (or one Unicode block, for the unlisted ones)
+ *   to another, and for each bidi control character.
+ *
+ * Ordinary text in one language costs its length, or a few times it.
  */
 
-/** Cost of one change of direction or script, or one bidi control character. */
+/** Cost of one change of script or block, or one bidi control. */
 export const RUN_COST = 1_000;
-/** Cost of one character of a script broken into lines by dictionary. */
-export const DICTIONARY_COST = 50;
+/** Cost of a character of the scripts measured to cost a few times Latin. */
+export const COMPLEX_COST = 8;
+/** Cost of a character of a script broken into lines by dictionary, or not measured. */
+export const UNMEASURED_COST = 50;
 
-const NEUTRAL = 0;
+/** A character's group — a change of group is a run — and what it costs. */
+interface Kind {
+  readonly group: number;
+  readonly cost: number;
+}
+
+const NEUTRAL = 0; // goes with the run it is in
+const CONTROL = -1; // a run of its own
 const LATIN = 1;
-const RTL = 2;
-const DICTIONARY = 3;
-const OTHER = 4;
-const CONTROL = 5;
+const GREEK = 2;
+const CYRILLIC = 3;
+const HEBREW = 4;
+const ARABIC = 5;
+const DEVANAGARI = 6;
+const HAN = 7; // with kana and bopomofo: one font covers them
+const HANGUL = 8;
+const EMOJI = 9;
 
-function classOf(code: number): number {
+const kind = (group: number, cost: number): Kind => ({ group, cost });
+const PLAIN = kind(NEUTRAL, 1);
+const MARK = kind(NEUTRAL, COMPLEX_COST);
+const RUN = kind(CONTROL, 1);
+
+const within = (code: number, from: number, to: number): boolean =>
+  code >= from && code <= to;
+
+function kindOf(code: number): Kind {
   if (code < 0x80)
-    return (code >= 0x30 && code <= 0x39) ||
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a)
-      ? LATIN
-      : NEUTRAL;
-  if (code < 0xc0) return NEUTRAL; // Latin-1 punctuation and symbols
-  if (code <= 0x02ff) return LATIN;
-  if (code <= 0x036f) return NEUTRAL; // combining marks go with their base
-  if (code === 0x061c) return CONTROL;
-  if (code >= 0x0590 && code <= 0x08ff) return RTL;
+    return within(code, 0x30, 0x39) ||
+      within(code, 0x41, 0x5a) ||
+      within(code, 0x61, 0x7a)
+      ? kind(LATIN, 1)
+      : PLAIN;
+  if (code < 0xc0) return PLAIN;
+  if (code <= 0x02ff || within(code, 0x1e00, 0x1eff)) return kind(LATIN, 1);
+  if (code <= 0x036f) return MARK; // combining marks go with their base
+  if (code <= 0x03ff || within(code, 0x1f00, 0x1fff)) return kind(GREEK, 1);
+  if (code <= 0x052f) return kind(CYRILLIC, 1);
+  if (within(code, 0x0590, 0x05ff) || within(code, 0xfb1d, 0xfb4f))
+    return kind(HEBREW, COMPLEX_COST);
+  if (code === 0x061c) return RUN;
   if (
-    (code >= 0x0e00 && code <= 0x0eff) || // Thai, Lao
-    (code >= 0x1000 && code <= 0x109f) || // Myanmar
-    (code >= 0x1780 && code <= 0x17ff) || // Khmer
-    (code >= 0x1a20 && code <= 0x1aaf) || // Tai Tham
-    (code >= 0xa9e0 && code <= 0xa9ff) ||
-    (code >= 0xaa60 && code <= 0xaa7f)
+    within(code, 0x0600, 0x06ff) ||
+    within(code, 0x0750, 0x077f) ||
+    within(code, 0x08a0, 0x08ff) ||
+    within(code, 0xfb50, 0xfdff) ||
+    within(code, 0xfe70, 0xfefe)
   )
-    return DICTIONARY;
-  if (code >= 0x1e00 && code <= 0x1eff) return LATIN;
+    return kind(ARABIC, COMPLEX_COST);
+  if (within(code, 0x0900, 0x097f)) return kind(DEVANAGARI, COMPLEX_COST);
   if (
     code === 0x200e ||
     code === 0x200f ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069)
+    within(code, 0x202a, 0x202e) ||
+    within(code, 0x2066, 0x2069)
   )
-    return CONTROL;
-  if (code >= 0x2000 && code <= 0x2bff) return NEUTRAL; // punctuation, symbols, arrows
-  if (code >= 0x3000 && code <= 0x303f) return NEUTRAL; // CJK punctuation
-  if (code >= 0xdc00 && code <= 0xdfff) return NEUTRAL; // second half of a pair
-  if (code >= 0xfb1d && code <= 0xfdff) return RTL;
-  if (code >= 0xfe00 && code <= 0xfe0f) return NEUTRAL; // variation selectors
-  if (code >= 0xfe70 && code <= 0xfeff) return code === 0xfeff ? NEUTRAL : RTL;
-  // first halves of pairs for the supplementary right-to-left blocks
-  if (code === 0xd802 || code === 0xd803 || code === 0xd83a || code === 0xd83b)
-    return RTL;
-  return OTHER;
+    return RUN;
+  if (code === 0x200d || within(code, 0xfe00, 0xfe0f)) return MARK; // joiners, selectors
+  if (within(code, 0x20d0, 0x20ff)) return MARK;
+  if (
+    within(code, 0x2600, 0x27bf) ||
+    within(code, 0x1f000, 0x1faff) ||
+    within(code, 0xe0020, 0xe007f)
+  )
+    return kind(EMOJI, COMPLEX_COST);
+  if (within(code, 0x2000, 0x2bff) || within(code, 0x3000, 0x303f))
+    return PLAIN; // punctuation, symbols, arrows; CJK punctuation
+  if (
+    within(code, 0x2e80, 0x2fff) ||
+    within(code, 0x3040, 0x31ff) ||
+    within(code, 0x3400, 0x4dbf) ||
+    within(code, 0x4e00, 0x9fff) ||
+    within(code, 0xf900, 0xfaff) ||
+    within(code, 0xff00, 0xffef) ||
+    within(code, 0x20000, 0x3ffff)
+  )
+    return kind(HAN, COMPLEX_COST);
+  if (
+    within(code, 0xac00, 0xd7af) ||
+    within(code, 0x1100, 0x11ff) ||
+    within(code, 0x3130, 0x318f)
+  )
+    return kind(HANGUL, COMPLEX_COST);
+  // Everything else — the dictionary scripts, and every script not measured — by its block.
+  return kind(1_000 + (code >> 7), UNMEASURED_COST);
 }
 
-/** Characters outside plain ASCII: the only text whose cost is not its length. */
-const BEYOND_ASCII = /[^\u0000-\u007f]/;
-
 export function layoutCost(text: string): number {
-  if (!BEYOND_ASCII.test(text)) return text.length;
-  let cost = text.length;
+  let ascii = true;
+  for (let index = 0; index < text.length; index++)
+    if (text.charCodeAt(index) > 0x7f) {
+      ascii = false;
+      break;
+    }
+  if (ascii) return text.length;
+  let cost = 0;
   let last = NEUTRAL;
   for (let index = 0; index < text.length; index++) {
-    const kind = classOf(text.charCodeAt(index));
-    if (kind === NEUTRAL) continue;
-    if (kind === CONTROL) {
+    let code = text.charCodeAt(index);
+    // a pair is one character
+    if (within(code, 0xd800, 0xdbff) && index + 1 < text.length) {
+      const low = text.charCodeAt(index + 1);
+      if (within(low, 0xdc00, 0xdfff)) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+        index++;
+      }
+    }
+    const { group, cost: each } = kindOf(code);
+    cost += each;
+    if (group === NEUTRAL) continue;
+    if (group === CONTROL) {
       cost += RUN_COST;
       continue;
     }
-    if (kind === DICTIONARY) cost += DICTIONARY_COST;
-    if (last !== NEUTRAL && kind !== last) cost += RUN_COST;
-    last = kind;
+    if (last !== NEUTRAL && group !== last) cost += RUN_COST;
+    last = group;
   }
   return cost;
 }

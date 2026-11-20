@@ -18,12 +18,12 @@ npm install @braidlabs/skew
 
 In composed and distributed frontend systems, version skew occurs across four critical boundaries:
 
-| Boundary | What crosses it | Typical failure | How `@braidlabs/skew` solves it |
-| :--- | :--- | :--- | :--- |
-| **Past ↔ Present** | Persisted draft or local cache | `undefined` read errors / crashes | Versioned schema automatically migrates past state |
-| **Client ↔ API** | Queued mutation outbox | Silent corruption or 400 Bad Request | Envelopes with explicit schema version headers |
-| **Host ↔ Fragment** | Props and Context Bus events | Mismatched object shapes | Bidirectional migration bridges |
-| **Client ↔ Origin** | Stale lazy chunks | `ChunkLoadError` white screen | Stamped build manifests and negotiation |
+| Boundary             | What crosses it                | Typical failure                      | How `@braidlabs/skew` solves it                    |
+| :------------------- | :----------------------------- | :----------------------------------- | :------------------------------------------------- |
+| **Past ↔ Present**  | Persisted draft or local cache | `undefined` read errors / crashes    | Versioned schema automatically migrates past state |
+| **Client ↔ API**    | Queued mutation outbox         | Silent corruption or 400 Bad Request | Envelopes with explicit schema version headers     |
+| **Host ↔ Fragment** | Props and Context Bus events   | Mismatched object shapes             | Bidirectional migration bridges                    |
+| **Client ↔ Origin** | Stale lazy chunks              | `ChunkLoadError` white screen        | Stamped build manifests and negotiation            |
 
 ---
 
