@@ -2,6 +2,7 @@ import { isRecord, outgrows } from '../lib/internal.js';
 import { readPointer } from '../a2ui/surfaces.js';
 import {
   type A2uiRegex,
+  MatchBudget,
   RegexDialectError,
   a2uiRegexMatches,
   compileA2uiRegex,
@@ -80,6 +81,8 @@ export function checkUrl(
   policy: UrlPolicy = {},
 ): UrlCheck {
   if (typeof raw !== 'string') return { ok: false, reason: 'not a URL' };
+  // What the URL parser strips: C0 controls and spaces at the ends — and nothing else.
+  // eslint-disable-next-line no-control-regex
   const stripped = raw.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
   if (stripped === '') return { ok: false, reason: 'not a URL' };
   // Whitespace the URL parser keeps but a person or a careless consumer would not — U+00A0,
@@ -97,9 +100,13 @@ export function checkUrl(
       : { ok: false, reason: 'a data URL that is not an image' };
   let parsed: URL;
   const PROBE = 'https://relative.a2ui.invalid';
+  // A URL that names a scheme is absolute, whatever the page's base: against an https: base,
+  // "https:attacker.example" would parse as a path, and on an http: page it is a host. The parser
+  // drops tabs and newlines anywhere, so they are dropped before looking.
+  const named = /^[a-z][a-z0-9+.-]*:/i.test(stripped.replace(/[\t\n\r]/g, ''));
   try {
     // The WHATWG parser is what a browser will use, so it decides: "java\tscript:" is javascript:.
-    parsed = new URL(raw, `${PROBE}/`);
+    parsed = named ? new URL(stripped) : new URL(stripped, `${PROBE}/`);
   } catch {
     return { ok: false, reason: 'not a URL' };
   }
@@ -167,6 +174,9 @@ export interface EvaluatorOptions {
   readonly report: (error: ReportedError) => void;
 }
 
+/** Regex steps one draw of a surface may take across all its matches: well under a frame's worth of work per check. */
+export const DRAW_MATCH_STEPS = 2_000_000;
+
 export const EVALUATION_LIMITS = Object.freeze({
   /** Function calls in one evaluation, templates included. */
   calls: 256,
@@ -195,6 +205,8 @@ export interface Evaluator {
     rules: unknown,
     scope?: EvaluationScope,
   ): { readonly valid: boolean; readonly messages: readonly string[] };
+  /** Starts a draw: regex matching shares one step budget until the next. */
+  beginDraw(): void;
   /** A function call made by a user gesture: `openUrl` runs only here. */
   activate(call: unknown, scope?: EvaluationScope): unknown;
 }
@@ -227,6 +239,8 @@ export function toText(value: unknown): string {
 export function createEvaluator(options: EvaluatorOptions): Evaluator {
   const locale = options.locale ?? 'en-US';
   const regexes = new Map<string, A2uiRegex | RegexDialectError>();
+  /** Shared by every match until the next `beginDraw`: see {@link MatchBudget}. */
+  let drawBudget = new MatchBudget(DRAW_MATCH_STEPS);
 
   const fail = (message: string): never => {
     throw new ExpressionError(message);
@@ -372,7 +386,9 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         }
         if (compiled instanceof RegexDialectError)
           return fail(`regex: ${compiled.message}`);
-        return valid(a2uiRegexMatches(compiled, toText(args['value'])));
+        return valid(
+          a2uiRegexMatches(compiled, toText(args['value']), drawBudget),
+        );
       }
       case 'length': {
         const length = [...toText(args['value'])].length;
@@ -664,6 +680,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       if (
         !(
           error instanceof ExpressionError ||
+          error instanceof RegexDialectError ||
           error instanceof RangeError ||
           error instanceof TypeError
         )
@@ -689,6 +706,9 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       guarded(null as unknown, () =>
         evaluate(raw, scope, new Budget(), 0, true),
       ),
+    beginDraw() {
+      drawBudget = new MatchBudget(DRAW_MATCH_STEPS);
+    },
     checks(rules, scope = ROOT_SCOPE) {
       if (!Array.isArray(rules)) return { valid: true, messages: [] };
       const messages: string[] = [];

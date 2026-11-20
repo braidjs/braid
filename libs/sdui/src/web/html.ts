@@ -11,7 +11,7 @@ import {
   type UrlPolicy,
   createEvaluator,
 } from './evaluate.js';
-import { type ComponentRegistry, renderSurface } from './render.js';
+import { type ComponentRegistry, drawSafely, renderSurface } from './render.js';
 import { toHtml } from './view.js';
 
 /**
@@ -84,17 +84,22 @@ export function renderA2uiHtml(
       functions: options.functions,
       report: (error) => errors.push(error),
     });
-    return renderSurface(surface, {
-      registry: options.registry,
-      catalog: options.catalog,
-      evaluator,
-      urlPolicy: options.urlPolicy,
-      dispatch: () => undefined,
-      write: () => undefined,
-      report: (error) => errors.push(error),
-      local: new Map(),
-      redraw: () => undefined,
-    });
+    return drawSafely(
+      id,
+      (error) => errors.push(error),
+      () =>
+        renderSurface(surface, {
+          registry: options.registry,
+          catalog: options.catalog,
+          evaluator,
+          urlPolicy: options.urlPolicy,
+          dispatch: () => undefined,
+          write: () => undefined,
+          report: (error) => errors.push(error),
+          local: new Map(),
+          redraw: () => undefined,
+        }),
+    );
   });
   const attrs = [
     'data-prerendered',

@@ -427,3 +427,124 @@ describe('tabs from the keyboard', () => {
     element.remove();
   });
 });
+
+describe('what the second verification found', () => {
+  it('an exhausted regex budget is an EXPRESSION_ERROR, and the rest of the surface still draws', () => {
+    const value = 'a'.repeat(4_096);
+    const start = performance.now();
+    const { html, errors } = renderA2uiHtml([
+      create('s'),
+      update('s', [
+        { id: 'root', component: 'Column', children: ['f', 'ok'] },
+        {
+          id: 'f',
+          component: 'TextField',
+          label: 'x',
+          value,
+          '@checks': [
+            {
+              condition: {
+                '@call': 'regex',
+                args: { value, pattern: '(a?){999}b' },
+              },
+              message: 'no',
+            },
+          ],
+        },
+        { id: 'ok', component: 'Text', text: 'still here' },
+      ]),
+    ]);
+    expect(performance.now() - start).toBeLessThan(3_000);
+    expect(markup(html)).toContain('still here');
+    expect(
+      errors.some(
+        (e) => e.code === 'EXPRESSION_ERROR' && /budget/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('many matches share one budget per draw, so they cannot add up to a frozen page', () => {
+    const call = {
+      '@call': 'regex',
+      args: { value: 'a'.repeat(400), pattern: '(a?){400}b' },
+    };
+    const start = performance.now();
+    renderA2uiHtml([
+      create('s'),
+      update('s', [
+        {
+          id: 'root',
+          component: 'TextField',
+          label: 'x',
+          value: 'v',
+          '@checks': [
+            {
+              condition: {
+                '@call': 'and',
+                args: { values: Array(250).fill(call) },
+              },
+            },
+          ],
+        },
+      ]),
+    ]);
+    expect(performance.now() - start).toBeLessThan(3_000);
+  });
+
+  it('a URL that names its scheme is absolute, whatever the page is served over', () => {
+    expect(checkUrl('https:attacker.example/i?d=hunter2', 'image').ok).toBe(
+      false,
+    );
+    expect(checkUrl('https:attacker.example/i?d=hunter2', 'media').ok).toBe(
+      false,
+    );
+    expect(
+      checkUrl('https:attacker.example/', 'link', { hosts: ['example.com'] })
+        .ok,
+    ).toBe(false);
+    expect(
+      checkUrl('https:images.example/a.png', 'image', {
+        mediaHosts: ['images.example'],
+      }),
+    ).toEqual({ ok: true, url: 'https://images.example/a.png' });
+  });
+
+  it('a list naming one component 120,000 times draws a bounded number and does not overflow', () => {
+    const start = performance.now();
+    const { html, errors } = renderA2uiHtml([
+      create('s'),
+      update('s', [
+        { id: 'root', component: 'Row', children: Array(120_000).fill('t') },
+        { id: 't', component: 'Text', text: 'x' },
+      ]),
+    ]);
+    expect(performance.now() - start).toBeLessThan(3_000);
+    expect(
+      errors.some((e) => /more than 10000 components/.test(e.message)),
+    ).toBe(true);
+    expect(markup(html).length).toBeLessThan(5_000_000);
+  });
+
+  it('many drawings of one long text are bounded by what they cost, not only by their count', () => {
+    const long = 'word '.repeat(4_000);
+    const start = performance.now();
+    const { errors } = renderA2uiHtml([
+      create('s', { dataModel: { items: Array(100).fill(0) } }),
+      update('s', [
+        {
+          id: 'root',
+          component: 'Column',
+          children: { path: '/items', componentId: 'row' },
+        },
+        {
+          id: 'row',
+          component: 'Column',
+          children: { path: '/items', componentId: 'cell' },
+        },
+        { id: 'cell', component: 'Text', text: long },
+      ]),
+    ]);
+    expect(performance.now() - start).toBeLessThan(3_000);
+    expect(errors.some((e) => /characters of text/.test(e.message))).toBe(true);
+  });
+});

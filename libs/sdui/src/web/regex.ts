@@ -617,13 +617,19 @@ function inSet(set: CharSet, code: number): boolean {
   return false;
 }
 
-class Budget {
+/**
+ * Steps matching may take. One per match by default; a renderer passes one shared by every match
+ * in a draw, so that many cheap-looking checks cannot add up to a frozen page.
+ */
+export class MatchBudget {
   steps = 0;
+  constructor(readonly limit: number = MATCH_STEP_BUDGET) {}
   spend(): void {
-    if (++this.steps > MATCH_STEP_BUDGET)
+    if (++this.steps > this.limit)
       throw new RegexDialectError('matching took more steps than its budget');
   }
 }
+type Budget = MatchBudget;
 
 /** Whether `program` matches `codes` starting at `start`; `anchored` stops it searching later starts. */
 function run(
@@ -711,7 +717,7 @@ function run(
 /** A compiled pattern in the A2UI dialect: tested without backtracking. */
 export interface A2uiRegex {
   readonly source: string;
-  test(value: string): boolean;
+  test(value: string, budget?: MatchBudget): boolean;
 }
 
 /**
@@ -738,20 +744,24 @@ export function compileA2uiRegex(pattern: string): A2uiRegex {
   const program = compile(tree);
   return {
     source: pattern,
-    test: (value) =>
+    test: (value, budget = new MatchBudget()) =>
       run(
         program,
         Array.from(value, (c) => c.codePointAt(0) as number),
         0,
         false,
-        new Budget(),
+        budget,
         new Map(),
       ),
   };
 }
 
 /** `regex`'s search: a value longer than 4,096 code points does not match, and is not an error. */
-export function a2uiRegexMatches(regex: A2uiRegex, value: string): boolean {
+export function a2uiRegexMatches(
+  regex: A2uiRegex,
+  value: string,
+  budget?: MatchBudget,
+): boolean {
   if ([...value].length > REGEX_LIMITS.valueCodePoints) return false;
-  return regex.test(value);
+  return regex.test(value, budget);
 }

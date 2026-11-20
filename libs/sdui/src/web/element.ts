@@ -18,7 +18,7 @@ import {
   checkUrl,
   createEvaluator,
 } from './evaluate.js';
-import { type ComponentRegistry, renderSurface } from './render.js';
+import { type ComponentRegistry, drawSafely, renderSurface } from './render.js';
 
 /**
  * `<a2ui-surface>` — an A2UI renderer that draws into the host's own page.
@@ -273,24 +273,29 @@ export function defineA2uiSurface(
         const surface = this.surfaces.get(id)!;
         let local = this.#local.get(id);
         if (!local) this.#local.set(id, (local = new Map()));
-        return renderSurface(surface, {
-          registry: this.registry,
-          catalog: options.catalog,
-          evaluator: this.#evaluatorFor(id),
-          urlPolicy: options.urlPolicy,
-          dispatch: (message) => this.#send(message),
-          write: (pointer, value) => {
-            try {
-              this.surfaces.write(id, pointer, value);
-            } catch (error) {
-              if (error instanceof A2uiError) this.#problem(id, error);
-            }
-            this.#schedule();
-          },
-          report: (error) => this.#problem(id, error),
-          local,
-          redraw: () => this.#schedule(),
-        });
+        return drawSafely(
+          id,
+          (error) => this.#problem(id, error),
+          () =>
+            renderSurface(surface, {
+              registry: this.registry,
+              catalog: options.catalog,
+              evaluator: this.#evaluatorFor(id),
+              urlPolicy: options.urlPolicy,
+              dispatch: (message) => this.#send(message),
+              write: (pointer, value) => {
+                try {
+                  this.surfaces.write(id, pointer, value);
+                } catch (error) {
+                  if (error instanceof A2uiError) this.#problem(id, error);
+                }
+                this.#schedule();
+              },
+              report: (error) => this.#problem(id, error),
+              local,
+              redraw: () => this.#schedule(),
+            }),
+        );
       });
       // Each surface's container is matched by its key, prerendered or not.
       patchChildren(this, views);
@@ -380,9 +385,14 @@ export function defineA2uiSurface(
             // An event is its data lines, joined; a blank line ends it.
             for (const line of [...lines, ...(done ? [''] : [])]) {
               const bare = line.replace(/\r$/, '');
-              if (bare.startsWith('data:'))
+              if (bare.startsWith('data:')) {
                 event.push(bare.slice(5).replace(/^ /, ''));
-              else if (bare === '' && event.length > 0) {
+                if (
+                  event.reduce((n, part) => n + part.length + 1, 0) >
+                  A2UI_LIMITS.messageChars
+                )
+                  return tooLong();
+              } else if (bare === '' && event.length > 0) {
                 const data = event.join('\n');
                 event = [];
                 if (data.length > A2UI_LIMITS.messageChars) return tooLong();

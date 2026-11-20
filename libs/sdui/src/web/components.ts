@@ -242,7 +242,7 @@ const flex =
         ]),
         'data-align': oneOf(c, 'align', ['start', 'center', 'end', 'stretch']),
       },
-      ...c.children('children'),
+      c.children('children'),
     );
 
 const List: ComponentRenderer = (c) =>
@@ -255,7 +255,7 @@ const List: ComponentRenderer = (c) =>
         oneOf(c, 'direction', ['vertical', 'horizontal']) ?? 'vertical',
       'data-align': oneOf(c, 'align', ['start', 'center', 'end', 'stretch']),
     },
-    ...c
+    c
       .children('children')
       .map((child) =>
         typeof child === 'string'
@@ -302,7 +302,7 @@ const Tabs: ComponentRenderer = (c) => {
     h(
       'div',
       { role: 'tablist', class: 'a2ui-tablist' },
-      ...tabs.map((tab, index) => ({
+      tabs.map((tab, index) => ({
         ...h(
           'button',
           {
@@ -318,7 +318,7 @@ const Tabs: ComponentRenderer = (c) => {
         on: { click: () => select(index), keydown: keydown(index) },
       })),
     ),
-    ...tabs.map((tab, index) =>
+    tabs.map((tab, index) =>
       h(
         'div',
         {
@@ -550,7 +550,7 @@ const ChoicePicker: ComponentRenderer = (c) => {
           },
         }
       : null,
-    ...shown.map((option) => {
+    shown.map((option) => {
       const value = String(option['value'] ?? '');
       const control: ViewElement = {
         ...h('input', {

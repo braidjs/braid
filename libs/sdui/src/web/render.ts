@@ -132,6 +132,8 @@ const MAX_DEPTH = 64;
  * is a placeholder and the agent is told.
  */
 export const MAX_DRAWS = 10_000;
+/** Characters of Markdown text drawn per surface per draw. */
+export const MAX_TEXT = 1_000_000;
 
 /** Attribute names a host element is never given from content. */
 const DENIED_ATTRIBUTES = new Set([
@@ -186,6 +188,10 @@ export function renderSurface(
   const catalog = options.catalog ?? a2uiBasicCatalog;
   const registry = options.registry ?? {};
   let drawn = 0;
+  // Characters of text drawn this time: a few shared components can stand for many drawings of
+  // one long string, and the draw count alone does not see what each drawing costs.
+  let text = MAX_TEXT;
+  options.evaluator.beginDraw();
   const draw = (
     id: unknown,
     scope: EvaluationScope,
@@ -460,7 +466,10 @@ export function renderSurface(
       children(name) {
         const value = raw(name);
         if (Array.isArray(value))
+          // No more than could be drawn: a list naming one component 100,000 times is 100,000
+          // placeholders otherwise.
           return value
+            .slice(0, MAX_DRAWS + 1)
             .map((id) => draw(id, scope, String(id), key, ancestry))
             .filter((v): v is View => v !== null);
         if (
@@ -521,7 +530,16 @@ export function renderSurface(
           use,
           options.urlPolicy,
         ),
-      markdown: (text) => markdown(text),
+      markdown: (source) => {
+        text -= source.length;
+        if (text >= 0) return markdown(source);
+        if (text + source.length >= 0)
+          options.report({
+            code: 'VALIDATION_FAILED',
+            message: `the surface draws more than ${MAX_TEXT} characters of text; the rest are not drawn`,
+          });
+        return { inline: true, views: [] };
+      },
       local<T>(name: string, initial: T): [T, (value: T) => void] {
         const slot = `${key}::${name}`;
         const current = (
@@ -597,4 +615,29 @@ function actionProps(catalog: SduiCatalog, type: string): readonly string[] {
     ? catalog.components[type]
     : undefined;
   return definition ? (definition.a2ui?.actions ?? []) : ['action'];
+}
+
+/**
+ * Draws one surface, and if drawing it fails — a host component that throws, a bug — reports it
+ * and draws an empty container instead: one surface must not take the others on the page down.
+ */
+export function drawSafely(
+  surfaceId: string,
+  report: (error: { readonly code: string; readonly message: string }) => void,
+  draw: () => ViewElement,
+): ViewElement {
+  try {
+    return draw();
+  } catch (error) {
+    report({
+      code: 'RENDER_ERROR',
+      message: `the surface could not be drawn: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return h('div', {
+      class: 'a2ui-surface',
+      'data-a2ui-surface': surfaceId,
+      'data-a2ui-failed': '',
+      key: `surface:${surfaceId}`,
+    });
+  }
 }

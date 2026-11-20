@@ -7,6 +7,6 @@ Copied unmodified from [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui)
 - `catalogs/basic/catalog.json` — `catalogs/basic/v1/catalog.json`: the basic catalog.
 - `examples/` — `catalogs/basic/v1/examples/`: the basic catalog's gallery.
 
-They are test data. `@braidlabs/sdui` is checked against them: every example must round-trip through
+They are test data. `@braidlabs/sdui` is checked against them: every example must round-trip (components nothing references are reported, not kept) through
 the SDUI model, and everything this package emits must validate against these schemas. To update,
 replace the files from a newer commit and change the commit above.
