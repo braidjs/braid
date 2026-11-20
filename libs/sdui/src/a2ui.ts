@@ -10,3 +10,5 @@ export * from './a2ui/messages.js';
 export * from './a2ui/surfaces.js';
 export * from './a2ui/basic.js';
 export * from './a2ui/codec.js';
+export * from './a2ui/capabilities.js';
+export * from './a2ui/projector.js';
