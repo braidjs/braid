@@ -50,8 +50,10 @@ export interface A2uiSurfaceOptions {
 }
 
 export interface A2uiSurfaceElement extends HTMLElement {
-  /** Applies messages, parsed or as text (JSON Lines or an array). */
+  /** Applies messages, parsed or as text (JSON Lines or an array), a little at a time. */
   push(messages: string | readonly unknown[]): void;
+  /** Resolves once everything pushed or streamed so far is applied and drawn. */
+  settled(): Promise<void>;
   readonly surfaces: A2uiSurfaces;
   /** What this renderer declares: `{ "1.0": { supportedCatalogIds } }`. */
   readonly capabilities: {
@@ -200,6 +202,27 @@ export function defineA2uiSurface(
       this.#push(messages, false);
     }
 
+    /** Resolvers waiting for the element to have nothing left to apply or draw. */
+    #idle: (() => void)[] = [];
+
+    settled(): Promise<void> {
+      if (!this.#busy()) return Promise.resolve();
+      return new Promise((resolve) => this.#idle.push(resolve));
+    }
+
+    #busy(): boolean {
+      return (
+        this.#pumping || this.#head < this.#queue.length || this.#scheduled
+      );
+    }
+
+    #release(): void {
+      if (this.#busy()) return;
+      const waiting = this.#idle;
+      this.#idle = [];
+      for (const resolve of waiting) resolve();
+    }
+
     /**
      * Messages from the host, as a list or text. Applied through the queue, a little at a time,
      * like a stream's — or, for the prerendered messages adopted as the element connects, at once.
@@ -210,13 +233,37 @@ export function defineA2uiSurface(
       if (typeof messages !== 'string')
         for (const raw of messages) steps.push(() => this.#take(raw, origin));
       else if (messages.trimStart().startsWith('[')) {
-        let list: readonly unknown[] = [];
+        // One JSON array: parsed here, but each message checked and applied in the queue, a
+        // little at a time, as a stream's are.
+        let list: unknown = [];
         try {
-          list = parseA2uiStream(messages);
+          if (messages.length > A2UI_LIMITS.messageChars * 8)
+            throw new A2uiError(
+              'VALIDATION_FAILED',
+              `the messages are longer than ${A2UI_LIMITS.messageChars * 8} characters`,
+              '',
+            );
+          try {
+            list = JSON.parse(messages);
+          } catch {
+            throw new A2uiError(
+              'VALIDATION_FAILED',
+              'the messages are not JSON',
+              '',
+            );
+          }
+          if (!Array.isArray(list) || list.length > A2UI_LIMITS.messages)
+            throw new A2uiError(
+              'VALIDATION_FAILED',
+              `the messages must be a list of at most ${A2UI_LIMITS.messages}`,
+              '',
+            );
         } catch (error) {
           this.#refuse(error, origin);
+          list = [];
         }
-        for (const raw of list) steps.push(() => this.#take(raw, origin));
+        for (const raw of list as unknown[])
+          steps.push(() => this.#take(raw, origin));
       } else
         for (const line of messages.split(/\r?\n/))
           steps.push(() => this.#line(line, origin));
@@ -269,8 +316,9 @@ export function defineA2uiSurface(
             (origin.stopped?.() === true ||
               origin.refused > ERROR_LIMITS.refusedPerStream);
           if (!stopped) step();
+          // The page runs between slices, but is not drawn: a batch half applied is drawn with
+          // its components and without their data.
           if (now() - slice > SLICE_MS) {
-            this.#schedule();
             await yieldToPage();
             slice = now();
           }
@@ -481,6 +529,7 @@ export function defineA2uiSurface(
         () => {
           this.#scheduled = false;
           if (this.isConnected) this.#draw();
+          this.#release();
         },
         this.#lastDrawMs > 16 ? Math.min(this.#lastDrawMs, 500) : 0,
       );

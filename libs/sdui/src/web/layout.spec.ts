@@ -102,4 +102,22 @@ describe('a text is priced by what laying it out costs', () => {
     expect(layoutCost('a\u0250'.repeat(100))).toBeGreaterThan(100 * RUN_COST);
     expect(layoutCost('caf\u00e9')).toBe(4);
   });
+
+  it('letters and punctuation a font may lack are rare: alternating with plain ones is a run each', () => {
+    for (const rare of [
+      0x205b, 0x20af, 0x0482, 0x1fb7, 0x03fc, 0x1e9c, 0x024f,
+    ]) {
+      const text = `a${String.fromCodePoint(rare)}`.repeat(100);
+      expect(layoutCost(text) / text.length).toBeGreaterThan(RUN_COST / 2);
+    }
+  });
+
+  it('the letters and punctuation every font has stay plain', () => {
+    expect(
+      layoutCost(
+        '\u0218coal\u0103 \u2014 \u201cvi\u1ec7t\u201d \u20ac5 \u2026',
+      ),
+    ).toBe(20);
+    expect(layoutCost('\u0391\u03b8\u03ae\u03bd\u03b1')).toBe(5);
+  });
 });

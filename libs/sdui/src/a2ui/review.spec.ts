@@ -103,7 +103,7 @@ describe('ids made for copies never collide with ids an agent sent', () => {
       catalog: a2uiBasicCatalog,
     });
     const components = (
-      created as { createSurface: { components: { id: string }[] } }
+      created as unknown as { createSurface: { components: { id: string }[] } }
     ).createSurface.components;
     expect(Object.fromEntries(components.map((c) => [c.id, c]))).toEqual(
       Object.fromEntries(state.components),

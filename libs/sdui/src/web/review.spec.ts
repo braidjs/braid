@@ -41,7 +41,17 @@ function mount(): { element: A2uiSurfaceElement; sent: A2uiRendererMessage[] } {
   document.body.append(element);
   return { element, sent };
 }
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** A task, then every element in the page settled: what was pushed is applied and drawn. */
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.all(
+    [...document.querySelectorAll('*')].flatMap((element) =>
+      typeof (element as Partial<A2uiSurfaceElement>).settled === 'function'
+        ? [(element as A2uiSurfaceElement).settled()]
+        : [],
+    ),
+  );
+};
 /** The markup a page shows: the HTML without the messages it carries for the renderer. */
 const markup = (html: string) =>
   html.replace(/<script type="application\/a2ui\+json">[\s\S]*?<\/script>/, '');
@@ -1134,7 +1144,7 @@ describe('what the review of the hardening found', () => {
     await flush();
     (element.querySelector('button') as HTMLButtonElement).click();
     element.surfaces.write('s', '/form/field0', 'changed');
-    const action = sent.find((m) => 'action' in m) as {
+    const action = sent.find((m) => 'action' in m) as unknown as {
       action: { context: { form: Record<string, string> } };
     };
     expect(action.action.context.form['field0']).toBe('v0');

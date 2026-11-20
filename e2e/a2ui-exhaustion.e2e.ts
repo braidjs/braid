@@ -239,6 +239,14 @@ const EXPENSIVE: Record<string, string> = {
   'spaced words': 'a ',
   'unassigned Greek between letters': '\u03b1\u0378',
   'Latin whose capitals are in other blocks': 'a\u0250',
+  // from the eighth verification: letters and punctuation a font may lack, in common blocks
+  'rare punctuation between letters': 'a\u205b',
+  'rare currency signs between letters': 'a\u20af',
+  'old Cyrillic signs between letters': '\u0430\u0482',
+  'polytonic Greek between letters': '\u03b1\u1fb7',
+  'Coptic in the Greek block between letters': '\u03b1\u03fc',
+  'archaic Latin between letters': 'a\u1e9c',
+  'Latin Extended-B between letters': 'a\u024f',
 };
 /** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
 const texts19 = (unit: string): Line[] => [
@@ -961,7 +969,87 @@ describe('a hostile stream within A2UI_LIMITS leaves the page responsive', () =>
   }, 120_000);
 });
 
+describe('a draw that runs out of components stops putting things in the page', () => {
+  it('62 nested Columns, each naming 5,000 more children than a draw can draw, then updates', async () => {
+    const depth = 62;
+    const columns = Array.from({ length: depth }, (_, i) => ({
+      id: i === 0 ? 'root' : `c${i}`,
+      component: 'Column',
+      children: [
+        ...(i + 1 < depth ? [`c${i + 1}`] : []),
+        ...Array(5_000).fill('x'),
+      ],
+    }));
+    const lines: Line[] = [
+      create({ dataModel: { n: 0 } }),
+      update([{ id: 'x', component: 'Text', text: { '@path': '/n' } }]),
+      ...Array.from({ length: Math.ceil(depth / 9) }, (_, i) =>
+        update(columns.slice(i * 9, i * 9 + 9)),
+      ),
+      ...Array.from({ length: 10 }, (_, n) => ({
+        version: '1.0',
+        updateDataModel: { surfaceId: H, path: '/n', value: n + 1 },
+      })),
+    ];
+    const outcome = await stream(withinLimits(lines), ROOT);
+    try {
+      responsive(outcome);
+      const nodes = await outcome.page.evaluate(
+        () => document.querySelectorAll('#assistant *').length,
+      );
+      expect(nodes).toBeLessThan(20_000);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
 describe('a host pushing a lot at once leaves the page responsive', () => {
+  it('one push() of a JSON array, as text, of 300 updates of the widest object a message may carry', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create(),
+        update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ]),
+      ROOT,
+    );
+    try {
+      await outcome.page.evaluate((V) => {
+        const value = Object.fromEntries(
+          Array.from({ length: V }, (_, i) => [`k${i}`, i]),
+        );
+        (window as unknown as { __text: string }).__text = JSON.stringify(
+          Array.from({ length: 300 }, (_, n) => ({
+            version: '1.0',
+            updateDataModel: { surfaceId: 'h', path: `/d${n % 4}`, value },
+          })),
+        );
+      }, V);
+      await outcome.page.evaluate(() => {
+        const w = window as unknown as {
+          __hb: { max: number; last: number };
+          __text: string;
+        };
+        w.__hb.max = 0;
+        w.__hb.last = performance.now();
+        (
+          document.querySelector('#assistant') as unknown as {
+            push(text: string): void;
+          }
+        ).push(w.__text);
+      });
+      await settle(outcome.page);
+      const block = await outcome.page.evaluate(() => {
+        const w = window as unknown as { __hb: { max: number; last: number } };
+        return Math.max(w.__hb.max, performance.now() - w.__hb.last);
+      });
+      expect(outcome.errors).toEqual([]);
+      expect(block).toBeLessThan(BLOCK_MS);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
   it('one push() of 60 updates of the widest object a message may carry', async () => {
     const outcome = await stream(
       withinLimits([

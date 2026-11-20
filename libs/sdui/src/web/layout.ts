@@ -46,6 +46,8 @@ const HANGUL = 8;
 const EMOJI = 9;
 
 const kind = (group: number, cost: number): Kind => ({ group, cost });
+/** A character a font may lack, by groups of 32: each change to or from one is a run. */
+const RARE = (code: number): Kind => kind(3_000 + (code >> 5), UNMEASURED_COST);
 const PLAIN = kind(NEUTRAL, 1);
 const MARK = kind(NEUTRAL, COMPLEX_COST);
 const RUN = kind(CONTROL, 1);
@@ -66,10 +68,20 @@ function kindOf(code: number): Kind {
   // C1 controls: line breaks and font changes nobody types
   if (code < 0xa0 || code === 0x00ad) return RUN; // and the soft hyphen, an invisible break
   if (code < 0xc0) return PLAIN;
-  if (code <= 0x02ff || within(code, 0x1e00, 0x1eff)) return kind(LATIN, 1);
-  if (code <= 0x036f) return MARK; // combining marks go with their base
-  if (code <= 0x03ff || within(code, 0x1f00, 0x1fff)) return kind(GREEK, 1);
-  if (code <= 0x052f) return kind(CYRILLIC, 1);
+  // The letters every text font has: Latin-1 and Extended-A, the Romanian and Vietnamese ones,
+  // basic Greek and Cyrillic. The rest of those blocks — IPA, archaic and phonetic letters,
+  // polytonic Greek, old Cyrillic — a font may lack, and are priced as rare, below.
+  if (
+    code <= 0x017f ||
+    within(code, 0x01a0, 0x01b0) ||
+    within(code, 0x0218, 0x021b) ||
+    within(code, 0x1ea0, 0x1ef9)
+  )
+    return kind(LATIN, 1);
+  if (within(code, 0x0300, 0x036f)) return MARK; // combining marks go with their base
+  if (within(code, 0x0386, 0x03ce)) return kind(GREEK, 1);
+  if (within(code, 0x0400, 0x045f)) return kind(CYRILLIC, 1);
+  if (code <= 0x052f || within(code, 0x1e00, 0x1fff)) return RARE(code);
   if (within(code, 0x0590, 0x05ff) || within(code, 0xfb1d, 0xfb4f))
     return kind(HEBREW, COMPLEX_COST);
   if (code === 0x061c) return RUN;
@@ -107,8 +119,19 @@ function kindOf(code: number): Kind {
     within(code, 0x2060, 0x206f)
   )
     return RUN;
-  // General punctuation, super- and subscripts and currency are in every text font.
-  if (within(code, 0x2000, 0x20cf)) return PLAIN;
+  // The punctuation every text font has: dashes, quotes, bullets, ellipsis, per mille, primes,
+  // angle quotes, the euro and the trade mark sign. The rest of the punctuation, super- and
+  // subscript and currency blocks is rare.
+  if (
+    within(code, 0x2000, 0x200a) ||
+    within(code, 0x2010, 0x2027) ||
+    within(code, 0x202f, 0x2033) ||
+    within(code, 0x2039, 0x203a) ||
+    code === 0x20ac ||
+    code === 0x2122
+  )
+    return PLAIN;
+  if (within(code, 0x2000, 0x20cf)) return RARE(code);
   // Symbols — letterlike, arrows, maths, technical, box drawing, shapes, Braille, and the emoji
   // among them — often come from fonts of their own: each block is a group, and a change a run.
   if (within(code, 0x2100, 0x2bff))

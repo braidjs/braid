@@ -23,7 +23,17 @@ function mount(): { element: A2uiSurfaceElement; sent: A2uiRendererMessage[] } {
   document.body.append(element);
   return { element, sent };
 }
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** A task, then every element in the page settled: what was pushed is applied and drawn. */
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.all(
+    [...document.querySelectorAll('*')].flatMap((element) =>
+      typeof (element as Partial<A2uiSurfaceElement>).settled === 'function'
+        ? [(element as A2uiSurfaceElement).settled()]
+        : [],
+    ),
+  );
+};
 
 describe('rendering the upstream examples', () => {
   it.each(examples.map((example) => [example.file, example] as const))(
@@ -308,7 +318,7 @@ describe('hostile content', () => {
       if (where === 'html') {
         const container = document.createElement('div');
         container.innerHTML = renderA2uiHtml(hostile).html.replace(
-          /<script type="application\/a2ui\+json">.*?<\/script>/s,
+          /<script type="application\/a2ui\+json">[\s\S]*?<\/script>/,
           '',
         );
         root = container;

@@ -34,7 +34,9 @@ export const registry = {
             style: 'currency',
             currency,
           }).format(value);
-    const badge = c.text('badge');
+    // A badge is a word or two, set in this app's own badge style (upper-case, monospace): the
+    // renderer prices text, not the host's CSS, so the view bounds what it shows itself.
+    const badge = [...c.text('badge')].slice(0, 32).join('');
     return h(
       'div',
       { class: 'fare' },

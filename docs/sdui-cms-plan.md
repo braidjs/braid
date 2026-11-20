@@ -1,6 +1,6 @@
 # A CMS for server-driven native UI, on Braid contracts — plan
 
-Status: approved — P1–P3 built (core; A2UI; the Braided web renderer), P4–P9 to do · Packages: `@braidlabs/sdui` (new, with `/a2ui` and `/web`), `@braidlabs/cms` (new) · Speaks: [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) · Builds on: `@braidlabs/skew`,
+Status: approved — P1–P3 built (core; A2UI; the Braided web renderer; P3's resource-exhaustion box open), P4–P9 to do · Packages: `@braidlabs/sdui` (new, with `/a2ui` and `/web`), `@braidlabs/cms` (new) · Speaks: [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) · Builds on: `@braidlabs/skew`,
 `@braidlabs/contract`, `@braidlabs/build`, `@braidlabs/studio` · Borrows patterns from: `@braidlabs/registry`,
 `@braidlabs/console`, `@braidlabs/data`
 
@@ -968,7 +968,7 @@ Built. Decisions that came out of building it:
       click sends exactly one action.
 - [x] Prerendered HTML shows with JavaScript off; with it, the renderer takes it over with the same
       text and no error; an old build's capabilities are served the downgraded variant.
-- [ ] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
+- [x] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
       regexes — runs nothing, makes no element outside the allowlist, and reports `blocked-url` /
       `EXPRESSION_ERROR`; the renderer source has no `innerHTML`, by test.
 - [ ] A hostile stream within `A2UI_LIMITS` — huge or wide bound values, components with many
@@ -1127,10 +1127,11 @@ Folded in above; listed so the removals are visible.
   moving to a new version is replacing those files and fixing what the round-trip tests say.
 - **Pricing layout is measurement.** The web renderer runs on the page's main thread. Every
   value a draw reads is charged by what it holds, text by what laying it out costs the browser
-  (each change of script or direction a thousand characters, scripts not measured fifty), a draw
-  in a browser ends after 100 ms, messages are applied in slices, and what a renderer holds is
-  counted in characters. Every hostile stream six review rounds found now stays under 300 ms at
-  once in Chromium. But layout is the browser's, and a kind of content nobody has measured may
+  (each change of script or direction a thousand characters, scripts not measured and letters a
+  font may lack fifty), players and date inputs count as many components, a draw in a browser
+  ends after 100 ms, messages are applied in slices, and what a renderer holds is counted in
+  characters. Every hostile stream eight review rounds found now stays under 300 ms at once in
+  Chromium. A host's own components are styled by the host, which the renderer cannot see. But layout is the browser's, and a kind of content nobody has measured may
   cost more than it is charged: an element draws less text after a slow layout, which bounds how
   often, not whether. Agents nobody trusts at all belong in a frame of their own origin.
 - **The projector re-projects a whole surface per agent message**, so a long stream of small

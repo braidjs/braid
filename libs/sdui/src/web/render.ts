@@ -214,11 +214,13 @@ export function renderSurface(
     ancestry: readonly string[],
   ): View | null => {
     if (typeof id !== 'string') return null;
-    // Out of components, or out of work or time (the evaluator has said which): the rest is a
-    // placeholder, and costs nothing to make.
+    // Out of components, or out of work or time (the evaluator has said which): one placeholder
+    // marks where the draw stopped, and the rest is nothing — a placeholder is an element too.
     const spent = budget().spent;
     if (spent || ++budget().draws > budget().drawLimit) {
       if (!spent) truncated(`/components/${id}`);
+      if (budget().reported.has('placeholder')) return null;
+      budget().reported.add('placeholder');
       return h('div', {
         class: 'a2ui-placeholder',
         'data-a2ui-truncated': '',
@@ -555,8 +557,9 @@ export function renderSurface(
           // A component named twice in one list is two drawings, kept apart by occurrence:
           // otherwise only one of them is matched to what was drawn last time.
           const seen = new Map<string, number>();
+          // No more than the draw has left, either.
           return value
-            .slice(0, MAX_DRAWS + 1)
+            .slice(0, Math.max(1, budget().drawLimit - budget().draws + 1))
             .map((id) => {
               const name = String(id);
               const n = seen.get(name) ?? 0;

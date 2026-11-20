@@ -35,7 +35,17 @@ function mount(): { element: A2uiSurfaceElement; sent: A2uiRendererMessage[] } {
   document.body.append(element);
   return { element, sent };
 }
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** A task, then every element in the page settled: what was pushed is applied and drawn. */
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.all(
+    [...document.querySelectorAll('*')].flatMap((element) =>
+      typeof (element as Partial<A2uiSurfaceElement>).settled === 'function'
+        ? [(element as A2uiSurfaceElement).settled()]
+        : [],
+    ),
+  );
+};
 
 describe('what the sixth audit found', () => {
   it('a label that alternates direction is priced by its runs, not its length', () => {
