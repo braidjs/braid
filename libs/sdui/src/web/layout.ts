@@ -133,6 +133,9 @@ function kindOf(code: number): Kind {
   return kind(1_000 + (code >> 7), UNMEASURED_COST);
 }
 
+/** Code points Unicode has not assigned: no font has them, so each is a search for one. */
+const UNASSIGNED = /\p{Cn}/gu;
+
 /** Characters a browser pairs and mirrors in right-to-left text: brackets. */
 const MIRRORED = new Set([
   0x28, 0x29, 0x3c, 0x3e, 0x5b, 0x5d, 0x7b, 0x7d, 0xab, 0xbb,
@@ -177,6 +180,7 @@ export function layoutCost(text: string): number {
     if (last !== NEUTRAL && group !== last) cost += RUN_COST;
     last = group;
   }
+  for (const _ of text.matchAll(UNASSIGNED)) cost += RUN_COST;
   // In right-to-left text, brackets are paired and mirrored: that costs per bracket.
   return rtl ? cost + brackets * UNMEASURED_COST : cost;
 }

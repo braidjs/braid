@@ -237,6 +237,7 @@ const EXPENSIVE: Record<string, string> = {
   'line separators between letters': 'a\u2028',
   'unassigned symbols between letters': 'a\u2427',
   'spaced words': 'a ',
+  'unassigned Greek between letters': '\u03b1\u0378',
 };
 /** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
 const texts19 = (unit: string): Line[] => [

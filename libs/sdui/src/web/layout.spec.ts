@@ -90,4 +90,10 @@ describe('a text is priced by what laying it out costs', () => {
       COMPLEX_COST + 3 + 3 * UNMEASURED_COST,
     );
   });
+
+  it('unassigned code points are a run each, in any block', () => {
+    expect(layoutCost('\u03b1\u0378'.repeat(10))).toBeGreaterThan(
+      10 * RUN_COST,
+    );
+  });
 });
