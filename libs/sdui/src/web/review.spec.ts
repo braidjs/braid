@@ -272,7 +272,9 @@ describe('controls an agent draws stay out of host forms and host ids', () => {
     expect(radio).toMatch(/name="a2ui-[0-9a-z]+"/);
     expect(radio).not.toMatch(/csrf|pick/);
     expect(radio).toContain('form="a2ui-detached"');
-    expect(/role="tab"[^>]*>/.exec(html)![0]).toMatch(/id="a2ui-[0-9a-z]+"/);
+    expect(/role="tab"[^>]*>/.exec(html)![0]).toMatch(
+      /id="a2ui-[0-9a-z]+-\d+"/,
+    );
   });
 });
 
@@ -744,5 +746,188 @@ describe('what the third verification found: one budget for all of a draw', () =
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe('what the fourth verification found: work is charged where it is done', () => {
+  const timed = <T>(work: () => T): { result: T; ms: number } => {
+    const start = performance.now();
+    const result = work();
+    return { result, ms: performance.now() - start };
+  };
+
+  it('a literal of 190,000 keys drawn a thousand times is bounded and reported', () => {
+    const keys: Record<string, number> = {};
+    for (let i = 0; i < 190_000; i++) keys[i.toString(36)] = 0;
+    const { result, ms } = timed(() =>
+      renderA2uiHtml([
+        create('s'),
+        update('s', [
+          { id: 't', component: 'Text', text: keys },
+          { id: 'root', component: 'Column', children: Array(1_000).fill('t') },
+        ]),
+      ]),
+    );
+    expect(ms).toBeLessThan(2_000);
+    expect(
+      result.errors.some((e) =>
+        /more work than one draw allows/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('a host element is never handed a huge prop, however many times it is drawn', () => {
+    const big = Array.from({ length: 19 }, () => 'x'.repeat(100_000));
+    const { result, ms } = timed(() =>
+      renderA2uiHtml(
+        [
+          create('s', { dataModel: { big } }),
+          update('s', [
+            {
+              id: 'card',
+              component: 'Card',
+              child: 'x',
+              blob: { '@path': '/big' },
+            },
+            { id: 'x', component: 'Divider' },
+            {
+              id: 'root',
+              component: 'Column',
+              children: Array(1_000).fill('card'),
+            },
+          ]),
+        ],
+        { registry: { Card: { element: 'host-card' } } },
+      ),
+    );
+    expect(ms).toBeLessThan(3_000);
+    expect(
+      result.errors.some((e) =>
+        /too large to hand to the host/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('many small updates to a large data model each cost what they change', () => {
+    const surfaces = new A2uiSurfaces();
+    surfaces.apply(
+      parseA2uiMessage(
+        create('s', {
+          dataModel: {
+            big: Array.from({ length: 190_000 }, (_, i) => i),
+            n: 0,
+          },
+        }),
+      ),
+    );
+    const { ms } = timed(() => {
+      for (let i = 0; i < 300; i++)
+        surfaces.apply(
+          parseA2uiMessage({
+            version: '1.0',
+            updateDataModel: { surfaceId: 's', path: '/n', value: i },
+          }),
+        );
+    });
+    expect(ms).toBeLessThan(1_000);
+    expect(surfaces.get('s')!.dataModel['n']).toBe(299);
+  });
+
+  it('check messages are text, and only a few are shown per component', () => {
+    const long = 'm'.repeat(100_000);
+    const checks = Array.from({ length: 19 }, () => ({
+      condition: false,
+      message: long,
+    }));
+    const { result, ms } = timed(() =>
+      renderA2uiHtml([
+        create('s', { dataModel: { items: Array(100).fill(0) } }),
+        update('s', [
+          {
+            id: 'root',
+            component: 'Column',
+            children: { path: '/items', componentId: 'b' },
+          },
+          {
+            id: 'b',
+            component: 'Button',
+            child: 'l',
+            action: { event: { name: 'x' } },
+            '@checks': checks,
+          },
+          { id: 'l', component: 'Text', text: 'go' },
+        ]),
+      ]),
+    );
+    expect(ms).toBeLessThan(3_000);
+    expect(markup(result.html).length).toBeLessThan(3_000_000);
+  });
+
+  it('a function costs what it reads: long inputs exhaust the budget, not the page', () => {
+    const value = 'a'.repeat(100_000);
+    const calls = Array.from({ length: 255 }, () => ({
+      '@call': 'email',
+      args: { value },
+    }));
+    const { ms } = timed(() =>
+      renderA2uiHtml([
+        create('s', { dataModel: { items: Array(78).fill(0) } }),
+        update('s', [
+          {
+            id: 'root',
+            component: 'Column',
+            children: { path: '/items', componentId: 'f' },
+          },
+          {
+            id: 'f',
+            component: 'TextField',
+            label: 'x',
+            value: 'v',
+            '@checks': [
+              { condition: { '@call': 'and', args: { values: calls } } },
+            ],
+          },
+        ]),
+      ]),
+    );
+    expect(ms).toBeLessThan(3_000);
+  });
+
+  it('a text of many markers makes a bounded number of elements', () => {
+    const { result } = timed(() =>
+      renderA2uiHtml([
+        create('s'),
+        update('s', [
+          { id: 't', component: 'Text', text: '*a* '.repeat(5_000) },
+          { id: 'root', component: 'Column', children: Array(100).fill('t') },
+        ]),
+      ]),
+    );
+    expect(
+      (markup(result.html).match(/<em>/g) ?? []).length,
+    ).toBeLessThanOrEqual(100 * 200);
+  });
+
+  it('an element sends the agent a bounded number of errors per draw', async () => {
+    const { element, sent } = mount();
+    const checks = Array.from({ length: 1_000 }, (_, i) => ({
+      condition: { '@call': `missing${i}`, args: {} },
+    }));
+    element.push([
+      create('s', { sendDataModel: true }),
+      update('s', [
+        {
+          id: 'root',
+          component: 'Button',
+          child: 'l',
+          action: { event: { name: 'x' } },
+          '@checks': checks,
+        },
+        { id: 'l', component: 'Text', text: 'go' },
+      ]),
+    ]);
+    await flush();
+    expect(sent.length).toBeLessThanOrEqual(10);
+    element.remove();
   });
 });

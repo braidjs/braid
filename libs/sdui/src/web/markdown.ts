@@ -20,20 +20,24 @@ const LIMIT = 20_000;
  * is often bound to data someone typed, so a link would be a lure in the host's own page. Each
  * run is bounded so a long line of markers costs little.
  */
-function inline(text: string, depth = 0): View[] {
-  if (depth > 4) return [text];
+/** Elements one text may make from its markup; past this, the rest is plain text. */
+const MAX_INLINE = 200;
+
+function inline(text: string, depth = 0, made = { count: 0 }): View[] {
+  if (depth > 4 || made.count >= MAX_INLINE) return [text];
   const out: View[] = [];
   const pattern =
     /\*\*([^*\n]{1,1000}?)\*\*|\*([^*\s][^*\n]{0,999}?)\*|`([^`\n]{1,1000})`|\[([^\][\n]{1,500})\]\(([^()\s]{1,2000})\)/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
+    if (++made.count > MAX_INLINE) break;
     const at = match.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
     const [, strong, em, code, words] = match;
-    if (strong) out.push(h('strong', {}, ...inline(strong, depth + 1)));
-    else if (em) out.push(h('em', {}, ...inline(em, depth + 1)));
+    if (strong) out.push(h('strong', {}, ...inline(strong, depth + 1, made)));
+    else if (em) out.push(h('em', {}, ...inline(em, depth + 1, made)));
     else if (code) out.push(h('code', {}, code));
-    else if (words) out.push(...inline(words, depth + 1));
+    else if (words) out.push(...inline(words, depth + 1, made));
     last = at + match[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
@@ -41,8 +45,14 @@ function inline(text: string, depth = 0): View[] {
 }
 
 export function markdown(source: string): MarkdownResult {
+  const made = { count: 0 };
   const text = source.length > LIMIT ? source.slice(0, LIMIT) : source;
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const all = text.replace(/\r\n?/g, '\n').split('\n');
+  // Each line can be an element of its own; past MAX_INLINE lines the rest is one line of text.
+  const lines =
+    all.length > MAX_INLINE
+      ? [...all.slice(0, MAX_INLINE), all.slice(MAX_INLINE).join(' ')]
+      : all;
   const blocks: View[] = [];
   let paragraph: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
@@ -51,7 +61,7 @@ export function markdown(source: string): MarkdownResult {
     const parts: View[] = [];
     paragraph.forEach((line, index) => {
       if (index > 0) parts.push(h('br'));
-      parts.push(...inline(line));
+      parts.push(...inline(line, 0, made));
     });
     blocks.push(h('p', {}, ...parts));
     paragraph = [];
@@ -62,7 +72,7 @@ export function markdown(source: string): MarkdownResult {
       h(
         list.ordered ? 'ol' : 'ul',
         {},
-        ...list.items.map((item) => h('li', {}, ...inline(item))),
+        ...list.items.map((item) => h('li', {}, ...inline(item, 0, made))),
       ),
     );
     list = null;
@@ -78,7 +88,7 @@ export function markdown(source: string): MarkdownResult {
         h(
           `h${(heading[1] as string).length}`,
           {},
-          ...inline(heading[2] as string),
+          ...inline(heading[2] as string, 0, made),
         ),
       );
     } else if (bullet || numbered) {

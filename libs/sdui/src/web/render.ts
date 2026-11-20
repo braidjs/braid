@@ -353,7 +353,22 @@ export function renderSurface(
         continue;
       if (actionProps(catalog, context.component.component).includes(key))
         continue;
-      props[key] = context.value(key);
+      const value = context.value(key);
+      // A host element is handed its props as a copy, on every drawing: their size is paid for as
+      // text, and a prop past the limit is not handed over at all.
+      const size = sizeWithin(value, MAX_HOST_PROP);
+      if (size === null || (budget().chars += size) > DRAW_LIMITS.chars) {
+        if (!budget().reported.has('host-props')) {
+          budget().reported.add('host-props');
+          options.report({
+            code: 'VALIDATION_FAILED',
+            message: `a prop of "${context.component.component}" is too large to hand to the host's component`,
+            path: `/components/${context.id}/${key}`,
+          });
+        }
+        continue;
+      }
+      props[key] = value;
     }
     const on: Record<string, (event: Event) => void> = {};
     if ('fragment' in override) {
@@ -591,6 +606,28 @@ function childProps(catalog: SduiCatalog, type: string): string[] {
   return Object.entries(definition.slots ?? {}).map(
     ([slot, spec]) => spec.a2ui?.list ?? slot,
   );
+}
+
+/** Characters of one prop a host element may be handed. */
+const MAX_HOST_PROP = 16_000;
+
+/** Roughly how many characters a value serialises to, or `null` past `limit` — stopping early. */
+function sizeWithin(value: unknown, limit: number): number | null {
+  let size = 0;
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const inner = stack.pop();
+    if (typeof inner === 'string') size += inner.length + 2;
+    else if (inner !== null && typeof inner === 'object') {
+      const entries = Array.isArray(inner)
+        ? inner
+        : Object.entries(inner).flat();
+      size += 2;
+      for (const item of entries) stack.push(item);
+    } else size += 8;
+    if (size > limit) return null;
+  }
+  return size;
 }
 
 /** The props a component's newest schema declares. */

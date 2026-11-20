@@ -62,6 +62,9 @@ export interface A2uiSurfaceElement extends HTMLElement {
 /** The header `src` is fetched with: the renderer's capabilities, as JSON. */
 export const CAPABILITIES_HEADER = 'A2UI-Renderer-Capabilities';
 
+/** Errors an element sends the agent per draw; the rest of a flood is dropped. */
+export const MAX_ERRORS_PER_DRAW = 10;
+
 /** Defines the element (once). Nothing is defined on import: call this in the browser. */
 export function defineA2uiSurface(
   options: A2uiSurfaceOptions = {},
@@ -75,6 +78,7 @@ export function defineA2uiSurface(
     registry: ComponentRegistry = options.registry ?? {};
     readonly #local = new Map<string, Map<string, unknown>>();
     #budget = new DrawBudget();
+    #reportedThisDraw = 0;
     readonly #evaluators = new Map<
       string,
       ReturnType<typeof createEvaluator>
@@ -247,6 +251,10 @@ export function defineA2uiSurface(
       // Reported once per surface: a broken binding is not a message per keystroke.
       const key = `${surfaceId}\u0000${error.code}\u0000${error.message}`;
       if (this.#reported.has(key)) return;
+      // And a few per draw: content can make every one of a thousand checks fail differently,
+      // and the agent needs to hear that something is wrong, not a thousand times.
+      if (++this.#reportedThisDraw > MAX_ERRORS_PER_DRAW) return;
+      if (this.#reported.size > 10_000) this.#reported.clear();
       this.#reported.add(key);
       const validation =
         error.code === 'VALIDATION_FAILED' ||
@@ -274,6 +282,7 @@ export function defineA2uiSurface(
 
     #draw(): void {
       this.#budget = new DrawBudget();
+      this.#reportedThisDraw = 0;
       const views = this.surfaces.ids().map((id) => {
         const surface = this.surfaces.get(id)!;
         let local = this.#local.get(id);
@@ -317,11 +326,19 @@ export function defineA2uiSurface(
       if (!this.dispatchEvent(event)) return;
       const url = this.getAttribute('action-url');
       if (!url) return;
+      // The data model of the surface the message is about, when that surface asked for it to
+      // be sent — not every surface's, on every message.
       const dataModels: Record<string, unknown> = {};
-      for (const id of this.surfaces.ids()) {
-        const surface = this.surfaces.get(id)!;
-        if (surface.sendDataModel) dataModels[id] = surface.dataModel;
-      }
+      const about =
+        (
+          message as {
+            action?: { surfaceId?: string };
+            error?: { surfaceId?: string };
+          }
+        ).action?.surfaceId ??
+        (message as { error?: { surfaceId?: string } }).error?.surfaceId;
+      const surface = about ? this.surfaces.get(about) : undefined;
+      if (surface?.sendDataModel) dataModels[surface.id] = surface.dataModel;
       void fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

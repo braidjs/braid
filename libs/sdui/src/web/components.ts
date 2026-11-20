@@ -274,7 +274,8 @@ const Tabs: ComponentRenderer = (c) => {
   const tabs = all.slice(0, c.allow(all.length));
   const [selected, select] = c.local('tab', 0);
   const current = Math.min(selected, Math.max(0, tabs.length - 1));
-  const tabId = (index: number) => opaque(c, `tab-${index}`);
+  const base = opaque(c, 'tabs'); // hashed once per component, not once per tab
+  const tabId = (index: number) => `${base}-${index}`;
   // Arrow keys move between tabs, as a tab list's do; focus follows once the redraw lands.
   const keydown = (index: number) => (event: Event) => {
     const key = (event as KeyboardEvent).key;

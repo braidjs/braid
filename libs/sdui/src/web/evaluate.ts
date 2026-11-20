@@ -193,6 +193,13 @@ export const DRAW_LIMITS = Object.freeze({
   draws: 10_000,
   /** Regex matching steps. */
   regexSteps: 2_000_000,
+  /**
+   * Everything else evaluating does, in units of roughly one value visited: each value of a
+   * literal walked, each 16 characters a function reads, each letter of a date format, each
+   * pattern compiled. What a function call costs depends on what it is given, not only that it
+   * was called.
+   */
+  work: 1_000_000,
 });
 /** @deprecated use DRAW_LIMITS.regexSteps */
 export const DRAW_MATCH_STEPS = DRAW_LIMITS.regexSteps;
@@ -203,9 +210,13 @@ export class DrawBudget {
   calls = 0;
   chars = 0;
   draws = 0;
+  work = 0;
   /** Which limits have been reported, so each is reported once per draw. */
   readonly reported = new Set<string>();
 }
+
+/** Messages one component's checks show; the rest still fail the component. */
+const MAX_CHECK_MESSAGES = 3;
 
 export const EVALUATION_LIMITS = Object.freeze({
   /** Function calls in one evaluation, templates included. */
@@ -285,6 +296,9 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     }
     throw new SilentOverBudget();
   };
+  const spendWork = (units: number): void => {
+    if ((draw().work += units) > DRAW_LIMITS.work) overDraw('work');
+  };
   const spendCall = (): void => {
     if (++draw().calls > DRAW_LIMITS.calls) overDraw('function calls');
   };
@@ -319,6 +333,11 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     if (depth > EVALUATION_LIMITS.depth)
       fail(`expressions nest more than ${EVALUATION_LIMITS.depth} levels deep`);
     if (raw === null || typeof raw !== 'object') return raw;
+    // A draw that has spent its budget stops here, before looking at the value: once it is gone,
+    // every further evaluation costs nothing.
+    if (draw().work > DRAW_LIMITS.work) overDraw('work');
+    // A literal is walked and rebuilt on every evaluation: that is paid for, per value.
+    spendWork(1 + (Array.isArray(raw) ? raw.length : Object.keys(raw).length));
     if (Array.isArray(raw))
       return raw.map((item) =>
         evaluate(item, scope, budget, depth + 1, activated),
@@ -394,6 +413,12 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     activated: boolean,
     literalTemplate = false,
   ): unknown {
+    // What a function reads is paid for by the 16 characters: a check over a long string costs
+    // in proportion to the string.
+    let read = 0;
+    for (const value of Object.values(args))
+      if (typeof value === 'string') read += value.length;
+    if (read > 0) spendWork(Math.ceil(read / 16));
     const num = (value: unknown, what: string): number => {
       const n =
         typeof value === 'number'
@@ -438,6 +463,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         let compiled = regexes.get(pattern);
         if (compiled === undefined) {
           try {
+            spendWork(1_000 + pattern.length * 50);
             compiled = compileA2uiRegex(pattern);
           } catch (error) {
             compiled =
@@ -514,6 +540,9 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         }).format(num(args['value'], 'value'));
       }
       case 'formatDate':
+        spendWork(
+          typeof args['format'] === 'string' ? args['format'].length * 20 : 0,
+        );
         return formatDate(
           args['value'],
           toText(args['format']),
@@ -786,6 +815,19 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       let valid = true;
       for (const rule of rules) {
         if (!isRecord(rule)) continue;
+        if (messages.length >= MAX_CHECK_MESSAGES) {
+          // Past a few, a check's message adds nothing a person reads; its result still counts.
+          const extra = guarded<unknown>(false, () =>
+            evaluate(rule['condition'], scope, new Budget(), 0, false),
+          );
+          if (
+            !(isRecord(extra) && typeof extra['valid'] === 'boolean'
+              ? extra['valid']
+              : toBoolean(extra))
+          )
+            valid = false;
+          continue;
+        }
         const fallback =
           typeof rule['message'] === 'string' ? rule['message'] : undefined;
         const result = guarded<unknown>(false, () =>
@@ -801,7 +843,8 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
           isRecord(result) && typeof result['message'] === 'string'
             ? result['message']
             : fallback;
-        if (message) messages.push(message);
+        // A message is text drawn, and paid for like any other.
+        if (message) messages.push(spendText(message));
       }
       return { valid, messages };
     },
