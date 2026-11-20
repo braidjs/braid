@@ -931,3 +931,14 @@ describe('what the fourth verification found: work is charged where it is done',
     element.remove();
   });
 });
+
+describe('a regex that ran out of budget once is not remembered as broken', () => {
+  it('compiles in the next draw', () => {
+    const e = createEvaluator({ model: () => ({}), report: () => undefined });
+    const check = { '@call': 'regex', args: { value: 'abc', pattern: '^a' } };
+    e.budget().work = Number.MAX_SAFE_INTEGER; // this draw has nothing left
+    expect(e.value(check)).toBeNull();
+    e.beginDraw();
+    expect(e.value(check)).toEqual({ valid: true });
+  });
+});

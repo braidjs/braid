@@ -462,8 +462,10 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
           return fail('regex: pattern must be a string');
         let compiled = regexes.get(pattern);
         if (compiled === undefined) {
+          // Paid for before the attempt, outside it: running out of budget is this draw's
+          // problem, not the pattern's, and must not be remembered as the pattern's error.
+          spendWork(1_000 + pattern.length * 50);
           try {
-            spendWork(1_000 + pattern.length * 50);
             compiled = compileA2uiRegex(pattern);
           } catch (error) {
             compiled =
