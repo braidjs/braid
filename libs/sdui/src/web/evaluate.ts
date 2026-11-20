@@ -191,11 +191,12 @@ export const DRAW_LIMITS = Object.freeze({
   /**
    * Text produced — every label, title, value and paragraph — priced by what laying it out
    * costs a browser ({@link layoutCost}): its length, and much more for each change of direction
-   * or script. At 2,000,000, every kind of text measured drew and laid out in under 200 ms. An element
-   * also lowers its own limit after a draw whose layout ran long, so text priced wrong is drawn
-   * less each time rather than slowly every time.
+   * or script. Layout also depends on where text is: a flex row measures each child's every line
+   * break, so 2,000,000 plain characters of short words took ~560 ms there. At 500,000 every kind
+   * of text measured, in a column or a row, drew and laid out in well under 300 ms. An element
+   * also lowers its own limit after a draw whose layout ran long, and lets it back slowly.
    */
-  chars: 2_000_000,
+  chars: 500_000,
   /**
    * Braid fragments drawn: each is a realm of its own (a frame), costly to boot and to keep.
    */

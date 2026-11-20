@@ -54,6 +54,9 @@ const within = (code: number, from: number, to: number): boolean =>
   code >= from && code <= to;
 
 function kindOf(code: number): Kind {
+  // C0 controls but tab and line ends: nothing a text means, and a font change each
+  if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+    return RUN;
   if (code < 0x80)
     return within(code, 0x30, 0x39) ||
       within(code, 0x41, 0x5a) ||
@@ -61,7 +64,7 @@ function kindOf(code: number): Kind {
       ? kind(LATIN, 1)
       : PLAIN;
   // C1 controls: line breaks and font changes nobody types
-  if (code < 0xa0) return RUN;
+  if (code < 0xa0 || code === 0x00ad) return RUN; // and the soft hyphen, an invisible break
   if (code < 0xc0) return PLAIN;
   if (code <= 0x02ff || within(code, 0x1e00, 0x1eff)) return kind(LATIN, 1);
   if (code <= 0x036f) return MARK; // combining marks go with their base
@@ -96,6 +99,14 @@ function kindOf(code: number): Kind {
     within(code, 0xe0020, 0xe007f)
   )
     return kind(EMOJI, COMPLEX_COST);
+  // Invisible breaks and formatting characters: a soft hyphen, zero-width spaces and joiners
+  // other than ZWJ, line and paragraph separators — each one ends a run.
+  if (
+    within(code, 0x200b, 0x200c) ||
+    within(code, 0x2028, 0x2029) ||
+    within(code, 0x2060, 0x206f)
+  )
+    return RUN;
   // General punctuation, super- and subscripts and currency are in every text font.
   if (within(code, 0x2000, 0x20cf)) return PLAIN;
   // Symbols — letterlike, arrows, maths, technical, box drawing, shapes, Braille, and the emoji
@@ -129,11 +140,16 @@ const MIRRORED = new Set([
 
 export function layoutCost(text: string): number {
   let ascii = true;
-  for (let index = 0; index < text.length; index++)
-    if (text.charCodeAt(index) > 0x7f) {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (
+      code > 0x7f ||
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+    ) {
       ascii = false;
       break;
     }
+  }
   if (ascii) return text.length;
   let cost = 0;
   let last = NEUTRAL;

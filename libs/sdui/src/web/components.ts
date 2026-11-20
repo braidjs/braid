@@ -447,7 +447,9 @@ const TextField: ComponentRenderer = (c) => {
   const value =
     bound.value === null || bound.value === undefined
       ? ''
-      : String(bound.value);
+      : typeof bound.value === 'string'
+        ? bound.value
+        : c.textOf(String(bound.value)); // shown, so paid for like any text
   const input = (event: Event) =>
     bound.write((event.target as HTMLInputElement).value);
   const attrs = {
@@ -523,7 +525,7 @@ const ChoicePicker: ComponentRenderer = (c) => {
     .slice(0, 500);
   const [filter, setFilter] = c.local('filter', '');
   const label = (option: Record<string, unknown>) =>
-    c.textOf(option['label']) || String(option['value'] ?? '');
+    c.textOf(option['label']) || c.textOf(String(option['value'] ?? ''));
   const matching =
     c.raw('filterable') === true && filter
       ? options.filter((o) =>

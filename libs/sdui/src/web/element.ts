@@ -540,8 +540,10 @@ export function defineA2uiSurface(
               0.0005,
               (this.#textScale * LAYOUT_MS) / layout,
             );
-          else if (layout < LAYOUT_MS / 2)
-            this.#textScale = Math.min(1, this.#textScale * 1.5);
+          // and comes back slowly: a limit that recovers at once lets the same slow text back
+          // in a draw or two later
+          else if (layout < LAYOUT_MS / 4)
+            this.#textScale = Math.min(1, this.#textScale * 1.1);
         }, 0),
       );
       // What runs between draws — a click, a check — gets a budget of its own, with no deadline:

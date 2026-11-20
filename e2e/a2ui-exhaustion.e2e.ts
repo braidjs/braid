@@ -205,6 +205,8 @@ function responsive(outcome: Outcome, maxPosts = MAX_POSTS): void {
   expect(outcome.posts).toBeLessThanOrEqual(maxPosts);
 }
 
+const ROTATING =
+  '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000';
 /** Text of each kind the text budget prices above its length, as a unit to repeat. */
 const EXPENSIVE: Record<string, string> = {
   'bidi words': '\u05e9\u05dc\u05d5\u05dd hello ',
@@ -228,6 +230,13 @@ const EXPENSIVE: Record<string, string> = {
   'C1 controls between letters': 'a\u0085',
   'CJK punctuation between letters': 'a\u3001',
   'brackets in Hebrew': '\u05d0(((((',
+  // from the seventh verification: characters with no glyph, or none in a text font
+  'ASCII controls between letters': 'a\u0001',
+  'soft hyphens between letters': 'a\u00ad',
+  'zero-width spaces between letters': 'a\u200b',
+  'line separators between letters': 'a\u2028',
+  'unassigned symbols between letters': 'a\u2427',
+  'spaced words': 'a ',
 };
 /** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
 const texts19 = (unit: string): Line[] => [
@@ -564,6 +573,16 @@ const CASES: Record<string, () => Line[]> = {
         ],
       ],
       [
+        `98 Texts of ${kind} in a Row, together just inside the text budget`,
+        () => [
+          create({ dataModel: { w: atBudget(unit, 98) } }),
+          update([
+            { id: 'root', component: 'Row', children: Array(98).fill('t') },
+            { id: 't', component: 'Text', text: { '@path': '/w' } },
+          ]),
+        ],
+      ],
+      [
         `1,000 Texts of ${kind}, together just inside the text budget`,
         () =>
           templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
@@ -636,6 +655,49 @@ const CASES: Record<string, () => Line[]> = {
       () => texts19(unit),
     ]),
   ),
+  // text that reached the page without being priced (the seventh verification)
+  'a ChoicePicker option shown by its value: 99,000 characters rotating scripts, x 3':
+    () => [
+      create({ dataModel: { v: [] } }),
+      update([
+        { id: 'root', component: 'Column', children: ['p', 'p', 'p'] },
+        {
+          id: 'p',
+          component: 'ChoicePicker',
+          label: 'x',
+          value: { '@path': '/v' },
+          options: [
+            { label: '', value: ROTATING.repeat(6_000).slice(0, 99_000) },
+          ],
+        },
+      ]),
+    ],
+  'TextFields bound to a list of 20,000 characters rotating scripts, x 10':
+    () => [
+      create({ dataModel: { v: [ROTATING.repeat(1_200).slice(0, 20_000)] } }),
+      update([
+        { id: 'root', component: 'Column', children: Array(10).fill('f') },
+        {
+          id: 'f',
+          component: 'TextField',
+          label: 'x',
+          value: { '@path': '/v' },
+        },
+      ]),
+    ],
+  'FlightCards handed a list of 16,000 characters rotating scripts, x 32':
+    () => [
+      create({ dataModel: { f: [ROTATING.repeat(1_000).slice(0, 15_900)] } }),
+      update([
+        { id: 'root', component: 'Column', children: Array(32).fill('c') },
+        {
+          id: 'c',
+          component: 'FlightCard',
+          flight: { '@path': '/f' },
+          status: { '@path': '/f' },
+        },
+      ]),
+    ],
   'one Text of stars between letters, changed by 6 messages': () => [
     create({ dataModel: { s: '' } }),
     update([{ id: 'root', component: 'Text', text: { '@path': '/s' } }]),
@@ -890,6 +952,55 @@ describe('a host pushing a lot at once leaves the page responsive', () => {
       });
       expect(outcome.errors).toEqual([]);
       expect(block).toBeLessThan(BLOCK_MS);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('slow text does not come back', () => {
+  it('maths between letters at the budget, redrawn every 400 ms for 10 s', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create({ dataModel: { w: atBudget('a\u2200', 98), n: 0 } }),
+        update([
+          {
+            id: 'root',
+            component: 'Column',
+            children: [...Array(98).fill('t'), 'n'],
+          },
+          { id: 't', component: 'Text', text: { '@path': '/w' } },
+          { id: 'n', component: 'Text', text: { '@path': '/n' } },
+        ]),
+      ]),
+      ROOT,
+    );
+    try {
+      const freezes = await outcome.page.evaluate(async () => {
+        const element = document.querySelector('#assistant') as unknown as {
+          push(messages: unknown[]): void;
+        };
+        let freezes = 0;
+        let last = performance.now();
+        const beat = setInterval(() => {
+          const now = performance.now();
+          if (now - last > 300) freezes++;
+          last = now;
+        }, 5);
+        for (let n = 1; n <= 25; n++) {
+          element.push([
+            {
+              version: '1.0',
+              updateDataModel: { surfaceId: 'h', path: '/n', value: n },
+            },
+          ]);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        clearInterval(beat);
+        return freezes;
+      });
+      expect(outcome.crashed).toBe(false);
+      expect(freezes).toBe(0);
     } finally {
       await outcome.close();
     }

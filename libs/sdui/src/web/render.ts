@@ -19,6 +19,7 @@ import {
   type UrlUse,
   checkUrl,
 } from './evaluate.js';
+import { layoutCost } from './layout.js';
 import { type MarkdownResult, markdown } from './markdown.js';
 import { type View, type ViewElement, h } from './view.js';
 
@@ -395,7 +396,10 @@ export function renderSurface(
       if (
         size === null ||
         size > MAX_HOST_PROP ||
-        (budget().chars += size) > DRAW_LIMITS.chars
+        // what a host element is handed it may show: priced as text, against the text limit
+        (budget().chars += layoutCost(
+          typeof value === 'string' ? value : (JSON.stringify(value) ?? ''),
+        )) > budget().textLimit
       ) {
         if (!budget().reported.has('host-props')) {
           budget().reported.add('host-props');
