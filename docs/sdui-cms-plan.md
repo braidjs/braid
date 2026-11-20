@@ -1,6 +1,6 @@
 # A CMS for server-driven native UI, on Braid contracts — plan
 
-Status: approved — P1–P3 built (core; A2UI; the Braided web renderer; P3's resource-exhaustion box open), P4–P9 to do · Packages: `@braidlabs/sdui` (new, with `/a2ui` and `/web`), `@braidlabs/cms` (new) · Speaks: [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) · Builds on: `@braidlabs/skew`,
+Status: approved — P1–P3 built (core; A2UI; the Braided web renderer — exhaustion measured, not proven: isolating untrusted surfaces in an own-origin frame is the follow-up), P4–P9 to do · Packages: `@braidlabs/sdui` (new, with `/a2ui` and `/web`), `@braidlabs/cms` (new) · Speaks: [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) · Builds on: `@braidlabs/skew`,
 `@braidlabs/contract`, `@braidlabs/build`, `@braidlabs/studio` · Borrows patterns from: `@braidlabs/registry`,
 `@braidlabs/console`, `@braidlabs/data`
 
@@ -971,10 +971,11 @@ Built. Decisions that came out of building it:
 - [x] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
       regexes — runs nothing, makes no element outside the allowlist, and reports `blocked-url` /
       `EXPRESSION_ERROR`; the renderer source has no `innerHTML`, by test.
-- [ ] A hostile stream within `A2UI_LIMITS` — huge or wide bound values, components with many
+- [x] A hostile stream within `A2UI_LIMITS` — huge or wide bound values, components with many
       props or checks, long paths, write storms, error floods, gigabytes of data model updates —
       never blocks the page's main thread for 300 ms, never crashes it, and is told a bounded
-      number of times (`e2e/a2ui-exhaustion.e2e.ts`).
+      number of times (`e2e/a2ui-exhaustion.e2e.ts`: every stream from eight review rounds, the
+      worst 136 ms). Measured, not proven — see the risk "Pricing layout is measurement".
 
 Built, with `examples/concierge` and `e2e/concierge-example.e2e.ts` as the proof.
 
