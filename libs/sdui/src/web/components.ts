@@ -361,9 +361,14 @@ const Button: ComponentRenderer = (c) => {
     ),
     on: { click: () => act?.() },
   };
-  return checks.messages.length === 0
-    ? button
-    : h('span', { class: 'a2ui-control' }, button, problems(checks.messages));
+  // One shape whether or not its checks pass: the button keeps its place, size and focus as they
+  // change, and its messages come and go beside it.
+  return h(
+    'span',
+    { class: 'a2ui-control' },
+    { ...button, key: 'control' },
+    problems(checks.messages),
+  );
 };
 
 const field = (
@@ -639,6 +644,7 @@ export const A2UI_DEFAULT_CSS = `
 :where(.a2ui-Divider){border:0;border-top:1px solid var(--a2ui-border,currentColor);opacity:.3;margin:.25rem 0;width:100%}
 :where(.a2ui-Divider[data-axis=vertical]){border-top:0;border-left:1px solid var(--a2ui-border,currentColor);width:auto;align-self:stretch}
 :where(.a2ui-TextField,.a2ui-Slider,.a2ui-DateTimeInput){display:flex;flex-direction:column;gap:.25rem}
+:where(.a2ui-control){display:inline-flex;flex-direction:column;align-items:flex-start;gap:.25rem}
 :where(.a2ui-problem){display:block;color:var(--a2ui-danger,#b3261e);font-size:.85em}
 :where(.a2ui-placeholder){min-height:1rem;border-radius:.25rem;background:var(--a2ui-placeholder,rgba(127,127,127,.15))}
 :where(.a2ui-tablist){display:flex;gap:.25rem}

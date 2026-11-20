@@ -12,7 +12,12 @@ export default defineConfig({
   cacheDir: '../node_modules/.vite/e2e',
   resolve: {
     // @braidlabs/registry imports the gateway by name; the tests run both from source
-    alias: [{ find: /^@braidlabs\/gateway$/, replacement: resolve(import.meta.dirname, '../libs/braid-gateway/src/index.ts') }],
+    alias: [
+      { find: /^@braidlabs\/gateway$/, replacement: resolve(import.meta.dirname, '../libs/braid-gateway/src/index.ts') },
+      // @braidlabs/sdui imports these by name (examples/concierge)
+      { find: /^@braidlabs\/skew$/, replacement: resolve(import.meta.dirname, '../libs/skew/src/index.ts') },
+      { find: /^@braidlabs\/contract$/, replacement: resolve(import.meta.dirname, '../libs/contract/src/index.ts') },
+    ],
   },
   test: {
     environment: 'node',

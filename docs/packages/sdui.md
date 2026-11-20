@@ -2,7 +2,7 @@
 
 Server-driven UI that survives app version skew. Every component, action and analytics event is a [`@braidlabs/contract`](./contract.md) document, so a screen is authored once and **projected** to exactly what each binary in the field was built to render.
 
-This package is the core: the document model and its parsers, the projection engine and its fallback ladder, handshake resolution, flag and rollout evaluation, the state specification, and a contract-aware screen diff. It holds no state and does no I/O, and runs unchanged on Node, Workers, Deno, browsers and Hermes. The delivery API, the client and the CMS described in the [plan](../sdui-cms-plan.md) are built on it.
+This package is the core: the document model and its parsers, the projection engine and its fallback ladder, handshake resolution, flag and rollout evaluation, the state specification, and a contract-aware screen diff. It holds no state and does no I/O, and runs unchanged on Node, Workers, Deno, browsers and Hermes. The delivery API, the client and the CMS described in the [plan](../sdui-cms-plan.md) are built on it. Two subpaths add [A2UI](#a2ui): `@braidlabs/sdui/a2ui`, the same model on A2UI's wire format, and `@braidlabs/sdui/web`, a renderer that draws it into the host's own page.
 
 ---
 
@@ -354,6 +354,88 @@ Content already in the field was authored under the published steps and is decod
 A component's `fallback`, `accepts`, `max` and editor metadata are policy and may change. A catalog whose ops cannot be compiled is a usage error (exit 2), not an addition.
 
 `checkCatalog`, `createClientManifest`, `catalogId` and `runSdui` are the same things as functions. `migrate(contract, value, from, to)` is the single-payload migration projection is built on.
+
+---
+
+## A2UI
+
+[A2UI](https://a2ui.org/specification/v1.0-a2ui/) is how agents describe UI to renderers: surfaces of components from a catalog, a data model they bind to, and actions back. `@braidlabs/sdui/a2ui` speaks v1.0 and joins it to everything above — an A2UI surface is a screen, and a renderer's catalog is a client manifest — so the projection that keeps native binaries safe from version skew keeps A2UI renderers safe too. `@braidlabs/sdui/web` is a renderer that draws A2UI into the host's own page.
+
+A2UI on its own identifies a catalog by an id and nothing else. A renderer built last spring and one built today look the same if they name the same catalog, and an agent writing for one breaks the other. Here:
+
+- **The agent authors against the catalog's own id** (`catalog.a2ui.catalogId`): the newest version of every component.
+- **Each renderer names a catalog id derived from what it can draw** — `…/catalog.json?caps=cv_9f2c…`, from `a2uiCatalogId(catalog, manifest)`. Builds that draw alike share an id.
+- **Between them, `createA2uiProjector`** projects each surface to that renderer: downgraded where the steps allow, down the fallback ladder where they do not, never with a guessed value. An update reaches the renderer as just the components whose projection changed. A surface a renderer cannot show honestly is not sent; the agent receives an `INCOMPATIBLE` error and can choose something else.
+
+```ts
+import { createA2uiProjector, resolveRendererCapabilities } from '@braidlabs/sdui/a2ui';
+
+// `a2uiRendererCapabilities` from the transport: which renderer is this?
+const renderer = resolveRendererCapabilities(capabilities, { catalogs: [catalog], manifests });
+if (renderer.status !== 'ok') return refuse(renderer.status); // manifest-unknown, protocol-unsupported
+
+const projector = createA2uiProjector({ catalog, manifest: renderer.manifest, catalogId: renderer.catalogId });
+for await (const message of agent) {
+  const { toRenderer, toAgent } = projector.push(message);
+  toRenderer.forEach(sendToRenderer);
+  toAgent.forEach(sendToAgent); // INCOMPATIBLE, or a function the renderer lacks
+}
+```
+
+### The model, in A2UI terms
+
+| A2UI                                      | SDUI model                                                                                                                       |
+| :---------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| a surface's components, a flat list by id | a screen's tree; `surfaceToScreen` and `treeToComponents` convert, and every upstream example round-trips                        |
+| `children: ["a", "b"]`, `child: "a"`      | slots; `max: 1` is a single child. `Tabs.tabs[].child` is a slot with `a2ui: { list, key }`                                      |
+| `children: { path, componentId }`         | a slot whose one node has `repeat: "<path>"`                                                                                     |
+| a referenced id not yet sent              | an `sdui.placeholder` node, written back as the same dangling reference                                                          |
+| one component under two parents           | a copy with `copyOf`, written back as a reference                                                                                |
+| `@accessibility`, `@checks`, `@metadata`  | `annotations`, carried through projection untouched                                                                              |
+| `action: { event }` / `{ functionCall }`  | the `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions are written as events of their name                        |
+| `{ "@path" }`, `{ "@call" }` in props     | bound values. A step may move, wrap or drop one; a step that converts, maps or reaches into one is a `gap`                       |
+| catalog functions                         | `catalog.functions`; `manifest.functions` lists what a renderer implements, and a node calling one it lacks goes down the ladder |
+| the data model                            | `screen.data`                                                                                                                    |
+
+`parseA2uiMessage` and `parseA2uiStream` refuse what the v1.0 schemas refuse — and reserved keys, unknown `@` directives, `theme` (removed in v1.0), values past the size limits — with the spec's error codes and a JSON Pointer. `A2uiSurfaces` applies messages by the spec's state rules. `a2uiBasicCatalog` and `a2uiBasicManifest` are the basic catalog as a catalog and as a renderer.
+
+### Prerendering
+
+Projection is a pure function of immutable inputs, and a release serves a finite set of manifests, so every variant can be computed when a screen is published:
+
+```bash
+sdui a2ui prerender --catalog catalog.json --screen screens/trip.json \
+  --manifest manifests/web-3.0.json --manifest manifests/web-1.9.json \
+  --context summer-sale=contexts/summer-sale.json --out prerendered/
+```
+
+Each variant is written as the A2UI stream that renderer receives (`.jsonl`) and as the HTML a browser shows before any script runs (`.html`), content-addressed, with `index.json` mapping each catalog id to its variant. `selectPrerendered(index, slug, supportedCatalogIds)` picks one per request. `prerenderA2ui` is the same as a function, and takes a renderer's registry so host components prerender too.
+
+### The renderer: `@braidlabs/sdui/web`
+
+```ts
+import { defineA2uiSurface, A2UI_DEFAULT_CSS } from '@braidlabs/sdui/web';
+
+defineA2uiSurface({
+  registry: {
+    Card: { element: 'acme-panel' }, // the host's own custom element
+    FlightCard: { fragment: { name: 'flight-card', entry: 'https://flights.example/card.js' }, events: { select: 'select' } }, // another team's Braid fragment
+    Fare: (c) => h('div', { class: 'fare' }, c.text('label')), // a view, drawn the same on a server
+  },
+});
+```
+
+```html
+<a2ui-surface src="/agent/stream" action-url="/agent/actions" catalog-ids="https://acme.example/a2ui/catalog.json?caps=cv_9f2c…"></a2ui-surface>
+```
+
+- **Light DOM.** Components are semantic HTML with classes (`a2ui-Button`) and data attributes (`data-variant="primary"`) and no styles of their own: the host's stylesheet is what they look like. `A2UI_DEFAULT_CSS` is a starting point at zero specificity.
+- **Braided components.** A component type can be the host's own custom element (props as its `a2ui` property and scalar attributes; children slotted by prop name) or a Braid fragment in contract mode (props as its `props`; a `braid:event` becomes the A2UI action named in `events`, with its detail in the context).
+- **Patching, not replacing.** An agent's update never replaces an input under the cursor: focus, caret and selection survive. Prerendered HTML (from `renderA2uiHtml`, or the prerender command) carries `data-a2ui-key`s and the messages that built it, and is adopted in place.
+- **Closed and checked.** Bindings, `@checks` and the basic catalog's functions are evaluated by a closed interpreter with a budget. Regular expressions are parsed in the A2UI dialect and refused when they could backtrack catastrophically. URLs pass a policy (`urlPolicy`) — `javascript:` and `data:text` are never written — and Markdown is a subset in which raw HTML is text. There is no `innerHTML` in the renderer; a test enforces it.
+- **Messages out** are dispatched as a cancelable `a2ui:message` event and POSTed to `action-url` as `{ message, metadata }`, with `a2uiRendererCapabilities` and, for surfaces created with `sendDataModel`, `a2uiRendererDataModel`. A response of more messages is applied.
+
+`examples/concierge` puts it together: a CMS-authored screen prerendered per renderer, an agent's surface through the projector, `Card` drawn by the host's element and `FlightCard` by a Braid fragment.
 
 ---
 
