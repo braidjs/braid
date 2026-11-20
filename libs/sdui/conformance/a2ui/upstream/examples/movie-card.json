@@ -36,7 +36,13 @@
           {
             "id": "content",
             "component": "Column",
-            "children": ["title_row", "genre", "rating_row", "runtime", "watch_trailer_btn"]
+            "children": [
+              "title_row",
+              "genre",
+              "rating_row",
+              "runtime",
+              "watch_trailer_btn"
+            ]
           },
           {
             "id": "title_row",

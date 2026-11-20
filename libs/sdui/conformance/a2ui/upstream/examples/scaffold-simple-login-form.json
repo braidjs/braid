@@ -18,7 +18,12 @@
           {
             "id": "root",
             "component": "Column",
-            "children": ["form_title", "username_field", "password_field", "submit_button"],
+            "children": [
+              "form_title",
+              "username_field",
+              "password_field",
+              "submit_button"
+            ],
             "justify": "start",
             "align": "stretch"
           },

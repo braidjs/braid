@@ -23,7 +23,13 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": ["header", "steps_display", "goal_text", "divider", "stats_row"],
+            "children": [
+              "header",
+              "steps_display",
+              "goal_text",
+              "divider",
+              "stats_row"
+            ],
             "align": "center"
           },
           {

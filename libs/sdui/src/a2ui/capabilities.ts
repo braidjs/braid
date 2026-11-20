@@ -1,10 +1,8 @@
 import type { ComponentDefinition, SduiCatalog } from '../lib/catalog.js';
 import { isRecord, own } from '../lib/internal.js';
-import {
-  type ClientManifest,
-  createClientManifest,
-  manifestFingerprint,
-} from '../lib/manifest.js';
+import { canonicalJson } from '@braidlabs/skew';
+import { sha256Hex } from '../lib/hash.js';
+import { type ClientManifest, createClientManifest } from '../lib/manifest.js';
 import {
   A2UI_BASIC_CATALOG_ID,
   a2uiBasicCatalog,
@@ -20,15 +18,31 @@ import {
  * one that shipped today look the same if they name the same catalog — and then the agent writes
  * for one of them and the other breaks.
  *
- * Here each registered manifest has a catalog id of its own, derived from the catalog's:
- * `https://acme.example/a2ui/catalog.json?manifest=cm_9f2c…`. A renderer built against a manifest
- * names that id; the agent keeps authoring against the plain id, at the newest version of every
+ * Here each registered manifest has a catalog id of its own, derived from the catalog's and from
+ * what the manifest can draw: `https://acme.example/a2ui/catalog.json?caps=cv_9f2c…`. A renderer
+ * built against a manifest names that id; the agent keeps authoring against the plain id, at the newest version of every
  * component; and the server, which knows both, projects each surface to what that renderer was
  * built to draw. The catalog definition each id names is generated from the contracts, at that
  * manifest's versions.
  */
 
-const MANIFEST_PARAM = 'manifest';
+const CAPS_PARAM = 'caps';
+
+/**
+ * What a manifest can draw, as a short key: its component, action and function versions, and
+ * nothing about which binary it is. Two builds that draw alike — 3.0.0 and 3.0.1 of one app, or
+ * one catalog on iOS and on the web — have one key, so they share a catalog id, a projection and
+ * every prerendered file.
+ */
+export function a2uiCapabilityKey(manifest: ClientManifest): string {
+  const draws = {
+    components: manifest.components,
+    actions: manifest.actions ?? {},
+    functions:
+      manifest.functions === undefined ? null : [...manifest.functions].sort(),
+  };
+  return `cv_${sha256Hex(canonicalJson(draws)).slice(0, 20)}`;
+}
 
 /** The id agents author against: the catalog's own, always the newest of everything. */
 export function a2uiAuthoringId(catalog: SduiCatalog): string {
@@ -50,7 +64,7 @@ export function a2uiCatalogId(
 ): string {
   const base = a2uiAuthoringId(catalog);
   if (manifest === undefined || base === A2UI_BASIC_CATALOG_ID) return base;
-  return `${base}${base.includes('?') ? '&' : '?'}${MANIFEST_PARAM}=${manifestFingerprint(manifest)}`;
+  return `${base}${base.includes('?') ? '&' : '?'}${CAPS_PARAM}=${a2uiCapabilityKey(manifest)}`;
 }
 
 /** The manifest of a renderer that implements everything a catalog has, at its newest. */
@@ -265,9 +279,9 @@ export function resolveRendererCapabilities(
 ): CapabilityResolution {
   const { versions, v1 } = parseRendererCapabilities(raw);
   if (!v1) return { status: 'protocol-unsupported', versions };
-  const byFingerprint = new Map(
+  const byKey = new Map(
     registry.manifests.map((manifest) => [
-      manifestFingerprint(manifest),
+      a2uiCapabilityKey(manifest),
       manifest,
     ]),
   );
@@ -289,9 +303,9 @@ export function resolveRendererCapabilities(
           manifest: a2uiNewestManifest(catalog),
           catalogId: id,
         };
-      const prefix = `${base}${base.includes('?') ? '&' : '?'}${MANIFEST_PARAM}=`;
+      const prefix = `${base}${base.includes('?') ? '&' : '?'}${CAPS_PARAM}=`;
       if (!id.startsWith(prefix)) continue;
-      const manifest = byFingerprint.get(id.slice(prefix.length));
+      const manifest = byKey.get(id.slice(prefix.length));
       if (manifest && fits(manifest, catalog))
         return { status: 'ok', catalog, manifest, catalogId: id };
     }

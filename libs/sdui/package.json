@@ -27,6 +27,10 @@
       "types": "./src/a2ui.d.ts",
       "default": "./src/a2ui.js"
     },
+    "./web": {
+      "types": "./src/web.d.ts",
+      "default": "./src/web.js"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {

@@ -2,14 +2,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseCatalog } from '../lib/catalog.js';
-import {
-  type ClientManifest,
-  manifestFingerprint,
-  parseClientManifest,
-} from '../lib/manifest.js';
+import { type ClientManifest, parseClientManifest } from '../lib/manifest.js';
 import { A2UI_BASIC_CATALOG_ID, a2uiBasicManifest } from './basic.js';
 import {
   a2uiAuthoringId,
+  a2uiCapabilityKey,
   a2uiCatalogFor,
   a2uiCatalogId,
   resolveRendererCapabilities,
@@ -332,7 +329,7 @@ describe('catalog ids and renderer capabilities', () => {
         true,
       );
       expect(definition.catalogId).toBe(
-        `${authoring}?manifest=${manifestFingerprint(manifest)}`,
+        `${authoring}?caps=${a2uiCapabilityKey(manifest)}`,
       );
       expect(Object.keys(definition.components).includes('FlightCard')).toBe(
         manifest !== manifests.legacy,
@@ -382,13 +379,23 @@ describe('catalog ids and renderer capabilities', () => {
     ).toMatchObject({
       status: 'manifest-unknown',
     });
-    // a fingerprint nobody registered is unknown, even under a known catalog
+    // a capability key nobody registered is unknown, even under a known catalog
     expect(
-      resolveRendererCapabilities(
-        caps([`${authoring}?manifest=cm_0000`]),
-        registry,
-      ).status,
+      resolveRendererCapabilities(caps([`${authoring}?caps=cv_0000`]), registry)
+        .status,
     ).toBe('manifest-unknown');
+    // builds that draw alike share an id, whatever else differs about them
+    const patch = parseClientManifest({
+      ...manifests.current,
+      version: '3.0.1',
+      build: 3001,
+    });
+    expect(a2uiCatalogId(catalog, patch)).toBe(
+      a2uiCatalogId(catalog, manifests.current),
+    );
+    expect(a2uiCatalogId(catalog, patch)).not.toBe(
+      a2uiCatalogId(catalog, manifests.oneBehind),
+    );
     expect(
       resolveRendererCapabilities(
         { '0.9': { supportedCatalogIds: [authoring] } },
