@@ -172,10 +172,40 @@ export interface EvaluatorOptions {
   readonly openUrl?: (url: string) => void;
   readonly functions?: Readonly<Record<string, HostFunction>>;
   readonly report: (error: ReportedError) => void;
+  /**
+   * The budget of the draw in progress. A renderer that draws several surfaces shares one; without
+   * it, the evaluator keeps its own, renewed by `beginDraw`.
+   */
+  readonly budget?: () => DrawBudget;
 }
 
-/** Regex steps one draw of a surface may take across all its matches: well under a frame's worth of work per check. */
-export const DRAW_MATCH_STEPS = 2_000_000;
+/**
+ * What one draw may cost, across every surface an element holds and every renderer function call
+ * between draws. Content decides how much work a draw asks for; this decides how much it gets.
+ * Past a limit, the rest of the draw is empty and the agent is told once.
+ */
+export const DRAW_LIMITS = Object.freeze({
+  /** Function calls, templates included. */
+  calls: 20_000,
+  /** Characters of text produced: every label, title and paragraph. */
+  chars: 2_000_000,
+  /** Components and repeated parts drawn: template items, tabs, options. */
+  draws: 10_000,
+  /** Regex matching steps. */
+  regexSteps: 2_000_000,
+});
+/** @deprecated use DRAW_LIMITS.regexSteps */
+export const DRAW_MATCH_STEPS = DRAW_LIMITS.regexSteps;
+
+/** What one draw has spent. Shared by every evaluator that draws with it. */
+export class DrawBudget {
+  readonly regex = new MatchBudget(DRAW_LIMITS.regexSteps);
+  calls = 0;
+  chars = 0;
+  draws = 0;
+  /** Which limits have been reported, so each is reported once per draw. */
+  readonly reported = new Set<string>();
+}
 
 export const EVALUATION_LIMITS = Object.freeze({
   /** Function calls in one evaluation, templates included. */
@@ -192,6 +222,8 @@ class Budget {
 }
 
 class ExpressionError extends Error {}
+/** A limit already reported in this draw: fails the value without saying so again. */
+class SilentOverBudget extends Error {}
 
 export interface Evaluator {
   /** A dynamic value: a literal, `{ "@path" }`, or `{ "@call" }`. `null` when it fails. */
@@ -207,6 +239,8 @@ export interface Evaluator {
   ): { readonly valid: boolean; readonly messages: readonly string[] };
   /** Starts a draw: regex matching shares one step budget until the next. */
   beginDraw(): void;
+  /** The budget of the draw in progress. */
+  budget(): DrawBudget;
   /** A function call made by a user gesture: `openUrl` runs only here. */
   activate(call: unknown, scope?: EvaluationScope): unknown;
 }
@@ -239,8 +273,37 @@ export function toText(value: unknown): string {
 export function createEvaluator(options: EvaluatorOptions): Evaluator {
   const locale = options.locale ?? 'en-US';
   const regexes = new Map<string, A2uiRegex | RegexDialectError>();
-  /** Shared by every match until the next `beginDraw`: see {@link MatchBudget}. */
-  let drawBudget = new MatchBudget(DRAW_MATCH_STEPS);
+  let own = new DrawBudget();
+  const draw = (): DrawBudget => (options.budget ? options.budget() : own);
+  const overDraw = (what: string): never => {
+    const budget = draw();
+    if (!budget.reported.has(what)) {
+      budget.reported.add(what);
+      throw new ExpressionError(
+        `the surface asks for more ${what} than one draw allows`,
+      );
+    }
+    throw new SilentOverBudget();
+  };
+  const spendCall = (): void => {
+    if (++draw().calls > DRAW_LIMITS.calls) overDraw('function calls');
+  };
+  /** Text produced: counted, and past the limit, nothing. */
+  const spendText = (text: string): string => {
+    const budget = draw();
+    budget.chars += text.length;
+    if (budget.chars > DRAW_LIMITS.chars) {
+      if (!budget.reported.has('text')) {
+        budget.reported.add('text');
+        options.report({
+          code: 'EXPRESSION_ERROR',
+          message: 'the surface asks for more text than one draw allows',
+        });
+      }
+      return '';
+    }
+    return text;
+  };
 
   const fail = (message: string): never => {
     throw new ExpressionError(message);
@@ -297,6 +360,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
   ): unknown {
     if (++budget.calls > EVALUATION_LIMITS.calls)
       fail(`more than ${EVALUATION_LIMITS.calls} function calls in one value`);
+    spendCall();
     const name = raw['@call'];
     if (typeof name !== 'string')
       return fail('a call names its function as a string');
@@ -387,7 +451,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         if (compiled instanceof RegexDialectError)
           return fail(`regex: ${compiled.message}`);
         return valid(
-          a2uiRegexMatches(compiled, toText(args['value']), drawBudget),
+          a2uiRegexMatches(compiled, toText(args['value']), draw().regex),
         );
       }
       case 'length': {
@@ -618,6 +682,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
           fail(
             `more than ${EVALUATION_LIMITS.calls} function calls in one value`,
           );
+        spendCall();
         const args: Record<string, unknown> = Object.create(null);
         for (const [key, value] of expr.args)
           args[key] = evalExpr(value, scope, budget, depth + 1, activated);
@@ -680,35 +745,41 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       if (
         !(
           error instanceof ExpressionError ||
+          error instanceof SilentOverBudget ||
           error instanceof RegexDialectError ||
           error instanceof RangeError ||
           error instanceof TypeError
         )
       )
         throw error;
-      options.report({ code: 'EXPRESSION_ERROR', message: error.message });
+      if (!(error instanceof SilentOverBudget))
+        options.report({ code: 'EXPRESSION_ERROR', message: error.message });
       return fallback;
     }
   };
 
   return {
     value: (raw, scope = ROOT_SCOPE) =>
-      guarded(null as unknown, () =>
-        evaluate(raw, scope, new Budget(), 0, false),
-      ),
+      guarded(null as unknown, () => {
+        const result = evaluate(raw, scope, new Budget(), 0, false);
+        return typeof result === 'string' ? spendText(result) : result;
+      }),
     boolean: (raw, scope = ROOT_SCOPE) =>
       guarded(false, () =>
         toBoolean(evaluate(raw, scope, new Budget(), 0, false)),
       ),
     text: (raw, scope = ROOT_SCOPE) =>
-      guarded('', () => toText(evaluate(raw, scope, new Budget(), 0, false))),
+      guarded('', () =>
+        spendText(toText(evaluate(raw, scope, new Budget(), 0, false))),
+      ),
     activate: (raw, scope = ROOT_SCOPE) =>
       guarded(null as unknown, () =>
         evaluate(raw, scope, new Budget(), 0, true),
       ),
     beginDraw() {
-      drawBudget = new MatchBudget(DRAW_MATCH_STEPS);
+      own = new DrawBudget();
     },
+    budget: draw,
     checks(rules, scope = ROOT_SCOPE) {
       if (!Array.isArray(rules)) return { valid: true, messages: [] };
       const messages: string[] = [];
@@ -739,6 +810,25 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
 
 // --- dates --------------------------------------------------------------------------------------
 
+/**
+ * Date formatters, kept: building one is costly, and a format string of many letters asks for
+ * one per letter. Bounded, as keys come partly from content (the locale, the time zone).
+ */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(
+  locale: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = `${locale}\u0000${JSON.stringify(options)}`;
+  let found = formatters.get(key);
+  if (!found) {
+    if (formatters.size >= 256) formatters.clear();
+    found = new Intl.DateTimeFormat(locale, options);
+    formatters.set(key, found);
+  }
+  return found;
+}
+
 function formatDate(
   value: unknown,
   pattern: string,
@@ -762,7 +852,7 @@ function formatDate(
     opts: Intl.DateTimeFormatOptions,
     type: Intl.DateTimeFormatPartTypes,
   ): string =>
-    new Intl.DateTimeFormat(locale, { ...zone, ...opts })
+    formatter(locale, { ...zone, ...opts })
       .formatToParts(date)
       .find((p) => p.type === type)?.value ?? '';
   const pad = (n: string, width: number) => n.padStart(width, '0');
@@ -772,7 +862,7 @@ function formatDate(
   ) =>
     String(
       Number(
-        new Intl.DateTimeFormat('en-US', { ...zone, ...opts })
+        formatter('en-US', { ...zone, ...opts })
           .formatToParts(date)
           .find((p) => p.type === type)?.value ?? '0',
       ),

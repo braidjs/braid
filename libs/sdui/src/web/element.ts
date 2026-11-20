@@ -13,6 +13,7 @@ import {
 import { A2uiSurfaces } from '../a2ui/surfaces.js';
 import { patchChildren } from './dom.js';
 import {
+  DrawBudget,
   type HostFunction,
   type UrlPolicy,
   checkUrl,
@@ -73,6 +74,7 @@ export function defineA2uiSurface(
     readonly surfaces = new A2uiSurfaces();
     registry: ComponentRegistry = options.registry ?? {};
     readonly #local = new Map<string, Map<string, unknown>>();
+    #budget = new DrawBudget();
     readonly #evaluators = new Map<
       string,
       ReturnType<typeof createEvaluator>
@@ -218,6 +220,8 @@ export function defineA2uiSurface(
     ) {
       return createEvaluator({
         model,
+        // One budget for everything between draws: every surface, every function call.
+        budget: () => this.#budget,
         locale:
           this.getAttribute('locale') ??
           (this.ownerDocument.documentElement.lang || undefined),
@@ -269,6 +273,7 @@ export function defineA2uiSurface(
     }
 
     #draw(): void {
+      this.#budget = new DrawBudget();
       const views = this.surfaces.ids().map((id) => {
         const surface = this.surfaces.get(id)!;
         let local = this.#local.get(id);
@@ -360,6 +365,7 @@ export function defineA2uiSurface(
           .getReader();
         let buffer = '';
         let event: string[] = [];
+        let eventLength = 0;
         const tooLong = (): void => {
           abort.abort();
           this.#send(
@@ -386,15 +392,14 @@ export function defineA2uiSurface(
             for (const line of [...lines, ...(done ? [''] : [])]) {
               const bare = line.replace(/\r$/, '');
               if (bare.startsWith('data:')) {
-                event.push(bare.slice(5).replace(/^ /, ''));
-                if (
-                  event.reduce((n, part) => n + part.length + 1, 0) >
-                  A2UI_LIMITS.messageChars
-                )
-                  return tooLong();
+                const part = bare.slice(5).replace(/^ /, '');
+                event.push(part);
+                eventLength += part.length + 1;
+                if (eventLength > A2UI_LIMITS.messageChars) return tooLong();
               } else if (bare === '' && event.length > 0) {
                 const data = event.join('\n');
                 event = [];
+                eventLength = 0;
                 if (data.length > A2UI_LIMITS.messageChars) return tooLong();
                 let message: unknown;
                 try {

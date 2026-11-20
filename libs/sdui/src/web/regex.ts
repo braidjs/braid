@@ -528,10 +528,58 @@ export const MAX_INSTRUCTIONS = 20_000;
 /** Thread steps one match may take, lookaheads included. */
 export const MATCH_STEP_BUDGET = 5_000_000;
 
-function compile(node: Node): Program {
+/**
+ * How many instructions a pattern compiles to, worked out before compiling — so that a short
+ * pattern of nested counted repeats is refused instead of built. A lookahead is compiled once
+ * however many copies of it a counted repeat makes, and counted once here.
+ */
+function estimate(node: Node, looks = new Set<Node>()): number {
+  const over = MAX_INSTRUCTIONS + 1;
+  const size = (n: Node): number => {
+    switch (n.kind) {
+      case 'char':
+      case 'assert':
+        return 1;
+      case 'look': {
+        if (looks.has(n)) return 1;
+        looks.add(n);
+        return Math.min(over, 2 + size(n.body));
+      }
+      case 'group':
+        return size(n.body);
+      case 'alt': {
+        let total = 0;
+        for (const seq of n.branches) {
+          total += 2;
+          for (const it of seq) {
+            const atom = size(it.atom);
+            total +=
+              it.max === Infinity
+                ? it.min * atom + atom + 2
+                : it.min * atom + (it.max - it.min) * (atom + 1);
+            if (total > MAX_INSTRUCTIONS) return over;
+          }
+        }
+        return total;
+      }
+    }
+  };
+  return size(node);
+}
+
+/** Instructions across a pattern and all its lookaheads, shared while compiling. */
+interface Compiling {
+  count: number;
+  readonly looks: Map<Node, Program>;
+}
+
+function compile(
+  node: Node,
+  shared: Compiling = { count: 0, looks: new Map() },
+): Program {
   const program: Program = [];
   const emit = (instruction: Instruction): number => {
-    if (program.length >= MAX_INSTRUCTIONS)
+    if (++shared.count > MAX_INSTRUCTIONS)
       throw new RegexDialectError(
         `the pattern compiles to more than ${MAX_INSTRUCTIONS} instructions`,
       );
@@ -550,7 +598,10 @@ function compile(node: Node): Program {
         emit({ op: 'assert', which: n.which });
         return;
       case 'look': {
-        const inner = compile(n.body);
+        // One program per lookahead in the pattern, shared by every copy a counted repeat makes,
+        // so its answers at each position are worked out once.
+        let inner = shared.looks.get(n);
+        if (!inner) shared.looks.set(n, (inner = compile(n.body, shared)));
         emit({ op: 'look', program: inner, negate: n.negate });
         return;
       }
@@ -624,8 +675,9 @@ function inSet(set: CharSet, code: number): boolean {
 export class MatchBudget {
   steps = 0;
   constructor(readonly limit: number = MATCH_STEP_BUDGET) {}
-  spend(): void {
-    if (++this.steps > this.limit)
+  spend(cost = 1): void {
+    this.steps += cost;
+    if (this.steps > this.limit)
       throw new RegexDialectError('matching took more steps than its budget');
   }
 }
@@ -640,6 +692,8 @@ function run(
   budget: Budget,
   looks: Map<Program, Map<number, boolean>>,
 ): boolean {
+  // Setting up a run costs its program's length: a lookahead run at every position is paid for.
+  budget.spend(program.length);
   const mark = new Int32Array(program.length).fill(-1);
   let generation = 0;
   const look = (
@@ -733,6 +787,10 @@ export function compileA2uiRegex(pattern: string): A2uiRegex {
     );
   const tree = parse(pattern);
   check(tree);
+  if (estimate(tree) > MAX_INSTRUCTIONS)
+    throw new RegexDialectError(
+      `the pattern compiles to more than ${MAX_INSTRUCTIONS} instructions`,
+    );
   // ECMAScript's own parser has the last word on syntax: a pattern it refuses is not one.
   try {
     new RegExp(pattern, 'u');

@@ -268,9 +268,10 @@ const Card: ComponentRenderer = (c) =>
   h('div', { class: cls('Card') }, c.child('child'));
 
 const Tabs: ComponentRenderer = (c) => {
-  const tabs = Array.isArray(c.raw('tabs'))
+  const all = Array.isArray(c.raw('tabs'))
     ? (c.raw('tabs') as unknown[]).filter(isRecord)
     : [];
+  const tabs = all.slice(0, c.allow(all.length));
   const [selected, select] = c.local('tab', 0);
   const current = Math.min(selected, Math.max(0, tabs.length - 1));
   const tabId = (index: number) => opaque(c, `tab-${index}`);
@@ -517,12 +518,13 @@ const ChoicePicker: ComponentRenderer = (c) => {
   const [filter, setFilter] = c.local('filter', '');
   const label = (option: Record<string, unknown>) =>
     c.textOf(option['label']) || String(option['value'] ?? '');
-  const shown =
+  const matching =
     c.raw('filterable') === true && filter
       ? options.filter((o) =>
           label(o).toLowerCase().includes(filter.toLowerCase()),
         )
       : options;
+  const shown = matching.slice(0, c.allow(matching.length));
   const messages = c.checks().messages;
   const group = opaque(c, 'choices');
   return h(

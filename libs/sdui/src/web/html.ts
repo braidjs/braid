@@ -6,6 +6,7 @@ import {
 } from '../a2ui/messages.js';
 import { A2uiSurfaces } from '../a2ui/surfaces.js';
 import {
+  DrawBudget,
   type HostFunction,
   type ReportedError,
   type UrlPolicy,
@@ -74,10 +75,13 @@ export function renderA2uiHtml(
     }
   }
   const tag = options.tag ?? 'a2ui-surface';
+  // One budget for the whole page: every surface draws from it.
+  const budget = new DrawBudget();
   const views = surfaces.ids().map((id) => {
     const surface = surfaces.get(id)!;
     const evaluator = createEvaluator({
       model: () => surface.dataModel,
+      budget: () => budget,
       locale: options.locale,
       timeZone: options.timeZone,
       urlPolicy: options.urlPolicy,

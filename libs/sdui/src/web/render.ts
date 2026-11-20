@@ -9,6 +9,8 @@ import {
 } from '../a2ui/surfaces.js';
 import { BASIC_COMPONENTS } from './components.js';
 import {
+  type DrawBudget,
+  DRAW_LIMITS,
   type EvaluationScope,
   type Evaluator,
   ROOT_SCOPE,
@@ -67,6 +69,11 @@ export interface RenderContext {
   /** A URL prop, checked against the page's policy. */
   url(name: string, use: UrlUse): UrlCheck;
   markdown(text: string): MarkdownResult;
+  /**
+   * How many of `count` repeated parts — tabs, options — may be drawn, counted against the
+   * draw's budget like components.
+   */
+  allow(count: number): number;
   /** State the renderer keeps for a component between draws — the open tab. */
   local<T>(name: string, initial: T): [T, (value: T) => void];
 }
@@ -127,13 +134,12 @@ export interface RenderOptions {
 
 const MAX_DEPTH = 64;
 /**
- * Components drawn per surface per draw, template items counted. A2UI lets a component be shared
- * and templates nest, so a few components can describe millions of drawings; past this the rest
- * is a placeholder and the agent is told.
+ * Components drawn per draw, template items, tabs and options counted — across every surface
+ * that shares the draw's budget. A2UI lets a component be shared and templates nest, so a few
+ * components can describe millions of drawings; past this the rest is a placeholder and the agent
+ * is told. Text, function calls and regex steps are bounded by the same budget (`DRAW_LIMITS`).
  */
-export const MAX_DRAWS = 10_000;
-/** Characters of Markdown text drawn per surface per draw. */
-export const MAX_TEXT = 1_000_000;
+export const MAX_DRAWS = DRAW_LIMITS.draws;
 
 /** Attribute names a host element is never given from content. */
 const DENIED_ATTRIBUTES = new Set([
@@ -187,11 +193,18 @@ export function renderSurface(
 ): ViewElement {
   const catalog = options.catalog ?? a2uiBasicCatalog;
   const registry = options.registry ?? {};
-  let drawn = 0;
-  // Characters of text drawn this time: a few shared components can stand for many drawings of
-  // one long string, and the draw count alone does not see what each drawing costs.
-  let text = MAX_TEXT;
+  // A renderer drawing several surfaces shares one budget among them; drawing alone, renew it.
   options.evaluator.beginDraw();
+  const budget = (): DrawBudget => options.evaluator.budget();
+  const truncated = (path: string): void => {
+    if (budget().reported.has('draws')) return;
+    budget().reported.add('draws');
+    options.report({
+      code: 'VALIDATION_FAILED',
+      message: `the surface draws more than ${MAX_DRAWS} components; the rest are not drawn`,
+      path,
+    });
+  };
   const draw = (
     id: unknown,
     scope: EvaluationScope,
@@ -200,13 +213,8 @@ export function renderSurface(
     ancestry: readonly string[],
   ): View | null => {
     if (typeof id !== 'string') return null;
-    if (++drawn > MAX_DRAWS) {
-      if (drawn === MAX_DRAWS + 1)
-        options.report({
-          code: 'VALIDATION_FAILED',
-          message: `the surface draws more than ${MAX_DRAWS} components; the rest are not drawn`,
-          path: `/components/${id}`,
-        });
+    if (++budget().draws > MAX_DRAWS) {
+      truncated(`/components/${id}`);
       return h('div', {
         class: 'a2ui-placeholder',
         'data-a2ui-truncated': '',
@@ -530,15 +538,13 @@ export function renderSurface(
           use,
           options.urlPolicy,
         ),
-      markdown: (source) => {
-        text -= source.length;
-        if (text >= 0) return markdown(source);
-        if (text + source.length >= 0)
-          options.report({
-            code: 'VALIDATION_FAILED',
-            message: `the surface draws more than ${MAX_TEXT} characters of text; the rest are not drawn`,
-          });
-        return { inline: true, views: [] };
+      markdown: (source) => markdown(source),
+      allow(count) {
+        const room = Math.max(0, MAX_DRAWS - budget().draws);
+        const granted = Math.min(count, room);
+        budget().draws += granted;
+        if (granted < count) truncated(`/components/${component.id}`);
+        return granted;
       },
       local<T>(name: string, initial: T): [T, (value: T) => void] {
         const slot = `${key}::${name}`;

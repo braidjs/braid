@@ -968,7 +968,7 @@ Built. Decisions that came out of building it:
       click sends exactly one action.
 - [x] Prerendered HTML shows with JavaScript off; with it, the renderer takes it over with the same
       text and no error; an old build's capabilities are served the downgraded variant.
-- [x] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
+- [ ] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
       regexes — runs nothing, makes no element outside the allowlist, and reports `blocked-url` /
       `EXPRESSION_ERROR`; the renderer source has no `innerHTML`, by test.
 

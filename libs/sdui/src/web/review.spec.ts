@@ -545,6 +545,204 @@ describe('what the second verification found', () => {
       ]),
     ]);
     expect(performance.now() - start).toBeLessThan(3_000);
-    expect(errors.some((e) => /characters of text/.test(e.message))).toBe(true);
+    expect(
+      errors.some((e) => /more text than one draw allows/.test(e.message)),
+    ).toBe(true);
+  });
+});
+
+describe('what the third verification found: one budget for all of a draw', () => {
+  const timed = <T>(work: () => T): { result: T; ms: number } => {
+    const start = performance.now();
+    const result = work();
+    return { result, ms: performance.now() - start };
+  };
+
+  it('labels count as text: a thousand labels bound to one long string are bounded', () => {
+    const { result, ms } = timed(() =>
+      renderA2uiHtml([
+        create('s', {
+          dataModel: { items: Array(1_000).fill(0), long: 'x'.repeat(100_000) },
+        }),
+        update('s', [
+          {
+            id: 'root',
+            component: 'Column',
+            children: { path: '/items', componentId: 'box' },
+          },
+          {
+            id: 'box',
+            component: 'CheckBox',
+            label: { '@path': '/long' },
+            value: false,
+          },
+        ]),
+      ]),
+    );
+    expect(ms).toBeLessThan(3_000);
+    expect(markup(result.html).length).toBeLessThan(3_000_000);
+    expect(
+      result.errors.some((e) =>
+        /more text than one draw allows/.test(e.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('the budget is shared by every surface of a page', () => {
+    const call = {
+      '@call': 'regex',
+      args: { value: 'a'.repeat(400), pattern: '(a?){400}b' },
+    };
+    const messages = Array.from({ length: 64 }, (_, i) => [
+      create(`s${i}`),
+      update(`s${i}`, [
+        {
+          id: 'root',
+          component: 'TextField',
+          label: 'x',
+          value: 'v',
+          '@checks': [
+            {
+              condition: {
+                '@call': 'and',
+                args: { values: Array(250).fill(call) },
+              },
+            },
+          ],
+        },
+      ]),
+    ]).flat();
+    expect(timed(() => renderA2uiHtml(messages)).ms).toBeLessThan(3_000);
+  });
+
+  it('renderer function calls between draws share the element’s budget', async () => {
+    const { element } = mount();
+    element.push([
+      create('s', { dataModel: {} }),
+      update('s', [{ id: 'root', component: 'Text', text: 'x' }]),
+    ]);
+    await flush();
+    const start = performance.now();
+    element.push(
+      Array.from({ length: 300 }, (_, i) => ({
+        version: '1.0',
+        callRendererFunction: {
+          functionCallId: `f${i}`,
+          surfaceId: 's',
+          callFunction: {
+            '@call': 'regex',
+            catalogId: B,
+            args: { value: 'a'.repeat(400), pattern: '(a?){400}b' },
+          },
+        },
+      })),
+    );
+    expect(performance.now() - start).toBeLessThan(3_000);
+    element.remove();
+  });
+
+  it('nested counted lookaheads are refused before they are built', () => {
+    for (const pattern of [
+      '(?:(?!(?:b{999}){20})){1000}x',
+      '(?:(?!(?:(?!(?:b{999}){20})){1000})){50}',
+    ]) {
+      const errors: ReportedError[] = [];
+      const e = createEvaluator({
+        model: () => ({}),
+        report: (error) => errors.push(error),
+      });
+      const { ms } = timed(() =>
+        e.value({
+          '@call': 'regex',
+          args: { value: 'b'.repeat(4_000), pattern },
+        }),
+      );
+      expect(ms).toBeLessThan(500);
+      expect(errors[0]?.message).toMatch(/more than 20000 instructions/);
+    }
+  });
+
+  it('formatDate with a long format, many times, is cheap', () => {
+    const format = 'yyyy MM dd HH mm ss '.repeat(13).slice(0, 256);
+    const value = Array.from(
+      { length: 254 },
+      () =>
+        `\${formatDate(value: '2026-02-02T15:17:00Z', format: '${format}')}`,
+    ).join('');
+    const { ms } = timed(() =>
+      renderA2uiHtml(
+        [
+          create('s'),
+          update('s', [
+            {
+              id: 'root',
+              component: 'Text',
+              text: { '@call': 'formatString', args: { value } },
+            },
+          ]),
+        ],
+        { timeZone: 'UTC' },
+      ),
+    );
+    expect(ms).toBeLessThan(2_000);
+  });
+
+  it('tabs and options count against the draw budget', () => {
+    const tabs = Array.from({ length: 10_000 }, (_, i) => ({
+      title: `t${i}`,
+      child: 'x',
+    }));
+    const options = Array.from({ length: 500 }, (_, i) => ({
+      label: `o${i}`,
+      value: `${i}`,
+    }));
+    const { result, ms } = timed(() =>
+      renderA2uiHtml([
+        create('s', { dataModel: { items: Array(1_000).fill(0) } }),
+        update('s', [
+          {
+            id: 'root',
+            component: 'Column',
+            children: ['tabsList', 'pickers'],
+          },
+          { id: 'tabsList', component: 'Tabs', tabs },
+          { id: 'x', component: 'Text', text: 'x' },
+          {
+            id: 'pickers',
+            component: 'Column',
+            children: { path: '/items', componentId: 'pick' },
+          },
+          { id: 'pick', component: 'ChoicePicker', options, value: [] },
+        ]),
+      ]),
+    );
+    expect(ms).toBeLessThan(3_000);
+    expect((markup(result.html).match(/<input/g) ?? []).length).toBeLessThan(
+      10_001,
+    );
+    expect(
+      result.errors.some((e) => /more than 10000 components/.test(e.message)),
+    ).toBe(true);
+  });
+
+  it('server-sent events accumulate in linear time', async () => {
+    const body = 'data:\n'.repeat(200_000);
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(body, {
+        headers: { 'content-type': 'text/event-stream' },
+      })) as typeof fetch;
+    try {
+      const { element, sent } = mount();
+      const start = performance.now();
+      element.setAttribute('src', '/stream');
+      for (let i = 0; i < 100 && sent.length === 0; i++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(performance.now() - start).toBeLessThan(3_000);
+      expect(sent.length).toBeGreaterThan(0);
+      element.remove();
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
