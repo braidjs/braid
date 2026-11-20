@@ -194,9 +194,26 @@ const Icon: ComponentRenderer = (c) => {
   );
 };
 
+/**
+ * Draws a component costs beyond its own, for elements a browser lays out and keeps far more
+ * expensively than a paragraph: a player's controls, a date picker. Measured in Chromium, 5,000
+ * video players took 1.6 s to lay out, and each change of their source as long again.
+ */
+const MEDIA_WEIGHT = 25;
+const DATE_INPUT_WEIGHT = 4;
+
+/** Whether the draw can afford `weight` draws more for this component. */
+const weighs = (c: Parameters<ComponentRenderer>[0], weight: number): boolean =>
+  c.allow(weight) === weight;
+
 const media =
   (tag: 'video' | 'audio'): ComponentRenderer =>
   (c) => {
+    if (!weighs(c, MEDIA_WEIGHT))
+      return h('span', {
+        class: cls(tag === 'video' ? 'Video' : 'AudioPlayer'),
+        'data-a2ui-truncated': '',
+      });
     const checked = c.url('url', 'media');
     const description = c.text('description');
     if (!checked.ok)
@@ -624,6 +641,11 @@ const Slider: ComponentRenderer = (c) => {
 };
 
 const DateTimeInput: ComponentRenderer = (c) => {
+  if (!weighs(c, DATE_INPUT_WEIGHT))
+    return h('span', {
+      class: cls('DateTimeInput'),
+      'data-a2ui-truncated': '',
+    });
   const bound = c.bind('value');
   const date = c.raw('enableDate') !== false;
   const time = c.raw('enableTime') === true;

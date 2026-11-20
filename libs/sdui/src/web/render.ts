@@ -202,7 +202,7 @@ export function renderSurface(
     budget().reported.add('draws');
     options.report({
       code: 'VALIDATION_FAILED',
-      message: `the surface draws more than ${MAX_DRAWS} components; the rest are not drawn`,
+      message: `the surface draws more than ${budget().drawLimit} components; the rest are not drawn`,
       path,
     });
   };
@@ -217,7 +217,7 @@ export function renderSurface(
     // Out of components, or out of work or time (the evaluator has said which): the rest is a
     // placeholder, and costs nothing to make.
     const spent = budget().spent;
-    if (spent || ++budget().draws > MAX_DRAWS) {
+    if (spent || ++budget().draws > budget().drawLimit) {
       if (!spent) truncated(`/components/${id}`);
       return h('div', {
         class: 'a2ui-placeholder',
@@ -639,7 +639,7 @@ export function renderSurface(
           : { inline: true, views: [source] };
       },
       allow(count) {
-        const room = Math.max(0, MAX_DRAWS - budget().draws);
+        const room = Math.max(0, budget().drawLimit - budget().draws);
         const granted = Math.min(count, room);
         budget().draws += granted;
         if (granted < count) truncated(`/components/${component.id}`);

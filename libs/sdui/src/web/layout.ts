@@ -141,7 +141,22 @@ const MIRRORED = new Set([
   0x28, 0x29, 0x3c, 0x3e, 0x5b, 0x5d, 0x7b, 0x7d, 0xab, 0xbb,
 ]);
 
+/**
+ * What a text costs, cased as the host's CSS may show it: `text-transform` can turn a letter in a
+ * cheap block into one in a block its font lacks (ɐ becomes Ɐ), so a text costs the dearest of
+ * itself, upper-cased and lower-cased.
+ */
 export function layoutCost(text: string): number {
+  // ASCII cases to ASCII: only text beyond it is priced three ways
+  if (/^[\t\n\r\x20-\x7e]*$/.test(text)) return text.length;
+  return Math.max(
+    costOf(text),
+    costOf(text.toUpperCase()),
+    costOf(text.toLowerCase()),
+  );
+}
+
+function costOf(text: string): number {
   let ascii = true;
   for (let index = 0; index < text.length; index++) {
     const code = text.charCodeAt(index);

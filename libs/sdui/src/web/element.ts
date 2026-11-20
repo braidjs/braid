@@ -491,6 +491,11 @@ export function defineA2uiSurface(
       this.#budget = new DrawBudget({
         ms: DRAW_LIMITS.ms,
         textLimit: DRAW_LIMITS.chars * this.#textScale,
+        // not only text lays out slowly: a page that did draws fewer components too
+        drawLimit: Math.max(
+          50,
+          Math.floor(DRAW_LIMITS.draws * this.#textScale),
+        ),
       });
       this.#reportedThisDraw = 0;
       const views = this.surfaces.ids().map((id) => {

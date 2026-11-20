@@ -180,3 +180,19 @@ describe('what the sixth verification found', () => {
     expect(new Set(keys).size).toBe(3);
   });
 });
+
+describe('what the eighth audit found', () => {
+  it('video players are weighed as the many draws they cost', () => {
+    const { html, errors } = renderA2uiHtml([
+      create('s', { dataModel: { u: '/x.mp4' } }),
+      update('s', [
+        { id: 'root', component: 'Column', children: Array(4_999).fill('v') },
+        { id: 'v', component: 'Video', url: { '@path': '/u' } },
+      ]),
+    ]);
+    const players = (html.match(/<video/g) ?? []).length;
+    expect(players).toBeGreaterThan(100);
+    expect(players).toBeLessThanOrEqual(200);
+    expect(errors.map((e) => e.message).join('\n')).toMatch(/draws more than/);
+  });
+});

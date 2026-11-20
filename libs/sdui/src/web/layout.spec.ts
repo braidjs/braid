@@ -9,7 +9,7 @@ import {
 describe('a text is priced by what laying it out costs', () => {
   it('Latin, Greek and Cyrillic text costs its length', () => {
     expect(layoutCost('hello, world')).toBe(12);
-    expect(layoutCost('Grüße, café — naïve')).toBe(19);
+    expect(layoutCost('Grüße, café — naïve')).toBe(20); // upper-cased, ß is SS
     expect(layoutCost('привет')).toBe(6);
   });
 
@@ -95,5 +95,11 @@ describe('a text is priced by what laying it out costs', () => {
     expect(layoutCost('\u03b1\u0378'.repeat(10))).toBeGreaterThan(
       10 * RUN_COST,
     );
+  });
+
+  it('a text costs the dearest of its cases: CSS may upper-case it', () => {
+    // ɐ is Latin, but its capital Ɐ is in a block of its own
+    expect(layoutCost('a\u0250'.repeat(100))).toBeGreaterThan(100 * RUN_COST);
+    expect(layoutCost('caf\u00e9')).toBe(4);
   });
 });

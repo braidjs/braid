@@ -238,6 +238,7 @@ const EXPENSIVE: Record<string, string> = {
   'unassigned symbols between letters': 'a\u2427',
   'spaced words': 'a ',
   'unassigned Greek between letters': '\u03b1\u0378',
+  'Latin whose capitals are in other blocks': 'a\u0250',
 };
 /** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
 const texts19 = (unit: string): Line[] => [
@@ -699,6 +700,58 @@ const CASES: Record<string, () => Line[]> = {
         },
       ]),
     ],
+  // from the eighth audit: elements that cost more than a component, and text the host's CSS cases
+  'video players x 4,999': () => [
+    create({ dataModel: { u: '/x.mp4' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('v') },
+      { id: 'v', component: 'Video', url: { '@path': '/u' } },
+    ]),
+    ...Array.from({ length: 5 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: { surfaceId: H, path: '/u', value: `/x${n}.mp4` },
+    })),
+  ],
+  'audio players x 4,999': () => [
+    create({ dataModel: { u: '/x.mp3' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('a') },
+      { id: 'a', component: 'AudioPlayer', url: { '@path': '/u' } },
+    ]),
+  ],
+  'date-time inputs x 4,999, their value changed 5 times': () => [
+    create({ dataModel: { v: '2026-01-01T10:00' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('d') },
+      {
+        id: 'd',
+        component: 'DateTimeInput',
+        enableTime: true,
+        value: { '@path': '/v' },
+      },
+    ]),
+    ...Array.from({ length: 5 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: {
+        surfaceId: H,
+        path: '/v',
+        value: `2026-01-0${n + 2}T10:00`,
+      },
+    })),
+  ],
+  'Fare badges the host upper-cases, x 98': () => [
+    create({ dataModel: { w: 'a\u0250'.repeat(2_500) } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(98).fill('f') },
+      {
+        id: 'f',
+        component: 'Fare',
+        label: 'x',
+        amount: { value: 1, currency: 'USD' },
+        badge: { '@path': '/w' },
+      },
+    ]),
+  ],
   'one Text of stars between letters, changed by 6 messages': () => [
     create({ dataModel: { s: '' } }),
     update([{ id: 'root', component: 'Text', text: { '@path': '/s' } }]),

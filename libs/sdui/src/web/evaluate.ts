@@ -257,12 +257,19 @@ export class DrawBudget {
   fragments = 0;
   /** What this draw's text may cost: `DRAW_LIMITS.chars`, or less on a page that lays out slowly. */
   readonly textLimit: number;
+  /** What this draw may draw: `DRAW_LIMITS.draws`, or less on a page that lays out slowly. */
+  readonly drawLimit: number;
 
   constructor(
-    options: { readonly ms?: number; readonly textLimit?: number } = {},
+    options: {
+      readonly ms?: number;
+      readonly textLimit?: number;
+      readonly drawLimit?: number;
+    } = {},
   ) {
     this.deadline = options.ms === undefined ? undefined : now() + options.ms;
     this.textLimit = options.textLimit ?? DRAW_LIMITS.chars;
+    this.drawLimit = options.drawLimit ?? DRAW_LIMITS.draws;
   }
 
   /** Whether the draw has spent its work, or run out of time: the rest of it is not drawn. */
