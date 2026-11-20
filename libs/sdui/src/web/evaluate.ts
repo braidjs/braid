@@ -240,6 +240,8 @@ export class DrawBudget {
   readonly deadline: number | undefined;
   /** Charges since the clock was last read. */
   ticks = 0;
+  /** Whether the draw ended on its deadline rather than its units: what it is reported as. */
+  timedOut = false;
 
   constructor(options: { readonly ms?: number } = {}) {
     this.deadline = options.ms === undefined ? undefined : now() + options.ms;
@@ -250,6 +252,7 @@ export class DrawBudget {
     if (this.work > DRAW_LIMITS.work) return true;
     if (this.deadline !== undefined && now() > this.deadline) {
       this.work = DRAW_LIMITS.work + 1;
+      this.timedOut = true;
       return true;
     }
     return false;
@@ -338,8 +341,10 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
   const regexes = new Map<string, A2uiRegex | RegexDialectError>();
   let own = new DrawBudget();
   const draw = (): DrawBudget => (options.budget ? options.budget() : own);
-  const overDraw = (what: string): never => {
+  const overDraw = (asked: string): never => {
     const budget = draw();
+    // Past the deadline the units are spent too; it is the time the agent should hear about.
+    const what = asked === 'work' && budget.timedOut ? 'time' : asked;
     if (!budget.reported.has(what)) {
       budget.reported.add(what);
       throw new ExpressionError(
@@ -356,6 +361,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       now() > budget.deadline
     ) {
       budget.work = DRAW_LIMITS.work + 1;
+      budget.timedOut = true;
       overDraw('time');
     }
   };

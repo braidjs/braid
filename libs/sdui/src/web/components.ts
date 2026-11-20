@@ -1,4 +1,5 @@
 import { hash32 } from '../lib/hash.js';
+import { DRAW_LIMITS } from './evaluate.js';
 import { isRecord } from '../lib/internal.js';
 import type { ComponentRenderer, RenderContext } from './render.js';
 import { type View, type ViewElement, h } from './view.js';
@@ -268,7 +269,7 @@ const Card: ComponentRenderer = (c) =>
   h('div', { class: cls('Card') }, c.child('child'));
 
 /** Tabs one component may have: as many as a draw could draw. */
-const MAX_TABS = 10_000;
+const MAX_TABS = DRAW_LIMITS.draws;
 
 const Tabs: ComponentRenderer = (c) => {
   // No more than could be drawn is looked at: a list of 100,000 tabs is not filtered each drawing.

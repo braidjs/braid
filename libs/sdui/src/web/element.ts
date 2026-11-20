@@ -89,6 +89,17 @@ const yieldToPage = (): Promise<void> =>
 interface Origin {
   refused: number;
   readonly hangUp?: () => void;
+  /** True once whatever this came from has been replaced or closed: the rest is not applied. */
+  readonly stopped?: () => boolean;
+}
+
+/** `text` cut to `length` characters, not through the middle of a surrogate pair. */
+function cut(text: string, length: number): string {
+  if (text.length <= length) return text;
+  const end = /[\uD800-\uDBFF]/.test(text[length - 1] ?? '')
+    ? length - 1
+    : length;
+  return `${text.slice(0, end)}…`;
 }
 
 /** Defines the element (once). Nothing is defined on import: call this in the browser. */
@@ -137,7 +148,7 @@ export function defineA2uiSurface(
         script.remove();
         this.push(text);
         this.#draw(); // at once: the prerendered markup is adopted in this task, not the next
-      }
+      } else if (this.surfaces.ids().length > 0) this.#schedule(); // pushed while detached
       this.#load();
     }
 
@@ -150,9 +161,15 @@ export function defineA2uiSurface(
     }
 
     push(messages: string | readonly unknown[]): void {
-      const origin: Origin = { refused: 0 };
+      const origin: Origin = {
+        refused: 0,
+        stopped: () => origin.refused > ERROR_LIMITS.refusedPerStream,
+      };
       if (typeof messages !== 'string') {
-        for (const raw of messages) this.#take(raw, origin);
+        for (const raw of messages) {
+          if (origin.stopped?.()) break;
+          this.#take(raw, origin);
+        }
       } else if (messages.trimStart().startsWith('[')) {
         let list: readonly unknown[] = [];
         try {
@@ -160,9 +177,15 @@ export function defineA2uiSurface(
         } catch (error) {
           this.#refuse(error, origin);
         }
-        for (const raw of list) this.#take(raw, origin);
+        for (const raw of list) {
+          if (origin.stopped?.()) break;
+          this.#take(raw, origin);
+        }
       } else
-        for (const line of messages.split(/\r?\n/)) this.#line(line, origin);
+        for (const line of messages.split(/\r?\n/)) {
+          if (origin.stopped?.()) break;
+          this.#line(line, origin);
+        }
       this.#schedule();
     }
 
@@ -174,6 +197,7 @@ export function defineA2uiSurface(
       let slice = now();
       try {
         for (const line of lines) {
+          if (origin.stopped?.()) return;
           if (origin.refused > ERROR_LIMITS.refusedPerStream) return;
           this.#line(line, origin);
           if (now() - slice > SLICE_MS) {
@@ -211,16 +235,13 @@ export function defineA2uiSurface(
     #refuse(error: unknown, origin: Origin): void {
       if (!(error instanceof A2uiError)) throw error;
       this.#send(errorMessage(error));
-      if (
-        ++origin.refused === ERROR_LIMITS.refusedPerStream + 1 &&
-        origin.hangUp
-      ) {
-        origin.hangUp();
+      if (++origin.refused === ERROR_LIMITS.refusedPerStream + 1) {
+        origin.hangUp?.();
         this.#send(
           errorMessage(
             new A2uiError(
               'VALIDATION_FAILED',
-              `more than ${ERROR_LIMITS.refusedPerStream} messages of the stream were refused; the renderer stopped reading it`,
+              `more than ${ERROR_LIMITS.refusedPerStream} messages were refused; the renderer stopped reading the rest`,
               '',
             ),
           ),
@@ -253,6 +274,8 @@ export function defineA2uiSurface(
           ? this.surfaces.get(body.surfaceId)
           : undefined;
         const failures: string[] = [];
+        // A call of its own, with a budget of its own: nothing a draw left over or ran out of.
+        this.#budget = new DrawBudget();
         const evaluator = this.#evaluator(
           surface?.id ?? '',
           () => surface?.dataModel ?? {},
@@ -269,7 +292,14 @@ export function defineA2uiSurface(
                   message: failures[0] as string,
                 },
               }
-            : { functionCallId: body.functionCallId, value: value ?? null },
+            : {
+                functionCallId: body.functionCallId,
+                // a copy: a value read from the data model changes with it
+                value:
+                  value === null || value === undefined
+                    ? null
+                    : structuredClone(value),
+              },
         });
         return;
       }
@@ -331,12 +361,11 @@ export function defineA2uiSurface(
       // and the agent needs to hear that something is wrong, not a thousand times.
       if (++this.#reportedThisDraw > MAX_ERRORS_PER_DRAW) return;
       if (this.#reported.size > 1_000) this.#reported.clear();
-      this.#reported.add(key);
       const validation =
         error.code === 'VALIDATION_FAILED' ||
         error.code === 'UNALLOWED_PARENT' ||
         error.code === 'UNALLOWED_CHILD';
-      this.#send({
+      const sent = this.#send({
         version: '1.0',
         error: {
           code: error.code,
@@ -345,6 +374,8 @@ export function defineA2uiSurface(
           ...(validation ? { path: error.path ?? '' } : {}),
         },
       });
+      // Only what was told counts as told: one the limiter dropped may be told later.
+      if (sent) this.#reported.add(key);
     }
 
     /**
@@ -399,6 +430,9 @@ export function defineA2uiSurface(
       // Each surface's container is matched by its key, prerendered or not.
       patchChildren(this, views);
       this.#lastDrawMs = now() - started;
+      // What runs between draws — a click, a check — gets a budget of its own, with no deadline:
+      // the draw's ended with it.
+      this.#budget = new DrawBudget();
       this.dispatchEvent(new CustomEvent('a2ui:render', { bubbles: true }));
     }
 
@@ -416,15 +450,16 @@ export function defineA2uiSurface(
       return true;
     }
 
-    #send(message: A2uiRendererMessage, always = false): void {
+    /** Sends a message; `false` when the error limiter dropped it. */
+    #send(message: A2uiRendererMessage, always = false): boolean {
       if ('error' in message && message.error) {
-        if (!always && !this.#mayReport()) return;
+        if (!always && !this.#mayReport()) return false;
         if (message.error.message.length > ERROR_LIMITS.message)
           message = {
             ...message,
             error: {
               ...message.error,
-              message: `${message.error.message.slice(0, ERROR_LIMITS.message)}…`,
+              message: cut(message.error.message, ERROR_LIMITS.message),
             },
           };
       }
@@ -434,9 +469,9 @@ export function defineA2uiSurface(
         composed: true,
         cancelable: true,
       });
-      if (!this.dispatchEvent(event)) return;
+      if (!this.dispatchEvent(event)) return true;
       const url = this.getAttribute('action-url');
-      if (!url) return;
+      if (!url) return true;
       // The data model of the surface the message is about, when that surface asked for it to
       // be sent — not every surface's, on every message.
       const dataModels: Record<string, unknown> = {};
@@ -470,6 +505,7 @@ export function defineA2uiSurface(
             return this.#feed(text.split(/\r?\n/), { refused: 0 });
         })
         .catch(() => undefined);
+      return true;
     }
 
     #load(): void {
@@ -492,7 +528,11 @@ export function defineA2uiSurface(
         const reader = response.body
           .pipeThrough(new TextDecoderStream())
           .getReader();
-        const origin: Origin = { refused: 0, hangUp: () => abort.abort() };
+        const origin: Origin = {
+          refused: 0,
+          hangUp: () => abort.abort(),
+          stopped: () => abort.signal.aborted,
+        };
         let slice = now();
         let buffer = '';
         let event: string[] = [];

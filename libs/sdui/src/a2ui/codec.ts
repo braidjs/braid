@@ -336,7 +336,7 @@ export function surfaceToScreen(
     slug: options.slug ?? surface.id,
     root,
     ...(Object.keys(surface.dataModel).length > 0
-      ? { data: surface.dataModel }
+      ? { data: structuredClone(surface.dataModel) } // the surface's changes in place
       : {}),
   };
   let screen: Screen;

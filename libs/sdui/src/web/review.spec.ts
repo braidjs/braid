@@ -1046,9 +1046,12 @@ describe('what the fifth verification found: an element tells the agent a bounde
       [JSON.stringify(create('s')), ...Array(20_000).fill('{}')].join('\n'),
     );
     await flush();
-    expect(sent.filter((m) => 'error' in m).length).toBeLessThanOrEqual(
-      ERROR_LIMITS.burst,
+    const errors = sent.flatMap((m) =>
+      'error' in m && m.error ? [m.error] : [],
     );
+    // the burst, and the one notice that the rest was not read
+    expect(errors.length).toBeLessThanOrEqual(ERROR_LIMITS.burst + 1);
+    expect(errors.at(-1)!.message).toMatch(/stopped reading the rest/);
   });
 
   it('an error message is cut to a length', async () => {
@@ -1069,5 +1072,111 @@ describe('what the fifth verification found: an element tells the agent a bounde
       expect(error.message.length).toBeLessThanOrEqual(
         ERROR_LIMITS.message + 1,
       );
+  });
+});
+
+describe('what the review of the hardening found', () => {
+  const form = Object.fromEntries(
+    Array.from({ length: 30 }, (_, i) => [`field${i}`, `v${i}`]),
+  );
+  const button = (surfaceId: string) =>
+    update(surfaceId, [
+      {
+        id: 'root',
+        component: 'Button',
+        child: 'l',
+        action: {
+          event: {
+            name: 'go',
+            context: Object.fromEntries(
+              Object.keys(form).map((key) => [
+                key,
+                { '@path': `/form/${key}` },
+              ]),
+            ),
+          },
+        },
+      },
+      { id: 'l', component: 'Text', text: 'go' },
+    ]);
+
+  it('a click long after a draw is not cut short by the draw’s deadline', async () => {
+    const { DRAW_LIMITS } = await import('./evaluate.js');
+    const { element, sent } = mount();
+    element.push([create('s', { dataModel: { form } }), button('s')]);
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, DRAW_LIMITS.ms + 50));
+    for (let i = 0; i < 10; i++)
+      (element.querySelector('button') as HTMLButtonElement).click();
+    const sizes = sent.flatMap((m) =>
+      'action' in m && m.action ? [Object.keys(m.action.context).length] : [],
+    );
+    expect(sizes).toEqual(Array(10).fill(30));
+    expect(sent.some((m) => 'error' in m)).toBe(false);
+  });
+
+  it('an action’s context is a copy: what the data model does next does not change it', async () => {
+    const { element, sent } = mount();
+    element.push([
+      create('s', { dataModel: { form } }),
+      update('s', [
+        {
+          id: 'root',
+          component: 'Button',
+          child: 'l',
+          action: {
+            event: { name: 'go', context: { form: { '@path': '/form' } } },
+          },
+        },
+        { id: 'l', component: 'Text', text: 'go' },
+      ]),
+    ]);
+    await flush();
+    (element.querySelector('button') as HTMLButtonElement).click();
+    element.surfaces.write('s', '/form/field0', 'changed');
+    const action = sent.find((m) => 'action' in m) as {
+      action: { context: { form: Record<string, string> } };
+    };
+    expect(action.action.context.form['field0']).toBe('v0');
+  });
+
+  it('a surface pushed before the element is in the page is drawn once it is', async () => {
+    const element = document.createElement(
+      'review-surface',
+    ) as A2uiSurfaceElement;
+    element.push([
+      create('s'),
+      update('s', [{ id: 'root', component: 'Text', text: 'hi' }]),
+    ]);
+    await flush();
+    document.body.append(element);
+    await flush();
+    expect(element.textContent).toContain('hi');
+  });
+
+  it('an error the limiter dropped is told once there is room again', async () => {
+    const { ERROR_LIMITS } = await import('./element.js');
+    const { element, sent } = mount();
+    // spend the burst
+    element.push(Array(ERROR_LIMITS.burst).fill('{}').join('\n'));
+    element.push([
+      create('s'),
+      update('s', [
+        { id: 'root', component: 'Text', text: { '@call': 'nope' } },
+      ]),
+    ]);
+    await flush();
+    const told = () =>
+      sent.filter(
+        (m) =>
+          'error' in m && /"nope" is not a function/.test(m.error!.message),
+      ).length;
+    expect(told()).toBe(0);
+    // a second later, a redraw tells it
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    element.surfaces.write('s', '/x', 1);
+    element.push([]);
+    await flush();
+    expect(told()).toBe(1);
   });
 });

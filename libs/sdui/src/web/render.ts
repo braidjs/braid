@@ -464,7 +464,9 @@ export function renderSurface(
         event['context'] ?? {},
         context.scope,
       );
-      const contextValue = isRecord(resolved) ? resolved : {};
+      // A copy: what was read from the data model goes on changing with it, and a listener may
+      // keep the message.
+      const contextValue = isRecord(resolved) ? structuredClone(resolved) : {};
       const userMessage =
         event['userMessage'] !== undefined
           ? options.evaluator.text(event['userMessage'], context.scope)
