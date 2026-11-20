@@ -132,6 +132,8 @@ async function stream(
   body: string | { url: string },
   waitFor: string | ((page: Page) => Promise<unknown>),
   timeoutMs = 60_000,
+  /** What the agent answers a POST with: JSON Lines. */
+  answer: (posted: string) => string = () => '',
 ): Promise<Outcome> {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -156,7 +158,7 @@ async function stream(
       return route.fulfill({
         status: 200,
         contentType: 'application/jsonl',
-        body: '',
+        body: answer(route.request().postData() ?? ''),
       });
     if (url.startsWith(server.url)) return route.continue();
     return route.abort();
@@ -200,6 +202,32 @@ function responsive(outcome: Outcome, maxPosts = MAX_POSTS): void {
   expect(outcome.blockMs).toBeLessThan(BLOCK_MS);
   expect(outcome.posts).toBeLessThanOrEqual(maxPosts);
 }
+
+/** 19 TextFields, each labelled with a 99,000-character string from the data model. */
+const textFields = (label: (i: number) => string): Line[] => [
+  create({
+    dataModel: {
+      t: Object.fromEntries(
+        Array.from({ length: 19 }, (_, i) => [
+          `b${i}`,
+          label(i).slice(0, 99_000),
+        ]),
+      ),
+    },
+  }),
+  update([
+    {
+      id: 'root',
+      component: 'Column',
+      children: Array.from({ length: 19 }, (_, i) => `f${i}`),
+    },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      id: `f${i}`,
+      component: 'TextField',
+      label: { '@path': `/t/b${i}` },
+    })),
+  ]),
+];
 
 /** `n` drawings of one component under a Column root. */
 const drawn = (id: string, n: number): Line =>
@@ -445,6 +473,73 @@ const CASES: Record<string, () => Line[]> = {
     templated({ component: 'Text', text: { '@path': '/md' } }, 100, {
       md: '*a*'.repeat(6_666),
     }),
+  // Text priced by its length alone, where laying it out costs far more (the sixth audit).
+  'TextFields labelled with 99,000 characters alternating direction, x 19':
+    () => textFields((i) => 'a\u05d0'.repeat(49_500).slice(i)),
+  'TextFields labelled with bidi words, x 19': () =>
+    textFields(() => '\u05e9\u05dc\u05d5\u05dd hello '.repeat(9_000)),
+  'TextFields labelled with Arabic and Latin, x 19': () =>
+    textFields(() => '\u0645\u0631\u062d\u0628\u0627 abc '.repeat(9_900)),
+  'TextFields labelled with Thai, x 19': () =>
+    textFields(() =>
+      '\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u0e04\u0e23\u0e31\u0e1a'.repeat(
+        9_900,
+      ),
+    ),
+  'TextFields labelled with rotating scripts, x 19': () =>
+    textFields(() => 'a\u03b1\u0431\u05d0\u4e2d\u0905'.repeat(16_500)),
+  // as much as a draw's text budget allows: what it costs is what the budget is for
+  'one Text of bidi words just inside the text budget': () => [
+    create(),
+    update([
+      {
+        id: 'root',
+        component: 'Text',
+        text: '\u05e9\u05dc\u05d5\u05dd hello '.repeat(990),
+      },
+    ]),
+  ],
+  'one Text alternating direction just inside the text budget': () => [
+    create(),
+    update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(990) }]),
+  ],
+  '1,000 Texts of bidi words, together just inside the text budget': () =>
+    templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
+      w: '\u05e9\u05dc\u05d5\u05dd ok '.repeat(1),
+    }),
+  '1,000 Texts alternating direction, together just inside the text budget':
+    () =>
+      templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
+        w: 'a\u05d0'.repeat(1),
+      }),
+  'a Text of 20,000 characters alternating direction': () => [
+    create(),
+    update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(10_000) }]),
+  ],
+  'a long TextField value alternating direction': () => [
+    create({ dataModel: { v: 'a\u05d0'.repeat(49_500) } }),
+    update([
+      {
+        id: 'root',
+        component: 'TextField',
+        label: 'note',
+        variant: 'longText',
+        value: { '@path': '/v' },
+      },
+    ]),
+  ],
+  'a Button labelled with 99,000 characters alternating direction': () => [
+    create({ dataModel: { v: 'a\u05d0'.repeat(49_500) } }),
+    update([
+      {
+        id: 'root',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+      },
+      { id: 'l', component: 'Text', text: { '@path': '/v' } },
+    ]),
+  ],
   'Fare (a registry view) x 9,990': () => [
     create(),
     update([
@@ -608,6 +703,102 @@ describe('a hostile stream within A2UI_LIMITS leaves the page responsive', () =>
         expect(block).toBeLessThan(BLOCK_MS);
       }
       expect(await input.inputValue()).toBe('abcdef');
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('an agent cannot make the renderer talk without end', () => {
+  const call = (i: number) =>
+    JSON.stringify({
+      version: '1.0',
+      callRendererFunction: {
+        functionCallId: `c${i}`,
+        callFunction: {
+          '@call': 'formatString',
+          catalogId,
+          args: { value: 'x' },
+        },
+      },
+    });
+
+  it('20,000 renderer function calls are a bounded number of answers', async () => {
+    const body =
+      [create(), update([{ id: 'root', component: 'Text', text: 'x' }])]
+        .map((line) => JSON.stringify(line))
+        .join('\n') +
+      '\n' +
+      Array.from({ length: 20_000 }, (_, i) => call(i)).join('\n') +
+      '\n';
+    const outcome = await stream(body, ROOT);
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('an agent whose every answer asks for two more calls is held to a rate', async () => {
+    let n = 0;
+    const body =
+      [create(), update([{ id: 'root', component: 'Text', text: 'x' }])]
+        .map((line) => JSON.stringify(line))
+        .join('\n') +
+      '\n' +
+      call(n++) +
+      '\n';
+    const outcome = await stream(
+      body,
+      ROOT,
+      60_000,
+      () => `${call(n++)}\n${call(n++)}\n`,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      const posts = await outcome.page.evaluate(
+        () => (window as unknown as { __posts: number }).__posts,
+      );
+      // the burst, five a second after it, and the errors refusing the rest
+      expect(posts).toBeLessThan(120);
+      expect(outcome.crashed).toBe(false);
+      expect(outcome.errors).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('errors on a sendDataModel surface holding 1.78 M characters do not write it out', async () => {
+    const lines: Line[] = [
+      create({ sendDataModel: true }),
+      update([
+        { id: 'root', component: 'Column', children: ['t'] },
+        { id: 't', component: 'Text', text: 'x' },
+      ]),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        version: '1.0',
+        updateDataModel: {
+          surfaceId: H,
+          path: `/d${i}`,
+          value: Array.from({ length: 3 }, () => '\u0001'.repeat(99_000)),
+        },
+      })),
+      update(
+        Array.from({ length: 10 }, (_, i) => ({
+          id: `u${i}`,
+          component: `Unknown${i}`,
+        })).concat([
+          {
+            id: 'root',
+            component: 'Column',
+            children: Array.from({ length: 10 }, (_, i) => `u${i}`),
+          } as never,
+        ]),
+      ),
+    ];
+    const outcome = await stream(withinLimits(lines), ROOT);
+    try {
+      responsive(outcome);
     } finally {
       await outcome.close();
     }

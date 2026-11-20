@@ -33,7 +33,7 @@ import { type ComponentRegistry, drawSafely, renderSurface } from './render.js';
  * (JSON Lines, or server-sent events whose `data:` lines are messages), or from `push()`. What it
  * sends back — actions, and errors — is dispatched as a cancelable `a2ui:message` event, and, unless
  * a listener cancels it, POSTed to `action-url` as `{ message, metadata }`, where `metadata` holds
- * `a2uiRendererCapabilities` and, for surfaces created with `sendDataModel`,
+ * `a2uiRendererCapabilities` and, for an action on a surface created with `sendDataModel`,
  * `a2uiRendererDataModel`.
  *
  * Attributes: `src`, `action-url`, `catalog-ids` (space-separated; the basic catalog by default),
@@ -77,6 +77,36 @@ export const ERROR_LIMITS = Object.freeze({
   message: 1_000,
   refusedPerStream: 100,
 });
+
+/**
+ * How often an agent may have the renderer run a function and answer it: a burst, then a few a
+ * second. Each answer is a request to the agent, and an agent's reply can ask for more, so past
+ * this a call is refused — and a stream of refused calls is hung up on like any other.
+ */
+export const CALL_LIMITS = Object.freeze({ burst: 20, perSecond: 5 });
+
+/** A refill-at-a-rate counter: `take()` is false once the burst is spent, until it refills. */
+class Bucket {
+  #tokens: number;
+  #at = now();
+  constructor(
+    private readonly burst: number,
+    private readonly perSecond: number,
+  ) {
+    this.#tokens = burst;
+  }
+  take(): boolean {
+    const at = now();
+    this.#tokens = Math.min(
+      this.burst,
+      this.#tokens + ((at - this.#at) / 1_000) * this.perSecond,
+    );
+    this.#at = at;
+    if (this.#tokens < 1) return false;
+    this.#tokens--;
+    return true;
+  }
+}
 
 /** Milliseconds of messages an element applies before it lets the page run. */
 const SLICE_MS = 8;
@@ -125,8 +155,8 @@ export function defineA2uiSurface(
     #reported = new Set<string>();
     /** How long the last draw took: the next one waits at least as long. */
     #lastDrawMs = 0;
-    #errorTokens: number = ERROR_LIMITS.burst;
-    #errorsAt = now();
+    readonly #errors = new Bucket(ERROR_LIMITS.burst, ERROR_LIMITS.perSecond);
+    readonly #calls = new Bucket(CALL_LIMITS.burst, CALL_LIMITS.perSecond);
 
     static get observedAttributes() {
       return ['src'];
@@ -273,9 +303,16 @@ export function defineA2uiSurface(
         const surface = body.surfaceId
           ? this.surfaces.get(body.surfaceId)
           : undefined;
+        if (!this.#calls.take())
+          throw new A2uiError(
+            'VALIDATION_FAILED',
+            `the agent asks for renderer functions more often than ${CALL_LIMITS.perSecond} a second`,
+            '/callRendererFunction',
+            body.surfaceId,
+          );
         const failures: string[] = [];
         // A call of its own, with a budget of its own: nothing a draw left over or ran out of.
-        this.#budget = new DrawBudget();
+        this.#budget = new DrawBudget({ ms: DRAW_LIMITS.ms });
         const evaluator = this.#evaluator(
           surface?.id ?? '',
           () => surface?.dataModel ?? {},
@@ -430,30 +467,27 @@ export function defineA2uiSurface(
       // Each surface's container is matched by its key, prerendered or not.
       patchChildren(this, views);
       this.#lastDrawMs = now() - started;
+      // Laying the page out comes after, and is the browser's: it is timed from here to the next
+      // frame, and a draw whose layout ran long is followed by as long a pause.
+      const drawn = now();
+      requestAnimationFrame(() =>
+        setTimeout(() => {
+          const layout = now() - drawn;
+          // a frame's own wait is not layout
+          if (layout > 50 && layout > this.#lastDrawMs)
+            this.#lastDrawMs = layout;
+        }, 0),
+      );
       // What runs between draws — a click, a check — gets a budget of its own, with no deadline:
       // the draw's ended with it.
       this.#budget = new DrawBudget();
       this.dispatchEvent(new CustomEvent('a2ui:render', { bubbles: true }));
     }
 
-    /** Whether one more error may go out: a burst, then a few a second. */
-    #mayReport(): boolean {
-      const at = now();
-      this.#errorTokens = Math.min(
-        ERROR_LIMITS.burst,
-        this.#errorTokens +
-          ((at - this.#errorsAt) / 1_000) * ERROR_LIMITS.perSecond,
-      );
-      this.#errorsAt = at;
-      if (this.#errorTokens < 1) return false;
-      this.#errorTokens--;
-      return true;
-    }
-
     /** Sends a message; `false` when the error limiter dropped it. */
     #send(message: A2uiRendererMessage, always = false): boolean {
       if ('error' in message && message.error) {
-        if (!always && !this.#mayReport()) return false;
+        if (!always && !this.#errors.take()) return false;
         if (message.error.message.length > ERROR_LIMITS.message)
           message = {
             ...message,
@@ -472,18 +506,13 @@ export function defineA2uiSurface(
       if (!this.dispatchEvent(event)) return true;
       const url = this.getAttribute('action-url');
       if (!url) return true;
-      // The data model of the surface the message is about, when that surface asked for it to
-      // be sent — not every surface's, on every message.
+      // The data model of the surface a person acted on, when that surface asked for it to be
+      // sent. Only with an action: an error or a function's answer is the agent's own doing, and
+      // writing out a large model for each would let it make the page do that as often as it likes.
       const dataModels: Record<string, unknown> = {};
-      const about =
-        (
-          message as {
-            action?: { surfaceId?: string };
-            error?: { surfaceId?: string };
-          }
-        ).action?.surfaceId ??
-        (message as { error?: { surfaceId?: string } }).error?.surfaceId;
-      const surface = about ? this.surfaces.get(about) : undefined;
+      const acted = (message as { action?: { surfaceId?: string } }).action
+        ?.surfaceId;
+      const surface = acted ? this.surfaces.get(acted) : undefined;
       if (surface?.sendDataModel) dataModels[surface.id] = surface.dataModel;
       void fetch(url, {
         method: 'POST',
@@ -552,6 +581,11 @@ export function defineA2uiSurface(
         for (;;) {
           const { done, value } = await reader.read();
           if (value) buffer += value;
+          // A chunk with no line end only lengthens the line: no need to split it all again.
+          if (!done && value && !value.includes('\n')) {
+            if (buffer.length > A2UI_LIMITS.messageChars) return tooLong();
+            continue;
+          }
           const lines = buffer.split('\n');
           buffer = done ? '' : (lines.pop() ?? '');
           if (buffer.length > A2UI_LIMITS.messageChars) return tooLong();

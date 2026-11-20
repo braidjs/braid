@@ -49,7 +49,9 @@ defineA2uiSurface({
 const log = document.querySelector('#traffic');
 document.addEventListener('a2ui:message', (event) => {
   const message = event.detail;
-  (window.__a2uiSent ??= []).push(message);
+  const sent = (window.__a2uiSent ??= []);
+  sent.push(message);
+  if (sent.length > 1_000) sent.splice(0, sent.length - 1_000);
   if (!log) return;
   const line = document.createElement('li');
   line.textContent = message.action

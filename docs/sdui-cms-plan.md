@@ -1126,7 +1126,8 @@ Folded in above; listed so the removals are visible.
   catalog and examples are vendored at a pinned commit and everything is checked against them;
   moving to a new version is replacing those files and fixing what the round-trip tests say.
 - **An agent can keep a surface busy.** The web renderer runs on the page's main thread. Every
-  value a draw reads is charged by what it holds, a draw in a browser ends after 100 ms, messages
+  value a draw reads is charged by what it holds, text by what laying it out costs the browser (a
+  change of direction costs a thousand characters), a draw in a browser ends after 100 ms, messages
   are applied in slices, and what a renderer holds is counted in characters — so a hostile stream
   costs a surface, not the page. A renderer that must draw agents it does not trust at all, with
   nothing of the host's at stake, can still put `<a2ui-surface>` in a frame of its own origin.

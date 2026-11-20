@@ -1,5 +1,6 @@
 import { isRecord, outgrows } from '../lib/internal.js';
 import { readPointer } from '../a2ui/surfaces.js';
+import { layoutCost } from './layout.js';
 import {
   type A2uiRegex,
   MatchBudget,
@@ -187,7 +188,11 @@ export interface EvaluatorOptions {
 export const DRAW_LIMITS = Object.freeze({
   /** Function calls, templates included. */
   calls: 20_000,
-  /** Characters of text produced: every label, title and paragraph. */
+  /**
+   * Text produced — every label, title, value and paragraph — priced by what laying it out
+   * costs a browser ({@link layoutCost}): its length, and much more for each change of direction
+   * or script. 2,000,000 is about 100 ms of layout, whatever the text is.
+   */
   chars: 2_000_000,
   /**
    * Components and repeated parts drawn — template items, tabs, options — and the elements a
@@ -432,7 +437,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
   /** Text produced: counted, and past the limit, nothing. */
   const spendText = (text: string): string => {
     const budget = draw();
-    budget.chars += text.length;
+    budget.chars += layoutCost(text);
     if (budget.chars > DRAW_LIMITS.chars) {
       if (!budget.reported.has('text')) {
         budget.reported.add('text');
