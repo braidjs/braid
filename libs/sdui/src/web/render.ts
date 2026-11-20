@@ -34,7 +34,10 @@ import { type View, type ViewElement, h } from './view.js';
 export interface RenderContext {
   readonly surfaceId: string;
   readonly id: string;
-  /** Unique among siblings: the id, and the item index inside a template. */
+  /**
+   * Unique to this drawing of the component: its place in the tree, template items included.
+   * What a component keys its own state and its generated DOM ids by.
+   */
   readonly key: string;
   readonly component: A2uiComponent;
   readonly scope: EvaluationScope;
@@ -123,6 +126,57 @@ export interface RenderOptions {
 }
 
 const MAX_DEPTH = 64;
+/**
+ * Components drawn per surface per draw, template items counted. A2UI lets a component be shared
+ * and templates nest, so a few components can describe millions of drawings; past this the rest
+ * is a placeholder and the agent is told.
+ */
+export const MAX_DRAWS = 10_000;
+
+/** Attribute names a host element is never given from content. */
+const DENIED_ATTRIBUTES = new Set([
+  'class',
+  'style',
+  'slot',
+  'is',
+  'id',
+  'name',
+  'form',
+  'tabindex',
+  'autofocus',
+  'contenteditable',
+  'inert',
+  'hidden',
+  'accesskey',
+  'popover',
+  'popovertarget',
+  'popovertargetaction',
+  'draggable',
+  'spellcheck',
+  'part',
+  'exportparts',
+  'nonce',
+  'href',
+  'src',
+  'srcset',
+  'action',
+  'formaction',
+  'poster',
+  'xmlns',
+]);
+const DENIED_PREFIXES = [
+  'on',
+  'data-a2ui',
+  'x-',
+  'hx-',
+  'v-',
+  'ng-',
+  'data-bind',
+  'data-hx-',
+  'data-x-',
+  'data-v-',
+  'aria-',
+];
 
 /** The view for one surface, with its container. */
 export function renderSurface(
@@ -131,13 +185,28 @@ export function renderSurface(
 ): ViewElement {
   const catalog = options.catalog ?? a2uiBasicCatalog;
   const registry = options.registry ?? {};
+  let drawn = 0;
   const draw = (
     id: unknown,
     scope: EvaluationScope,
     key: string,
+    parent: string,
     ancestry: readonly string[],
   ): View | null => {
     if (typeof id !== 'string') return null;
+    if (++drawn > MAX_DRAWS) {
+      if (drawn === MAX_DRAWS + 1)
+        options.report({
+          code: 'VALIDATION_FAILED',
+          message: `the surface draws more than ${MAX_DRAWS} components; the rest are not drawn`,
+          path: `/components/${id}`,
+        });
+      return h('div', {
+        class: 'a2ui-placeholder',
+        'data-a2ui-truncated': '',
+        key,
+      });
+    }
     if (ancestry.length > MAX_DEPTH || ancestry.includes(id)) {
       options.report({
         code: 'VALIDATION_FAILED',
@@ -154,7 +223,10 @@ export function renderSurface(
         'data-a2ui-pending': id,
         key,
       });
-    const context = contextFor(component, scope, key, [...ancestry, id]);
+    const context = contextFor(component, scope, key, `${parent}/${key}`, [
+      ...ancestry,
+      id,
+    ]);
     const override = Object.prototype.hasOwnProperty.call(
       registry,
       component.component,
@@ -194,7 +266,7 @@ export function renderSurface(
   const decorate = (
     view: View,
     component: A2uiComponent,
-    context: RenderContext,
+    context: RenderContext & { readonly siblingKey: string },
   ): ViewElement => {
     const element: ViewElement =
       typeof view === 'string' ? h('span', {}, view) : view;
@@ -204,7 +276,7 @@ export function renderSurface(
     const weight = component['weight'];
     return {
       ...element,
-      key: context.key,
+      key: context.siblingKey,
       attrs: {
         ...element.attrs,
         'data-a2ui-id': component.id,
@@ -232,7 +304,7 @@ export function renderSurface(
         Number.isFinite(weight) &&
         weight >= 0 &&
         weight <= 1_000
-          ? { style: `flex-grow: ${weight}` }
+          ? { style: `flex-grow: ${Number(weight.toFixed(3))}` }
           : {}),
       },
     };
@@ -294,14 +366,28 @@ export function renderSurface(
     }
     for (const [type, prop] of Object.entries(override.events ?? {}))
       on[type] = () => runAction(context, prop);
+    // Attributes only for the scalar props the catalog declares, under names content cannot
+    // choose: an attribute can be a framework's directive (x-init, hx-on) or move the element
+    // (slot, popover). Everything is in the `a2ui` property regardless.
+    const declared = declaredProps(catalog, context.component.component);
     const attrs: Record<string, string | number | boolean> = {};
-    for (const [key, value] of Object.entries(props))
+    for (const [key, value] of Object.entries(props)) {
+      if (!declared.has(key)) continue;
       if (
-        typeof value === 'string' ||
-        typeof value === 'number' ||
-        typeof value === 'boolean'
+        typeof value !== 'string' &&
+        typeof value !== 'number' &&
+        typeof value !== 'boolean'
       )
-        attrs[key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)] = value;
+        continue;
+      const name = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+      if (
+        !/^[a-z][a-z0-9-]{0,63}$/.test(name) ||
+        DENIED_ATTRIBUTES.has(name) ||
+        DENIED_PREFIXES.some((prefix) => name.startsWith(prefix))
+      )
+        continue;
+      attrs[name] = value;
+    }
     return {
       tag: override.element,
       attrs,
@@ -349,17 +435,19 @@ export function renderSurface(
   const contextFor = (
     component: A2uiComponent,
     scope: EvaluationScope,
+    siblingKey: string,
     key: string,
     ancestry: readonly string[],
-  ): RenderContext => {
+  ): RenderContext & { readonly siblingKey: string } => {
     const raw = (name: string): unknown =>
       Object.prototype.hasOwnProperty.call(component, name)
         ? component[name]
         : undefined;
-    const context: RenderContext = {
+    const context: RenderContext & { readonly siblingKey: string } = {
       surfaceId: surface.id,
       id: component.id,
       key,
+      siblingKey,
       component,
       scope,
       raw,
@@ -367,13 +455,13 @@ export function renderSurface(
       text: (name) => options.evaluator.text(raw(name), scope),
       boolean: (name) => options.evaluator.boolean(raw(name), scope),
       textOf: (value) => options.evaluator.text(value, scope),
-      child: (name) => draw(raw(name), scope, String(raw(name)), ancestry),
-      childById: (id) => draw(id, scope, String(id), ancestry),
+      child: (name) => draw(raw(name), scope, String(raw(name)), key, ancestry),
+      childById: (id) => draw(id, scope, String(id), key, ancestry),
       children(name) {
         const value = raw(name);
         if (Array.isArray(value))
           return value
-            .map((id) => draw(id, scope, String(id), ancestry))
+            .map((id) => draw(id, scope, String(id), key, ancestry))
             .filter((v): v is View => v !== null);
         if (
           isRecord(value) &&
@@ -393,6 +481,7 @@ export function renderSurface(
                 value['componentId'],
                 { base: [...base, String(index)], index },
                 `${value['componentId']}#${index}`,
+                key,
                 ancestry,
               ),
             )
@@ -432,7 +521,7 @@ export function renderSurface(
           use,
           options.urlPolicy,
         ),
-      markdown: (text) => markdown(text, options.urlPolicy),
+      markdown: (text) => markdown(text),
       local<T>(name: string, initial: T): [T, (value: T) => void] {
         const slot = `${key}::${name}`;
         const current = (
@@ -450,7 +539,7 @@ export function renderSurface(
     return context;
   };
 
-  const root = draw('root', ROOT_SCOPE, 'root', []);
+  const root = draw('root', ROOT_SCOPE, 'root', '', []);
   return h(
     'div',
     {
@@ -478,6 +567,26 @@ function childProps(catalog: SduiCatalog, type: string): string[] {
   return Object.entries(definition.slots ?? {}).map(
     ([slot, spec]) => spec.a2ui?.list ?? slot,
   );
+}
+
+/** The props a component's newest schema declares. */
+function declaredProps(
+  catalog: SduiCatalog,
+  type: string,
+): ReadonlySet<string> {
+  const definition = Object.prototype.hasOwnProperty.call(
+    catalog.components,
+    type,
+  )
+    ? catalog.components[type]
+    : undefined;
+  const schema =
+    definition?.contract.schemas?.[String(definition.contract.current)];
+  const properties =
+    isRecord(schema) && isRecord(schema['properties'])
+      ? schema['properties']
+      : {};
+  return new Set(Object.keys(properties));
 }
 
 function actionProps(catalog: SduiCatalog, type: string): readonly string[] {

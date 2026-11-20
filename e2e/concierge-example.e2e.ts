@@ -9,6 +9,7 @@ import { build } from '../examples/concierge/build.mjs';
 import { start } from '../examples/concierge/server.mjs';
 import { parseCatalog, parseClientManifest } from '../libs/sdui/src/index.js';
 import { A2UI_BASIC_CATALOG_ID, a2uiCatalogId } from '../libs/sdui/src/a2ui.js';
+import { ALLOWED_TAGS } from '../libs/sdui/src/web/view.js';
 
 /**
  * The Concierge example (`examples/concierge`) in Chromium: A2UI surfaces drawn into a host app's
@@ -213,7 +214,7 @@ describe('the upstream A2UI gallery, in the host’s own page', () => {
               {
                 id: 'root',
                 component: 'Column',
-                children: ['t1', 't2', 't3', 'i1', 'v1', 'b1', 'f1'],
+                children: ['t1', 't2', 't3', 'i1', 'i2', 'v1', 'b1', 'f1'],
               },
               {
                 id: 't1',
@@ -249,6 +250,13 @@ describe('the upstream A2UI gallery, in the host’s own page', () => {
                 },
               },
               { id: 'bl', component: 'Text', text: 'Open' },
+              // javascript: behind a no-break space, which String#trim strips and URL parsers keep
+              {
+                id: 'i2',
+                component: 'Image',
+                url: '\u00a0javascript:window.__pwned=1',
+                description: 'disguised',
+              },
               {
                 id: 'f1',
                 component: 'TextField',
@@ -284,20 +292,23 @@ describe('the upstream A2UI gallery, in the host’s own page', () => {
         () => (window as unknown as { __pwned?: number }).__pwned,
       ),
     ).toBeUndefined();
-    expect(
-      await surface
-        .locator('script, iframe, object, embed, style, img, link')
-        .count(),
-    ).toBe(0);
+    // every element is one the renderer is allowed to make
+    const tags = await surface.evaluate((root) => [
+      ...new Set([...root.querySelectorAll('*')].map((el) => el.localName)),
+    ]);
+    expect(tags.filter((tag) => !ALLOWED_TAGS.has(tag))).toEqual([]);
+    expect(await surface.locator('img').count()).toBe(0);
     const handlers = await surface.evaluate((root) =>
       [...root.querySelectorAll('*')].flatMap((el) =>
         el.getAttributeNames().filter((name) => name.startsWith('on')),
       ),
     );
     expect(handlers).toEqual([]);
+    // the two images and the video; the Markdown link is drawn as its words
     expect(
       await surface.locator('[data-a2ui-state="blocked-url"]').count(),
     ).toBe(3);
+    expect(await surface.locator('a').count()).toBe(0);
     expect(
       await surface.locator('[data-a2ui-id="t1"]').textContent(),
     ).toContain('<script>');

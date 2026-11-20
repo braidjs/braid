@@ -23,14 +23,7 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": [
-              "title",
-              "time_row",
-              "location_row",
-              "description",
-              "divider",
-              "actions"
-            ]
+            "children": ["title", "time_row", "location_row", "description", "divider", "actions"]
           },
           {
             "id": "title",

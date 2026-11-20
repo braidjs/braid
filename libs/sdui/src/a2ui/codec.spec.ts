@@ -6,6 +6,11 @@ import { A2uiSurfaces } from './surfaces.js';
 import { upstreamExamples, upstreamValidators } from './upstream.spec-util.js';
 
 const examples = upstreamExamples();
+
+/** Components an example sends that end up unreferenced by its last message. */
+const ORPHANS: Readonly<Record<string, readonly string[]>> = {
+  'incremental-dashboard.json': ['panel_a_loading', 'panel_b_loading'],
+};
 const validators = upstreamValidators();
 
 function fold(messages: readonly unknown[]): A2uiSurfaces {
@@ -52,7 +57,10 @@ describe('the upstream basic-catalog examples', () => {
             validators.explain(validators.agentToRenderer),
           ).toBe(true);
 
-        // what reaches the root comes back exactly; what does not is reported, not sent
+        // What reaches the root comes back exactly. What does not is reported, not sent: a tree
+        // has no place for a component nothing references. Upstream has exactly one such case —
+        // the loading panels incremental-dashboard replaces — and that is asserted, not filtered.
+        expect(orphans).toEqual(ORPHANS[example.file] ?? []);
         const reachable = [...state.components].filter(
           ([id]) => !orphans.includes(id),
         );

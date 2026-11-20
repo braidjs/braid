@@ -23,14 +23,7 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": [
-              "from_row",
-              "to_row",
-              "subject_row",
-              "divider",
-              "message",
-              "actions"
-            ]
+            "children": ["from_row", "to_row", "subject_row", "divider", "message", "actions"]
           },
           {
             "id": "from_row",

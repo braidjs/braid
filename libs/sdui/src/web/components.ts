@@ -1,3 +1,4 @@
+import { hash32 } from '../lib/hash.js';
 import { isRecord } from '../lib/internal.js';
 import type { ComponentRenderer, RenderContext } from './render.js';
 import { type View, type ViewElement, h } from './view.js';
@@ -12,6 +13,20 @@ import { type View, type ViewElement, h } from './view.js';
  */
 
 const cls = (name: string) => `a2ui-${name}`;
+
+/**
+ * An id or a name for something a component draws, opaque: derived from where the component is,
+ * never spelled from what an agent chose. An agent's ids must not be able to name a host element
+ * (`getElementById`) or a host form's field.
+ */
+const opaque = (c: RenderContext, what: string): string =>
+  `a2ui-${hash32(`${c.surfaceId}\u0000${c.key}\u0000${what}`).toString(36)}`;
+
+/**
+ * Controls point at a form no page has, so a host form around a surface never submits what an
+ * agent put in it; and they ask the browser not to fill them in.
+ */
+const DETACHED = { form: 'a2ui-detached', autocomplete: 'off' } as const;
 const variant = (
   context: RenderContext,
   allowed: readonly string[],
@@ -258,8 +273,29 @@ const Tabs: ComponentRenderer = (c) => {
     : [];
   const [selected, select] = c.local('tab', 0);
   const current = Math.min(selected, Math.max(0, tabs.length - 1));
-  const tabId = (index: number) =>
-    `${c.surfaceId}-${c.key}-tab-${index}`.replace(/[^A-Za-z0-9_-]/g, '_');
+  const tabId = (index: number) => opaque(c, `tab-${index}`);
+  // Arrow keys move between tabs, as a tab list's do; focus follows once the redraw lands.
+  const keydown = (index: number) => (event: Event) => {
+    const key = (event as KeyboardEvent).key;
+    const next =
+      key === 'ArrowRight'
+        ? (index + 1) % tabs.length
+        : key === 'ArrowLeft'
+          ? (index - 1 + tabs.length) % tabs.length
+          : key === 'Home'
+            ? 0
+            : key === 'End'
+              ? tabs.length - 1
+              : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    const list = (event.currentTarget as HTMLElement).parentElement;
+    select(next);
+    setTimeout(
+      () => (list?.children[next] as HTMLElement | undefined)?.focus(),
+      0,
+    );
+  };
   return h(
     'div',
     { class: cls('Tabs') },
@@ -279,7 +315,7 @@ const Tabs: ComponentRenderer = (c) => {
           },
           c.textOf(tab['title']),
         ),
-        on: { click: () => select(index) },
+        on: { click: () => select(index), keydown: keydown(index) },
       })),
     ),
     ...tabs.map((tab, index) =>
@@ -411,6 +447,9 @@ const TextField: ComponentRenderer = (c) => {
     placeholder: c.text('placeholder') || undefined,
     'data-variant': kind,
     key: 'control',
+    ...DETACHED,
+    // a password field an agent draws is not one a password manager should fill
+    ...(kind === 'obscured' ? { autocomplete: 'new-password' } : {}),
   };
   const control: ViewElement =
     kind === 'longText'
@@ -439,7 +478,7 @@ const CheckBox: ComponentRenderer = (c) => {
   const bound = c.bind('value');
   const checked = c.boolean('value') || bound.value === true;
   const control: ViewElement = {
-    ...h('input', { type: 'checkbox', key: 'control' }),
+    ...h('input', { type: 'checkbox', key: 'control', ...DETACHED }),
     props: { checked },
     on: {
       change: (event: Event) =>
@@ -485,7 +524,7 @@ const ChoicePicker: ComponentRenderer = (c) => {
         )
       : options;
   const messages = c.checks().messages;
-  const group = `${c.surfaceId}-${c.key}`.replace(/[^A-Za-z0-9_-]/g, '_');
+  const group = opaque(c, 'choices');
   return h(
     'fieldset',
     {
@@ -499,6 +538,7 @@ const ChoicePicker: ComponentRenderer = (c) => {
       ? {
           ...h('input', {
             type: 'search',
+            ...DETACHED,
             class: 'a2ui-filter',
             'aria-label': 'Filter',
             key: 'filter',
@@ -516,6 +556,7 @@ const ChoicePicker: ComponentRenderer = (c) => {
         ...h('input', {
           type: single ? 'radio' : 'checkbox',
           name: group,
+          ...DETACHED,
           value,
           key: `option-${value}`,
         }),
@@ -555,7 +596,14 @@ const Slider: ComponentRenderer = (c) => {
   const value =
     typeof bound.value === 'number' ? bound.value : Number(bound.value ?? min);
   const control: ViewElement = {
-    ...h('input', { type: 'range', min, max, step, key: 'control' }),
+    ...h('input', {
+      type: 'range',
+      min,
+      max,
+      step,
+      key: 'control',
+      ...DETACHED,
+    }),
     props: { value: String(Number.isFinite(value) ? value : min) },
     on: {
       input: (event: Event) =>
@@ -580,6 +628,7 @@ const DateTimeInput: ComponentRenderer = (c) => {
   const control: ViewElement = {
     ...h('input', {
       type,
+      ...DETACHED,
       min:
         typeof c.raw('min') === 'string' ? (c.raw('min') as string) : undefined,
       max:

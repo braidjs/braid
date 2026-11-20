@@ -51,13 +51,7 @@
           "additionalProperties": false
         }
       },
-      "required": [
-        "name",
-        "surfaceId",
-        "sourceComponentId",
-        "timestamp",
-        "context"
-      ]
+      "required": ["name", "surfaceId", "sourceComponentId", "timestamp", "context"]
     },
     "callAgentFunction": {
       "type": "object",
@@ -89,11 +83,7 @@
           "title": "Validation Failed Error",
           "properties": {
             "code": {
-              "enum": [
-                "VALIDATION_FAILED",
-                "UNALLOWED_PARENT",
-                "UNALLOWED_CHILD"
-              ]
+              "enum": ["VALIDATION_FAILED", "UNALLOWED_PARENT", "UNALLOWED_CHILD"]
             },
             "surfaceId": {
               "type": "string",
@@ -118,11 +108,7 @@
             "code": {
               "type": "string",
               "not": {
-                "enum": [
-                  "VALIDATION_FAILED",
-                  "UNALLOWED_PARENT",
-                  "UNALLOWED_CHILD"
-                ]
+                "enum": ["VALIDATION_FAILED", "UNALLOWED_PARENT", "UNALLOWED_CHILD"]
               }
             },
             "message": {

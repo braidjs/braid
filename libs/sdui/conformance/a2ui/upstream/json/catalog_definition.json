@@ -5,8 +5,8 @@
   "description": "A collection of component and function definitions.",
   "type": "object",
   "properties": {
-    "$schema": { "type": "string" },
-    "$id": { "type": "string" },
+    "$schema": {"type": "string"},
+    "$id": {"type": "string"},
     "protocolVersion": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:\\.(0|[1-9][0-9]*))?(?:-((?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
@@ -98,7 +98,7 @@
             "@call": {
               "type": "object",
               "properties": {
-                "const": { "type": "string" }
+                "const": {"type": "string"}
               },
               "required": ["const"]
             },
@@ -113,8 +113,8 @@
         },
         "required": {
           "type": "array",
-          "items": { "type": "string" },
-          "contains": { "const": "@call" }
+          "items": {"type": "string"},
+          "contains": {"const": "@call"}
         }
       },
       "required": ["type", "properties", "required"]
@@ -160,13 +160,13 @@
         {
           "if": {
             "properties": {
-              "requiresUserActivation": { "const": true }
+              "requiresUserActivation": {"const": true}
             },
             "required": ["requiresUserActivation"]
           },
           "then": {
             "properties": {
-              "allowedCallers": { "enum": ["rendererOnly"] }
+              "allowedCallers": {"enum": ["rendererOnly"]}
             }
           }
         }
@@ -264,7 +264,7 @@
             }
           },
           "not": {
-            "anyOf": [{ "required": ["anyOf"] }, { "required": ["oneOf"] }]
+            "anyOf": [{"required": ["anyOf"]}, {"required": ["oneOf"]}]
           }
         }
       ]

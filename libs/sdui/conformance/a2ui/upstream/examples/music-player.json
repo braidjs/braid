@@ -23,13 +23,7 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": [
-              "album_art",
-              "track_info",
-              "progress",
-              "time_row",
-              "controls"
-            ],
+            "children": ["album_art", "track_info", "progress", "time_row", "controls"],
             "align": "center"
           },
           {

@@ -384,18 +384,18 @@ for await (const message of agent) {
 
 ### The model, in A2UI terms
 
-| A2UI                                      | SDUI model                                                                                                                       |
-| :---------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| a surface's components, a flat list by id | a screen's tree; `surfaceToScreen` and `treeToComponents` convert, and every upstream example round-trips                        |
-| `children: ["a", "b"]`, `child: "a"`      | slots; `max: 1` is a single child. `Tabs.tabs[].child` is a slot with `a2ui: { list, key }`                                      |
-| `children: { path, componentId }`         | a slot whose one node has `repeat: "<path>"`                                                                                     |
-| a referenced id not yet sent              | an `sdui.placeholder` node, written back as the same dangling reference                                                          |
-| one component under two parents           | a copy with `copyOf`, written back as a reference                                                                                |
-| `@accessibility`, `@checks`, `@metadata`  | `annotations`, carried through projection untouched                                                                              |
-| `action: { event }` / `{ functionCall }`  | the `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions are written as events of their name                        |
-| `{ "@path" }`, `{ "@call" }` in props     | bound values. A step may move, wrap or drop one; a step that converts, maps or reaches into one is a `gap`                       |
-| catalog functions                         | `catalog.functions`; `manifest.functions` lists what a renderer implements, and a node calling one it lacks goes down the ladder |
-| the data model                            | `screen.data`                                                                                                                    |
+| A2UI                                      | SDUI model                                                                                                                                                   |
+| :---------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a surface's components, a flat list by id | a screen's tree; `surfaceToScreen` and `treeToComponents` convert; every upstream example round-trips, its unreferenced components reported rather than kept |
+| `children: ["a", "b"]`, `child: "a"`      | slots; `max: 1` is a single child. `Tabs.tabs[].child` is a slot with `a2ui: { list, key }`                                                                  |
+| `children: { path, componentId }`         | a slot whose one node has `repeat: "<path>"`                                                                                                                 |
+| a referenced id not yet sent              | an `sdui.placeholder` node, written back as the same dangling reference                                                                                      |
+| one component under two parents           | a copy with `copyOf`, written back as a reference                                                                                                            |
+| `@accessibility`, `@checks`, `@metadata`  | `annotations`, carried through projection untouched                                                                                                          |
+| `action: { event }` / `{ functionCall }`  | the `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions are written as events of their name                                                    |
+| `{ "@path" }`, `{ "@call" }` in props     | bound values. A step may move, wrap or drop one; a step that converts, maps or reaches into one is a `gap`                                                   |
+| catalog functions                         | `catalog.functions`; `manifest.functions` lists what a renderer implements, and a node calling one it lacks goes down the ladder                             |
+| the data model                            | `screen.data`                                                                                                                                                |
 
 `parseA2uiMessage` and `parseA2uiStream` refuse what the v1.0 schemas refuse — and reserved keys, unknown `@` directives, `theme` (removed in v1.0), values past the size limits — with the spec's error codes and a JSON Pointer. `A2uiSurfaces` applies messages by the spec's state rules. `a2uiBasicCatalog` and `a2uiBasicManifest` are the basic catalog as a catalog and as a renderer.
 
@@ -414,7 +414,7 @@ Each variant is written as the A2UI stream that renderer receives (`.jsonl`) and
 ### The renderer: `@braidlabs/sdui/web`
 
 ```ts
-import { defineA2uiSurface, A2UI_DEFAULT_CSS } from '@braidlabs/sdui/web';
+import { defineA2uiSurface, h } from '@braidlabs/sdui/web';
 
 defineA2uiSurface({
   registry: {
@@ -432,7 +432,10 @@ defineA2uiSurface({
 - **Light DOM.** Components are semantic HTML with classes (`a2ui-Button`) and data attributes (`data-variant="primary"`) and no styles of their own: the host's stylesheet is what they look like. `A2UI_DEFAULT_CSS` is a starting point at zero specificity.
 - **Braided components.** A component type can be the host's own custom element (props as its `a2ui` property and scalar attributes; children slotted by prop name) or a Braid fragment in contract mode (props as its `props`; a `braid:event` becomes the A2UI action named in `events`, with its detail in the context).
 - **Patching, not replacing.** An agent's update never replaces an input under the cursor: focus, caret and selection survive. Prerendered HTML (from `renderA2uiHtml`, or the prerender command) carries `data-a2ui-key`s and the messages that built it, and is adopted in place.
-- **Closed and checked.** Bindings, `@checks` and the basic catalog's functions are evaluated by a closed interpreter with a budget. Regular expressions are parsed in the A2UI dialect and refused when they could backtrack catastrophically. URLs pass a policy (`urlPolicy`) — `javascript:` and `data:text` are never written — and Markdown is a subset in which raw HTML is text. There is no `innerHTML` in the renderer; a test enforces it.
+- **Closed and checked.** Bindings, `@checks` and the basic catalog's functions are evaluated by a closed interpreter with a budget; a `formatString` template is interpolated only where it was written as one, never from data. Regular expressions are parsed in the A2UI dialect, refused when the spec's rules say they could backtrack, and matched by a linear-time NFA with a step budget, so no pattern can freeze a page. Markdown is the spec's subset — no HTML, images or links; a link is its words.
+- **URLs pass a policy** (`urlPolicy`). `javascript:`, `data:text` and URLs wrapped in invisible characters are never written. Links (which need a click) may go to any http(s) host unless `hosts` narrows them. **Media load by themselves**, so a URL built from bound data would send what someone types to whoever it names: absolute media URLs are refused unless their host is in `mediaHosts`.
+- **Bounded.** A surface draws at most `MAX_DRAWS` components per draw (sharing and nested templates multiply), a renderer holds at most 64 surfaces, and a stream line is capped. Components an agent draws carry opaque ids and names, sit outside any host form (`form="a2ui-detached"`), and a host element is given attributes only for the scalar props its catalog schema declares.
+- **Not a confidentiality boundary.** `sendDataModel` says whether the data model rides along with messages to the agent; an agent can read any value anyway, by binding it into an action's context. Keep secrets out of a surface's data model.
 - **Messages out** are dispatched as a cancelable `a2ui:message` event and POSTed to `action-url` as `{ message, metadata }`, with `a2uiRendererCapabilities` and, for surfaces created with `sendDataModel`, `a2uiRendererDataModel`. A response of more messages is applied.
 
 `examples/concierge` puts it together: a CMS-authored screen prerendered per renderer, an agent's surface through the projector, `Card` drawn by the host's element and `FlightCard` by a Braid fragment.

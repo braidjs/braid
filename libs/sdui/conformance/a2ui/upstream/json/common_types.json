@@ -276,10 +276,7 @@
       "properties": {
         "condition": {
           "description": "Path or function call evaluating to a structured validation result object or a boolean.",
-          "oneOf": [
-            { "$ref": "#/$defs/DataBinding" },
-            { "$ref": "#/$defs/FunctionCall" }
-          ]
+          "oneOf": [{"$ref": "#/$defs/DataBinding"}, {"$ref": "#/$defs/FunctionCall"}]
         },
         "message": {
           "type": "string",
@@ -379,15 +376,15 @@
           "type": "object",
           "description": "An error object indicating failure of the function execution.",
           "properties": {
-            "code": { "type": "string" },
-            "message": { "type": "string" }
+            "code": {"type": "string"},
+            "message": {"type": "string"}
           },
           "required": ["code", "message"],
           "additionalProperties": false
         }
       },
       "required": ["functionCallId"],
-      "oneOf": [{ "required": ["value"] }, { "required": ["error"] }],
+      "oneOf": [{"required": ["value"]}, {"required": ["error"]}],
       "additionalProperties": false
     }
   }

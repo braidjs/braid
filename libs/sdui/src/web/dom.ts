@@ -154,9 +154,12 @@ export function patchChildren(
     if (key !== null) keyed.set(key, node);
     else unkeyed.push(node);
   }
+  // First match every view to a node (or make one), then take away what was not drawn, and only
+  // then put the nodes in order. Removing first means a node that stays never moves because a
+  // sibling went; and moving a focused element is what blurs it.
   let position = 0;
   const used = new Set<Node>();
-  let cursor: ChildNode | null = parent.firstChild;
+  const plan: Node[] = [];
   for (const view of views) {
     let node: Node | undefined;
     if (typeof view === 'string') {
@@ -191,9 +194,11 @@ export function patchChildren(
       update(node as Element, view, svg || view.tag === 'svg');
     if (!node) node = create(view, document, svg);
     used.add(node);
-    if (node !== cursor) parent.insertBefore(node, cursor);
-    else cursor = cursor.nextSibling;
+    plan.push(node);
   }
-  // What is left was not drawn this time.
   for (const node of [...parent.childNodes]) if (!used.has(node)) node.remove();
+  plan.forEach((node, index) => {
+    const there = parent.childNodes[index];
+    if (there !== node) parent.insertBefore(node, there ?? null);
+  });
 }

@@ -41,6 +41,9 @@ export interface AppliedMessage {
   };
 }
 
+/** How many surfaces one renderer holds at once: each may be 5,000 components and its data. */
+export const MAX_SURFACES = 64;
+
 /** How large a data model may grow, through any number of updates. */
 export const DATA_MODEL_LIMITS = Object.freeze({ depth: 40, values: 400_000 });
 
@@ -81,6 +84,13 @@ export class A2uiSurfaces {
           throw new A2uiError(
             'INTEGRITY_ERROR',
             `the surface "${body.surfaceId}" already exists; delete it before creating it again`,
+            '/surfaceId',
+            body.surfaceId,
+          );
+        if (this.#surfaces.size >= MAX_SURFACES)
+          throw new A2uiError(
+            'VALIDATION_FAILED',
+            `a renderer holds at most ${MAX_SURFACES} surfaces; delete one first`,
             '/surfaceId',
             body.surfaceId,
           );

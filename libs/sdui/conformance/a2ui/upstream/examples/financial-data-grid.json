@@ -29,12 +29,7 @@
           {
             "id": "header_row",
             "component": "Row",
-            "children": [
-              "col_asset",
-              "col_price",
-              "col_change",
-              "col_market_cap"
-            ],
+            "children": ["col_asset", "col_price", "col_change", "col_market_cap"],
             "align": "center"
           },
           {
@@ -76,12 +71,7 @@
           {
             "id": "row_template",
             "component": "Row",
-            "children": [
-              "asset_info",
-              "asset_price",
-              "asset_change",
-              "asset_market_cap"
-            ],
+            "children": ["asset_info", "asset_price", "asset_change", "asset_market_cap"],
             "align": "center"
           },
           {

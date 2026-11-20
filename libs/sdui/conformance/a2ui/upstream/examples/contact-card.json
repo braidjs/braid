@@ -23,14 +23,7 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": [
-              "avatar_image",
-              "name",
-              "title",
-              "divider",
-              "contact_info",
-              "actions"
-            ],
+            "children": ["avatar_image", "name", "title", "divider", "contact_info", "actions"],
             "align": "center"
           },
           {

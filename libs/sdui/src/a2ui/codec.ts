@@ -187,12 +187,12 @@ export function surfaceToScreen(
         return { id, type: PLACEHOLDER_TYPE, v: 1 };
       }
       // A dangling id referenced twice is two placeholders; the second needs an id of its own.
-      return {
-        id: `${id}~${++copies}`,
-        type: PLACEHOLDER_TYPE,
-        v: 1,
-        copyOf: id,
-      };
+      if (++copies > MAX_COPIES)
+        return invalid(
+          `components are shared so often that the surface would expand past ${MAX_COPIES} copies`,
+          parent,
+        );
+      return { id: fresh(id), type: PLACEHOLDER_TYPE, v: 1, copyOf: id };
     }
     // A component a second parent references is drawn again, as a copy: see `SduiNode.copyOf`.
     if (reached.has(id)) {
@@ -206,12 +206,22 @@ export function surfaceToScreen(
     return node(component);
   };
   let copies = 0;
+  /**
+   * An id for a copy that no component has and no other copy took. Any character is legal in an
+   * A2UI id, so a suffix alone could collide with one an agent sent.
+   */
+  const taken = new Set<string>(surface.components.keys());
+  const fresh = (base: string): string => {
+    let candidate = `${base}~${copies}`;
+    while (taken.has(candidate)) candidate = `${candidate}~`;
+    taken.add(candidate);
+    return candidate;
+  };
   /** Renames a subtree's ids so it can sit in a tree beside the original. */
   const copyOf = (original: SduiNode): SduiNode => {
-    const suffix = `~${copies}`;
     const rename = (inner: SduiNode): SduiNode => ({
       ...inner,
-      id: `${inner.id}${suffix}`,
+      id: fresh(inner.copyOf ?? inner.id),
       copyOf: inner.copyOf ?? inner.id,
       ...(inner.slots
         ? {
@@ -278,7 +288,8 @@ export function surfaceToScreen(
             id,
           );
       } else {
-        // The list stays a prop; each item gives up the field that named its child to the slot.
+        // The list stays a prop, each item still naming its child; the slot holds the children.
+        // Written back, an item is kept only while its child is still there to name.
         if (!Array.isArray(value)) continue;
         taken.add(plan.slot);
         const key = plan.key as string;
@@ -287,9 +298,7 @@ export function surfaceToScreen(
           if (!isRecord(item))
             return invalid(`${plan.slot}[${index}] must be an object`, id);
           children.push(child(item[key], id, `${plan.slot}[${index}].${key}`));
-          return Object.fromEntries(
-            Object.entries(item).filter(([field]) => field !== key),
-          );
+          return item;
         });
         slots.push([slot, children]);
       }
@@ -465,12 +474,27 @@ export function treeToComponents(
         const list = props[plan.slot];
         if (!Array.isArray(list)) continue;
         const key = plan.key as string;
-        props[plan.slot] = list.map((item, index) => ({
-          ...(isRecord(item) ? item : {}),
-          [key]: children?.[index]
-            ? visit(children[index] as ProjectedNode, false)
-            : `${id}~${slot}~${index}`,
-        }));
+        const items = list.filter(isRecord);
+        if (items.some((item) => typeof item[key] === 'string')) {
+          // Each item names its child: keep the items whose child projection kept — a child
+          // omitted or hidden takes its item with it, rather than shifting the rest onto
+          // the wrong content.
+          const kept = new Map<string, ProjectedNode | SduiNode>();
+          for (const c of children ?? []) kept.set(c.copyOf ?? c.id, c);
+          props[plan.slot] = items.filter((item) => {
+            const named = kept.get(item[key] as string);
+            if (named) visit(named, false);
+            return named !== undefined;
+          });
+        } else {
+          // Authored in the SDUI model: children in the list's order.
+          props[plan.slot] = items.map((item, index) => ({
+            ...item,
+            [key]: children?.[index]
+              ? visit(children[index] as ProjectedNode, false)
+              : `${id}~${slot}~${index}`,
+          }));
+        }
       }
     }
     Object.assign(component, props);

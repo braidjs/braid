@@ -301,17 +301,17 @@ agent that writes for one breaks the other.
 So A2UI is not a second system beside the SDUI model. It is a wire format _of_ the model, and every
 mechanism above applies to it:
 
-| A2UI                                        | This plan                                                                                                             |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| a surface, its flat component list          | a screen, its tree — converted both ways; every upstream basic-catalog example round-trips exactly                    |
-| a catalog                                   | a catalog: components, actions and **functions** are contracts or closed lists, and `catalog.a2ui.catalogId` names it |
-| a renderer's `supportedCatalogIds`          | a client manifest: each manifest gets a catalog id of its own, derived from what it can draw                          |
-| an agent writing against a catalog          | an author writing at the newest version: the agent authors against the catalog's own id                               |
-| what the renderer receives                  | a projection: per component, exact, downgraded, or down the ladder — never a guessed value                            |
-| `{ "@path" }`, `{ "@call" }`                | bound values: a step may move, wrap or drop one; one that converts, maps or reaches into one is a `gap`               |
-| a dangling reference (drawn as placeholder) | an `sdui.placeholder` node — and the placeholder fallback is written as a dangling reference                          |
-| `action: { event }` / `{ functionCall }`    | `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions (`navigate`) are written as events                  |
-| `@checks` failing disables a control        | how a disabled action is written: an always-failing check, so an old renderer shows an honest, inert control          |
+| A2UI                                        | This plan                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| a surface, its flat component list          | a screen, its tree — converted both ways; every upstream example round-trips exactly, bar components nothing references, which are reported |
+| a catalog                                   | a catalog: components, actions and **functions** are contracts or closed lists, and `catalog.a2ui.catalogId` names it                       |
+| a renderer's `supportedCatalogIds`          | a client manifest: each manifest gets a catalog id of its own, derived from what it can draw                                                |
+| an agent writing against a catalog          | an author writing at the newest version: the agent authors against the catalog's own id                                                     |
+| what the renderer receives                  | a projection: per component, exact, downgraded, or down the ladder — never a guessed value                                                  |
+| `{ "@path" }`, `{ "@call" }`                | bound values: a step may move, wrap or drop one; one that converts, maps or reaches into one is a `gap`                                     |
+| a dangling reference (drawn as placeholder) | an `sdui.placeholder` node — and the placeholder fallback is written as a dangling reference                                                |
+| `action: { event }` / `{ functionCall }`    | `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions (`navigate`) are written as events                                        |
+| `@checks` failing disables a control        | how a disabled action is written: an always-failing check, so an old renderer shows an honest, inert control                                |
 
 **Catalog ids name capabilities.** A manifest's A2UI id is the catalog's id plus a key over its
 component, action and function versions — `…/catalog.json?caps=cv_9f2c…` — and not over which binary
@@ -929,8 +929,9 @@ and `blocked` is what the `incompatible` screen state is resolved from.
 ### P2 — A2UI in the core (`@braidlabs/sdui/a2ui`)
 
 - [x] Every vendored upstream basic-catalog example round-trips: parse → surface → SDUI model →
-      A2UI → identical component map and data model, and everything emitted validates against the
-      upstream v1.0 JSON Schemas.
+      A2UI → an identical component map (every component reachable from the root; one nothing
+      references is reported, not kept) and data model, and everything emitted validates against
+      the upstream v1.0 JSON Schemas.
 - [x] Malformed streams are refused with the spec's error codes and a JSON Pointer — an update
       before `createSurface`, a duplicate surface (`INTEGRITY_ERROR`), unknown `@` keys, `theme`,
       reserved keys, cycles, size and depth limits; a dangling id is a reported placeholder.

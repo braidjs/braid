@@ -1,6 +1,7 @@
-import { isRecord } from '../lib/internal.js';
+import { isRecord, outgrows } from '../lib/internal.js';
 import { readPointer } from '../a2ui/surfaces.js';
 import {
+  type A2uiRegex,
   RegexDialectError,
   a2uiRegexMatches,
   compileA2uiRegex,
@@ -36,16 +37,32 @@ export interface ValidationResult {
 export type ReportedError = { readonly code: string; readonly message: string };
 
 /**
- * Which URLs may be used, and for what. Links and `openUrl` default to `https:`, `http:`, `mailto:`
- * and `tel:`; media to `https:` and `http:`, and images also to `data:` images. A relative URL is
- * always allowed — it names the page's own origin. `hosts`, when given, limits absolute http(s)
- * URLs to those hosts (`*.example.com` matches subdomains).
+ * Which URLs may be used, and for what.
+ *
+ * - Links and `openUrl` — which need a person's click — default to `https:`, `http:`, `mailto:`
+ *   and `tel:` on any host; `hosts` limits absolute http(s) links (`*.example.com` matches
+ *   subdomains).
+ * - Media load by themselves, the moment they are drawn, so they are a channel out: an image URL
+ *   built from bound data would send what someone types to whoever the URL names. So absolute
+ *   media URLs are refused unless their host is in `mediaHosts`; relative URLs (the page's own
+ *   origin) and `data:` raster images are allowed.
  */
 export interface UrlPolicy {
   readonly linkSchemes?: readonly string[];
   readonly mediaSchemes?: readonly string[];
   readonly hosts?: readonly string[];
+  /** Hosts images, video and audio may load from. None by default. */
+  readonly mediaHosts?: readonly string[];
 }
+
+const hostMatches = (host: string, patterns: readonly string[]): boolean =>
+  patterns.some(
+    (pattern) =>
+      pattern === '*' ||
+      (pattern.startsWith('*.')
+        ? host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1
+        : host === pattern),
+  );
 
 export type UrlUse = 'link' | 'image' | 'media';
 
@@ -62,13 +79,21 @@ export function checkUrl(
   use: UrlUse,
   policy: UrlPolicy = {},
 ): UrlCheck {
-  if (typeof raw !== 'string' || raw.trim() === '')
-    return { ok: false, reason: 'not a URL' };
+  if (typeof raw !== 'string') return { ok: false, reason: 'not a URL' };
+  const stripped = raw.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
+  if (stripped === '') return { ok: false, reason: 'not a URL' };
+  // Whitespace the URL parser keeps but a person or a careless consumer would not — U+00A0,
+  // U+FEFF, U+3000 around "javascript:" — is a disguise, not a URL.
+  if (stripped.trim() !== stripped)
+    return {
+      ok: false,
+      reason: 'a URL that begins or ends with invisible characters',
+    };
   if (raw.length > 8_192)
     return { ok: false, reason: 'a URL longer than 8192 characters' };
-  if (use === 'image' && raw.trim().toLowerCase().startsWith('data:'))
-    return DATA_IMAGE.test(raw.trim())
-      ? { ok: true, url: raw.trim() }
+  if (use === 'image' && stripped.toLowerCase().startsWith('data:'))
+    return DATA_IMAGE.test(stripped)
+      ? { ok: true, url: stripped }
       : { ok: false, reason: 'a data URL that is not an image' };
   let parsed: URL;
   const PROBE = 'https://relative.a2ui.invalid';
@@ -78,7 +103,11 @@ export function checkUrl(
   } catch {
     return { ok: false, reason: 'not a URL' };
   }
-  if (parsed.origin === PROBE) return { ok: true, url: raw.trim() };
+  // Relative: the page's own origin. Returned stripped exactly as the URL parser strips it —
+  // C0 controls and spaces at the ends — and no more: String#trim also strips U+00A0 and U+FEFF,
+  // which the parser keeps, so a trimmed " javascript:…" would be a different URL from the one
+  // just checked.
+  if (parsed.origin === PROBE) return { ok: true, url: stripped };
   const schemes =
     use === 'link'
       ? (policy.linkSchemes ?? ['https:', 'http:', 'mailto:', 'tel:'])
@@ -88,20 +117,35 @@ export function checkUrl(
       ok: false,
       reason: `the "${parsed.protocol}" scheme is not allowed`,
     };
+  const web = parsed.protocol === 'https:' || parsed.protocol === 'http:';
   if (
+    use !== 'link' &&
+    web &&
+    !hostMatches(parsed.hostname, policy.mediaHosts ?? [])
+  )
+    return {
+      ok: false,
+      reason: `"${parsed.hostname}" is not a host this page loads media from`,
+    };
+  if (
+    use === 'link' &&
     policy.hosts &&
-    (parsed.protocol === 'https:' || parsed.protocol === 'http:')
-  ) {
-    const host = parsed.hostname;
-    const allowed = policy.hosts.some((pattern) =>
-      pattern.startsWith('*.')
-        ? host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1
-        : host === pattern,
-    );
-    if (!allowed)
-      return { ok: false, reason: `"${host}" is not a host this page allows` };
-  }
+    web &&
+    !hostMatches(parsed.hostname, policy.hosts)
+  )
+    return {
+      ok: false,
+      reason: `"${parsed.hostname}" is not a host this page allows`,
+    };
   return { ok: true, url: parsed.href };
+}
+
+/**
+ * Whether a URL's scheme is one a view may ever write, whatever a page's policy: the backstop the
+ * view applies to every URL attribute. Hosts are the page policy's business, checked before.
+ */
+export function urlSchemeAllowed(raw: string, use: UrlUse): boolean {
+  return checkUrl(raw, use, { mediaHosts: ['*'] }).ok;
 }
 
 /** A function a host adds to the evaluator, for a catalog of its own. */
@@ -171,6 +215,8 @@ export function toText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean')
     return String(value);
+  // A binding to the whole data model is drawn on every redraw; past this, it is not drawn.
+  if (outgrows(value, { depth: 32, values: 10_000 }) !== null) return '';
   try {
     return JSON.stringify(value) ?? '';
   } catch {
@@ -180,7 +226,7 @@ export function toText(value: unknown): string {
 
 export function createEvaluator(options: EvaluatorOptions): Evaluator {
   const locale = options.locale ?? 'en-US';
-  const regexes = new Map<string, RegExp | RegexDialectError>();
+  const regexes = new Map<string, A2uiRegex | RegexDialectError>();
 
   const fail = (message: string): never => {
     throw new ExpressionError(message);
@@ -241,13 +287,24 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     if (typeof name !== 'string')
       return fail('a call names its function as a string');
     const rawArgs = isRecord(raw['args']) ? raw['args'] : {};
-    const args: Record<string, unknown> = {};
+    // No prototype: an argument named "__proto__" is an argument, not a way to the object's.
+    const args: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(rawArgs))
       args[key] =
         name === 'formatString' && key === 'value'
           ? value
           : evaluate(value, scope, budget, depth + 1, activated);
-    return run(name, args, scope, budget, depth, activated);
+    // A template is interpolated only when it was written as one: a bound value is data, and
+    // text someone typed must not become an expression.
+    return run(
+      name,
+      args,
+      scope,
+      budget,
+      depth,
+      activated,
+      typeof rawArgs['value'] === 'string',
+    );
   }
 
   function run(
@@ -257,6 +314,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     budget: Budget,
     depth: number,
     activated: boolean,
+    literalTemplate = false,
   ): unknown {
     const num = (value: unknown, what: string): number => {
       const n =
@@ -344,7 +402,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         );
       case 'formatString': {
         const template = args['value'];
-        if (typeof template !== 'string')
+        if (typeof template !== 'string' || !literalTemplate)
           return toText(
             evaluate(template, scope, budget, depth + 1, activated),
           );
@@ -544,10 +602,20 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
           fail(
             `more than ${EVALUATION_LIMITS.calls} function calls in one value`,
           );
-        const args: Record<string, unknown> = {};
+        const args: Record<string, unknown> = Object.create(null);
         for (const [key, value] of expr.args)
           args[key] = evalExpr(value, scope, budget, depth + 1, activated);
-        return run(expr.name, args, scope, budget, depth + 1, activated);
+        const literal =
+          expr.args.find(([key]) => key === 'value')?.[1].kind === 'literal';
+        return run(
+          expr.name,
+          args,
+          scope,
+          budget,
+          depth + 1,
+          activated,
+          literal,
+        );
       }
     }
   }

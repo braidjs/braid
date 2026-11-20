@@ -23,13 +23,7 @@
           {
             "id": "main_column",
             "component": "Column",
-            "children": [
-              "header",
-              "tracking_number",
-              "divider",
-              "steps_list",
-              "eta"
-            ]
+            "children": ["header", "tracking_number", "divider", "steps_list", "eta"]
           },
           {
             "id": "header",

@@ -15,6 +15,11 @@ const SINKS = [
   /\bcreateContextualFragment\b/,
   /\bDOMParser\b/,
   /\bsrcdoc\b(?!['"])/,
+  // the same sinks reached indirectly
+  /setAttribute\(\s*['"`](srcdoc|on\w+)['"`]/i,
+  /\[\s*['"`](inner|outer)HTML['"`]\s*\]/,
+  /['"`](inner|outer)['"`]\s*\+/,
+  /\.srcdoc\b/,
   /\beval\s*\(/,
   /\bnew\s+Function\b/,
   /\bsetTimeout\s*\(\s*['"`]/,

@@ -236,6 +236,10 @@ describe('the URL policy', () => {
     ['data:text/html,<script>alert(1)</script>', 'link', false],
     ['data:text/html,<script>alert(1)</script>', 'image', false],
     ['data:image/png;base64,iVBORw0KGgo=', 'image', true],
+    // media loads by itself, so it is a way out: no host by default
+    ['https://images.example/a.png', 'image', false],
+    ['https://attacker.example/p?d=hunter2', 'media', false],
+    ['/img/a.png', 'image', true],
     ['data:image/svg+xml;base64,PHN2Zz4=', 'image', false],
     ['mailto:a@example.com', 'media', false],
     ['//evil.example/x', 'link', true],
@@ -244,11 +248,17 @@ describe('the URL policy', () => {
   });
 
   it('limits hosts when asked', () => {
-    const policy = { hosts: ['example.com', '*.cdn.example.com'] };
+    const policy = {
+      hosts: ['example.com'],
+      mediaHosts: ['*.cdn.example.com'],
+    };
     expect(checkUrl('https://example.com/', 'link', policy).ok).toBe(true);
     expect(
       checkUrl('https://img.cdn.example.com/a.png', 'image', policy).ok,
     ).toBe(true);
+    expect(checkUrl('https://example.com/a.png', 'image', policy).ok).toBe(
+      false,
+    );
     expect(checkUrl('https://evil.example/', 'link', policy).ok).toBe(false);
     expect(checkUrl('//evil.example/x', 'link', policy).ok).toBe(false);
     expect(

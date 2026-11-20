@@ -38,7 +38,12 @@ document.head.prepend(defaults);
 
 // Braid's runtime, for the flights team's fragment; then the renderer.
 initBraid();
-defineA2uiSurface({ registry, catalog });
+// Media loads by itself, so it is a way out for data: the app names the hosts it loads from.
+defineA2uiSurface({
+  registry,
+  catalog,
+  urlPolicy: { mediaHosts: ['images.unsplash.com'] },
+});
 
 // For whoever is looking: what the surfaces say back.
 const log = document.querySelector('#traffic');

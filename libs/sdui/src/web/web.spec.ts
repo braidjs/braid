@@ -337,11 +337,13 @@ describe('hostile content', () => {
       expect(root.querySelector('[data-a2ui-id="t1"]')!.textContent).toContain(
         '<script>',
       );
+      // the image and the video; a Markdown link is its words, never an <a>
       expect(
         root.querySelectorAll('[data-a2ui-state="blocked-url"]').length,
-      ).toBeGreaterThanOrEqual(3);
-      expect(root.querySelector('a')!.getAttribute('href')).toBe(
-        'https://example.com/',
+      ).toBe(2);
+      expect(root.querySelector('a')).toBeNull();
+      expect(root.querySelector('[data-a2ui-id="t3"]')!.textContent).toBe(
+        'click me and ok',
       );
       expect(
         (window as unknown as { __pwned?: number }).__pwned,

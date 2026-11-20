@@ -1,11 +1,9 @@
-import { checkUrl, type UrlPolicy } from './evaluate.js';
 import { type View, h } from './view.js';
 
 /**
  * The Markdown A2UI's `Text` carries — "simple Markdown" — as views: headings, paragraphs, lists,
- * strong, emphasis, code and links. Nothing else: raw HTML in the source is text, because there is
- * no way here to make an element from a string, and a link whose URL the policy refuses is shown
- * as its words.
+ * strong, emphasis and code. Nothing else: raw HTML in the source is text, because there is no way
+ * here to make an element from a string, and a link is its words.
  */
 
 export interface MarkdownResult {
@@ -16,61 +14,33 @@ export interface MarkdownResult {
 
 const LIMIT = 20_000;
 
-/** Inline markup: `**strong**`, `*em*` / `_em_`, `` `code` ``, `[words](url)`. */
-function inline(
-  text: string,
-  policy: UrlPolicy | undefined,
-  depth = 0,
-): View[] {
+/**
+ * Inline markup: `**strong**`, `*em*`, `` `code` ``. A link — `[words](url)` — is drawn as its
+ * words: the basic catalog's Text is "simple Markdown … without HTML, images, or links", and text
+ * is often bound to data someone typed, so a link would be a lure in the host's own page. Each
+ * run is bounded so a long line of markers costs little.
+ */
+function inline(text: string, depth = 0): View[] {
   if (depth > 4) return [text];
   const out: View[] = [];
   const pattern =
-    /\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+    /\*\*([^*\n]{1,1000}?)\*\*|\*([^*\s][^*\n]{0,999}?)\*|`([^`\n]{1,1000})`|\[([^\][\n]{1,500})\]\(([^()\s]{1,2000})\)/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const at = match.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
-    const [, strong1, strong2, em1, em2, code, words, url] = match;
-    if (strong1 ?? strong2)
-      out.push(
-        h(
-          'strong',
-          {},
-          ...inline((strong1 ?? strong2) as string, policy, depth + 1),
-        ),
-      );
-    else if (em1 ?? em2)
-      out.push(
-        h('em', {}, ...inline((em1 ?? em2) as string, policy, depth + 1)),
-      );
+    const [, strong, em, code, words] = match;
+    if (strong) out.push(h('strong', {}, ...inline(strong, depth + 1)));
+    else if (em) out.push(h('em', {}, ...inline(em, depth + 1)));
     else if (code) out.push(h('code', {}, code));
-    else if (words && url) {
-      const checked = checkUrl(url, 'link', policy);
-      out.push(
-        checked.ok
-          ? h(
-              'a',
-              {
-                href: checked.url,
-                rel: 'noopener noreferrer nofollow',
-                target: '_blank',
-              },
-              ...inline(words, policy, depth + 1),
-            )
-          : h(
-              'span',
-              { 'data-a2ui-state': 'blocked-url' },
-              ...inline(words, policy, depth + 1),
-            ),
-      );
-    }
+    else if (words) out.push(...inline(words, depth + 1));
     last = at + match[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
 
-export function markdown(source: string, policy?: UrlPolicy): MarkdownResult {
+export function markdown(source: string): MarkdownResult {
   const text = source.length > LIMIT ? source.slice(0, LIMIT) : source;
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const blocks: View[] = [];
@@ -81,7 +51,7 @@ export function markdown(source: string, policy?: UrlPolicy): MarkdownResult {
     const parts: View[] = [];
     paragraph.forEach((line, index) => {
       if (index > 0) parts.push(h('br'));
-      parts.push(...inline(line, policy));
+      parts.push(...inline(line));
     });
     blocks.push(h('p', {}, ...parts));
     paragraph = [];
@@ -92,7 +62,7 @@ export function markdown(source: string, policy?: UrlPolicy): MarkdownResult {
       h(
         list.ordered ? 'ol' : 'ul',
         {},
-        ...list.items.map((item) => h('li', {}, ...inline(item, policy))),
+        ...list.items.map((item) => h('li', {}, ...inline(item))),
       ),
     );
     list = null;
@@ -108,7 +78,7 @@ export function markdown(source: string, policy?: UrlPolicy): MarkdownResult {
         h(
           `h${(heading[1] as string).length}`,
           {},
-          ...inline(heading[2] as string, policy),
+          ...inline(heading[2] as string),
         ),
       );
     } else if (bullet || numbered) {

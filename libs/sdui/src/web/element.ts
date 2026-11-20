@@ -1,6 +1,7 @@
 import type { SduiCatalog } from '../lib/catalog.js';
 import { A2UI_BASIC_CATALOG_ID } from '../a2ui/basic.js';
 import {
+  A2UI_LIMITS,
   A2uiError,
   type A2uiMessage,
   type A2uiRendererMessage,
@@ -72,6 +73,10 @@ export function defineA2uiSurface(
     readonly surfaces = new A2uiSurfaces();
     registry: ComponentRegistry = options.registry ?? {};
     readonly #local = new Map<string, Map<string, unknown>>();
+    readonly #evaluators = new Map<
+      string,
+      ReturnType<typeof createEvaluator>
+    >();
     #scheduled = false;
     #abort: AbortController | null = null;
     #reported = new Set<string>();
@@ -110,12 +115,25 @@ export function defineA2uiSurface(
 
     push(messages: string | readonly unknown[]): void {
       let list: readonly unknown[];
-      try {
-        list =
-          typeof messages === 'string' ? parseA2uiStream(messages) : messages;
-      } catch (error) {
-        if (error instanceof A2uiError) this.#send(errorMessage(error));
-        return;
+      if (typeof messages !== 'string') list = messages;
+      else if (messages.trimStart().startsWith('[')) {
+        try {
+          list = parseA2uiStream(messages);
+        } catch (error) {
+          if (error instanceof A2uiError) this.#send(errorMessage(error));
+          return;
+        }
+      } else {
+        // JSON Lines, a line at a time: one bad line is one error, not the loss of its neighbours.
+        list = [];
+        for (const line of messages.split(/\r?\n/)) {
+          if (line.trim() === '') continue;
+          try {
+            (list as unknown[]).push(...parseA2uiStream(line));
+          } catch (error) {
+            if (error instanceof A2uiError) this.#send(errorMessage(error));
+          }
+        }
       }
       for (const raw of list) {
         try {
@@ -174,8 +192,23 @@ export function defineA2uiSurface(
         return;
       }
       const applied = this.surfaces.apply(message);
-      if (applied.kind === 'deleteSurface' && applied.surfaceId)
+      if (applied.kind === 'deleteSurface' && applied.surfaceId) {
         this.#local.delete(applied.surfaceId);
+        this.#evaluators.delete(applied.surfaceId);
+      }
+    }
+
+    /** One evaluator per surface, kept between draws: its compiled patterns are worth keeping. */
+    #evaluatorFor(id: string) {
+      let evaluator = this.#evaluators.get(id);
+      if (!evaluator) {
+        evaluator = this.#evaluator(
+          id,
+          () => this.surfaces.get(id)?.dataModel ?? {},
+        );
+        this.#evaluators.set(id, evaluator);
+      }
+      return evaluator;
     }
 
     #evaluator(
@@ -243,10 +276,7 @@ export function defineA2uiSurface(
         return renderSurface(surface, {
           registry: this.registry,
           catalog: options.catalog,
-          evaluator: this.#evaluator(
-            id,
-            () => this.surfaces.get(id)?.dataModel ?? {},
-          ),
+          evaluator: this.#evaluatorFor(id),
           urlPolicy: options.urlPolicy,
           dispatch: (message) => this.#send(message),
           write: (pointer, value) => {
@@ -324,21 +354,57 @@ export function defineA2uiSurface(
           .pipeThrough(new TextDecoderStream())
           .getReader();
         let buffer = '';
+        let event: string[] = [];
+        const tooLong = (): void => {
+          abort.abort();
+          this.#send(
+            errorMessage(
+              new A2uiError(
+                'VALIDATION_FAILED',
+                `a line of the stream is longer than ${A2UI_LIMITS.messageChars} characters`,
+                '',
+              ),
+            ),
+          );
+        };
         for (;;) {
           const { done, value } = await reader.read();
           if (value) buffer += value;
           const lines = buffer.split('\n');
           buffer = done ? '' : (lines.pop() ?? '');
-          const messages = lines
-            .map((line) =>
-              sse
-                ? line.startsWith('data:')
-                  ? line.slice(5).trim()
-                  : ''
-                : line.trim(),
-            )
-            .filter(Boolean);
-          if (messages.length > 0) this.push(messages.join('\n'));
+          if (buffer.length > A2UI_LIMITS.messageChars) return tooLong();
+          if (!sse) {
+            const text = lines.filter((line) => line.trim() !== '').join('\n');
+            if (text) this.push(text);
+          } else {
+            // An event is its data lines, joined; a blank line ends it.
+            for (const line of [...lines, ...(done ? [''] : [])]) {
+              const bare = line.replace(/\r$/, '');
+              if (bare.startsWith('data:'))
+                event.push(bare.slice(5).replace(/^ /, ''));
+              else if (bare === '' && event.length > 0) {
+                const data = event.join('\n');
+                event = [];
+                if (data.length > A2UI_LIMITS.messageChars) return tooLong();
+                let message: unknown;
+                try {
+                  message = JSON.parse(data);
+                } catch {
+                  this.#send(
+                    errorMessage(
+                      new A2uiError(
+                        'VALIDATION_FAILED',
+                        'an event of the stream is not JSON',
+                        '',
+                      ),
+                    ),
+                  );
+                  continue;
+                }
+                this.push([message]);
+              }
+            }
+          }
           if (done) break;
         }
       })().catch(() => undefined);

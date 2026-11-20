@@ -97,6 +97,21 @@ function ownStep(
 }
 
 const lenses = new WeakMap<SkewContractStep, CompiledLens>();
+const opLenses = new WeakMap<object, CompiledLens>();
+
+/** One op on its own, for walking a step op by op. */
+function opLens(
+  op: SkewContractStep['ops'] extends readonly (infer O)[] | undefined
+    ? O
+    : never,
+): CompiledLens {
+  let lens = opLenses.get(op as object);
+  if (!lens) {
+    lens = compileLens([op]);
+    opLenses.set(op as object, lens);
+  }
+  return lens;
+}
 
 function lensOf(step: SkewContractStep): CompiledLens | null {
   if (!step.ops) return null;
@@ -136,15 +151,30 @@ function walk(
       // Compiling is inside the try: a catalog that was never run through `parseCatalog` may
       // carry ops the lens compiler refuses, and that must cost one node, not the whole screen.
       const lens = lensOf(step);
-      if (bound && step.ops) {
-        const conflict = boundConflict(step.ops, current, up);
-        if (conflict !== null)
-          return {
-            ok: false,
-            reason: 'gap',
-            step: span,
-            message: `${label} ${conflict}`,
-          };
+      if (bound && step.ops && lens && (up || lens.down)) {
+        // Op by op, each checked against the value as the ops before it left it: a step that
+        // renames a bound value and then converts it is caught at the convert.
+        const ops = up ? step.ops : [...step.ops].reverse();
+        for (const op of ops) {
+          const conflict = boundConflict([op], current, up);
+          if (conflict !== null)
+            return {
+              ok: false,
+              reason: 'gap',
+              step: span,
+              message: `${label} ${conflict}`,
+            };
+          const single = opLens(op);
+          current = up
+            ? single.up(current, ctx)
+            : (single.down as NonNullable<CompiledLens['down']>)(
+                current as never,
+                ctx,
+              );
+        }
+        for (const path of up ? lens.derivedUp : lens.derivedDown)
+          derived.add(path);
+        continue;
       }
       const code = step.code
         ? ownStep(options.codeSteps, step.code)

@@ -171,7 +171,12 @@ export function createA2uiProjector(
       }
       return;
     }
-    const components = treeToComponents(visible.root, { catalog });
+    // A call that names the agent's catalog names the renderer's on the way: the renderer has
+    // never heard of the agent's id.
+    const components = treeToComponents(visible.root, { catalog }).map(
+      (component) =>
+        renamedCatalog(component, authoringId, targetId) as A2uiComponent,
+    );
     if (!side.created) {
       toRenderer.push(create(components));
       side.created = true;
@@ -294,4 +299,29 @@ export function createA2uiProjector(
   }
 
   return { push, fromRenderer, surfaces };
+}
+
+/** A value with every function call's `catalogId` of `from` changed to `to`. */
+function renamedCatalog(
+  value: unknown,
+  from: string,
+  to: string,
+  depth = 0,
+): unknown {
+  if (from === to || depth > 64 || typeof value !== 'object' || value === null)
+    return value;
+  if (Array.isArray(value))
+    return value.map((item) => renamedCatalog(item, from, to, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, inner] of Object.entries(value))
+    Object.defineProperty(out, key, {
+      value:
+        key === 'catalogId' && inner === from && '@call' in value
+          ? to
+          : renamedCatalog(inner, from, to, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  return out;
 }

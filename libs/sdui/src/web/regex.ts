@@ -82,14 +82,17 @@ type Node =
   | { readonly kind: 'alt'; readonly branches: readonly Seq[] }
   | { readonly kind: 'char'; readonly set: CharSet }
   | { readonly kind: 'group'; readonly body: Node }
-  | { readonly kind: 'look'; readonly body: Node }
-  | { readonly kind: 'assert' };
+  | { readonly kind: 'look'; readonly body: Node; readonly negate: boolean }
+  | { readonly kind: 'assert'; readonly which: '^' | '$' | 'b' | 'B' };
 type Seq = readonly Item[];
 interface Item {
   readonly atom: Node;
   readonly min: number;
   readonly max: number; // Infinity for unbounded
 }
+
+/** The largest bound a counted repeat may name: `{0,1000}`. */
+const MAX_COUNT = 1_000;
 
 export class RegexDialectError extends Error {
   override readonly name = 'RegexDialectError';
@@ -245,7 +248,7 @@ function parse(source: string): Node {
           if (kind === '=' || kind === '!') {
             const body = alternation();
             eat(')');
-            return { kind: 'look', body };
+            return { kind: 'look', body, negate: kind === '!' };
           }
           if (kind === '<')
             return fail(
@@ -267,11 +270,12 @@ function parse(source: string): Node {
       case '^':
       case '$':
         at++;
-        return { kind: 'assert' };
+        return { kind: 'assert', which: c };
       case '\\': {
         at++;
+        const which = chars[at] === 'B' ? 'B' : 'b';
         const set = escape(false);
-        return set === null ? { kind: 'assert' } : { kind: 'char', set };
+        return set === null ? { kind: 'assert', which } : { kind: 'char', set };
       }
       case ')':
       case '|':
@@ -320,6 +324,8 @@ function parse(source: string): Node {
             ? Infinity
             : Number(match[3]);
       if (max < min) fail('a quantifier out of order');
+      if (min > MAX_COUNT || (max !== Infinity && max > MAX_COUNT))
+        fail(`a counted repeat above ${MAX_COUNT}`);
       at += match[0].length - 1;
       bounds = { min, max };
     }
@@ -499,29 +505,253 @@ function check(node: Node): void {
   }
 }
 
+// --- matching ----------------------------------------------------------------------------------
+
 /**
- * A `RegExp` for a pattern in the A2UI dialect, after the safety check. Throws
- * {@link RegexDialectError} — the caller reports it as `EXPRESSION_ERROR`.
+ * Matching, without backtracking: the pattern is compiled to an NFA and run as a Pike VM — every
+ * thread advanced in lockstep, one step per code point — so time grows with pattern × value, never
+ * exponentially, whatever a pattern does. The static rules above are the spec's; this is what
+ * makes a pattern they miss harmless. A lookahead is a sub-machine run from the position it
+ * guards, its answer remembered per position. A step budget bounds the whole of one match.
  */
-export function compileA2uiRegex(pattern: string): RegExp {
+type Instruction =
+  | { readonly op: 'char'; readonly set: CharSet }
+  | { readonly op: 'split'; readonly x: number; readonly y: number }
+  | { readonly op: 'jmp'; readonly to: number }
+  | { readonly op: 'assert'; readonly which: '^' | '$' | 'b' | 'B' }
+  | { readonly op: 'look'; readonly program: Program; readonly negate: boolean }
+  | { readonly op: 'match' };
+type Program = Instruction[];
+
+/** How large a compiled pattern may be: counted repeats are copies, so `(…){1000}` is big. */
+export const MAX_INSTRUCTIONS = 20_000;
+/** Thread steps one match may take, lookaheads included. */
+export const MATCH_STEP_BUDGET = 5_000_000;
+
+function compile(node: Node): Program {
+  const program: Program = [];
+  const emit = (instruction: Instruction): number => {
+    if (program.length >= MAX_INSTRUCTIONS)
+      throw new RegexDialectError(
+        `the pattern compiles to more than ${MAX_INSTRUCTIONS} instructions`,
+      );
+    program.push(instruction);
+    return program.length - 1;
+  };
+  const patch = (at: number, instruction: Instruction): void => {
+    program[at] = instruction;
+  };
+  const node_ = (n: Node): void => {
+    switch (n.kind) {
+      case 'char':
+        emit({ op: 'char', set: n.set });
+        return;
+      case 'assert':
+        emit({ op: 'assert', which: n.which });
+        return;
+      case 'look': {
+        const inner = compile(n.body);
+        emit({ op: 'look', program: inner, negate: n.negate });
+        return;
+      }
+      case 'group':
+        node_(n.body);
+        return;
+      case 'alt': {
+        // split L1, next; L1: branch; jmp end; next: split … — the last branch falls through
+        const jumps: number[] = [];
+        n.branches.forEach((seq, index) => {
+          if (index < n.branches.length - 1) {
+            const split = emit({ op: 'jmp', to: -1 });
+            seq.forEach(item);
+            jumps.push(emit({ op: 'jmp', to: -1 }));
+            patch(split, { op: 'split', x: split + 1, y: program.length });
+          } else seq.forEach(item);
+        });
+        for (const jump of jumps)
+          patch(jump, { op: 'jmp', to: program.length });
+        return;
+      }
+    }
+  };
+  const item = (it: Item): void => {
+    for (let i = 0; i < it.min; i++) node_(it.atom);
+    if (it.max === Infinity) {
+      // L: split body, end; body; jmp L
+      const loop = emit({ op: 'jmp', to: -1 });
+      node_(it.atom);
+      emit({ op: 'jmp', to: loop });
+      patch(loop, { op: 'split', x: loop + 1, y: program.length });
+      return;
+    }
+    const optional: number[] = [];
+    for (let i = it.min; i < it.max; i++) {
+      optional.push(emit({ op: 'jmp', to: -1 }));
+      node_(it.atom);
+    }
+    for (const at of optional)
+      patch(at, { op: 'split', x: at + 1, y: program.length });
+  };
+  node_(node);
+  emit({ op: 'match' });
+  return program;
+}
+
+const isWord = (code: number | undefined): boolean =>
+  code !== undefined &&
+  ((code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    code === 95 ||
+    (code >= 97 && code <= 122));
+
+function inSet(set: CharSet, code: number): boolean {
+  let lo = 0;
+  let hi = set.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [a, b] = set[mid] as Range;
+    if (code < a) hi = mid - 1;
+    else if (code > b) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+class Budget {
+  steps = 0;
+  spend(): void {
+    if (++this.steps > MATCH_STEP_BUDGET)
+      throw new RegexDialectError('matching took more steps than its budget');
+  }
+}
+
+/** Whether `program` matches `codes` starting at `start`; `anchored` stops it searching later starts. */
+function run(
+  program: Program,
+  codes: readonly number[],
+  start: number,
+  anchored: boolean,
+  budget: Budget,
+  looks: Map<Program, Map<number, boolean>>,
+): boolean {
+  const mark = new Int32Array(program.length).fill(-1);
+  let generation = 0;
+  const look = (
+    instruction: Extract<Instruction, { op: 'look' }>,
+    at: number,
+  ): boolean => {
+    let memo = looks.get(instruction.program);
+    if (!memo) looks.set(instruction.program, (memo = new Map()));
+    let found = memo.get(at);
+    if (found === undefined) {
+      found = run(instruction.program, codes, at, true, budget, looks);
+      memo.set(at, found);
+    }
+    return instruction.negate ? !found : found;
+  };
+  /** Follows everything that consumes nothing; returns true on reaching `match`. */
+  const add = (list: number[], pc: number, at: number): boolean => {
+    const stack = [pc];
+    while (stack.length > 0) {
+      const p = stack.pop() as number;
+      if (mark[p] === generation) continue;
+      mark[p] = generation;
+      budget.spend();
+      const instruction = program[p] as Instruction;
+      switch (instruction.op) {
+        case 'match':
+          return true;
+        case 'jmp':
+          stack.push(instruction.to);
+          break;
+        case 'split':
+          stack.push(instruction.y, instruction.x);
+          break;
+        case 'assert': {
+          const ok =
+            instruction.which === '^'
+              ? at === 0
+              : instruction.which === '$'
+                ? at === codes.length
+                : (isWord(codes[at - 1]) !== isWord(codes[at])) ===
+                  (instruction.which === 'b');
+          if (ok) stack.push(p + 1);
+          break;
+        }
+        case 'look':
+          if (look(instruction, at)) stack.push(p + 1);
+          break;
+        case 'char':
+          list.push(p);
+          break;
+      }
+    }
+    return false;
+  };
+  // One generation per position: the threads that reached it, and (searching) a fresh start.
+  generation++;
+  let list: number[] = [];
+  if (add(list, 0, start)) return true;
+  for (let at = start; at < codes.length; at++) {
+    const code = codes[at] as number;
+    generation++;
+    const next: number[] = [];
+    for (const p of list) {
+      budget.spend();
+      const instruction = program[p] as Extract<Instruction, { op: 'char' }>;
+      if (inSet(instruction.set, code) && add(next, p + 1, at + 1)) return true;
+    }
+    if (!anchored && add(next, 0, at + 1)) return true;
+    if (next.length === 0 && anchored) return false;
+    list = next;
+  }
+  return false;
+}
+
+/** A compiled pattern in the A2UI dialect: tested without backtracking. */
+export interface A2uiRegex {
+  readonly source: string;
+  test(value: string): boolean;
+}
+
+/**
+ * A pattern in the A2UI dialect, after the safety check, compiled for linear-time matching.
+ * Throws {@link RegexDialectError} — the caller reports it as `EXPRESSION_ERROR`.
+ */
+export function compileA2uiRegex(pattern: string): A2uiRegex {
   if (typeof pattern !== 'string')
     throw new RegexDialectError('a pattern must be a string');
   if ([...pattern].length > REGEX_LIMITS.patternCodePoints)
     throw new RegexDialectError(
       `a pattern is longer than ${REGEX_LIMITS.patternCodePoints} code points`,
     );
-  check(parse(pattern));
+  const tree = parse(pattern);
+  check(tree);
+  // ECMAScript's own parser has the last word on syntax: a pattern it refuses is not one.
   try {
-    return new RegExp(pattern, 'u');
+    new RegExp(pattern, 'u');
   } catch (error) {
     throw new RegexDialectError(
       `not a valid pattern: ${(error as Error).message}`,
     );
   }
+  const program = compile(tree);
+  return {
+    source: pattern,
+    test: (value) =>
+      run(
+        program,
+        Array.from(value, (c) => c.codePointAt(0) as number),
+        0,
+        false,
+        new Budget(),
+        new Map(),
+      ),
+  };
 }
 
 /** `regex`'s search: a value longer than 4,096 code points does not match, and is not an error. */
-export function a2uiRegexMatches(regex: RegExp, value: string): boolean {
+export function a2uiRegexMatches(regex: A2uiRegex, value: string): boolean {
   if ([...value].length > REGEX_LIMITS.valueCodePoints) return false;
   return regex.test(value);
 }

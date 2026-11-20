@@ -110,9 +110,12 @@ export function boundConflict(
     const [kind] = Object.keys(raw);
     const body = (raw as Op)[kind as string];
     if (!isRecord(body)) continue;
-    const paths = (['path', 'from', 'to'] as const)
-      .map((key) => body[key])
-      .filter((path): path is string => typeof path === 'string');
+    const paths = [
+      ...(['path', 'from', 'to'] as const).map((key) => body[key]),
+      // values an op reads from elsewhere in the payload: `{ "$from": "a.b" }` in `wrap.also`,
+      // `default`, `const`
+      ...sources(body),
+    ].filter((path): path is string => typeof path === 'string');
     for (const path of paths) {
       const bound = boundOn(value, path);
       if (bound?.inside)
@@ -144,6 +147,18 @@ export function boundConflict(
       return `takes a field out of "${name(path)}", which is bound to data (${describe(target)}) and only known when it is rendered`;
   }
   return null;
+}
+
+/** Every `$from` an op's body reads, outside a nested `map`'s own ops. */
+function sources(body: Readonly<Record<string, unknown>>, depth = 0): string[] {
+  const found: string[] = [];
+  if (depth > 16) return found;
+  for (const [key, inner] of Object.entries(body)) {
+    if (key === 'ops') continue;
+    if (key === '$from' && typeof inner === 'string') found.push(inner);
+    else if (isRecord(inner)) found.push(...sources(inner, depth + 1));
+  }
+  return found;
 }
 
 function getAt(value: unknown, path: string): unknown {

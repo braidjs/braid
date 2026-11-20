@@ -1,4 +1,4 @@
-import { checkUrl } from './evaluate.js';
+import { urlSchemeAllowed } from './evaluate.js';
 
 /**
  * A view: the tree the renderer's components build, and the one thing both backends draw — as DOM
@@ -148,7 +148,8 @@ export function assertTag(tag: string): void {
  */
 export function attributeAllowed(name: string, value: string): boolean {
   const lower = name.toLowerCase();
-  if (!/^[a-z][a-z0-9:-]*$/.test(lower) || lower.startsWith('on')) return false;
+  // No namespaced names (`hx-on:click`), nothing that starts like a handler.
+  if (!/^[a-z][a-z0-9-]*$/.test(lower) || lower.startsWith('on')) return false;
   if (
     lower === 'srcdoc' ||
     lower === 'srcset' ||
@@ -157,10 +158,7 @@ export function attributeAllowed(name: string, value: string): boolean {
   )
     return false;
   if (URL_ATTRS.has(lower))
-    return checkUrl(
-      value,
-      lower === 'href' || lower === 'xlink:href' ? 'link' : 'image',
-    ).ok;
+    return urlSchemeAllowed(value, lower === 'href' ? 'link' : 'image');
   if (lower === 'style') return /^flex-grow: \d+(\.\d+)?$/.test(value);
   return true;
 }
@@ -183,6 +181,8 @@ export function attributesOf(view: ViewElement): [string, string][] {
   const out: [string, string][] = [];
   for (const [name, raw] of Object.entries(view.attrs ?? {})) {
     if (raw === undefined || raw === false) continue;
+    // Only `key` writes the adoption key: a second one would win in an HTML parser.
+    if (name.toLowerCase() === 'data-a2ui-key') continue;
     const value = raw === true ? '' : String(raw);
     if (attributeAllowed(name, value)) out.push([name, value]);
   }
@@ -206,8 +206,10 @@ export function toHtml(view: View | readonly View[]): string {
   if (element.tag === 'textarea')
     return `<textarea${attrs}>${escapeText(typeof value === 'string' ? value : '')}</textarea>`;
   if (element.tag === 'input') {
+    // A password's value is never written into markup: the renderer sets it in the browser.
+    const secret = element.attrs?.['type'] === 'password';
     const extra =
-      typeof value === 'string' || typeof value === 'number'
+      !secret && (typeof value === 'string' || typeof value === 'number')
         ? ` value="${escapeAttr(String(value))}"`
         : '';
     const checked = element.props?.['checked'] === true ? ' checked' : '';

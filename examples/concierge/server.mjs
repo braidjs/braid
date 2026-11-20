@@ -63,7 +63,7 @@ export async function start({ dir, port = 0 } = {}) {
         ? await readFile(join(root, 'prerendered', variant.html), 'utf8')
         : '<p>This trip cannot be shown in this version of the app.</p>';
       const page = template
-        .replace('<!--trip-->', trip)
+        .replace('<!--trip-->', () => trip) // a function: `$&` in the markup is markup, not a pattern
         .replaceAll('__CATALOG_ID__', renderer.catalogId)
         .replace(
           '__RENDERER__',
