@@ -189,18 +189,39 @@ export const DRAW_LIMITS = Object.freeze({
   calls: 20_000,
   /** Characters of text produced: every label, title and paragraph. */
   chars: 2_000_000,
-  /** Components and repeated parts drawn: template items, tabs, options. */
-  draws: 10_000,
+  /**
+   * Components and repeated parts drawn — template items, tabs, options — and the elements a
+   * text's markup makes. What a draw puts in the page is bounded by this: 5,000 is a long page.
+   */
+  draws: 5_000,
   /** Regex matching steps. */
   regexSteps: 2_000_000,
   /**
-   * Everything else evaluating does, in units of roughly one value visited: each value of a
-   * literal walked, each 16 characters a function reads, each letter of a date format, each
-   * pattern compiled. What a function call costs depends on what it is given, not only that it
-   * was called.
+   * Everything else evaluating does, in units of roughly one value visited: each value read,
+   * bound or literal, and each 16 characters of its strings and keys; each letter of a date
+   * format; each pattern compiled; each prop handed to a host element and each check. A value
+   * costs what it holds every time it is read, so what a draw can be made to walk, copy or
+   * stringify is bounded by this, whatever the surface is.
    */
   work: 1_000_000,
+  /**
+   * Milliseconds a draw in a browser may take, whatever its units add up to: a backstop for work
+   * the units price wrong, on a device slower than they assume. A server's draw has no deadline,
+   * so what it prerenders does not depend on how busy it is.
+   */
+  ms: 100,
 });
+
+const now: () => number =
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? () => performance.now()
+    : () => Date.now();
+
+/** What a value holds: its values (each scalar, list and object), and the characters of its strings and keys. */
+export interface Weight {
+  readonly values: number;
+  readonly chars: number;
+}
 /** @deprecated use DRAW_LIMITS.regexSteps */
 export const DRAW_MATCH_STEPS = DRAW_LIMITS.regexSteps;
 
@@ -213,6 +234,26 @@ export class DrawBudget {
   work = 0;
   /** Which limits have been reported, so each is reported once per draw. */
   readonly reported = new Set<string>();
+  /** Values weighed in this draw: one read again is charged again, but not walked again. */
+  readonly weights = new WeakMap<object, Weight>();
+  /** When the draw must end, on `performance.now()`'s clock; none, for a deterministic draw. */
+  readonly deadline: number | undefined;
+  /** Charges since the clock was last read. */
+  ticks = 0;
+
+  constructor(options: { readonly ms?: number } = {}) {
+    this.deadline = options.ms === undefined ? undefined : now() + options.ms;
+  }
+
+  /** Whether the draw has spent its work, or run out of time: the rest of it is not drawn. */
+  get spent(): boolean {
+    if (this.work > DRAW_LIMITS.work) return true;
+    if (this.deadline !== undefined && now() > this.deadline) {
+      this.work = DRAW_LIMITS.work + 1;
+      return true;
+    }
+    return false;
+  }
 }
 
 /** Messages one component's checks show; the rest still fail the component. */
@@ -254,6 +295,13 @@ export interface Evaluator {
   budget(): DrawBudget;
   /** A function call made by a user gesture: `openUrl` runs only here. */
   activate(call: unknown, scope?: EvaluationScope): unknown;
+  /**
+   * Charges what a value holds to the draw, as reading it does, and says what that is; `null`
+   * when the draw cannot pay for it. For a renderer about to copy or hand a value over.
+   */
+  measure(value: unknown): Weight | null;
+  /** Charges `units` of work to the draw; `false` (reported once) when it cannot pay for them. */
+  spend(units: number): boolean;
 }
 
 /** The spec's `DynamicBoolean` coercion table. */
@@ -266,16 +314,20 @@ export function toBoolean(value: unknown): boolean {
   return false;
 }
 
+/** Past these, an object is not drawn as text: a binding to the whole data model is drawn on every redraw. */
+const TEXT_OF_OBJECT = Object.freeze({ values: 10_000, chars: 100_000 });
+
 /** `formatString`'s conversion: `null` is empty, objects are JSON. */
 export function toText(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean')
     return String(value);
-  // A binding to the whole data model is drawn on every redraw; past this, it is not drawn.
-  if (outgrows(value, { depth: 32, values: 10_000 }) !== null) return '';
+  if (outgrows(value, { depth: 32, values: TEXT_OF_OBJECT.values }) !== null)
+    return '';
   try {
-    return JSON.stringify(value) ?? '';
+    const text = JSON.stringify(value) ?? '';
+    return text.length > TEXT_OF_OBJECT.chars ? '' : text;
   } catch {
     return '';
   }
@@ -296,11 +348,80 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     }
     throw new SilentOverBudget();
   };
+  /** Every charge reads the clock now and then: a draw that is slow for its units still ends. */
+  const clock = (budget: DrawBudget): void => {
+    if (
+      budget.deadline !== undefined &&
+      (++budget.ticks & 127) === 0 &&
+      now() > budget.deadline
+    ) {
+      budget.work = DRAW_LIMITS.work + 1;
+      overDraw('time');
+    }
+  };
   const spendWork = (units: number): void => {
-    if ((draw().work += units) > DRAW_LIMITS.work) overDraw('work');
+    const budget = draw();
+    if ((budget.work += units) > DRAW_LIMITS.work) overDraw('work');
+    clock(budget);
   };
   const spendCall = (): void => {
-    if (++draw().calls > DRAW_LIMITS.calls) overDraw('function calls');
+    const budget = draw();
+    if (++budget.calls > DRAW_LIMITS.calls) overDraw('function calls');
+    clock(budget);
+  };
+  /**
+   * Charges what a value holds — one per value, and one per 16 characters of its strings and
+   * keys — and returns it. A value weighed already in this draw is charged without being walked
+   * again; one the draw cannot pay for stops the walk where the budget ran out, not after it.
+   */
+  const measure = (value: unknown): Weight => {
+    if (typeof value === 'string') {
+      spendWork(1 + (value.length >> 4));
+      return { values: 1, chars: value.length };
+    }
+    if (value === null || typeof value !== 'object') {
+      spendWork(1);
+      return { values: 1, chars: 0 };
+    }
+    const budget = draw();
+    const known = budget.weights.get(value);
+    if (known !== undefined) {
+      spendWork(known.values + (known.chars >> 4));
+      return known;
+    }
+    let values = 0;
+    let chars = 0;
+    const stack: unknown[] = [value];
+    while (stack.length > 0) {
+      const inner = stack.pop();
+      values++;
+      if (typeof inner === 'string') chars += inner.length;
+      else if (inner !== null && typeof inner === 'object') {
+        if (budget.work + values + (chars >> 4) > DRAW_LIMITS.work)
+          spendWork(values + (chars >> 4)); // throws: the rest is not walked
+        if (Array.isArray(inner)) for (const child of inner) stack.push(child);
+        else
+          for (const key of Object.keys(inner)) {
+            chars += key.length;
+            stack.push((inner as Record<string, unknown>)[key]);
+          }
+      }
+    }
+    const weight: Weight = { values, chars };
+    spendWork(values + (chars >> 4));
+    budget.weights.set(value, weight);
+    return weight;
+  };
+  /** {@link toText}, paid for: an object is weighed before it is turned into JSON. */
+  const str = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return toText(value);
+    const weight = measure(value);
+    if (
+      weight.values > TEXT_OF_OBJECT.values ||
+      weight.chars > TEXT_OF_OBJECT.chars
+    )
+      return '';
+    return toText(value);
   };
   /** Text produced: counted, and past the limit, nothing. */
   const spendText = (text: string): string => {
@@ -332,21 +453,31 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
   ): unknown {
     if (depth > EVALUATION_LIMITS.depth)
       fail(`expressions nest more than ${EVALUATION_LIMITS.depth} levels deep`);
-    if (raw === null || typeof raw !== 'object') return raw;
+    // Every value evaluated is paid for, a scalar too, and a string by its length.
+    if (raw === null || typeof raw !== 'object') {
+      spendWork(typeof raw === 'string' ? 1 + (raw.length >> 4) : 1);
+      return raw;
+    }
     // A draw that has spent its budget stops here, before looking at the value: once it is gone,
     // every further evaluation costs nothing.
     if (draw().work > DRAW_LIMITS.work) overDraw('work');
     // A literal is walked and rebuilt on every evaluation: that is paid for, per value.
-    spendWork(1 + (Array.isArray(raw) ? raw.length : Object.keys(raw).length));
-    if (Array.isArray(raw))
+    if (Array.isArray(raw)) {
+      spendWork(1 + raw.length);
       return raw.map((item) =>
         evaluate(item, scope, budget, depth + 1, activated),
       );
+    }
     if (Object.prototype.hasOwnProperty.call(raw, '@path')) {
       const path = (raw as Record<string, unknown>)['@path'];
       if (typeof path !== 'string')
-        fail('a binding names its path as a string');
-      return readPointer(options.model(), path as string, scope) ?? null;
+        return fail('a binding names its path as a string');
+      // The path is parsed, and what it names is paid for by what it holds: a binding to a
+      // large value costs as much, each time it is read, as anything done with it afterwards.
+      spendWork(1 + (path.length >> 4));
+      const read = readPointer(options.model(), path, scope) ?? null;
+      measure(read);
+      return read;
     }
     if (Object.prototype.hasOwnProperty.call(raw, '@call'))
       return call(
@@ -357,8 +488,12 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         activated,
       );
     // A literal object: its values may be bound, and "@@key" is the literal key "@key".
+    const entries = Object.entries(raw);
+    let keyChars = 0;
+    for (const [key] of entries) keyChars += key.length;
+    spendWork(1 + entries.length + (keyChars >> 4));
     const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(raw)) {
+    for (const [key, value] of entries) {
       const literal = key.startsWith('@@') ? key.slice(1) : key;
       Object.defineProperty(out, literal, {
         value: evaluate(value, scope, budget, depth + 1, activated),
@@ -479,11 +614,11 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         if (compiled instanceof RegexDialectError)
           return fail(`regex: ${compiled.message}`);
         return valid(
-          a2uiRegexMatches(compiled, toText(args['value']), draw().regex),
+          a2uiRegexMatches(compiled, str(args['value']), draw().regex),
         );
       }
       case 'length': {
-        const length = [...toText(args['value'])].length;
+        const length = [...str(args['value'])].length;
         const min = args['min'] === undefined ? 0 : num(args['min'], 'min');
         const max =
           args['max'] === undefined ? Infinity : num(args['max'], 'max');
@@ -506,14 +641,12 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       }
       case 'email':
         return valid(
-          /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/.test(toText(args['value'])),
+          /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/.test(str(args['value'])),
         );
       case 'formatString': {
         const template = args['value'];
         if (typeof template !== 'string' || !literalTemplate)
-          return toText(
-            evaluate(template, scope, budget, depth + 1, activated),
-          );
+          return str(evaluate(template, scope, budget, depth + 1, activated));
         return interpolate(template, scope, budget, depth + 1, activated);
       }
       case 'formatNumber': {
@@ -527,7 +660,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         }).format(num(args['value'], 'value'));
       }
       case 'formatCurrency': {
-        const currency = toText(args['currency']).toUpperCase();
+        const currency = str(args['currency']).toUpperCase();
         if (!/^[A-Z]{3}$/.test(currency))
           fail('formatCurrency: currency must be an ISO 4217 code');
         const d = decimals(args['decimals']);
@@ -547,7 +680,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
         );
         return formatDate(
           args['value'],
-          toText(args['format']),
+          str(args['format']),
           locale,
           options.timeZone,
         );
@@ -561,7 +694,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
             ? args['zero']
             : undefined) ??
           args['other'];
-        return toText(chosen);
+        return str(chosen);
       }
       case 'and':
       case 'or': {
@@ -706,8 +839,12 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
     switch (expr.kind) {
       case 'literal':
         return expr.value;
-      case 'path':
-        return readPointer(options.model(), expr.path, scope) ?? null;
+      case 'path': {
+        spendWork(1 + (expr.path.length >> 4));
+        const read = readPointer(options.model(), expr.path, scope) ?? null;
+        measure(read);
+        return read;
+      }
       case 'call': {
         if (++budget.calls > EVALUATION_LIMITS.calls)
           fail(
@@ -755,7 +892,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       if (c === '$' && template[at + 1] === '{') {
         const { expr, end } = parseExpr(template, at + 2, depth);
         if (template[end] !== '}') fail('a "${" is not closed');
-        out += toText(evalExpr(expr, scope, budget, depth, activated));
+        out += str(evalExpr(expr, scope, budget, depth, activated));
         at = end + 1;
       } else {
         out += c;
@@ -801,7 +938,7 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       ),
     text: (raw, scope = ROOT_SCOPE) =>
       guarded('', () =>
-        spendText(toText(evaluate(raw, scope, new Budget(), 0, false))),
+        spendText(str(evaluate(raw, scope, new Budget(), 0, false))),
       ),
     activate: (raw, scope = ROOT_SCOPE) =>
       guarded(null as unknown, () =>
@@ -811,11 +948,18 @@ export function createEvaluator(options: EvaluatorOptions): Evaluator {
       own = new DrawBudget();
     },
     budget: draw,
+    measure: (value) => guarded(null, () => measure(value)),
+    spend: (units) => guarded(false, () => (spendWork(units), true)),
     checks(rules, scope = ROOT_SCOPE) {
       if (!Array.isArray(rules)) return { valid: true, messages: [] };
       const messages: string[] = [];
       let valid = true;
       for (const rule of rules) {
+        // Each rule is paid for, empty or not: a list of 100,000 of them is not free to skip.
+        if (!guarded(false, () => (spendWork(1), true))) {
+          valid = false;
+          break;
+        }
         if (!isRecord(rule)) continue;
         if (messages.length >= MAX_CHECK_MESSAGES) {
           // Past a few, a check's message adds nothing a person reads; its result still counts.

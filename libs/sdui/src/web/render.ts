@@ -213,8 +213,11 @@ export function renderSurface(
     ancestry: readonly string[],
   ): View | null => {
     if (typeof id !== 'string') return null;
-    if (++budget().draws > MAX_DRAWS) {
-      truncated(`/components/${id}`);
+    // Out of components, or out of work or time (the evaluator has said which): the rest is a
+    // placeholder, and costs nothing to make.
+    const spent = budget().spent;
+    if (spent || ++budget().draws > MAX_DRAWS) {
+      if (!spent) truncated(`/components/${id}`);
       return h('div', {
         class: 'a2ui-placeholder',
         'data-a2ui-truncated': '',
@@ -343,7 +346,24 @@ export function renderSurface(
               : { ...child, attrs: { ...child.attrs, slot: plan } },
           );
     }
-    for (const key of Object.keys(context.component)) {
+    // Each prop is looked at on every drawing: paid for, however many a component has.
+    const keys = propKeys(context.component);
+    let affordable = options.evaluator.spend(keys.length);
+    if (affordable && keys.length > MAX_HOST_PROPS) {
+      affordable = false;
+      if (!budget().reported.has('host-prop-count')) {
+        budget().reported.add('host-prop-count');
+        options.report({
+          code: 'VALIDATION_FAILED',
+          message: `"${context.component.component}" has more than ${MAX_HOST_PROPS} props to hand to the host's component`,
+          path: `/components/${context.id}`,
+        });
+      }
+    }
+    const actions = actionProps(catalog, context.component.component);
+    for (const key of affordable ? keys : []) {
+      // Out of budget, the rest is not looked at: each would fail, and failing costs too.
+      if (budget().spent) break;
       if (
         key === 'id' ||
         key === 'component' ||
@@ -351,13 +371,17 @@ export function renderSurface(
         slotProps.has(key)
       )
         continue;
-      if (actionProps(catalog, context.component.component).includes(key))
-        continue;
+      if (actions.includes(key)) continue;
       const value = context.value(key);
       // A host element is handed its props as a copy, on every drawing: their size is paid for as
-      // text, and a prop past the limit is not handed over at all.
-      const size = sizeWithin(value, MAX_HOST_PROP);
-      if (size === null || (budget().chars += size) > DRAW_LIMITS.chars) {
+      // work and as text, and a prop past the limit is not handed over at all.
+      const weight = options.evaluator.measure(value);
+      const size = weight === null ? null : weight.chars + 2 * weight.values;
+      if (
+        size === null ||
+        size > MAX_HOST_PROP ||
+        (budget().chars += size) > DRAW_LIMITS.chars
+      ) {
         if (!budget().reported.has('host-props')) {
           budget().reported.add('host-props');
           options.report({
@@ -553,7 +577,15 @@ export function renderSurface(
           use,
           options.urlPolicy,
         ),
-      markdown: (source) => markdown(source),
+      markdown: (source) => {
+        // The elements a text's markup makes are drawn like components: past what the draw has
+        // left, the text is drawn plain.
+        const result = markdown(source);
+        const made = elementsIn(result.views);
+        return made === 0 || context.allow(made) === made
+          ? result
+          : { inline: true, views: [source] };
+      },
       allow(count) {
         const room = Math.max(0, MAX_DRAWS - budget().draws);
         const granted = Math.min(count, room);
@@ -610,24 +642,15 @@ function childProps(catalog: SduiCatalog, type: string): string[] {
 
 /** Characters of one prop a host element may be handed. */
 const MAX_HOST_PROP = 16_000;
+/** Props a host element may be handed: a component of more hands over none. */
+const MAX_HOST_PROPS = 256;
 
-/** Roughly how many characters a value serialises to, or `null` past `limit` — stopping early. */
-function sizeWithin(value: unknown, limit: number): number | null {
-  let size = 0;
-  const stack: unknown[] = [value];
-  while (stack.length > 0) {
-    const inner = stack.pop();
-    if (typeof inner === 'string') size += inner.length + 2;
-    else if (inner !== null && typeof inner === 'object') {
-      const entries = Array.isArray(inner)
-        ? inner
-        : Object.entries(inner).flat();
-      size += 2;
-      for (const item of entries) stack.push(item);
-    } else size += 8;
-    if (size > limit) return null;
-  }
-  return size;
+/** A component's prop names, listed once per component rather than once per drawing. */
+const propKeysOf = new WeakMap<object, readonly string[]>();
+function propKeys(component: object): readonly string[] {
+  let keys = propKeysOf.get(component);
+  if (!keys) propKeysOf.set(component, (keys = Object.keys(component)));
+  return keys;
 }
 
 /** The props a component's newest schema declares. */
@@ -683,4 +706,17 @@ export function drawSafely(
       key: `surface:${surfaceId}`,
     });
   }
+}
+
+/** Elements in some views, nested ones included. */
+function elementsIn(views: readonly View[]): number {
+  let count = 0;
+  const stack = [...views];
+  while (stack.length > 0) {
+    const view = stack.pop();
+    if (view === undefined || typeof view === 'string') continue;
+    count++;
+    for (const child of view.children ?? []) stack.push(child);
+  }
+  return count;
 }

@@ -117,7 +117,7 @@ describe('A2UI streams that are refused', () => {
       }),
     );
     // each message is under the per-message limit; together they are past the data model's
-    const big = Array.from({ length: 190_000 }, (_, i) => i);
+    const big = Array.from({ length: 45_000 }, (_, i) => i);
     const update = (path: string) =>
       surfaces.apply(
         parseA2uiMessage({
@@ -125,11 +125,10 @@ describe('A2UI streams that are refused', () => {
           updateDataModel: { surfaceId: 's', path, value: big },
         }),
       );
-    update('/x');
-    update('/y');
-    expect(() => update('/z')).toThrow(/more than 400000 values/);
-    expect(surfaces.get('s')!.dataModel['z']).toBeUndefined();
-    expect(surfaces.get('s')!.dataModel['y']).toHaveLength(190_000);
+    for (const path of ['/a', '/b', '/c', '/d']) update(path);
+    expect(() => update('/e')).toThrow(/more than 200000 values/);
+    expect(surfaces.get('s')!.dataModel['e']).toBeUndefined();
+    expect(surfaces.get('s')!.dataModel['d']).toHaveLength(45_000);
   });
 
   it('refuses a string longer than the limit', () => {

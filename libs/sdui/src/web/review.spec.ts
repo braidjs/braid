@@ -89,7 +89,9 @@ describe('amplification is bounded', () => {
     ]);
     expect(performance.now() - start).toBeLessThan(3_000);
     expect(
-      errors.some((e) => /more than 10000 components/.test(e.message)),
+      errors.some((e) =>
+        new RegExp(`more than ${MAX_DRAWS} components`).test(e.message),
+      ),
     ).toBe(true);
   });
 
@@ -511,18 +513,20 @@ describe('what the second verification found', () => {
     ).toEqual({ ok: true, url: 'https://images.example/a.png' });
   });
 
-  it('a list naming one component 120,000 times draws a bounded number and does not overflow', () => {
+  it('a list naming one component 45,000 times draws a bounded number and does not overflow', () => {
     const start = performance.now();
     const { html, errors } = renderA2uiHtml([
       create('s'),
       update('s', [
-        { id: 'root', component: 'Row', children: Array(120_000).fill('t') },
+        { id: 'root', component: 'Row', children: Array(45_000).fill('t') },
         { id: 't', component: 'Text', text: 'x' },
       ]),
     ]);
     expect(performance.now() - start).toBeLessThan(3_000);
     expect(
-      errors.some((e) => /more than 10000 components/.test(e.message)),
+      errors.some((e) =>
+        new RegExp(`more than ${MAX_DRAWS} components`).test(e.message),
+      ),
     ).toBe(true);
     expect(markup(html).length).toBeLessThan(5_000_000);
   });
@@ -723,7 +727,9 @@ describe('what the third verification found: one budget for all of a draw', () =
       10_001,
     );
     expect(
-      result.errors.some((e) => /more than 10000 components/.test(e.message)),
+      result.errors.some((e) =>
+        new RegExp(`more than ${MAX_DRAWS} components`).test(e.message),
+      ),
     ).toBe(true);
   });
 
@@ -756,9 +762,9 @@ describe('what the fourth verification found: work is charged where it is done',
     return { result, ms: performance.now() - start };
   };
 
-  it('a literal of 190,000 keys drawn a thousand times is bounded and reported', () => {
+  it('a literal of 45,000 keys drawn a thousand times is bounded and reported', () => {
     const keys: Record<string, number> = {};
-    for (let i = 0; i < 190_000; i++) keys[i.toString(36)] = 0;
+    for (let i = 0; i < 45_000; i++) keys[i.toString(36)] = 0;
     const { result, ms } = timed(() =>
       renderA2uiHtml([
         create('s'),
@@ -814,7 +820,7 @@ describe('what the fourth verification found: work is charged where it is done',
       parseA2uiMessage(
         create('s', {
           dataModel: {
-            big: Array.from({ length: 190_000 }, (_, i) => i),
+            big: Array.from({ length: 45_000 }, (_, i) => i),
             n: 0,
           },
         }),
@@ -940,5 +946,128 @@ describe('a regex that ran out of budget once is not remembered as broken', () =
     expect(e.value(check)).toBeNull();
     e.beginDraw();
     expect(e.value(check)).toEqual({ valid: true });
+  });
+});
+
+describe('what the fifth verification found: what a value holds is paid for each time it is read', () => {
+  const bigStrings = () =>
+    Object.fromEntries(
+      Array.from({ length: 19 }, (_, i) => [
+        `b${i}`,
+        String.fromCharCode(97 + i).repeat(100_000),
+      ]),
+    );
+  const wide = (n: number) =>
+    Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, 0]));
+
+  it('a function over a bound 1.9 MB object stops at the work budget', () => {
+    const model = { big: bigStrings() };
+    const reported: ReportedError[] = [];
+    const evaluator = createEvaluator({
+      model: () => model,
+      report: (error) => reported.push(error),
+    });
+    const length = {
+      '@call': 'length',
+      args: { value: { '@path': '/big' }, min: 0 },
+    };
+    const started = performance.now();
+    for (let i = 0; i < 40; i++)
+      evaluator.boolean({
+        '@call': 'and',
+        args: { values: Array(255).fill(length) },
+      });
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(reported.map((e) => e.message)).toContain(
+      'the surface asks for more work than one draw allows',
+    );
+  });
+
+  it('a host prop bound to a 45,000-key object is weighed once per draw, and refused', () => {
+    const catalog: SduiCatalog = {
+      ...a2uiBasicCatalog,
+      components: { ...a2uiBasicCatalog.components },
+    };
+    const started = performance.now();
+    const { errors } = renderA2uiHtml(
+      [
+        create('s', { dataModel: { w: wide(45_000) } }),
+        update('s', [
+          {
+            id: 'card',
+            component: 'Card',
+            child: 'l',
+            blob: { '@path': '/w' },
+          },
+          { id: 'l', component: 'Text', text: 'x' },
+          {
+            id: 'root',
+            component: 'Column',
+            children: Array(4_995).fill('card'),
+          },
+        ]),
+      ],
+      { catalog, registry: { Card: { element: 'x-card' } } },
+    );
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(errors.map((e) => e.message).join('\n')).toMatch(
+      /more work than one draw allows|too large to hand/,
+    );
+  });
+
+  it('a check list of 199,000 empty rules is paid for by the rule', () => {
+    const reported: ReportedError[] = [];
+    const evaluator = createEvaluator({
+      model: () => ({}),
+      report: (error) => reported.push(error),
+    });
+    const rules = Array(199_000).fill({});
+    for (let i = 0; i < 10; i++) evaluator.checks(rules);
+    // past the budget, a component's checks cannot be shown to pass
+    expect(evaluator.checks(rules).valid).toBe(false);
+    expect(reported.some((e) => /more work/.test(e.message))).toBe(true);
+  });
+
+  it('a draw in a browser ends at its deadline, whatever its units say', async () => {
+    const { DrawBudget, DRAW_LIMITS } = await import('./evaluate.js');
+    const budget = new DrawBudget({ ms: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(budget.spent).toBe(true);
+    expect(new DrawBudget().spent).toBe(false); // no deadline: a server's draw
+    expect(DRAW_LIMITS.ms).toBeGreaterThan(0);
+  });
+});
+
+describe('what the fifth verification found: an element tells the agent a bounded amount', () => {
+  it('20,000 malformed lines are a burst of errors, not 20,000', async () => {
+    const { ERROR_LIMITS } = await import('./element.js');
+    const { element, sent } = mount();
+    element.push(
+      [JSON.stringify(create('s')), ...Array(20_000).fill('{}')].join('\n'),
+    );
+    await flush();
+    expect(sent.filter((m) => 'error' in m).length).toBeLessThanOrEqual(
+      ERROR_LIMITS.burst,
+    );
+  });
+
+  it('an error message is cut to a length', async () => {
+    const { ERROR_LIMITS } = await import('./element.js');
+    const { element, sent } = mount();
+    element.push([
+      create('s'),
+      update('s', [
+        { id: 'root', component: 'Text', text: { '@call': 'f'.repeat(5_000) } },
+      ]),
+    ]);
+    await flush();
+    const errors = sent.flatMap((m) =>
+      'error' in m && m.error ? [m.error] : [],
+    );
+    expect(errors.length).toBeGreaterThan(0);
+    for (const error of errors)
+      expect(error.message.length).toBeLessThanOrEqual(
+        ERROR_LIMITS.message + 1,
+      );
   });
 });

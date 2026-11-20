@@ -172,8 +172,12 @@ export const A2UI_LIMITS = Object.freeze({
   components: 5_000,
   /** Nesting inside any value: a prop, the data model, a call's arguments. */
   depth: 32,
-  /** Scalars, arrays and objects in one message. */
-  values: 200_000,
+  /**
+   * Scalars, arrays and objects in one message. A message is applied in one go, so this is what
+   * bounds the longest a page spends on one: parsing, checking and storing 50,000 values is tens
+   * of milliseconds. A data model may grow larger, through several.
+   */
+  values: 50_000,
   /** Characters in one string. */
   string: 100_000,
   /** Characters in an id, a surface id, a component name, a catalog id. */

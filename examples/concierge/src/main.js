@@ -49,12 +49,14 @@ defineA2uiSurface({
 const log = document.querySelector('#traffic');
 document.addEventListener('a2ui:message', (event) => {
   const message = event.detail;
-  window.__a2uiSent = [...(window.__a2uiSent ?? []), message];
+  (window.__a2uiSent ??= []).push(message);
   if (!log) return;
   const line = document.createElement('li');
   line.textContent = message.action
     ? `action ${message.action.name} from ${message.action.sourceComponentId}`
     : `error ${message.error?.code}: ${message.error?.message}`;
   log.prepend(line);
+  // a log for a person: the last few lines, not every message a long session sends
+  while (log.childElementCount > 50) log.lastElementChild.remove();
 });
 document.documentElement.dataset.ready = '';

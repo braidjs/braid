@@ -41,11 +41,30 @@ export interface AppliedMessage {
   };
 }
 
-/** How many surfaces one renderer holds at once: each may be 5,000 components and its data. */
+/** How many surfaces one renderer holds at once. */
 export const MAX_SURFACES = 64;
 
-/** How large a data model may grow, through any number of updates. */
-export const DATA_MODEL_LIMITS = Object.freeze({ depth: 40, values: 400_000 });
+/**
+ * How large a surface's data model may grow, through any number of updates: nesting, values (each
+ * scalar, list and object), and characters (of its strings and keys). Characters are what a page
+ * keeps in memory; values are what walking it costs.
+ */
+export const DATA_MODEL_LIMITS = Object.freeze({
+  depth: 40,
+  values: 200_000,
+  chars: 2_000_000,
+});
+
+/**
+ * What one renderer holds in all: the characters of every surface's components and data model
+ * together. A surface may grow to its own limits only while the renderer has room.
+ */
+export const SURFACES_LIMITS = Object.freeze({
+  surfaces: MAX_SURFACES,
+  /** Characters of one surface's components, counted as for the data model plus one per value. */
+  componentChars: 2_000_000,
+  chars: 8_000_000,
+});
 
 interface MutableSurface {
   id: string;
@@ -53,14 +72,20 @@ interface MutableSurface {
   sendDataModel: boolean;
   metadata?: Record<string, unknown>;
   components: Map<string, A2uiComponent>;
+  /** What each component costs to hold, so replacing one need not weigh the old one again. */
+  componentWeights: Map<string, number>;
+  componentChars: number;
   dataModel: Record<string, unknown>;
-  /** Values in the data model, kept as it changes so no update has to count them all again. */
-  size: number;
+  /** The data model's weight, kept as it changes so no update has to weigh it all again. */
+  values: number;
+  chars: number;
   revision: number;
 }
 
 export class A2uiSurfaces {
   readonly #surfaces = new Map<string, MutableSurface>();
+  /** Characters held across every surface: components and data models. */
+  #chars = 0;
 
   get(id: string): A2uiSurfaceState | undefined {
     return this.#surfaces.get(id);
@@ -68,6 +93,11 @@ export class A2uiSurfaces {
 
   ids(): string[] {
     return [...this.#surfaces.keys()];
+  }
+
+  /** Characters this renderer holds, across all its surfaces. */
+  get chars(): number {
+    return this.#chars;
   }
 
   /**
@@ -96,6 +126,10 @@ export class A2uiSurfaces {
             '/surfaceId',
             body.surfaceId,
           );
+        const dataModel = body.dataModel
+          ? (structuredClone(body.dataModel) as Record<string, unknown>)
+          : {};
+        const weight = weigh(dataModel);
         const surface: MutableSurface = {
           id: body.surfaceId,
           ...(body.catalogId !== undefined
@@ -111,16 +145,25 @@ export class A2uiSurfaces {
               }
             : {}),
           components: new Map(),
-          dataModel: body.dataModel
-            ? (structuredClone(body.dataModel) as Record<string, unknown>)
-            : {},
-          size: 0,
+          componentWeights: new Map(),
+          componentChars: 0,
+          dataModel: {},
+          values: 0,
+          chars: 0,
           revision: 1,
         };
-        surface.size = countValues(surface.dataModel);
-        const ids = body.components
-          ? mergeComponents(surface, body.components)
-          : [];
+        this.#fitData(surface, weight.values, weight.chars, weight.depth);
+        surface.dataModel = dataModel;
+        surface.values = weight.values;
+        surface.chars = weight.chars;
+        this.#chars += weight.chars;
+        let ids: string[] = [];
+        try {
+          ids = body.components ? this.#merge(surface, body.components) : [];
+        } catch (error) {
+          this.#chars -= weight.chars;
+          throw error;
+        }
         this.#surfaces.set(surface.id, surface);
         return {
           kind,
@@ -133,7 +176,7 @@ export class A2uiSurfaces {
           message as Extract<A2uiMessage, { updateComponents: unknown }>
         ).updateComponents;
         const surface = this.#existing(body.surfaceId, kind);
-        const ids = mergeComponents(surface, body.components);
+        const ids = this.#merge(surface, body.components);
         surface.revision++;
         return { kind, surfaceId: surface.id, changed: { components: ids } };
       }
@@ -142,7 +185,7 @@ export class A2uiSurfaces {
           message as Extract<A2uiMessage, { updateDataModel: unknown }>
         ).updateDataModel;
         const surface = this.#existing(body.surfaceId, kind);
-        writeAt(surface, parsePointer(body.path ?? '/'), body.value);
+        this.#write(surface, parsePointer(body.path ?? '/'), body.value);
         surface.revision++;
         return { kind, surfaceId: surface.id, changed: { dataModel: true } };
       }
@@ -150,7 +193,8 @@ export class A2uiSurfaces {
         const body = (
           message as Extract<A2uiMessage, { deleteSurface: unknown }>
         ).deleteSurface;
-        this.#existing(body.surfaceId, kind);
+        const surface = this.#existing(body.surfaceId, kind);
+        this.#chars -= surface.chars + surface.componentChars;
         this.#surfaces.delete(body.surfaceId);
         return { kind, surfaceId: body.surfaceId };
       }
@@ -165,7 +209,7 @@ export class A2uiSurfaces {
    */
   write(surfaceId: string, path: string, value: unknown): void {
     const surface = this.#existing(surfaceId, 'updateDataModel');
-    writeAt(surface, parsePointer(path), value);
+    this.#write(surface, parsePointer(path), value);
     surface.revision++;
   }
 
@@ -180,122 +224,202 @@ export class A2uiSurfaces {
       );
     return surface;
   }
-}
 
-function mergeComponents(
-  surface: MutableSurface,
-  components: readonly A2uiComponent[],
-): string[] {
-  const added = components.filter(
-    (component) => !surface.components.has(component.id),
-  ).length;
-  if (surface.components.size + added > A2UI_LIMITS.components)
-    throw new A2uiError(
-      'VALIDATION_FAILED',
-      `the surface would hold more than ${A2UI_LIMITS.components} components`,
-      '/components',
-      surface.id,
-    );
-  for (const component of components)
-    surface.components.set(component.id, component);
-  return components.map((component) => component.id);
-}
-
-/** Values in a value — scalars, arrays and objects — as the data model limit counts them. */
-function countValues(value: unknown): number {
-  let count = 0;
-  const stack: unknown[] = [value];
-  while (stack.length > 0) {
-    const inner = stack.pop();
-    count++;
-    if (inner !== null && typeof inner === 'object')
-      for (const child of Array.isArray(inner) ? inner : Object.values(inner))
-        stack.push(child);
+  /** Refuses a data model of this weight, replacing the surface's current one, past any limit. */
+  #fitData(
+    surface: MutableSurface,
+    values: number,
+    chars: number,
+    depth: number,
+  ): void {
+    const refuse = (message: string): never => {
+      throw new A2uiError('VALIDATION_FAILED', message, '/value', surface.id);
+    };
+    if (depth > DATA_MODEL_LIMITS.depth)
+      refuse(
+        `the data model would nest more than ${DATA_MODEL_LIMITS.depth} levels deep`,
+      );
+    if (values > DATA_MODEL_LIMITS.values)
+      refuse(
+        `the data model would hold more than ${DATA_MODEL_LIMITS.values} values`,
+      );
+    if (chars > DATA_MODEL_LIMITS.chars)
+      refuse(
+        `the data model would hold more than ${DATA_MODEL_LIMITS.chars} characters`,
+      );
+    if (this.#chars - surface.chars + chars > SURFACES_LIMITS.chars)
+      refuse(
+        `the renderer would hold more than ${SURFACES_LIMITS.chars} characters across its surfaces`,
+      );
   }
-  return count;
-}
 
-function depthOf(value: unknown, limit: number): number {
-  const visit = (inner: unknown, depth: number): number => {
-    if (depth > limit || inner === null || typeof inner !== 'object')
-      return depth;
-    let deepest = depth;
-    for (const child of Array.isArray(inner) ? inner : Object.values(inner))
-      deepest = Math.max(deepest, visit(child, depth + 1));
-    return deepest;
-  };
-  return visit(value, 0);
-}
+  #merge(
+    surface: MutableSurface,
+    components: readonly A2uiComponent[],
+  ): string[] {
+    let added = 0;
+    let chars = surface.componentChars;
+    const weights = new Map<string, number>();
+    for (const component of components) {
+      const previous = weights.has(component.id)
+        ? weights.get(component.id)
+        : surface.componentWeights.get(component.id);
+      if (previous === undefined) added++;
+      const weight = weigh(component);
+      const units = weight.values + weight.chars;
+      chars += units - (previous ?? 0);
+      weights.set(component.id, units);
+    }
+    const refuse = (message: string): never => {
+      throw new A2uiError(
+        'VALIDATION_FAILED',
+        message,
+        '/components',
+        surface.id,
+      );
+    };
+    if (surface.components.size + added > A2UI_LIMITS.components)
+      refuse(
+        `the surface would hold more than ${A2UI_LIMITS.components} components`,
+      );
+    if (chars > SURFACES_LIMITS.componentChars)
+      refuse(
+        `the surface's components would hold more than ${SURFACES_LIMITS.componentChars} characters`,
+      );
+    const total = this.#chars - surface.componentChars + chars;
+    if (total > SURFACES_LIMITS.chars)
+      refuse(
+        `the renderer would hold more than ${SURFACES_LIMITS.chars} characters across its surfaces`,
+      );
+    for (const component of components)
+      surface.components.set(component.id, component);
+    for (const [id, units] of weights) surface.componentWeights.set(id, units);
+    this.#chars = total;
+    surface.componentChars = chars;
+    return components.map((component) => component.id);
+  }
 
-const shallow = (container: object): Record<string, unknown> | unknown[] =>
-  Array.isArray(container)
-    ? container.slice()
-    : { ...(container as Record<string, unknown>) };
+  /**
+   * Puts `value` at `segments` in a surface's data model — `null` deletes — in place, after
+   * everything that could refuse it has been checked, so a refused update leaves the model as it
+   * was. An update costs what it changes: nothing is copied but the value itself, and nothing
+   * weighed but it and what it replaces. Missing containers on the way are created as objects; a
+   * numeric segment into an array addresses an index, and `-` appends.
+   */
+  #write(
+    surface: MutableSurface,
+    segments: readonly string[],
+    value: unknown,
+  ): void {
+    const fresh = value === null ? null : structuredClone(value);
+    const added =
+      fresh === null ? { values: 0, chars: 0, depth: 0 } : weigh(fresh);
+    if (segments.length === 0) {
+      if (fresh !== null && !isRecord(fresh))
+        throw new A2uiError(
+          'VALIDATION_FAILED',
+          'the data model as a whole must be an object',
+          '/value',
+          surface.id,
+        );
+      const next = (fresh as Record<string, unknown> | null) ?? {};
+      const weight = fresh === null ? weigh(next) : added;
+      this.#fitData(surface, weight.values, weight.chars, weight.depth);
+      this.#chars += weight.chars - surface.chars;
+      surface.dataModel = next;
+      surface.values = weight.values;
+      surface.chars = weight.chars;
+      return;
+    }
+    // Find, without changing anything, how far the path exists.
+    let container: unknown = surface.dataModel;
+    let at = 0;
+    for (; at < segments.length - 1; at++) {
+      const child = read(container, segments[at] as string);
+      if (typeof child !== 'object' || child === null) break;
+      container = child;
+    }
+    const last = segments.length - 1;
+    // Deleting below something that is not a container changes nothing.
+    if (fresh === null && at < last) return;
+    const keyChars = (parent: unknown, key: string): number =>
+      Array.isArray(parent) ? 0 : key.length;
+    let values = surface.values;
+    let chars = surface.chars;
+    // The entry the write replaces: a scalar in the way of the path, or the value at its end.
+    const target = segments[at] as string;
+    const replaced = read(container, target);
+    if (replaced !== undefined) {
+      const old = weigh(replaced);
+      values -= old.values;
+      chars -= old.chars + keyChars(container, target);
+    } else if (fresh === null) return; // deleting what is not there changes nothing
+    if (fresh !== null) {
+      writable(container, target, surface.id);
+      // Containers the path creates: an object per segment, each under its key.
+      for (let index = at; index < last; index++) {
+        values += 1;
+        chars +=
+          index === at ? keyChars(container, target) : segments[index]!.length;
+      }
+      values += added.values;
+      chars +=
+        added.chars +
+        (at < last ? segments[last]!.length : keyChars(container, target));
+    }
+    this.#fitData(
+      surface,
+      values,
+      chars,
+      fresh === null ? 0 : segments.length + added.depth,
+    );
+    // Accepted: change the model.
+    if (fresh === null) remove(container, target);
+    else if (at === last) assign(container, target, fresh);
+    else {
+      let parent = container;
+      for (let index = at; index < last; index++) {
+        const created = {};
+        assign(parent, segments[index] as string, created);
+        parent = created;
+      }
+      assign(parent, segments[last] as string, fresh);
+    }
+    this.#chars += chars - surface.chars;
+    surface.values = values;
+    surface.chars = chars;
+  }
+}
 
 /**
- * Puts `value` at `segments` in a surface's data model — `null` deletes — copying only the
- * containers on the way, so the old model is untouched until the new one is accepted, and an
- * update costs what it changes rather than the size of the whole model. Missing containers on the
- * way are created as objects; a numeric segment into an array addresses an index, and `-` appends.
+ * What holding a value costs: `values` (each scalar, list and object), `chars` (the characters of
+ * its strings and object keys) and `depth` (how many containers deep it goes; a scalar is 0).
  */
-function writeAt(
-  surface: MutableSurface,
-  segments: readonly string[],
-  value: unknown,
-): void {
-  const refuse = (message: string): never => {
-    throw new A2uiError('VALIDATION_FAILED', message, '/value', surface.id);
-  };
-  const fresh = value === null ? null : structuredClone(value);
-  if (
-    fresh !== null &&
-    segments.length + depthOf(fresh, DATA_MODEL_LIMITS.depth) >
-      DATA_MODEL_LIMITS.depth
-  )
-    refuse(
-      `the data model would nest more than ${DATA_MODEL_LIMITS.depth} levels deep`,
-    );
-  let next: Record<string, unknown>;
-  let size: number;
-  if (segments.length === 0) {
-    if (fresh !== null && !isRecord(fresh))
-      return refuse('the data model as a whole must be an object');
-    next = (fresh as Record<string, unknown> | null) ?? {};
-    size = countValues(next);
-  } else {
-    next = shallow(surface.dataModel) as Record<string, unknown>;
-    size = surface.size;
-    let container: unknown = next;
-    for (let index = 0; index < segments.length - 1; index++) {
-      const segment = segments[index] as string;
-      const child = read(container, segment);
-      if (typeof child !== 'object' || child === null) {
-        if (fresh === null) return; // deleting below something absent changes nothing
-        const created = {};
-        size += 1 - (child === undefined ? 0 : 1);
-        assign(container, segment, created, surface.id);
-        container = created;
-      } else {
-        const copy = shallow(child);
-        assign(container, segment, copy, surface.id);
-        container = copy;
-      }
-    }
-    const last = segments[segments.length - 1] as string;
-    const old = read(container, last);
-    size -= old === undefined ? 0 : countValues(old);
-    if (fresh === null) remove(container, last);
-    else {
-      assign(container, last, fresh, surface.id);
-      size += countValues(fresh);
+export function weigh(value: unknown): {
+  values: number;
+  chars: number;
+  depth: number;
+} {
+  let values = 0;
+  let chars = 0;
+  let depth = 0;
+  const stack: [unknown, number][] = [[value, 0]];
+  while (stack.length > 0) {
+    const [inner, level] = stack.pop() as [unknown, number];
+    values++;
+    if (typeof inner === 'string') chars += inner.length;
+    else if (inner !== null && typeof inner === 'object') {
+      if (level + 1 > depth) depth = level + 1;
+      if (Array.isArray(inner))
+        for (const child of inner) stack.push([child, level + 1]);
+      else
+        for (const key of Object.keys(inner)) {
+          chars += key.length;
+          stack.push([(inner as Record<string, unknown>)[key], level + 1]);
+        }
     }
   }
-  if (size > DATA_MODEL_LIMITS.values)
-    refuse(
-      `the data model would hold more than ${DATA_MODEL_LIMITS.values} values`,
-    );
-  surface.dataModel = next;
-  surface.size = size;
+  return { values, chars, depth };
 }
 
 function read(container: unknown, segment: string): unknown {
@@ -307,27 +431,31 @@ function read(container: unknown, segment: string): unknown {
     : undefined;
 }
 
-function assign(
+/** Throws unless `segment` of `container` can be written: an array takes an index up to its end. */
+function writable(
   container: unknown,
   segment: string,
-  value: unknown,
   surfaceId: string,
 ): void {
+  if (!Array.isArray(container)) return;
+  const index =
+    segment === '-'
+      ? container.length
+      : /^\d+$/.test(segment)
+        ? Number(segment)
+        : -1;
+  if (index < 0 || index > container.length)
+    throw new A2uiError(
+      'VALIDATION_FAILED',
+      `"${segment}" is not an index this list can be written at`,
+      '/path',
+      surfaceId,
+    );
+}
+
+function assign(container: unknown, segment: string, value: unknown): void {
   if (Array.isArray(container)) {
-    const index =
-      segment === '-'
-        ? container.length
-        : /^\d+$/.test(segment)
-          ? Number(segment)
-          : -1;
-    if (index < 0 || index > container.length)
-      throw new A2uiError(
-        'VALIDATION_FAILED',
-        `"${segment}" is not an index this list can be written at`,
-        '/path',
-        surfaceId,
-      );
-    container[index] = value;
+    container[segment === '-' ? container.length : Number(segment)] = value;
     return;
   }
   // Defined, not assigned: a key named like an accessor on Object.prototype must not reach it.

@@ -128,7 +128,8 @@ export function createA2uiProjector(
         ...(state.sendDataModel ? { sendDataModel: true } : {}),
         ...(components && components.length > 0 ? { components } : {}),
         ...(Object.keys(state.dataModel).length > 0
-          ? { dataModel: state.dataModel }
+          ? // a copy: the surface's model changes in place as updates arrive
+            { dataModel: structuredClone(state.dataModel) }
           : {}),
         ...(state.metadata ? { metadata: state.metadata } : {}),
       },

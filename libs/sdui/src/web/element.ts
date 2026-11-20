@@ -13,6 +13,7 @@ import {
 import { A2uiSurfaces } from '../a2ui/surfaces.js';
 import { patchChildren } from './dom.js';
 import {
+  DRAW_LIMITS,
   DrawBudget,
   type HostFunction,
   type UrlPolicy,
@@ -65,6 +66,31 @@ export const CAPABILITIES_HEADER = 'A2UI-Renderer-Capabilities';
 /** Errors an element sends the agent per draw; the rest of a flood is dropped. */
 export const MAX_ERRORS_PER_DRAW = 10;
 
+/**
+ * How much an element tells the agent, however much is wrong: a burst of errors, then a few a
+ * second; each error's message cut to a length; and a stream (or an answer to an action) that has
+ * had this many messages refused is hung up on — it is not going to start making sense.
+ */
+export const ERROR_LIMITS = Object.freeze({
+  burst: 20,
+  perSecond: 2,
+  message: 1_000,
+  refusedPerStream: 100,
+});
+
+/** Milliseconds of messages an element applies before it lets the page run. */
+const SLICE_MS = 8;
+
+const now = (): number => performance.now();
+const yieldToPage = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Where messages come from, and how to stop it: a stream, an action's answer, or `push()`. */
+interface Origin {
+  refused: number;
+  readonly hangUp?: () => void;
+}
+
 /** Defines the element (once). Nothing is defined on import: call this in the browser. */
 export function defineA2uiSurface(
   options: A2uiSurfaceOptions = {},
@@ -86,6 +112,10 @@ export function defineA2uiSurface(
     #scheduled = false;
     #abort: AbortController | null = null;
     #reported = new Set<string>();
+    /** How long the last draw took: the next one waits at least as long. */
+    #lastDrawMs = 0;
+    #errorTokens: number = ERROR_LIMITS.burst;
+    #errorsAt = now();
 
     static get observedAttributes() {
       return ['src'];
@@ -120,37 +150,83 @@ export function defineA2uiSurface(
     }
 
     push(messages: string | readonly unknown[]): void {
-      let list: readonly unknown[];
-      if (typeof messages !== 'string') list = messages;
-      else if (messages.trimStart().startsWith('[')) {
+      const origin: Origin = { refused: 0 };
+      if (typeof messages !== 'string') {
+        for (const raw of messages) this.#take(raw, origin);
+      } else if (messages.trimStart().startsWith('[')) {
+        let list: readonly unknown[] = [];
         try {
           list = parseA2uiStream(messages);
         } catch (error) {
-          if (error instanceof A2uiError) this.#send(errorMessage(error));
-          return;
+          this.#refuse(error, origin);
         }
-      } else {
-        // JSON Lines, a line at a time: one bad line is one error, not the loss of its neighbours.
-        list = [];
-        for (const line of messages.split(/\r?\n/)) {
-          if (line.trim() === '') continue;
-          try {
-            (list as unknown[]).push(...parseA2uiStream(line));
-          } catch (error) {
-            if (error instanceof A2uiError) this.#send(errorMessage(error));
+        for (const raw of list) this.#take(raw, origin);
+      } else
+        for (const line of messages.split(/\r?\n/)) this.#line(line, origin);
+      this.#schedule();
+    }
+
+    /**
+     * JSON Lines a little at a time, letting the page run between slices: a stream of a million
+     * lines is a busy surface, not a frozen page.
+     */
+    async #feed(lines: Iterable<string>, origin: Origin): Promise<void> {
+      let slice = now();
+      try {
+        for (const line of lines) {
+          if (origin.refused > ERROR_LIMITS.refusedPerStream) return;
+          this.#line(line, origin);
+          if (now() - slice > SLICE_MS) {
+            this.#schedule();
+            await yieldToPage();
+            slice = now();
           }
         }
+      } finally {
+        // what was applied is drawn, however the feed ended
+        this.#schedule();
       }
-      for (const raw of list) {
-        try {
-          const message = parseA2uiMessage(raw);
-          this.#accept(message);
-        } catch (error) {
-          if (!(error instanceof A2uiError)) throw error;
-          this.#send(errorMessage(error));
-        }
+    }
+
+    /** One line of JSON Lines: one bad line is one error, not the loss of its neighbours. */
+    #line(line: string, origin: Origin): void {
+      if (line.trim() === '') return;
+      let list: readonly unknown[] = [];
+      try {
+        list = parseA2uiStream(line);
+      } catch (error) {
+        this.#refuse(error, origin);
       }
-      this.#schedule();
+      for (const raw of list) this.#take(raw, origin);
+    }
+
+    #take(raw: unknown, origin: Origin): void {
+      try {
+        this.#accept(parseA2uiMessage(raw));
+      } catch (error) {
+        this.#refuse(error, origin);
+      }
+    }
+
+    #refuse(error: unknown, origin: Origin): void {
+      if (!(error instanceof A2uiError)) throw error;
+      this.#send(errorMessage(error));
+      if (
+        ++origin.refused === ERROR_LIMITS.refusedPerStream + 1 &&
+        origin.hangUp
+      ) {
+        origin.hangUp();
+        this.#send(
+          errorMessage(
+            new A2uiError(
+              'VALIDATION_FAILED',
+              `more than ${ERROR_LIMITS.refusedPerStream} messages of the stream were refused; the renderer stopped reading it`,
+              '',
+            ),
+          ),
+          true,
+        );
+      }
     }
 
     #accept(message: A2uiMessage): void {
@@ -249,12 +325,12 @@ export function defineA2uiSurface(
       error: { code: string; message: string; path?: string },
     ): void {
       // Reported once per surface: a broken binding is not a message per keystroke.
-      const key = `${surfaceId}\u0000${error.code}\u0000${error.message}`;
+      const key = `${surfaceId}\u0000${error.code}\u0000${error.message.slice(0, ERROR_LIMITS.message)}`;
       if (this.#reported.has(key)) return;
       // And a few per draw: content can make every one of a thousand checks fail differently,
       // and the agent needs to hear that something is wrong, not a thousand times.
       if (++this.#reportedThisDraw > MAX_ERRORS_PER_DRAW) return;
-      if (this.#reported.size > 10_000) this.#reported.clear();
+      if (this.#reported.size > 1_000) this.#reported.clear();
       this.#reported.add(key);
       const validation =
         error.code === 'VALIDATION_FAILED' ||
@@ -271,17 +347,26 @@ export function defineA2uiSurface(
       });
     }
 
+    /**
+     * A draw in a task of its own, after whatever scheduled it: messages arriving together are
+     * drawn once. A draw that took long is not followed at once by another — the page gets at
+     * least as long to itself as the last draw took.
+     */
     #schedule(): void {
       if (this.#scheduled) return;
       this.#scheduled = true;
-      queueMicrotask(() => {
-        this.#scheduled = false;
-        this.#draw();
-      });
+      setTimeout(
+        () => {
+          this.#scheduled = false;
+          if (this.isConnected) this.#draw();
+        },
+        this.#lastDrawMs > 16 ? Math.min(this.#lastDrawMs, 500) : 0,
+      );
     }
 
     #draw(): void {
-      this.#budget = new DrawBudget();
+      const started = now();
+      this.#budget = new DrawBudget({ ms: DRAW_LIMITS.ms });
       this.#reportedThisDraw = 0;
       const views = this.surfaces.ids().map((id) => {
         const surface = this.surfaces.get(id)!;
@@ -313,10 +398,36 @@ export function defineA2uiSurface(
       });
       // Each surface's container is matched by its key, prerendered or not.
       patchChildren(this, views);
+      this.#lastDrawMs = now() - started;
       this.dispatchEvent(new CustomEvent('a2ui:render', { bubbles: true }));
     }
 
-    #send(message: A2uiRendererMessage): void {
+    /** Whether one more error may go out: a burst, then a few a second. */
+    #mayReport(): boolean {
+      const at = now();
+      this.#errorTokens = Math.min(
+        ERROR_LIMITS.burst,
+        this.#errorTokens +
+          ((at - this.#errorsAt) / 1_000) * ERROR_LIMITS.perSecond,
+      );
+      this.#errorsAt = at;
+      if (this.#errorTokens < 1) return false;
+      this.#errorTokens--;
+      return true;
+    }
+
+    #send(message: A2uiRendererMessage, always = false): void {
+      if ('error' in message && message.error) {
+        if (!always && !this.#mayReport()) return;
+        if (message.error.message.length > ERROR_LIMITS.message)
+          message = {
+            ...message,
+            error: {
+              ...message.error,
+              message: `${message.error.message.slice(0, ERROR_LIMITS.message)}…`,
+            },
+          };
+      }
       const event = new CustomEvent('a2ui:message', {
         detail: message,
         bubbles: true,
@@ -355,7 +466,8 @@ export function defineA2uiSurface(
         .then((response) => (response.ok ? response.text() : ''))
         .then((text) => {
           // An agent may answer an action with more messages, in the response.
-          if (text.trim()) this.push(text);
+          if (text.trim())
+            return this.#feed(text.split(/\r?\n/), { refused: 0 });
         })
         .catch(() => undefined);
     }
@@ -380,6 +492,8 @@ export function defineA2uiSurface(
         const reader = response.body
           .pipeThrough(new TextDecoderStream())
           .getReader();
+        const origin: Origin = { refused: 0, hangUp: () => abort.abort() };
+        let slice = now();
         let buffer = '';
         let event: string[] = [];
         let eventLength = 0;
@@ -402,8 +516,8 @@ export function defineA2uiSurface(
           buffer = done ? '' : (lines.pop() ?? '');
           if (buffer.length > A2UI_LIMITS.messageChars) return tooLong();
           if (!sse) {
-            const text = lines.filter((line) => line.trim() !== '').join('\n');
-            if (text) this.push(text);
+            await this.#feed(lines, origin);
+            if (abort.signal.aborted) return;
           } else {
             // An event is its data lines, joined; a blank line ends it.
             for (const line of [...lines, ...(done ? [''] : [])]) {
@@ -422,20 +536,27 @@ export function defineA2uiSurface(
                 try {
                   message = JSON.parse(data);
                 } catch {
-                  this.#send(
-                    errorMessage(
-                      new A2uiError(
-                        'VALIDATION_FAILED',
-                        'an event of the stream is not JSON',
-                        '',
-                      ),
+                  this.#refuse(
+                    new A2uiError(
+                      'VALIDATION_FAILED',
+                      'an event of the stream is not JSON',
+                      '',
                     ),
+                    origin,
                   );
+                  if (abort.signal.aborted) return this.#schedule();
                   continue;
                 }
-                this.push([message]);
+                this.#take(message, origin);
+                if (abort.signal.aborted) return this.#schedule();
+                if (now() - slice > SLICE_MS) {
+                  this.#schedule();
+                  await yieldToPage();
+                  slice = now();
+                }
               }
             }
+            this.#schedule();
           }
           if (done) break;
         }

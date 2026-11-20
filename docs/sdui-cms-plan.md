@@ -971,6 +971,10 @@ Built. Decisions that came out of building it:
 - [ ] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
       regexes — runs nothing, makes no element outside the allowlist, and reports `blocked-url` /
       `EXPRESSION_ERROR`; the renderer source has no `innerHTML`, by test.
+- [ ] A hostile stream within `A2UI_LIMITS` — huge or wide bound values, components with many
+      props or checks, long paths, write storms, error floods, gigabytes of data model updates —
+      never blocks the page's main thread for 300 ms, never crashes it, and is told a bounded
+      number of times (`e2e/a2ui-exhaustion.e2e.ts`).
 
 Built, with `examples/concierge` and `e2e/concierge-example.e2e.ts` as the proof.
 
@@ -1121,6 +1125,14 @@ Folded in above; listed so the removals are visible.
 - **A2UI is young.** v1.0 is current and v1.1 is on its roadmap. The upstream schemas, basic
   catalog and examples are vendored at a pinned commit and everything is checked against them;
   moving to a new version is replacing those files and fixing what the round-trip tests say.
+- **An agent can keep a surface busy.** The web renderer runs on the page's main thread. Every
+  value a draw reads is charged by what it holds, a draw in a browser ends after 100 ms, messages
+  are applied in slices, and what a renderer holds is counted in characters — so a hostile stream
+  costs a surface, not the page. A renderer that must draw agents it does not trust at all, with
+  nothing of the host's at stake, can still put `<a2ui-surface>` in a frame of its own origin.
+- **The projector re-projects a whole surface per agent message**, so a long stream of small
+  updates to a large surface costs the server messages × surface. The server phase (P4) should
+  project incrementally or batch messages.
 - **Contract fragments under a strict host CSP.** A contract realm inherits the host's
   Content-Security-Policy, and its bootstrap needs an inline script and a `<base>`; the gateway-free
   docs mention only `blob:` in `frame-src`. Hosts with a strict CSP cannot mount a fragment as an

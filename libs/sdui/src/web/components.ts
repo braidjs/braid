@@ -267,9 +267,13 @@ const List: ComponentRenderer = (c) =>
 const Card: ComponentRenderer = (c) =>
   h('div', { class: cls('Card') }, c.child('child'));
 
+/** Tabs one component may have: as many as a draw could draw. */
+const MAX_TABS = 10_000;
+
 const Tabs: ComponentRenderer = (c) => {
+  // No more than could be drawn is looked at: a list of 100,000 tabs is not filtered each drawing.
   const all = Array.isArray(c.raw('tabs'))
-    ? (c.raw('tabs') as unknown[]).filter(isRecord)
+    ? (c.raw('tabs') as unknown[]).slice(0, MAX_TABS).filter(isRecord)
     : [];
   const tabs = all.slice(0, c.allow(all.length));
   const [selected, select] = c.local('tab', 0);
