@@ -15,6 +15,7 @@ npm install -D @braidlabs/cli
 ## Commands
 
 ### `braid dev`
+
 Starts the dev servers declared in `braid.config.json`, waits for all services to answer health checks, and starts the gateway on a single unified origin.
 
 ```bash
@@ -22,6 +23,7 @@ npx braid dev
 ```
 
 ### `braid init`
+
 Scaffolds a clean `braid.config.json` in the current project root.
 
 ```bash
@@ -29,6 +31,7 @@ npx braid init
 ```
 
 ### `braid add <fragment-id>`
+
 Adds a new fragment entry to `braid.config.json` with port and piercing route options:
 
 ```bash
@@ -36,6 +39,7 @@ npx braid add billing --port 4201 --pierce "/billing/*"
 ```
 
 ### `braid detangle`
+
 Analyzes an existing Module Federation Nx workspace, maps remotes to Braid fragments, detects shared singletons/guards, and automates migration to Braid:
 
 ```bash
@@ -51,17 +55,17 @@ npx braid detangle --write --gateway --shell-edits
 
 #### Flags for `braid detangle`
 
-| Flag | Description |
-| :--- | :--- |
-| *(none)* | Dry-run report only (detects shell, remotes, routes, and shared state). |
-| `--shell <project>` | Explicitly specify host shell project name if multiple exist. |
-| `--diff` | Display the `braid.config.json` that would be generated. |
-| `--write` | Write `braid.config.json` (refuses on dirty git tree or blocking findings). |
-| `--gateway` | With `--write`, scaffold the gateway application (new files only). |
-| `--shell-edits` | With `--write`, apply safe codemods to host shell (e.g. `provideBraid()`, client hydration). |
-| `--force` | Override git safety refusals and replace existing configs. |
-| `--remove-mf` | Check whether Module Federation config can be safely removed. |
-| `--port <n>` | Port for the composed gateway application (default: `4000`). |
+| Flag                | Description                                                                                  |
+| :------------------ | :------------------------------------------------------------------------------------------- |
+| _(none)_            | Dry-run report only (detects shell, remotes, routes, and shared state).                      |
+| `--shell <project>` | Explicitly specify host shell project name if multiple exist.                                |
+| `--diff`            | Display the `braid.config.json` that would be generated.                                     |
+| `--write`           | Write `braid.config.json` (refuses on dirty git tree or blocking findings).                  |
+| `--gateway`         | With `--write`, scaffold the gateway application (new files only).                           |
+| `--shell-edits`     | With `--write`, apply safe codemods to host shell (e.g. `provideBraid()`, client hydration). |
+| `--force`           | Override git safety refusals and replace existing configs.                                   |
+| `--remove-mf`       | Check whether Module Federation config can be safely removed.                                |
+| `--port <n>`        | Port for the composed gateway application (default: `4000`).                                 |
 
 > For a full migration guide from Webpack/Rspack Module Federation, see **[From Module Federation](../braid-from-module-federation.md)**.
 
@@ -101,7 +105,7 @@ access` takes principals from `--as` only, never from a `braid.config` it happen
   "port": 3000,
   "shell": {
     "port": 4200,
-    "command": "npm run start:shell"
+    "command": "npm run start:shell",
   },
   "fragments": [
     {
@@ -109,13 +113,13 @@ access` takes principals from `--as` only, never from a `braid.config` it happen
       "endpoint": "http://localhost:4201/__braid/frag/billing",
       "dev": {
         "port": 4201,
-        "command": "npm run start:billing"
+        "command": "npm run start:billing",
       },
       "pierce": ["/billing", "/billing/*"],
       "timeoutMs": 2000,
-      "fallback": "placeholder"
-    }
-  ]
+      "fallback": "placeholder",
+    },
+  ],
 }
 ```
 

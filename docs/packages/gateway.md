@@ -26,11 +26,11 @@ npm install @braidlabs/gateway
 
 ## Reserved URL Namespaces
 
-| Namespace | What it serves | Purpose |
-| :--- | :--- | :--- |
-| `/__braid/frag/:id/*` | Assets & API traffic | Forwards directly to fragment endpoint with prefix stripped. |
-| `/__braid/realm/:id/*` | Realm boot stubs | Serves minimal HTML stub to initialize hidden iframe runtimes. |
-| `/__braid/doc/:id/*` | Prepared DOM payload | Serves rewritten, script-inert HTML for dynamic injection. |
+| Namespace                | What it serves                             | Purpose                                                                           |
+| :----------------------- | :----------------------------------------- | :-------------------------------------------------------------------------------- |
+| `/__braid/frag/:id/*`    | Assets & API traffic                       | Forwards directly to fragment endpoint with prefix stripped.                      |
+| `/__braid/realm/:id/*`   | Realm boot stubs                           | Serves minimal HTML stub to initialize hidden iframe runtimes.                    |
+| `/__braid/doc/:id/*`     | Prepared DOM payload                       | Serves rewritten, script-inert HTML for dynamic injection.                        |
 | `/__braid/preferences/*` | The signed-in user's JSON entries (opt-in) | Reads and writes per-user preferences; see [below](#per-user-preferences-opt-in). |
 
 A host mounted under a path it shares a domain with sets `createGateway({ basePath: '/manage' })`
@@ -222,7 +222,7 @@ createGateway({
 });
 ```
 
-- **Every page carries a pointer to the rules.** Pages the gateway composes, and the navigations it passes to your app, get `Speculation-Rules: "/__braid/speculation-rules.json"`. The page that *links* to a route is the one the browser speculates from. For a passed-through page, the binding sets the header on the way out (`gateway.pageHeaders(request)`, applied by `toNodeMiddleware`, `toWebMiddleware` and `toFetchHandler`). The gateway never reads your app's response to add it, so the page streams exactly as it would without the gateway. The value is the same for every visitor, so cached pages stay shareable, and browsers ignore it on anything but HTML.
+- **Every page carries a pointer to the rules.** Pages the gateway composes, and the navigations it passes to your app, get `Speculation-Rules: "/__braid/speculation-rules.json"`. The page that _links_ to a route is the one the browser speculates from. For a passed-through page, the binding sets the header on the way out (`gateway.pageHeaders(request)`, applied by `toNodeMiddleware`, `toWebMiddleware` and `toFetchHandler`). The gateway never reads your app's response to add it, so the page streams exactly as it would without the gateway. The value is the same for every visitor, so cached pages stay shareable, and browsers ignore it on anything but HTML.
 - **The rules list each opted-in fragment's `pierce` patterns.** `prefetch` fetches the composed document, so the click skips the round trip. `prerender` also renders it: the realm boots and the fragment's code runs, so the page appears at once and the fragment doesn't fetch its document again. Both trigger with `moderate` eagerness, on hover or pointerdown. Trailing-slash variants are included, matching how pierce routes match.
 - **Some links and patterns are never speculated:**
   - links marked `rel="nofollow"`, as user-generated content usually is, or `data-braid-no-speculate`;
@@ -230,6 +230,7 @@ createGateway({
   - patterns that match any path (`/*`, `/:page`), which would make every same-origin link speculative, `/logout` included.
 
   Registry analysis warns about the last two.
+
 - **Access rules are respected.** A fragment the visitor may not list or load is left out, as discovery and the namespace keep it out of sight. When the gateway can tell visitors apart (a `principal` resolver) or any fragment has access rules, the response is `private, no-store` and varies on `cookie` and `authorization`. Otherwise it's shared for 60 seconds. In development, nothing is filtered and nothing is stored.
 - **Prerendering runs a fragment's code before anyone sees the page.** Analytics, view counts and other side effects fire for pages the visitor may never open, and the request carries the visitor's cookies. That's why it's opt-in per fragment. A fragment that sets `speculate` should treat a request with `Sec-Purpose: prefetch` (`prefetch;prerender` when prerendering) as not yet a visit, and defer side effects in the page until `document.prerendering` is false (the `prerenderingchange` event).
 - **Only Chromium implements it.** Other browsers ignore the header. The endpoint isn't available under a `basePath` yet.
@@ -263,6 +264,7 @@ createGateway({
 
   It catches accidents and naive supply-chain exfiltration. It is not a boundary, because the
   trusted tier has none.
+
 - **What you see.** The client logs every request the policy blocks, or would have blocked, with
   the fragment's name and the URL. Start with `'report'`, read the console, add what is missing,
   then switch to `'enforce'`.
@@ -316,7 +318,7 @@ Limits:
 
 - **Every scoped cookie travels on every request** to the origin. Large upstream sessions across
   many fragments can exceed proxy header limits, which are commonly 8–16 KB.
-- **Only cookies that pass through the gateway are renamed.** A proxy *in front of* the gateway on
+- **Only cookies that pass through the gateway are renamed.** A proxy _in front of_ the gateway on
   the same origin, such as an OIDC plugin at the edge, needs its own per-route session cookie
   names.
 - **A fragment's requests must go through its namespace** (`/__braid/frag/<id>/…`) for its cookies
@@ -382,12 +384,12 @@ createGateway({
 });
 ```
 
-| Request | Answer |
-| :--- | :--- |
-| `GET /__braid/preferences/{key}` | 200 with the value, or 404 |
-| `PUT /__braid/preferences/{key}` with an `application/json` body | 204 |
-| `DELETE /__braid/preferences/{key}` | 204 |
-| `GET /__braid/preferences?prefix={prefix}` | 200 `{ "keys": [...] }` |
+| Request                                                          | Answer                     |
+| :--------------------------------------------------------------- | :------------------------- |
+| `GET /__braid/preferences/{key}`                                 | 200 with the value, or 404 |
+| `PUT /__braid/preferences/{key}` with an `application/json` body | 204                        |
+| `DELETE /__braid/preferences/{key}`                              | 204                        |
+| `GET /__braid/preferences?prefix={prefix}`                       | 200 `{ "keys": [...] }`    |
 
 - **Keyed by `subject`.** Entries belong to the `subject` your `principal` resolver returns. It
   must be globally unique and come from your session, never from anything the client sends. An

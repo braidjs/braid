@@ -5,7 +5,7 @@
 to — the samples below use the demo's portfolio API
 (`npm run api`, port 3333), but any REST-ish backend works.
 
-Angular's `resource()` and `httpResource()` are *per-call* caches: two
+Angular's `resource()` and `httpResource()` are _per-call_ caches: two
 requests that return the same record produce two independent copies, and
 updating one leaves the other stale. This package adds the three things every
 data layer ends up reimplementing — **shared entity identity**, **tag
@@ -29,9 +29,9 @@ import { BUILD_ID } from '../generated/build-id';
 export const appConfig: ApplicationConfig = {
   providers: [
     provideSkewData({
-      owner: 'bulletin',     // this app's name in the shared outbox — required when persisting
-      persistOutbox: true,   // queued writes survive a reload
-      buildId: BUILD_ID,     // queued entries name the build that wrote them
+      owner: 'bulletin', // this app's name in the shared outbox — required when persisting
+      persistOutbox: true, // queued writes survive a reload
+      buildId: BUILD_ID, // queued entries name the build that wrote them
       onOutboxError: (message, detail) => console.warn(message, detail),
     }),
   ],
@@ -72,9 +72,9 @@ view:
 ```ts
 import { tag } from '@braidlabs/angular-data';
 
-tag.entity(FundEntity, 'f1');  // 'fund#f1'   — one record
-tag.all(FundEntity);           // 'fund#*'    — every fund
-tag.collection('funds-page');  // 'funds-page' — an arbitrary view
+tag.entity(FundEntity, 'f1'); // 'fund#f1'   — one record
+tag.all(FundEntity); // 'fund#*'    — every fund
+tag.collection('funds-page'); // 'funds-page' — an arbitrary view
 ```
 
 ---
@@ -90,13 +90,15 @@ import { Component, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { EntityStore, query } from '@braidlabs/angular-data';
-import { FundListSchemaV1 } from './contracts';   // Tutorial 2 habits apply
+import { FundListSchemaV1 } from './contracts'; // Tutorial 2 habits apply
 import { Fund, FundEntity } from './entities';
 
 @Component({
   selector: 'app-fund-list',
   template: `
-    @if (list.isLoading()) { <p>Loading…</p> }
+    @if (list.isLoading()) {
+      <p>Loading…</p>
+    }
     @for (fund of funds(); track fund.id) {
       <div>{{ fund.name }} — {{ fund.currency }} {{ fund.nav }}</div>
     }
@@ -109,12 +111,12 @@ export class FundList {
   protected readonly list = query({
     loader: async () => {
       const body = await firstValueFrom(this.http.get(`${API}/v1/funds`));
-      const result = FundListSchemaV1.read(body);   // never `as Fund[]`
+      const result = FundListSchemaV1.read(body); // never `as Fund[]`
       if (!result.ok) throw new Error(result.message);
       return result.value;
     },
-    normalize: FundEntity,          // every fund lands in the shared store
-    tags: () => ['funds'],          // invalidating 'funds' re-runs this
+    normalize: FundEntity, // every fund lands in the shared store
+    tags: () => ['funds'], // invalidating 'funds' re-runs this
   });
 
   // ✓ a live view of the shared graph
@@ -167,10 +169,7 @@ readonly renameFund = mutation({
 ```
 
 ```html
-<button (click)="renameFund.mutate({ id: fund.id, name: draft })"
-        [disabled]="renameFund.isPending()">
-  Rename
-</button>
+<button (click)="renameFund.mutate({ id: fund.id, name: draft })" [disabled]="renameFund.isPending()">Rename</button>
 ```
 
 Under the hood that callback runs against a transaction that **records** rather
@@ -182,7 +181,7 @@ readonly asServerSaid = this.store.peekConfirmed(FundEntity, id);
 readonly disagreed = this.renameFund.conflict();                // { expected, actual, paths, entity }
 ```
 
-The prediction is stored *with the queued entry*, which is why it survives a
+The prediction is stored _with the queued entry_, which is why it survives a
 reload and why another app on the page shows it too. And a rename the server
 accepts but normalizes (`north star` → `North Star`) is neither a failure nor
 something to swap in silently: `onConflict` defaults to `'raise'`, while the
@@ -202,7 +201,7 @@ tx.apply((t) => {
   t.remove(OrderEntity, 'o9');
 });
 // …server says no…
-tx.rollback();   // both records restored exactly
+tx.rollback(); // both records restored exactly
 ```
 
 ---
@@ -227,8 +226,8 @@ readonly submitOrder = mutation({
 The rules that make it work, each there because of a real failure mode:
 
 - **`id` is required and must be stable.** A queued entry outlives the
-  closure that created it; after a reload it finds its operation again *by
-  name*. Rename the id and orphan every queued write.
+  closure that created it; after a reload it finds its operation again _by
+  name_. Rename the id and orphan every queued write.
 - **Register at bootstrap, not lazily.** Outbox mutations must be created
   during app construction (a root service, an `ENVIRONMENT_INITIALIZER`) so a
   queue rehydrated at start-up has somewhere to go.
@@ -245,7 +244,7 @@ That last point deserves its own step.
 
 ## Step 6 — When a queued write meets a newer server
 
-The outbox re-runs a failed entry with the *same input* on its next flush —
+The outbox re-runs a failed entry with the _same input_ on its next flush —
 so if the server now refuses that input's contract version, retrying at the
 library level would resend the same stale payload forever. The migration has
 to happen **inside the runner**, before it returns. This is the demo's
@@ -253,10 +252,7 @@ order-submission path, verbatim in spirit:
 
 ```ts
 async function runOrderMutation(input: unknown, entry: OutboxEntry) {
-  const envelope =
-    entry.schemaVersion === 2
-      ? OrderSchemaV2.write(input as OrderV2)
-      : { v: entry.schemaVersion, payload: input };
+  const envelope = entry.schemaVersion === 2 ? OrderSchemaV2.write(input as OrderV2) : { v: entry.schemaVersion, payload: input };
 
   const first = await postOrder(envelope);
   if (first.status !== 409) return first.body;
@@ -276,7 +272,7 @@ async function runOrderMutation(input: unknown, entry: OutboxEntry) {
 ```
 
 The `seed: entry.id` line is small and load-bearing: an idempotency key
-derived from the clock mints a *new* identity on every retry — the one
+derived from the clock mints a _new_ identity on every retry — the one
 property an idempotency key must not have. The entry's stable id makes the
 migrated payload identical across attempts, so the server can deduplicate.
 
@@ -295,4 +291,4 @@ queued.
 
 **Where next:** the [README](https://github.com/braidjs/braid/blob/main/README.md)'s production demo ties all four
 tutorials into one running system — and its Basics walkthrough is the
-fastest way to *see* every claim these tutorials made.
+fastest way to _see_ every claim these tutorials made.

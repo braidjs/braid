@@ -6,23 +6,23 @@ gateway prepares it, so that **no code a fragment's markup carries inline runs o
 realm or navigates the host page.** Inline code runs where Braid manages it — with the compat
 patches, the lifecycle, and the teardown — or not at all.
 
-That is a rule about *where* fragment code runs, not a security boundary. A trusted fragment already
+That is a rule about _where_ fragment code runs, not a security boundary. A trusted fragment already
 holds the user's session; see [Trust tiers](./braid-boundary.md). The untrusted tier is a
 cross-origin iframe, and the gateway never touches its markup.
 
 ## What is neutralized
 
-| Markup | What happens | Why |
-| --- | --- | --- |
-| `<script>` | `type="inert"`, real type kept in `data-script-type` | the client runs it in the fragment's realm instead |
-| `<link rel="preload\|prefetch\|modulepreload">` | `rel="inert-…"` | would load the fragment's code a second time in the host |
-| `onclick`, `onerror`, any `on*` attribute | removed | compiled into a function in the host realm |
-| `<meta http-equiv="refresh">` | `http-equiv` removed | navigates the whole host page |
-| `<iframe srcdoc>` | removed | the frame's document runs on parse with the host's origin |
-| `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept | a `javascript:` frame runs on parse with the host's origin; `data:` and `blob:` are refused alongside it as the same shape — a document the markup carries inline |
-| relative and root-relative subresource URLs (`img[src]`, `link[href]`, …) | resolved against the fragment's `<base href>`, then re-rooted under `/__braid/frag/<id>/` (behind the gateway's `basePath`, if it has one) | they would otherwise resolve against the host page |
+| Markup                                                                                                                  | What happens                                                                                                                               | Why                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<script>`                                                                                                              | `type="inert"`, real type kept in `data-script-type`                                                                                       | the client runs it in the fragment's realm instead                                                                                                                |
+| `<link rel="preload\|prefetch\|modulepreload">`                                                                         | `rel="inert-…"`                                                                                                                            | would load the fragment's code a second time in the host                                                                                                          |
+| `onclick`, `onerror`, any `on*` attribute                                                                               | removed                                                                                                                                    | compiled into a function in the host realm                                                                                                                        |
+| `<meta http-equiv="refresh">`                                                                                           | `http-equiv` removed                                                                                                                       | navigates the whole host page                                                                                                                                     |
+| `<iframe srcdoc>`                                                                                                       | removed                                                                                                                                    | the frame's document runs on parse with the host's origin                                                                                                         |
+| `iframe[src]`, `embed[src]`, `object[data]` with any scheme but `http:`/`https:` (e.g. `javascript:`, `data:`, `blob:`) | removed; `about:blank` is kept                                                                                                             | a `javascript:` frame runs on parse with the host's origin; `data:` and `blob:` are refused alongside it as the same shape — a document the markup carries inline |
+| relative and root-relative subresource URLs (`img[src]`, `link[href]`, …)                                               | resolved against the fragment's `<base href>`, then re-rooted under `/__braid/frag/<id>/` (behind the gateway's `basePath`, if it has one) | they would otherwise resolve against the host page                                                                                                                |
 
-The same rule applies to subresource URLs that the fragment's *code* sets, through the property
+The same rule applies to subresource URLs that the fragment's _code_ sets, through the property
 (`frame.src = 'silent-renew.html'`) or `setAttribute`/`setAttributeNS`. The client applies it when
 the URL is set, against the same base the gateway uses (the fragment's own `<base href>`, default
 `/`). A hidden auth iframe or a lazily set image then loads from the fragment rather than the host,
@@ -43,7 +43,7 @@ what was removed:
 ```html
 <iframe title="Preview" data-braid-blocked="srcdoc"></iframe>
 <object type="application/pdf" data-braid-blocked="data"></object>
-<meta content="0;url=/elsewhere" data-braid-blocked="meta-refresh">
+<meta content="0;url=/elsewhere" data-braid-blocked="meta-refresh" />
 ```
 
 If something a fragment renders standalone is missing when composed, look for `data-braid-blocked`
@@ -55,11 +55,11 @@ The frame rule is an allowlist and it is blunt on purpose. It looks at the marku
 browser would make of it. A narrower rule would have to decide which inline documents are safe, and
 that decision would have to be right in every engine. So some harmless markup goes too:
 
-| Removed | Harmless because | Instead |
-| --- | --- | --- |
-| `<iframe sandbox srcdoc="…">` without `allow-same-origin` | the frame gets an opaque origin | serve the document from a URL in the fragment's namespace (`<iframe sandbox src="preview.html">`) |
-| `<object data="data:application/pdf;…">`, `<embed src="data:image/svg+xml;…">` | `data:` documents get an opaque origin in current browsers | serve the file from a URL; for an SVG, `<img src>` or inline `<svg>` |
-| `blob:` URLs on frames | — | none needed: a `blob:` URL means nothing outside the page that created it, so served markup has no use for one |
+| Removed                                                                        | Harmless because                                           | Instead                                                                                                        |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `<iframe sandbox srcdoc="…">` without `allow-same-origin`                      | the frame gets an opaque origin                            | serve the document from a URL in the fragment's namespace (`<iframe sandbox src="preview.html">`)              |
+| `<object data="data:application/pdf;…">`, `<embed src="data:image/svg+xml;…">` | `data:` documents get an opaque origin in current browsers | serve the file from a URL; for an SVG, `<img src>` or inline `<svg>`                                           |
+| `blob:` URLs on frames                                                         | —                                                          | none needed: a `blob:` URL means nothing outside the page that created it, so served markup has no use for one |
 
 Only markup the gateway serves is prepared. Frames that the fragment's own code creates in the
 browser are never touched by this rule.
@@ -88,7 +88,7 @@ sanitization.
 
 ## Markup a compat fragment writes at runtime
 
-The gateway's rules cover the markup a fragment *sends*. Markup its code *writes* afterwards, with
+The gateway's rules cover the markup a fragment _sends_. Markup its code _writes_ afterwards, with
 `innerHTML`, `outerHTML`, a template, a `Range` or any other parser, goes into the host document as
 written. On every compat fragment, with no option to set, the following is enforced:
 
@@ -103,6 +103,7 @@ written. On every compat fragment, with no option to set, the following is enfor
   case is `Range.createContextualFragment`: its scripts would run natively, and here they do not.
   Create a script element instead. Every JavaScript type a browser runs counts as a script, not
   only the common spellings (`application/javascript`, `text/ecmascript` and the rest).
+
 - **A script runs once, in the realm, and never in the host.** Braid runs a fresh copy of each
   fragment script in the realm. Before the original reaches the fragment's DOM, the browser marks
   it "already started": Braid connects it once to a document with no browsing context, where it is
@@ -110,7 +111,7 @@ written. On every compat fragment, with no option to set, the following is enfor
   and drop), or code that changes the script's type, text or `src`, cannot make the browser run it
   in the host window. Scripts keep their real `type`, so selectors by type still match.
 - **Braid's markers are Braid's.** The gateway and the boundary neutralize scripts as
-  `type="inert"`, and preload links as `rel="inert-*"`. A script or link that *arrives* carrying
+  `type="inert"`, and preload links as `rel="inert-*"`. A script or link that _arrives_ carrying
   those markers, such as one a fragment wrote from user data, stays exactly as inert as it would be
   natively. The gateway renames any `rel="inert-*"` it finds in a fragment's own markup.
 - **Data blocks keep their type.** A written `<script type="application/json">` is left in the DOM

@@ -1,6 +1,7 @@
 # Step 1: Blank Slate to Two Apps in an Nx Monorepo
 
 In this step, you will initialize a clean workspace and generate two separate frontend applications in two different frameworks:
+
 - **Host App:** Angular (Port `4200`)
 - **Remote App:** React (Port `4201`)
 
@@ -26,6 +27,7 @@ npm install -D @nx/angular @nx/react
 ```
 
 ### Create the Angular Shell (Host)
+
 ```bash
 npx nx g @nx/angular:app apps/shell \
   --standalone=true \
@@ -36,6 +38,7 @@ npx nx g @nx/angular:app apps/shell \
 ```
 
 ### Create the React Billing App (Remote)
+
 ```bash
 npx nx g @nx/react:app apps/billing \
   --style=css \
@@ -103,6 +106,7 @@ npx nx serve billing --port=4201
 ```
 
 Verify in your browser:
+
 - `http://localhost:4200` shows the standalone Angular shell.
 - `http://localhost:4201` shows the standalone React billing app.
 

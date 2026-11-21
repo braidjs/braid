@@ -4,10 +4,10 @@ In this step, you will implement decoupled, bidirectional communication between 
 
 The billing app is still an unmodified app: it runs in Braid's default compat mode and contains no Braid code. That decides which mechanisms it can use.
 
-| Direction | For this tutorial's unmodified app | For a fragment that is given an `env` |
-| :--- | :--- | :--- |
-| Host to fragment | a page channel from `@braidlabs/data` | `[props]`, read as `env.props` |
-| Fragment to host | a composed DOM event | `env.emit(...)`, heard as `(fragmentEvent)` |
+| Direction        | For this tutorial's unmodified app    | For a fragment that is given an `env`       |
+| :--------------- | :------------------------------------ | :------------------------------------------ |
+| Host to fragment | a page channel from `@braidlabs/data` | `[props]`, read as `env.props`              |
+| Fragment to host | a composed DOM event                  | `env.emit(...)`, heard as `(fragmentEvent)` |
 
 `[props]` and `(fragmentEvent)` travel through the `env` object Braid hands to a fragment's `mount(env)`. A fragment gets an `env` by opting in with `defineFragment`. (A fragment that is a custom element gets the same two things with no Braid code: props as element properties, and the events its manifest lists.) A compat fragment has no `env`, so props set on its slot are never seen by its code, and nothing it dispatches arrives as `(fragmentEvent)`. The [events and data guide](../events-and-data.md) covers every mechanism here, with the tradeoffs.
 
@@ -48,7 +48,9 @@ const account = createEventBus({ consumer: 'shell' }).channel<Account>('account'
     <header style="background: #18181b; color: white; padding: 1rem; display: flex; justify-content: space-between;">
       <h1 style="font-size: 1.25rem; margin: 0;">Acme Enterprise Portal</h1>
       <div>
-        <span>Account: <strong>{{ currentAccount() }}</strong></span>
+        <span
+          >Account: <strong>{{ currentAccount() }}</strong></span
+        >
         <button (click)="switchAccount()" style="margin-left: 8px;">Switch Account</button>
       </div>
     </header>
@@ -73,18 +75,14 @@ export class AppComponent {
   }
 
   switchAccount() {
-    this.currentAccount.set(
-      this.currentAccount() === 'ACC-99201' ? 'ACC-44012' : 'ACC-99201'
-    );
+    this.currentAccount.set(this.currentAccount() === 'ACC-99201' ? 'ACC-44012' : 'ACC-99201');
     this.publishAccount();
   }
 
   // An ordinary DOM event: it left the fragment and bubbled up to <braid-fragment>
   onInvoicePaid(event: Event) {
     const { invoiceId, amount } = (event as CustomEvent<{ invoiceId: string; amount: string }>).detail;
-    this.lastNotification.set(
-      `Received payment confirmation for invoice ${invoiceId} (${amount})`
-    );
+    this.lastNotification.set(`Received payment confirmation for invoice ${invoiceId} (${amount})`);
   }
 
   private publishAccount() {
@@ -125,9 +123,7 @@ export function App() {
 
   const payInvoice = (id: string, amount: string) => {
     // 1. Update local React state
-    setInvoices((prev) =>
-      prev.map((inv) => (inv.id === id ? { ...inv, status: 'Paid' } : inv))
-    );
+    setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'Paid' } : inv)));
 
     // 2. Tell the host. Braid delivers the fragment's window events to its shadow root;
     //    `composed` is what lets this one cross out of it, into the host's DOM.
@@ -136,14 +132,16 @@ export function App() {
         detail: { invoiceId: id, amount, timestamp: Date.now() },
         bubbles: true,
         composed: true,
-      })
+      }),
     );
   };
 
   return (
     <div style={{ padding: '1.5rem', fontFamily: 'system-ui, sans-serif' }}>
       <h2>Billing & Invoices (React Remote)</h2>
-      <p>Account: {account?.accountId ?? '…'} ({account?.currency ?? '…'})</p>
+      <p>
+        Account: {account?.accountId ?? '…'} ({account?.currency ?? '…'})
+      </p>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
         <thead>
           <tr style={{ background: '#f4f4f5', textAlign: 'left' }}>

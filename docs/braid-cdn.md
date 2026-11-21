@@ -8,7 +8,7 @@ This is the gateway's default, and it enforces its own half: pages that some fra
 marked `private`, so a correct shared cache will not store them even if your shell says `public`.
 You configure the aggressive half — the `/__braid/*` namespaces — at the edge.
 
-That default is only *simple* because the protocol was designed for it. If you are curious why,
+That default is only _simple_ because the protocol was designed for it. If you are curious why,
 or you want to cache pages too, read on.
 
 Two other questions come up straight after this one, and both have their own section below: what
@@ -22,12 +22,12 @@ them, with two specific exceptions worth knowing before you plan around them).
 Each kind of thing the gateway serves has its own path, rather than one path that returns
 different content depending on request headers:
 
-| Path | Serves | How to cache it |
-| --- | --- | --- |
-| `/__braid/frag/:id/*` | the fragment's own endpoint: JS, CSS, images, data | **Aggressively.** This is the bulk of your traffic. If the fragment's build hashes filenames, cache immutably; the fragment id is in the path, so two fragments' assets can never collide. |
-| `/__braid/realm/:id/*` | the realm stub each fragment's hidden iframe boots from | **Aggressively.** Tiny, and marked `public, max-age=300, s-maxage=60, stale-while-revalidate=86400` with an ETag, so the edge follows a re-pin within a minute and a returning visitor's boot never waits on it. Caching it removes a round trip from every fragment boot. |
-| `/__braid/doc/:id/*` | the fragment's document, prepared for the host page's DOM | **Follow the fragment's own headers.** It is the fragment team's call, and it often reflects a signed-in user. |
-| `/__braid/registry` | the discovery listing, if enabled | **Never.** Already `no-store`; it depends on who asked. |
+| Path                   | Serves                                                    | How to cache it                                                                                                                                                                                                                                                            |
+| ---------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/__braid/frag/:id/*`  | the fragment's own endpoint: JS, CSS, images, data        | **Aggressively.** This is the bulk of your traffic. If the fragment's build hashes filenames, cache immutably; the fragment id is in the path, so two fragments' assets can never collide.                                                                                 |
+| `/__braid/realm/:id/*` | the realm stub each fragment's hidden iframe boots from   | **Aggressively.** Tiny, and marked `public, max-age=300, s-maxage=60, stale-while-revalidate=86400` with an ETag, so the edge follows a re-pin within a minute and a returning visitor's boot never waits on it. Caching it removes a round trip from every fragment boot. |
+| `/__braid/doc/:id/*`   | the fragment's document, prepared for the host page's DOM | **Follow the fragment's own headers.** It is the fragment team's call, and it often reflects a signed-in user.                                                                                                                                                             |
+| `/__braid/registry`    | the discovery listing, if enabled                         | **Never.** Already `no-store`; it depends on who asked.                                                                                                                                                                                                                    |
 
 None of these vary on a request header. A CDN that does nothing but key on the URL is correct.
 
@@ -98,7 +98,7 @@ fails to boot with a `realm-boot` error. Exempt the braid namespaces, or scope t
 
 **Nonces are handled for you.** The gateway injects inline markup into your document — the `<style>`
 that makes slots lay out as blocks, and the web-vitals collector if you turned it on. Under a strict
-policy the browser drops unstamped inline content *silently*, which is the worst failure shape
+policy the browser drops unstamped inline content _silently_, which is the worst failure shape
 there is: the page renders, the slot layout rule is missing, and nothing anywhere logs it.
 
 So the gateway reads the nonce off your shell's own `Content-Security-Policy` response header and
@@ -120,7 +120,7 @@ CDN is that place, and a fleet of interchangeable compute instances is not. If y
 Cloud Run, or anything else behind a load balancer, an in-process cache would be N caches with N
 independent hit rates and no way to purge them together. Leave caching at the edge.
 
-There is one thing the edge structurally cannot do for you. A CDN caches the *composed document*;
+There is one thing the edge structurally cannot do for you. A CDN caches the _composed document_;
 on a cache **miss** the gateway still makes one origin fetch per fragment on that page. A widget
 pierced into `/` and `/*` is fetched once per render, so fifty concurrent renders are fifty
 identical fetches of the same header panel.
@@ -128,14 +128,14 @@ identical fetches of the same header panel.
 The gateway collapses those, and does it **by default** — there is nothing to turn on:
 
 ```ts
-createGateway({ registry });                                  // coalescing on
-createGateway({ registry, coalesceFragmentFetches: false });  // off, everywhere
+createGateway({ registry }); // coalescing on
+createGateway({ registry, coalesceFragmentFetches: false }); // off, everywhere
 ```
 
 Default-on is defensible because of what it changes: how many times an identical fetch is made, and
 nothing else. No response is stored, reused later, or shared across identities.
 
-It is not a cache and does not become one. It only notices that a fetch it is *already making* is
+It is not a cache and does not become one. It only notices that a fetch it is _already making_ is
 the one another request wants, and lets both use the result; nothing outlives the request that
 started it. No TTL, no invalidation, no shared state, and no dependence on which instance a request
 lands on.
@@ -174,12 +174,12 @@ The gateway is a `fetch` handler. It takes a `Request`, may call `fetch` a few t
 streaming `Response`. There is nothing Node-specific in it — `node:` imports appear only in the
 optional Express/Node adapter — so it runs anywhere that gives you four things:
 
-| Needs | Used for |
-| --- | --- |
-| `Request` / `Response` / `fetch` | everything |
+| Needs                                            | Used for                                                |
+| ------------------------------------------------ | ------------------------------------------------------- |
+| `Request` / `Response` / `fetch`                 | everything                                              |
 | **Streaming response bodies** (`ReadableStream`) | piercing, and this is the one that eliminates platforms |
-| `URLPattern` | compiling `pierce` patterns |
-| `AbortSignal.timeout` | per-fragment timeout budgets |
+| `URLPattern`                                     | compiling `pierce` patterns                             |
+| `AbortSignal.timeout`                            | per-fragment timeout budgets                            |
 
 `URLPattern` is the portable one to watch: it is global from Node 23.8, and on a runtime without it
 the registry reports a single `urlpattern-unavailable` error rather than claiming every one of your
@@ -187,23 +187,23 @@ patterns is malformed.
 
 **Streaming is the requirement that decides most of this.** Piercing is a streaming transform: the
 shell streams out, and each fragment's HTML is spliced in as it arrives. On a platform that buffers
-the response before sending it, everything still *works* — you simply give up the reason to compose
+the response before sending it, everything still _works_ — you simply give up the reason to compose
 on the server at all, because time-to-first-byte goes back to waiting for the slowest fragment.
 
 ### The short version by platform
 
-| Platform | Verdict | Why |
-| --- | --- | --- |
-| **Cloudflare Workers** | Best fit | Full Web-standard runtime, streaming, `URLPattern`, and a native `HTMLRewriter` the transform layer is already written to accommodate |
-| Vercel Edge / Netlify Edge / Deno Deploy | Works well | V8 isolates or Deno; streaming and the whole API surface |
-| **AWS ECS / Fargate / App Runner** | Works well | Ordinary Node; the boring, predictable option |
-| Google Cloud Run | Works well | Ordinary Node, streaming supported, scales to zero |
-| Azure Container Apps / App Service | Works well | Ordinary Node |
-| AWS Lambda **Function URL** with response streaming | Works | Needs `awslambda.streamifyResponse`; regional rather than edge |
-| Fastly Compute | Probably works | Verify `URLPattern` in the JS runtime before committing |
-| **AWS Lambda@Edge** | Avoid | No response streaming, plus body-size caps — you keep composition and lose the reason for it |
-| **CloudFront Functions** | Cannot | No network access at all, ~1ms CPU budget. The gateway's job is fetching fragment endpoints |
-| Azure Front Door rules / Akamai ESI | Cannot | Rules engines, not runtimes — no place for your code to run |
+| Platform                                            | Verdict        | Why                                                                                                                                   |
+| --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloudflare Workers**                              | Best fit       | Full Web-standard runtime, streaming, `URLPattern`, and a native `HTMLRewriter` the transform layer is already written to accommodate |
+| Vercel Edge / Netlify Edge / Deno Deploy            | Works well     | V8 isolates or Deno; streaming and the whole API surface                                                                              |
+| **AWS ECS / Fargate / App Runner**                  | Works well     | Ordinary Node; the boring, predictable option                                                                                         |
+| Google Cloud Run                                    | Works well     | Ordinary Node, streaming supported, scales to zero                                                                                    |
+| Azure Container Apps / App Service                  | Works well     | Ordinary Node                                                                                                                         |
+| AWS Lambda **Function URL** with response streaming | Works          | Needs `awslambda.streamifyResponse`; regional rather than edge                                                                        |
+| Fastly Compute                                      | Probably works | Verify `URLPattern` in the JS runtime before committing                                                                               |
+| **AWS Lambda@Edge**                                 | Avoid          | No response streaming, plus body-size caps — you keep composition and lose the reason for it                                          |
+| **CloudFront Functions**                            | Cannot         | No network access at all, ~1ms CPU budget. The gateway's job is fetching fragment endpoints                                           |
+| Azure Front Door rules / Akamai ESI                 | Cannot         | Rules engines, not runtimes — no place for your code to run                                                                           |
 
 The two "cannot" rows are worth stating plainly because they are the ones people ask about first.
 CloudFront Functions and CDN rules engines are for rewriting headers and URLs. The gateway makes

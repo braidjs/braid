@@ -1,6 +1,7 @@
 # Step 7: Production Hardening, Service Workers & Monitoring
 
 In this final step, you will harden your composed architecture for real-world production deployment:
+
 1. Adding `@braidlabs/sw` to eliminate stale lazy-chunk 404s during rolling updates.
 2. Configuring error boundary and fallback UI states for upstream fragment outages.
 3. Mounting `@braidlabs/console` to monitor gateway and registry health.
@@ -66,10 +67,7 @@ Update `apps/billing/braid.manifest.json`:
 In the Angular Shell (`apps/shell/src/app/app.component.ts`), handle fallback states:
 
 ```html
-<braid-fragment
-  name="billing"
-  (failed)="onBillingFailed($event)"
->
+<braid-fragment name="billing" (failed)="onBillingFailed($event)">
   <!-- Slot content rendered if billing upstream is down or times out -->
   <div class="fallback-card" style="padding: 1.5rem; background: #fef2f2; border: 1px solid #f87171; border-radius: 8px;">
     <h3>Billing Service Temporarily Unavailable</h3>
@@ -99,10 +97,7 @@ export function AdminStatusPage() {
   return (
     <div style={{ padding: '2rem' }}>
       <h1>Gateway Registry Status</h1>
-      <RegistryConsole
-        api={{ baseUrl: 'http://localhost:3000' }}
-        theme="light"
-      />
+      <RegistryConsole api={{ baseUrl: 'http://localhost:3000' }} theme="light" />
     </div>
   );
 }

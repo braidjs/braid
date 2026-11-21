@@ -12,14 +12,14 @@ it in the host's JavaScript context, sharing a dependency graph.
 Braid composes at **runtime/DOM** level: the remote runs in its own realm with its own
 dependency graph, and only its DOM enters the host page.
 
-| | Module Federation | Braid |
-| --- | --- | --- |
-| Remote's dependencies | shared with the host, negotiated at runtime | isolated; two React majors cannot collide |
-| Version skew | singletons must agree, or you get subtle breakage | structurally impossible for dependencies |
-| Remote must be built for it | yes — `exposes`, shared config, matching bundler | no — compat takes an unmodified app |
-| Server-side rendering | hard; needs coordinated SSR | the gateway composes SSR output |
-| Cost | one JS context, smallest payload | one iframe realm per fragment |
-| Failure mode | a shared-dep mismatch breaks the host | a broken fragment leaves the page standing |
+|                             | Module Federation                                 | Braid                                      |
+| --------------------------- | ------------------------------------------------- | ------------------------------------------ |
+| Remote's dependencies       | shared with the host, negotiated at runtime       | isolated; two React majors cannot collide  |
+| Version skew                | singletons must agree, or you get subtle breakage | structurally impossible for dependencies   |
+| Remote must be built for it | yes — `exposes`, shared config, matching bundler  | no — compat takes an unmodified app        |
+| Server-side rendering       | hard; needs coordinated SSR                       | the gateway composes SSR output            |
+| Cost                        | one JS context, smallest payload                  | one iframe realm per fragment              |
+| Failure mode                | a shared-dep mismatch breaks the host             | a broken fragment leaves the page standing |
 
 **Keep federation** where remotes are small, share the host's framework version, and you want the
 smallest possible payload. **Move to Braid** where a remote has its own release train, its own
@@ -145,17 +145,17 @@ braid detangle — apps/shell
 
 ### The flags
 
-| Flag | What it does |
-| --- | --- |
-| *(none)* | report only |
-| `--shell <project>` | name the host, when the workspace has more than one |
-| `--diff` | also print the `braid.config.json` it would write |
-| `--write` | write `braid.config.json`. Refuses on a dirty git tree or a blocking finding |
-| `--gateway` | with `--write`, also scaffold the gateway app (new files only) |
-| `--shell-edits` | with `--write`, also apply the shell edits that can be applied safely |
-| `--force` | override those refusals, and replace an existing config |
-| `--remove-mf` | check whether the federation config can safely be stripped |
-| `--port <n>` | port for the composed app (default 4000) |
+| Flag                | What it does                                                                 |
+| ------------------- | ---------------------------------------------------------------------------- |
+| _(none)_            | report only                                                                  |
+| `--shell <project>` | name the host, when the workspace has more than one                          |
+| `--diff`            | also print the `braid.config.json` it would write                            |
+| `--write`           | write `braid.config.json`. Refuses on a dirty git tree or a blocking finding |
+| `--gateway`         | with `--write`, also scaffold the gateway app (new files only)               |
+| `--shell-edits`     | with `--write`, also apply the shell edits that can be applied safely        |
+| `--force`           | override those refusals, and replace an existing config                      |
+| `--remove-mf`       | check whether the federation config can safely be stripped                   |
+| `--port <n>`        | port for the composed app (default 4000)                                     |
 
 ### What it will and will not do for you
 
@@ -164,7 +164,7 @@ braid detangle — apps/shell
 **With `--gateway` it scaffolds the gateway app** — new files only, and it refuses an existing
 directory rather than merging into it.
 
-**With `--shell-edits` it applies the edits it can prove**: the Braid runtime import *and* its
+**With `--shell-edits` it applies the edits it can prove**: the Braid runtime import _and_ its
 `provideBraid()` call, `provideClientHydration()`, and the removal of routes that mount a remote.
 Providers are inserted inside `providers: [ … ]` at a character offset, so a one-line array stays
 valid; where no providers array can be found, the import and its call are refused **together**,
@@ -196,4 +196,3 @@ that `git checkout` undoes it, and that is only true when there was nothing else
 
 **`--remove-mf` refuses when another host still consumes the same remotes**, naming every one. That
 failure is not recoverable by re-running anything — the other host simply stops building.
-

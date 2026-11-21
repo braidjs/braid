@@ -26,18 +26,18 @@ npm install @braidlabs/skew @braidlabs/data
 ## The idea in one paragraph
 
 Most client caches live in memory: the app starts empty, fetches, and forgets everything on reload.
-This one lives in **IndexedDB**, so it starts warm — and because IndexedDB belongs to the *origin*
+This one lives in **IndexedDB**, so it starts warm — and because IndexedDB belongs to the _origin_
 rather than to your app, a second application on the same page reads what yours already fetched.
 Everything stored carries a **version envelope**, which is what lets an app that has not been
 redeployed yet still read a record written by one that has.
 
 Three pieces, and you only need the ones you use:
 
-| Piece | What it is |
-| --- | --- |
-| **Record store** | put/get/list of versioned records, partitioned by tenant |
-| **Query client** | reactive reads with a shared cache and tag invalidation |
-| **Outbox** | a durable queue of writes that have not reached the server yet |
+| Piece            | What it is                                                     |
+| ---------------- | -------------------------------------------------------------- |
+| **Record store** | put/get/list of versioned records, partitioned by tenant       |
+| **Query client** | reactive reads with a shared cache and tag invalidation        |
+| **Outbox**       | a durable queue of writes that have not reached the server yet |
 
 ---
 
@@ -57,7 +57,7 @@ export interface Note {
 export const NoteContract = versioned<Note>('note');
 ```
 
-`versioned<Note>('note')` says: *this shape is version 1 of a contract named `note`*. That name and
+`versioned<Note>('note')` says: _this shape is version 1 of a contract named `note`_. That name and
 number get written next to every record.
 
 **Why bother on day one?** Because a record you store today is read by the app you deploy in March.
@@ -75,7 +75,7 @@ import { NoteContract } from './contracts/note';
 
 const driver = indexedDbRecordDriver({
   database: 'my-app',
-  collections: ['notes'],   // every collection, declared up front
+  collections: ['notes'], // every collection, declared up front
 });
 
 export const notes = createRecordStore({
@@ -106,7 +106,7 @@ Two things to notice in that signature.
 to another, so `get('n1', 'tenant-a')` cannot see tenant B's `n1`. Use `'default'` if you have one
 tenant. Use something like `hash(userId, accountId)` when you have more.
 
-**`get` returns a wrapper, not your object.** `note.value` is your data; the rest is *provenance* —
+**`get` returns a wrapper, not your object.** `note.value` is your data; the rest is _provenance_ —
 covered in step 6, and the reason this store exists.
 
 ---
@@ -184,11 +184,11 @@ data.invalidate('note#n1');
 
 Tags are just strings you choose. A useful convention:
 
-| Tag | Meaning |
-| --- | --- |
-| `note#n1` | this one record |
-| `notes` | any list of notes |
-| `note#*` | wildcard: every `note#…` subscriber |
+| Tag       | Meaning                             |
+| --------- | ----------------------------------- |
+| `note#n1` | this one record                     |
+| `notes`   | any list of notes                   |
+| `note#*`  | wildcard: every `note#…` subscriber |
 
 Invalidate the narrowest tag that is true. `invalidate('notes')` after editing one note refetches
 every list on the page, which is correct but wasteful.
@@ -218,12 +218,12 @@ note.subscribe((state) => {
 
 What each field means:
 
-| Field | Meaning |
-| --- | --- |
-| `migratedFrom` | the record was older than your app, and was upgraded on the way out |
-| `derivedPaths` | fields a migration **guessed** rather than the server reporting them |
-| `downgradedFrom` | the record was **newer** than your app, and was reduced to fit |
-| `lossyPaths` | fields the reduction had to drop |
+| Field            | Meaning                                                              |
+| ---------------- | -------------------------------------------------------------------- |
+| `migratedFrom`   | the record was older than your app, and was upgraded on the way out  |
+| `derivedPaths`   | fields a migration **guessed** rather than the server reporting them |
+| `downgradedFrom` | the record was **newer** than your app, and was reduced to fit       |
+| `lossyPaths`     | fields the reduction had to drop                                     |
 
 **Why you should care.** If your app is a version behind and displays a field a migration invented,
 you are showing the user a guess as though it were a fact. `derivedPaths` is how you tell the
@@ -302,14 +302,14 @@ Queue the same change into two outboxes that differ in exactly one way:
 ```ts
 import { memoryRecordDriver } from '@braidlabs/data';
 
-const durable = createOutbox({ driver, owner: 'demo' });                       // IndexedDB
+const durable = createOutbox({ driver, owner: 'demo' }); // IndexedDB
 const volatile = createOutbox({ driver: memoryRecordDriver(), owner: 'demo' }); // memory
 
 await durable.enqueue({ mutationId: 'note.rename', input: { id: 'n1' } });
 await volatile.enqueue({ mutationId: 'note.rename', input: { id: 'n1' } });
 
-console.log((await durable.mine()).length);   // 1
-console.log((await volatile.mine()).length);  // 1
+console.log((await durable.mine()).length); // 1
+console.log((await volatile.mine()).length); // 1
 ```
 
 Now reload the page and check again:
@@ -340,7 +340,7 @@ import { provideSkewData } from '@braidlabs/angular-data';
 
 providers: [
   provideSkewData({
-    owner: 'notes-app',            // required when persisting
+    owner: 'notes-app', // required when persisting
     persistOutbox: true,
     database: 'my-app',
     collections: ['notes'],
@@ -382,7 +382,7 @@ import { createTenancy } from '@braidlabs/data';
 
 const tenancy = createTenancy({
   driver,
-  collections: ['entities', 'outbox'],   // everything a purge has to clear
+  collections: ['entities', 'outbox'], // everything a purge has to clear
 });
 
 await tenancy.signIn({ userId: 'u-1', actingAs: 'household-a' });
@@ -394,8 +394,8 @@ const client = createDataClient({
   outbox: createOutbox({ driver, owner: 'notes-app', partition: tenancy.partition }),
 });
 
-await tenancy.switchTenant('household-b');  // a pointer move; household-a stays warm on disk
-await tenancy.signOut();                    // every partition for u-1 is destroyed
+await tenancy.switchTenant('household-b'); // a pointer move; household-a stays warm on disk
+await tenancy.signOut(); // every partition for u-1 is destroyed
 ```
 
 Three behaviours that are the whole reason this is a component rather than a `let partition`:
@@ -432,8 +432,7 @@ const disconnect = client.connect({
   schema: Quote,
   source: (sink, signal) => {
     const socket = new WebSocket('wss://example.test/quotes');
-    socket.onmessage = (event) =>
-      void sink.receive({ key: `quote:${event.data.symbol}`, value: event.data });
+    socket.onmessage = (event) => void sink.receive({ key: `quote:${event.data.symbol}`, value: event.data });
     signal.addEventListener('abort', () => socket.close());
   },
 });

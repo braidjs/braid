@@ -17,6 +17,7 @@ npm install @braidlabs/contract @braidlabs/skew
 Standard code-shipped migration chains cannot migrate **backward** from a future version (`ahead` failure) because the older client was compiled before the new version was authored.
 
 `@braidlabs/contract` solves this:
+
 - **Reversible Declarative Operations:** Operations (`rename`, `move`, `wrap`, `hoist`, `map`, `default`, `drop`, `convert`, `const`) automatically imply their inverse migrations.
 - **Dynamic Downgrades:** When an older client receives data authored by a newer build, it fetches the contract document from the origin, learns the new migration steps, and downgrades the payload safely.
 
@@ -34,11 +35,7 @@ Standard code-shipped migration chains cannot migrate **backward** from a future
       "from": 1,
       "to": 2,
       "description": "split fullName into firstName and lastName; nest settings",
-      "ops": [
-        { "rename": { "from": "name", "to": "fullName" } },
-        { "move": { "from": "theme", "to": "preferences.theme" } },
-        { "default": { "path": "preferences.notifications", "value": true } }
-      ]
+      "ops": [{ "rename": { "from": "name", "to": "fullName" } }, { "move": { "from": "theme", "to": "preferences.theme" } }, { "default": { "path": "preferences.notifications", "value": true } }]
     }
   ],
   "schemas": {

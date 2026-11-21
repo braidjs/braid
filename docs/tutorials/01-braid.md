@@ -11,11 +11,13 @@ When a web application is small, life is simple. You have one repository, one fr
 Then the company grows.
 
 Three engineers become thirty. Thirty become three hundred across multiple autonomous squads:
+
 - **Team Checkout** owns the shopping cart and payment flows.
 - **Team Catalog** owns product listings and search filters.
 - **Team Account** owns user profiles, settings, and billing.
 
 Suddenly, the monolithic frontend application becomes an organizational bottleneck:
+
 1. **Deployment Lockstep (The "Release Train")**: Team Checkout cannot ship a one-line bug fix to payments without waiting for Team Account to finish a half-baked refactor in the same codebase.
 2. **Merge Conflicts & Deploy Queues**: A broken test from one team blocks everyone else from deploying. CI/CD test suites take 45 minutes to run.
 3. **Framework Lock-in**: If the monolithic app was built in Angular 15, no team can upgrade to Angular 19 or experiment with React without forcing the entire company to coordinate a multi-month rewrite.
@@ -54,25 +56,30 @@ Over the years, the web community has tried three major approaches to microfront
 
 ### The Deep Breakdown: Where Module Federation Breaks Down
 
-Module Federation revolutionized microfrontends by allowing a host application to dynamically import compiled JavaScript modules from remote servers at runtime. 
+Module Federation revolutionized microfrontends by allowing a host application to dynamically import compiled JavaScript modules from remote servers at runtime.
 
 In controlled environments with identical framework versions, it works well. But in enterprise environments with independent release cycles, it routinely runs into severe hazards:
 
 #### 1. Version Skew & Singleton Collisions
+
 Module Federation loads remote JavaScript directly into the **same window and memory heap** as the host. If the host uses React 18, Remote A needs React 19, and Remote B uses Vue 3, they fight over shared dependencies:
-- If you configure React as a *shared singleton*, the bundler chooses one version. If that version has breaking changes or missing APIs, the other remotes crash at runtime with cryptic errors like:
+
+- If you configure React as a _shared singleton_, the bundler chooses one version. If that version has breaking changes or missing APIs, the other remotes crash at runtime with cryptic errors like:
   ```
   TypeError: Cannot read properties of null (reading 'useMemo')
   ```
 - If you don't share singletons, multiple copies of libraries run in the same window, breaking libraries that rely on global symbols or `instanceof` checks (e.g. Redux, RxJS, or component libraries).
 
 #### 2. Uncontrolled Blast Radius
+
 Because all code executes in one JavaScript global scope, an unhandled exception or infinite loop in a low-priority widget (e.g. a feedback banner) can crash the entire page, taking down the mission-critical checkout flow with it.
 
 #### 3. Global CSS Pollution
+
 Unless every team adheres perfectly to strict CSS scoping or Shadow DOM, a stylesheet from one remote containing `.btn { padding: 0; }` or a CSS reset will silently mutate the appearance of every other team's buttons across the application.
 
 #### 4. The SSR Nightmare
+
 Server-Side Rendering (SSR) in Module Federation requires coordinated server topologies: the host server must fetch, parse, and execute remote JavaScript chunks in Node.js before rendering. When a remote server lags or fails, the host SSR process often hangs or errors out.
 
 ---
@@ -89,7 +96,7 @@ graph TD
         HostDOM["Host App DOM (Angular / React / HTML)"]
         Slot["Host Slot: &lt;braid-fragment name='billing'&gt;"]
         Shadow["#shadow-root (Declarative Shadow DOM)"]
-        
+
         HostDOM --> Slot
         Slot --> Shadow
         Shadow --> FragmentDOM["Rendered Fragment DOM (Clean & Scoped)"]
@@ -107,6 +114,7 @@ graph TD
 ![Braid demo application running Angular, React, and Web Component microfrontends on one page inside Shadow Roots and hidden iframe realms](assets/mfes.png)
 
 ### The Core Mental Model:
+
 1. **Isolated Execution Realms**: Each microfrontend runs inside its own lightweight, hidden `iframe` realm. It has its own `window`, its own `document`, its own framework instance (any version of React, Angular, Svelte, or vanilla JS), and its own memory heap.
 2. **Projected Shadow DOM**: The visual output of the microfrontend is projected into the host page inside a **Shadow Root** (`<template shadowrootmode="open">`).
 3. **The Compat Adapter & Document Facade**: The microfrontend doesn't know it's a microfrontend. It thinks it owns the entire page! Braid intercepts its standard DOM APIs (`document.getElementById`, event listeners, router navigations) via a transparent Proxy and connects them seamlessly to its shadow root in the host page.
@@ -138,30 +146,32 @@ export const registry = [
     endpoint: 'https://billing.internal',
     pierce: ['/billing', '/billing/*'], // URLs to server-render into the host
     timeoutMs: 1500,
-    fallback: 'placeholder',            // graceful degradation if billing fails
+    fallback: 'placeholder', // graceful degradation if billing fails
   },
   {
     id: 'catalog',
     endpoint: 'https://catalog.internal',
     pierce: ['/products/*'],
-  }
+  },
 ];
 ```
 
 #### The Three Clean Namespaces
+
 The gateway automatically exposes three isolated URL namespaces that cache effortlessly on standard CDNs on URL alone:
 
-| Namespace | What it serves | Purpose |
-| :--- | :--- | :--- |
-| `/__braid/frag/:id/*` | Assets & API data | Forwards requests directly to the fragment endpoint with the prefix stripped. |
-| `/__braid/realm/:id/*` | Realm boot stub | The minimal HTML stub that initializes the hidden iframe runtime. |
-| `/__braid/doc/:id/*` | Prepared DOM payload | The fragment's HTML, rewritten and sanitized for injection into the host DOM. |
+| Namespace              | What it serves       | Purpose                                                                       |
+| :--------------------- | :------------------- | :---------------------------------------------------------------------------- |
+| `/__braid/frag/:id/*`  | Assets & API data    | Forwards requests directly to the fragment endpoint with the prefix stripped. |
+| `/__braid/realm/:id/*` | Realm boot stub      | The minimal HTML stub that initializes the hidden iframe runtime.             |
+| `/__braid/doc/:id/*`   | Prepared DOM payload | The fragment's HTML, rewritten and sanitized for injection into the host DOM. |
 
 ---
 
 ### 2. Piercing: Instant First Paint without Waterfalls
 
 In typical microfrontend setups without server composition, the user experiences a **loading waterfall**:
+
 1. User requests `/billing`.
 2. Server sends empty host shell.
 3. Browser downloads host JavaScript and renders `<div id="billing-slot">`.
@@ -194,7 +204,9 @@ sequenceDiagram
 ```
 
 #### What Happens to Fragment HTML During Piercing?
+
 To ensure the fragment cannot break the host document during SSR:
+
 - `<html>`, `<head>`, and `<body>` are safely converted to `<braid-html>`, `<braid-head>`, and `<braid-body>`.
 - `<script>` tags are neutralized into `<script type="inert">` so they do not execute in the host window.
 - Asset URLs (images, CSS) are automatically rewritten to route through `/__braid/frag/:id/...`.
@@ -219,6 +231,7 @@ In your host application (Angular, React, or standard HTML), mounting a microfro
 ```
 
 #### How the Slot Boots in the Browser:
+
 1. **Adoption**: The `<braid-fragment>` slot checks if the gateway already pierced server-rendered HTML into its shadow root. If yes, it immediately adopts it without making a network request.
 2. **Fallback Fetch**: If the page was loaded client-side (SPA navigation), the slot fetches `/__braid/doc/billing/...`.
 3. **Realm Boot**: In the background, the slot spawns the hidden iframe realm (`/__braid/realm/billing/...`).
@@ -231,6 +244,7 @@ In your host application (Angular, React, or standard HTML), mounting a microfro
 One of the biggest friction points with microfrontends is forcing sub-teams to rewrite their code to match the host's architecture.
 
 With Braid's default **Compat Adapter**:
+
 - A sub-app is built, tested, and run as a **completely normal, standalone web application**.
 - Inside its realm, when the sub-app runs:
   ```ts
@@ -249,18 +263,18 @@ With Braid's default **Compat Adapter**:
 Microfrontends must feel like one cohesive app to the end user. Braid provides built-in mechanisms for coordination without tight coupling:
 
 #### Two-Way Routing Synchronization
+
 When you omit the `src` attribute from `<braid-fragment name="billing">`, the fragment is **bound** to the host:
+
 - When the user clicks a `<a href="/billing/invoices">` inside the billing fragment, it updates the browser's address bar.
 - When the user clicks the browser's Back/Forward buttons, the host location drives the fragment's internal router.
 
 #### Context & Props Passing
+
 You can pass reactive properties and environment data across the boundary:
 
 ```html
-<braid-fragment 
-  name="billing" 
-  [props]="{ customerId: activeUser.id, theme: 'dark' }">
-</braid-fragment>
+<braid-fragment name="billing" [props]="{ customerId: activeUser.id, theme: 'dark' }"> </braid-fragment>
 ```
 
 Braid safely passes this data across realms using structured cloning. A fragment reads it as `env.props`, which it has when it opts in with `defineFragment`; an unmodified app in compat mode does not see props, and uses a [page channel](../events-and-data.md#fragment-to-fragment-what-is-true-channel-state) instead.
@@ -321,9 +335,9 @@ const gateway = createGateway({
       endpoint: 'https://billing.internal.company.com',
       pierce: ['/billing', '/billing/*'],
       timeoutMs: 1200,
-      fallback: 'placeholder'
-    }
-  ]
+      fallback: 'placeholder',
+    },
+  ],
 });
 
 // Mount Braid gateway as the first middleware
@@ -343,7 +357,7 @@ In your host template (Angular, React, or plain HTML):
 <!-- host-shell/src/app/billing-view.component.html -->
 <div class="billing-container">
   <h1>Account & Invoicing</h1>
-  
+
   <!-- Braid fragment slot -->
   <braid-fragment name="billing"></braid-fragment>
 </div>
@@ -366,15 +380,15 @@ No special bundler plugins, no shared dependency negotiations, and no webpack co
 
 ## When to Choose What: Architectural Decision Matrix
 
-| Requirement | Monolith SPA | Module Federation | Braid |
-| :--- | :---: | :---: | :---: |
-| **Team Size** | 1–2 teams | 2–5 teams | 5+ autonomous squads |
-| **Framework Diversity** | Single framework | Must match or align closely | Any framework / legacy apps |
-| **Independent Deployments** | ❌ No | ⚠️ Yes (with version discipline) | ✅ Yes (complete isolation) |
-| **Dependency Version Skew** | N/A | ❌ Fragile / singleton collisions | ✅ Structurally immune |
-| **Fault Isolation (Blast Radius)** | ❌ None | ❌ None (shared JS context) | ✅ Complete (isolated realms) |
-| **Server-Side Rendering (SSR)** | ✅ Built-in | ❌ High complexity | ✅ Seamless via Piercing |
-| **Payload Size & Overhead** | Lowest | Low | Small overhead (iframe realm) |
+| Requirement                        |   Monolith SPA   |         Module Federation         |             Braid             |
+| :--------------------------------- | :--------------: | :-------------------------------: | :---------------------------: |
+| **Team Size**                      |    1–2 teams     |             2–5 teams             |     5+ autonomous squads      |
+| **Framework Diversity**            | Single framework |    Must match or align closely    |  Any framework / legacy apps  |
+| **Independent Deployments**        |      ❌ No       | ⚠️ Yes (with version discipline)  |  ✅ Yes (complete isolation)  |
+| **Dependency Version Skew**        |       N/A        | ❌ Fragile / singleton collisions |    ✅ Structurally immune     |
+| **Fault Isolation (Blast Radius)** |     ❌ None      |    ❌ None (shared JS context)    | ✅ Complete (isolated realms) |
+| **Server-Side Rendering (SSR)**    |   ✅ Built-in    |        ❌ High complexity         |   ✅ Seamless via Piercing    |
+| **Payload Size & Overhead**        |      Lowest      |                Low                | Small overhead (iframe realm) |
 
 ---
 

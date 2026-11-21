@@ -79,8 +79,8 @@ Not sure whether you want a channel, an intent, props or something else? The
 const bus = createEventBus({ consumer: 'blotter' });
 const selection = bus.channel<{ id: string }>('selection'); // scope: 'page' by default
 
-selection.broadcast({ id: 'row-1' });             // state: last value wins
-selection.subscribe((row) => highlight(row));      // called at once with the current value
+selection.broadcast({ id: 'row-1' }); // state: last value wins
+selection.subscribe((row) => highlight(row)); // called at once with the current value
 await selection.emit('row.opened', { id: 'row-1' }); // an event: not replayed
 ```
 
@@ -206,14 +206,15 @@ await withLock('flush-outbox:tenant_acme', async () => {
 
 ### `createRecordStore(options: RecordStoreOptions): RecordStore`
 
-| Method | Signature | Description |
-| :--- | :--- | :--- |
-| `put` | `(collection, key, schema, value, owner?) => Promise<void>` | Envelopes and stores a versioned record. |
-| `get` | `(collection, key, schema) => Promise<T \| null>` | Reads and projects record to target schema version. |
-| `delete` | `(collection, key) => Promise<void>` | Removes a record by key. |
-| `list` | `(collection, schema) => Promise<T[]>` | Lists all records in the partition, ordered by sequence. |
-| `clearPartition` | `(collection) => Promise<void>` | Clears all records for current partition (e.g. on logout). |
+| Method           | Signature                                                   | Description                                                |
+| :--------------- | :---------------------------------------------------------- | :--------------------------------------------------------- |
+| `put`            | `(collection, key, schema, value, owner?) => Promise<void>` | Envelopes and stores a versioned record.                   |
+| `get`            | `(collection, key, schema) => Promise<T \| null>`           | Reads and projects record to target schema version.        |
+| `delete`         | `(collection, key) => Promise<void>`                        | Removes a record by key.                                   |
+| `list`           | `(collection, schema) => Promise<T[]>`                      | Lists all records in the partition, ordered by sequence.   |
+| `clearPartition` | `(collection) => Promise<void>`                             | Clears all records for current partition (e.g. on logout). |
 
 ### Storage Drivers
+
 - `indexedDbRecordDriver(options: IndexedDbDriverOptions)`: Production persistent IndexedDB driver.
 - `memoryRecordDriver()`: In-memory driver for unit testing and ephemeral sessions.

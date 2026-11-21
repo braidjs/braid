@@ -1,0 +1,110 @@
+{
+  "id": "scr_trip",
+  "slug": "trip",
+  "title": "Your trip",
+  "root": {
+    "id": "root",
+    "type": "Column",
+    "v": 1,
+    "props": {
+      "align": "stretch"
+    },
+    "slots": {
+      "children": [
+        {
+          "id": "title",
+          "type": "Text",
+          "v": 1,
+          "props": {
+            "text": "# Lisbon, 3 nights"
+          }
+        },
+        {
+          "id": "fare",
+          "type": "Fare",
+          "v": 3,
+          "props": {
+            "label": "Return flight",
+            "amount": {
+              "value": 420,
+              "currency": "EUR"
+            },
+            "badge": "Best price"
+          }
+        },
+        {
+          "id": "sale",
+          "type": "Text",
+          "v": 1,
+          "props": {
+            "text": "Summer sale: 20% off hotels"
+          },
+          "visibility": {
+            "flag": "summer-sale"
+          }
+        },
+        {
+          "id": "flight",
+          "type": "FlightCard",
+          "v": 1,
+          "props": {
+            "flight": "TP 1351",
+            "status": "On time",
+            "gate": "B12"
+          },
+          "actions": {
+            "select": {
+              "type": "a2ui.event",
+              "v": 1,
+              "props": {
+                "name": "selectFlight",
+                "context": {
+                  "flight": "TP 1351"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "book",
+          "type": "Button",
+          "v": 1,
+          "props": {
+            "variant": "primary"
+          },
+          "slots": {
+            "child": [
+              {
+                "id": "bookLabel",
+                "type": "Text",
+                "v": 1,
+                "props": {
+                  "text": "Book this trip"
+                }
+              }
+            ]
+          },
+          "actions": {
+            "action": {
+              "type": "a2ui.event",
+              "v": 1,
+              "props": {
+                "name": "book",
+                "context": {
+                  "trip": {
+                    "@path": "/trip/id"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "data": {
+    "trip": {
+      "id": "LIS-3"
+    }
+  }
+}

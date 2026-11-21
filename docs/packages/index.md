@@ -59,16 +59,16 @@ flowchart TD
 
 These packages manage origin routing, streaming HTML composition, declarative shadow DOM projection, and JavaScript realm isolation.
 
-| Package | Description | Key APIs |
-| :--- | :--- | :--- |
-| [`@braidlabs/core`](./core.md) | Client runtime for mounting fragments in isolated realms and declarative shadow roots. | `<fragment-slot>`, `defineFragment`, `createEnv` |
-| [`@braidlabs/gateway`](./gateway.md) | Origin-front middleware for namespace routing, HTML piercing, and streaming SSR composition. | `createGateway`, `toNodeMiddleware` |
-| [`@braidlabs/cli`](./cli.md) | Local development server, manifest scaffolding, and multi-origin proxying. | `braid dev`, `braid init` |
-| [`@braidlabs/registry`](./registry.md) | Immutable manifest snapshots, content-addressed versioning, and validation. | `createRegistry`, `validateManifest` |
-| [`@braidlabs/sw`](./sw.md) | Service Worker partition handler for skew-safe chunk delivery across rolling deploys. | `createBraidFetchHandler`, `braidServiceWorker` |
-| [`@braidlabs/console`](./console.md) | Registry console: fragments, topology, a shell designer and history. Its `/workspace` entry runs a shell's workspace area: launching apps, per-user preferences, app settings and saved layouts. | `<RegistryConsole>`, `<ShellsPanel>`, `createWorkspace` |
-| [`@braidlabs/fdc3`](./fdc3.md) | FDC3 3.0 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory, with opt-in launching and an intent resolver. | `createBraidDesktopAgent`, `dialogResolver` |
-| [`@braidlabs/otel`](./otel.md) | OpenTelemetry for Braid: fragment fetches as spans in your existing traces, attributed per fragment. | `otelGatewayTelemetry` |
+| Package                                | Description                                                                                                                                                                                      | Key APIs                                                |
+| :------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| [`@braidlabs/core`](./core.md)         | Client runtime for mounting fragments in isolated realms and declarative shadow roots.                                                                                                           | `<fragment-slot>`, `defineFragment`, `createEnv`        |
+| [`@braidlabs/gateway`](./gateway.md)   | Origin-front middleware for namespace routing, HTML piercing, and streaming SSR composition.                                                                                                     | `createGateway`, `toNodeMiddleware`                     |
+| [`@braidlabs/cli`](./cli.md)           | Local development server, manifest scaffolding, and multi-origin proxying.                                                                                                                       | `braid dev`, `braid init`                               |
+| [`@braidlabs/registry`](./registry.md) | Immutable manifest snapshots, content-addressed versioning, and validation.                                                                                                                      | `createRegistry`, `validateManifest`                    |
+| [`@braidlabs/sw`](./sw.md)             | Service Worker partition handler for skew-safe chunk delivery across rolling deploys.                                                                                                            | `createBraidFetchHandler`, `braidServiceWorker`         |
+| [`@braidlabs/console`](./console.md)   | Registry console: fragments, topology, a shell designer and history. Its `/workspace` entry runs a shell's workspace area: launching apps, per-user preferences, app settings and saved layouts. | `<RegistryConsole>`, `<ShellsPanel>`, `createWorkspace` |
+| [`@braidlabs/fdc3`](./fdc3.md)         | FDC3 3.0 Desktop Agent: a `window.fdc3` for every fragment, resolved against the registry's App Directory, with opt-in launching and an intent resolver.                                         | `createBraidDesktopAgent`, `dialogResolver`             |
+| [`@braidlabs/otel`](./otel.md)         | OpenTelemetry for Braid: fragment fetches as spans in your existing traces, attributed per fragment.                                                                                             | `otelGatewayTelemetry`                                  |
 
 ---
 
@@ -76,10 +76,10 @@ These packages manage origin routing, streaming HTML composition, declarative sh
 
 Typed components and navigation connectors for popular UI frameworks.
 
-| Package | Description | Key APIs |
-| :--- | :--- | :--- |
-| [`@braidlabs/react`](./react.md) | React component for mounting Braid fragments, host-navigation wiring, and React contract fragments. | `<BraidFragment>`, `useBraidHostNavigation`, `defineReactFragment` |
-| [`@braidlabs/angular`](./angular.md) | Angular component and providers for embedding Braid fragments into Angular applications. | `<braid-fragment>`, `provideBraid()` |
+| Package                              | Description                                                                                         | Key APIs                                                           |
+| :----------------------------------- | :-------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------- |
+| [`@braidlabs/react`](./react.md)     | React component for mounting Braid fragments, host-navigation wiring, and React contract fragments. | `<BraidFragment>`, `useBraidHostNavigation`, `defineReactFragment` |
+| [`@braidlabs/angular`](./angular.md) | Angular component and providers for embedding Braid fragments into Angular applications.            | `<braid-fragment>`, `provideBraid()`                               |
 
 ---
 
@@ -87,14 +87,14 @@ Typed components and navigation connectors for popular UI frameworks.
 
 Framework-agnostic primitives for handling independent deployment lifecycles, schema evolution, and persistent client storage.
 
-| Package | Description | Key APIs |
-| :--- | :--- | :--- |
-| [`@braidlabs/skew`](./skew.md) | Primitives for versioned envelopes, bidirectional migration chains, and identity stamping. | `defineSchema`, `Envelope`, `stamp` |
-| [`@braidlabs/data`](./data.md) | Persistence-first local data layer with projection on read and durable mutation outbox. | `createRecordStore`, `withLock`, `indexedDbRecordDriver` |
-| [`@braidlabs/contract`](./contract.md) | Data-driven schema migrations resolved dynamically from declarative API contracts. | `resolveContract`, `migratePayload` |
-| [`@braidlabs/build`](./build.md) | Build-time identity stamping and manifest generation for stale-origin detection. | `skew-stamp`, `emitManifest` |
-| [`@braidlabs/studio`](./studio.md) | Interactive debugger for inspecting versioned payloads and testing migration chains. | `<SkewStudio>`, `diffPayloads` |
-| [`@braidlabs/sdui`](./sdui.md) | Server-driven UI for native apps: screens projected through component contracts to each binary's versions, with a fallback ladder, handshake, flags, rollouts and a state specification. | `projectScreen`, `resolveHandshake`, `diffScreens`, `sdui` |
+| Package                                | Description                                                                                                                                                                              | Key APIs                                                   |
+| :------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------- |
+| [`@braidlabs/skew`](./skew.md)         | Primitives for versioned envelopes, bidirectional migration chains, and identity stamping.                                                                                               | `defineSchema`, `Envelope`, `stamp`                        |
+| [`@braidlabs/data`](./data.md)         | Persistence-first local data layer with projection on read and durable mutation outbox.                                                                                                  | `createRecordStore`, `withLock`, `indexedDbRecordDriver`   |
+| [`@braidlabs/contract`](./contract.md) | Data-driven schema migrations resolved dynamically from declarative API contracts.                                                                                                       | `resolveContract`, `migratePayload`                        |
+| [`@braidlabs/build`](./build.md)       | Build-time identity stamping and manifest generation for stale-origin detection.                                                                                                         | `skew-stamp`, `emitManifest`                               |
+| [`@braidlabs/studio`](./studio.md)     | Interactive debugger for inspecting versioned payloads and testing migration chains.                                                                                                     | `<SkewStudio>`, `diffPayloads`                             |
+| [`@braidlabs/sdui`](./sdui.md)         | Server-driven UI for native apps: screens projected through component contracts to each binary's versions, with a fallback ladder, handshake, flags, rollouts and a state specification. | `projectScreen`, `resolveHandshake`, `diffScreens`, `sdui` |
 
 ---
 
@@ -102,9 +102,9 @@ Framework-agnostic primitives for handling independent deployment lifecycles, sc
 
 Specialized Angular integrations built directly on `@braidlabs/skew` and `@braidlabs/data`.
 
-| Package | Description | Key APIs |
-| :--- | :--- | :--- |
-| [`@braidlabs/angular-core`](./angular-core.md) | Signal-based versioned state and DI bindings for `@braidlabs/skew`. | `provideSkew()`, `versionedStore()` |
-| [`@braidlabs/angular-data`](./angular-data.md) | Normalized entity cache, tag invalidation, and durable mutation outbox. | `EntityStore`, `OutboxService`, `provideData()` |
-| [`@braidlabs/angular-router`](./angular-router.md) | Stale lazy chunk recovery interceptor with loop prevention and manifest probing. | `provideSkewRecovery()`, `SkewRecoveryService` |
-| [`@braidlabs/angular-workflow`](./angular-workflow.md) | Durable multi-step form workflows with versioned draft persistence across reloads. | `WorkflowRuntime`, `WorkflowDraft` |
+| Package                                                | Description                                                                        | Key APIs                                        |
+| :----------------------------------------------------- | :--------------------------------------------------------------------------------- | :---------------------------------------------- |
+| [`@braidlabs/angular-core`](./angular-core.md)         | Signal-based versioned state and DI bindings for `@braidlabs/skew`.                | `provideSkew()`, `versionedStore()`             |
+| [`@braidlabs/angular-data`](./angular-data.md)         | Normalized entity cache, tag invalidation, and durable mutation outbox.            | `EntityStore`, `OutboxService`, `provideData()` |
+| [`@braidlabs/angular-router`](./angular-router.md)     | Stale lazy chunk recovery interceptor with loop prevention and manifest probing.   | `provideSkewRecovery()`, `SkewRecoveryService`  |
+| [`@braidlabs/angular-workflow`](./angular-workflow.md) | Durable multi-step form workflows with versioned draft persistence across reloads. | `WorkflowRuntime`, `WorkflowDraft`              |

@@ -1,0 +1,1393 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Browser, Page } from 'playwright';
+import { launch } from './harness.js';
+import { build } from '../examples/concierge/build.mjs';
+import { start } from '../examples/concierge/server.mjs';
+import { A2UI_LIMITS, parseA2uiMessage } from '../libs/sdui/src/a2ui.js';
+import { DRAW_LIMITS } from '../libs/sdui/src/web/evaluate.js';
+import { layoutCost } from '../libs/sdui/src/web/layout.js';
+
+/**
+ * What an agent can make a page do by sending a lot: every stream the verification rounds used to
+ * freeze or crash the renderer, at the scale that did it, drawn by `<a2ui-surface>` in the
+ * Concierge example. Each message is within A2UI_LIMITS — the parser accepts it — so what stands
+ * between it and the page is the renderer's budgets. The page must stay responsive (no main-thread
+ * gap over BLOCK_MS), not crash, and tell the agent only a bounded number of times.
+ */
+
+const BLOCK_MS = 300;
+/** The most values one message may carry, less room for the rest of it: each case is as large as a message may be. */
+const V = A2UI_LIMITS.values - 1_000;
+/** Errors an element may POST however much is wrong: its burst, and what refills during a test. */
+const MAX_POSTS = 60;
+
+const tsconfig = new URL('../tsconfig.base.json', import.meta.url).pathname;
+let browser: Browser;
+let server: Awaited<ReturnType<typeof start>>;
+let dir: string;
+let catalogId: string;
+
+beforeAll(async () => {
+  browser = await launch();
+  dir = await mkdtemp(join(tmpdir(), 'a2ui-exhaustion-'));
+  await build({ out: dir, tsconfig });
+  server = await start({ dir });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(server.url);
+  await page.waitForSelector('html[data-ready]');
+  catalogId = (await page.evaluate(() =>
+    document.querySelector('#assistant')!.getAttribute('catalog-ids'),
+  ))!;
+  await context.close();
+}, 180_000);
+afterAll(async () => {
+  await browser?.close();
+  await server?.close();
+  if (dir) await rm(dir, { recursive: true, force: true });
+});
+
+/** A heartbeat every 5 ms: the longest gap between beats is the longest the page was frozen. */
+const INIT = `
+  window.__hb = { last: performance.now(), max: 0 };
+  setInterval(() => { const n = performance.now(); __hb.max = Math.max(__hb.max, n - __hb.last); __hb.last = n; }, 5);
+  window.__posts = 0;
+  const of = window.fetch;
+  window.fetch = function (input, init) { if (init && init.method === 'POST') __posts++; return of.apply(this, arguments); };
+  window.__renders = 0;
+  document.addEventListener('a2ui:render', () => { window.__renders++; window.__lastRender = performance.now(); });
+`;
+
+interface Outcome {
+  blockMs: number;
+  posts: number;
+  crashed: boolean;
+  errors: string[];
+  page: Page;
+  close: () => Promise<void>;
+}
+
+type Line = Record<string, unknown>;
+const H = 'h';
+const create = (extra: Record<string, unknown> = {}): Line => ({
+  version: '1.0',
+  createSurface: { surfaceId: H, catalogId, ...extra },
+});
+const update = (components: unknown[], surfaceId = H): Line => ({
+  version: '1.0',
+  updateComponents: { surfaceId, components },
+});
+const and = (values: unknown[]) => ({ '@call': 'and', args: { values } });
+const ROOT = `[data-a2ui-surface="${H}"] [data-a2ui-id="root"]`;
+/** 19 strings of 100,000 characters: 1.9 MB in 20 values. */
+const bigStrings = (): Record<string, string> =>
+  Object.fromEntries(
+    Array.from({ length: 19 }, (_, i) => [
+      `b${i}`,
+      String.fromCharCode(97 + i).repeat(100_000),
+    ]),
+  );
+/** An object of `n` keys. */
+const wide = (n: number): Record<string, number> =>
+  Object.fromEntries(
+    Array.from({ length: n }, (_, i) => [`k${i.toString(36)}`, 0]),
+  );
+
+/** Every line the parser accepts, and none longer than a line may be: the renderer's problem. */
+function withinLimits(
+  lines: readonly Line[],
+  malformedFrom = Infinity,
+): string {
+  const body = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+  lines.forEach((line, index) => {
+    const text = JSON.stringify(line);
+    expect(text.length).toBeLessThanOrEqual(A2UI_LIMITS.messageChars);
+    if (index < malformedFrom) parseA2uiMessage(JSON.parse(text));
+  });
+  return body;
+}
+
+/** Waits until the element has drawn nothing for `quietMs`, or `capMs` passes. */
+async function settle(
+  page: Page,
+  quietMs = 400,
+  capMs = 30_000,
+): Promise<void> {
+  await page
+    .waitForFunction(
+      (quiet) => {
+        const w = window as unknown as { __lastRender?: number };
+        return performance.now() - (w.__lastRender ?? 0) > quiet;
+      },
+      quietMs,
+      { timeout: capMs, polling: 100 },
+    )
+    .catch(() => undefined);
+}
+
+async function stream(
+  body: string | { url: string },
+  waitFor: string | ((page: Page) => Promise<unknown>),
+  timeoutMs = 60_000,
+  /** What the agent answers a POST with: JSON Lines. */
+  answer: (posted: string) => string = () => '',
+): Promise<Outcome> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const errors: string[] = [];
+  let crashed = false;
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('crash', () => {
+    crashed = true;
+  });
+  await context.addInitScript(INIT);
+  await context.route('**/*', (route) => {
+    const url = route.request().url();
+    if (url.includes('/agent/stream'))
+      return typeof body === 'string'
+        ? route.fulfill({
+            status: 200,
+            contentType: 'application/jsonl; charset=utf-8',
+            body,
+          })
+        : route.continue({ url: body.url });
+    if (url.includes('/agent/actions'))
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/jsonl',
+        body: answer(route.request().postData() ?? ''),
+      });
+    if (url.startsWith(server.url)) return route.continue();
+    return route.abort();
+  });
+  await page.goto(server.url);
+  const waiting =
+    typeof waitFor === 'string'
+      ? page.waitForSelector(waitFor, { state: 'attached', timeout: timeoutMs })
+      : waitFor(page);
+  await Promise.race([
+    waiting,
+    new Promise((resolve) => page.once('crash', resolve)),
+  ]);
+  if (!crashed) await settle(page);
+  const measured = crashed
+    ? { blockMs: Infinity, posts: Infinity }
+    : await page.evaluate(() => {
+        const w = window as unknown as {
+          __hb: { max: number; last: number };
+          __posts: number;
+        };
+        return {
+          blockMs: Math.round(
+            Math.max(w.__hb.max, performance.now() - w.__hb.last),
+          ),
+          posts: w.__posts,
+        };
+      });
+  return {
+    ...measured,
+    crashed,
+    errors,
+    page,
+    close: () => context.close().catch(() => undefined),
+  };
+}
+
+function responsive(outcome: Outcome, maxPosts = MAX_POSTS): void {
+  expect(outcome.crashed).toBe(false);
+  expect(outcome.errors).toEqual([]);
+  expect(outcome.blockMs).toBeLessThan(BLOCK_MS);
+  expect(outcome.posts).toBeLessThanOrEqual(maxPosts);
+}
+
+const ROTATING =
+  '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000';
+/** Text of each kind the text budget prices above its length, as a unit to repeat. */
+const EXPENSIVE: Record<string, string> = {
+  'bidi words': '\u05e9\u05dc\u05d5\u05dd hello ',
+  'alternating direction': 'a\u05d0',
+  'rotating scripts':
+    '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000',
+  'emoji families':
+    '\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 ',
+  Thai: '\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35 ',
+  Ethiopic: '\u1230\u120b\u121d ',
+  'combining marks': 'a\u0301\u0302\u0303',
+  Arabic: '\u0645\u0631\u062d\u0628\u0627 ',
+  // from the seventh audit: characters a browser draws from fonts of their own
+  'stars between letters': 'a\u2b50',
+  'watches between letters': 'a\u231a',
+  'box drawing between letters': 'a\u2500',
+  'maths between letters': 'a\u2200',
+  'Braille between letters': 'a\u2801',
+  'emoji-presented copyright signs': '\u00a9\ufe0fa',
+  keycaps: '1\ufe0f\u20e3a',
+  'C1 controls between letters': 'a\u0085',
+  'CJK punctuation between letters': 'a\u3001',
+  'brackets in Hebrew': '\u05d0(((((',
+  // from the seventh verification: characters with no glyph, or none in a text font
+  'ASCII controls between letters': 'a\u0001',
+  'soft hyphens between letters': 'a\u00ad',
+  'zero-width spaces between letters': 'a\u200b',
+  'line separators between letters': 'a\u2028',
+  'unassigned symbols between letters': 'a\u2427',
+  'spaced words': 'a ',
+  'unassigned Greek between letters': '\u03b1\u0378',
+  'Latin whose capitals are in other blocks': 'a\u0250',
+  // from the eighth verification: letters and punctuation a font may lack, in common blocks
+  'rare punctuation between letters': 'a\u205b',
+  'rare currency signs between letters': 'a\u20af',
+  'old Cyrillic signs between letters': '\u0430\u0482',
+  'polytonic Greek between letters': '\u03b1\u1fb7',
+  'Coptic in the Greek block between letters': '\u03b1\u03fc',
+  'archaic Latin between letters': 'a\u1e9c',
+  'Latin Extended-B between letters': 'a\u024f',
+};
+/** 19 Texts, each bound to 20,000 characters of `unit`: the seventh audit's shape. */
+const texts19 = (unit: string): Line[] => [
+  create({
+    dataModel: {
+      t: Object.fromEntries(
+        Array.from({ length: 19 }, (_, i) => [
+          `b${i}`,
+          unit.repeat(Math.ceil(20_000 / unit.length)).slice(0, 20_000),
+        ]),
+      ),
+    },
+  }),
+  update([
+    {
+      id: 'root',
+      component: 'Column',
+      children: Array.from({ length: 19 }, (_, i) => `t${i}`),
+    },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      id: `t${i}`,
+      component: 'Text',
+      text: { '@path': `/t/b${i}` },
+    })),
+  ]),
+];
+/** `unit` repeated until `copies` of it would cost just under a draw's text budget. */
+function atBudget(unit: string, copies = 1): string {
+  const room = (DRAW_LIMITS.chars * 0.98) / copies;
+  let low = 1;
+  let high = Math.floor(A2UI_LIMITS.string / unit.length);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (layoutCost(unit.repeat(middle)) <= room) low = middle;
+    else high = middle - 1;
+  }
+  return unit.repeat(low);
+}
+
+/** 19 TextFields, each labelled with a 99,000-character string from the data model. */
+const textFields = (label: (i: number) => string): Line[] => [
+  create({
+    dataModel: {
+      t: Object.fromEntries(
+        Array.from({ length: 19 }, (_, i) => [
+          `b${i}`,
+          label(i).slice(0, 99_000),
+        ]),
+      ),
+    },
+  }),
+  update([
+    {
+      id: 'root',
+      component: 'Column',
+      children: Array.from({ length: 19 }, (_, i) => `f${i}`),
+    },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      id: `f${i}`,
+      component: 'TextField',
+      label: { '@path': `/t/b${i}` },
+    })),
+  ]),
+];
+
+/** `n` drawings of one component under a Column root. */
+const drawn = (id: string, n: number): Line =>
+  update([{ id: 'root', component: 'Column', children: Array(n).fill(id) }]);
+/** `n` drawings of a template over a list of `n` items. */
+const templated = (
+  component: Record<string, unknown>,
+  n: number,
+  data = {},
+): Line[] => [
+  create({ dataModel: { items: Array(n).fill(0), ...data } }),
+  update([
+    {
+      id: 'root',
+      component: 'Column',
+      children: { path: '/items', componentId: 't' },
+    },
+    { id: 't', ...component },
+  ]),
+];
+
+const CASES: Record<string, () => Line[]> = {
+  // Work functions do on what they are given.
+  'formatDate with a 256-letter format, 255 calls x 78': () =>
+    templated(
+      {
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'formatDate',
+            args: { value: 0, format: { '@path': '/f' } },
+          }),
+        ),
+      },
+      78,
+      { f: 'yMdEHhmsa'.repeat(29).slice(0, 256) },
+    ),
+  'length of a 100,000-char string, 255 calls x 78': () =>
+    templated(
+      {
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'length',
+            args: { value: { '@path': '/s' }, min: 1 },
+          }),
+        ),
+      },
+      78,
+      { s: 'a'.repeat(100_000) },
+    ),
+  'email of a 100,000-char near-address, 255 calls x 78': () =>
+    templated(
+      {
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'email',
+            args: { value: { '@path': '/s' } },
+          }),
+        ),
+      },
+      78,
+      { s: 'a@' + 'b.'.repeat(49_998) + ' ' },
+    ),
+  'length of a bound 1.9 MB object, 255 calls x 40': () => [
+    create({ dataModel: { big: bigStrings() } }),
+    update([
+      {
+        id: 't',
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'length',
+            args: { value: { '@path': '/big' }, min: 0 },
+          }),
+        ),
+      },
+    ]),
+    drawn('t', 40),
+  ],
+  'email of a bound 1.9 MB object, 255 calls x 78': () => [
+    create({ dataModel: { big: bigStrings() } }),
+    update([
+      {
+        id: 't',
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'email',
+            args: { value: { '@path': '/big' } },
+          }),
+        ),
+      },
+    ]),
+    drawn('t', 78),
+  ],
+  'formatCurrency, 255 calls x 78': () => [
+    create(),
+    update([
+      {
+        id: 't',
+        component: 'Text',
+        text: and(
+          Array(255).fill({
+            '@call': 'formatCurrency',
+            args: { value: 1234.5, currency: 'EUR', decimals: 2 },
+          }),
+        ),
+      },
+    ]),
+    drawn('t', 78),
+  ],
+  // Values walked whole.
+  'Text bound to a 1.9 MB object x 9,990': () => [
+    create({ dataModel: { big: bigStrings() } }),
+    update([{ id: 't', component: 'Text', text: { '@path': '/big' } }]),
+    drawn('t', 9_990),
+  ],
+  'Text whose text is the widest literal object a message may carry, x 100':
+    () => [
+      create(),
+      update([{ id: 't', component: 'Text', text: wide(V) }]),
+      drawn('t', 100),
+    ],
+  'Text whose text is the longest literal list a message may carry, x 1,000':
+    () => [
+      create(),
+      update([{ id: 't', component: 'Text', text: Array(V).fill(0) }]),
+      drawn('t', 1_000),
+    ],
+  'Card prop bound to the widest object a message may carry, x 4,995': () => [
+    create({ dataModel: { w: wide(V) } }),
+    update([
+      { id: 'card', component: 'Card', child: 'l', blob: { '@path': '/w' } },
+      { id: 'l', component: 'Text', text: 'x' },
+    ]),
+    drawn('card', 4_995),
+  ],
+  'Card prop bound to the longest list a message may carry, x 4,990': () => [
+    create({ dataModel: { a: Array(V).fill(0) } }),
+    update([
+      { id: 'card', component: 'Card', child: 'l', blob: { '@path': '/a' } },
+      { id: 'l', component: 'Text', text: 'x' },
+    ]),
+    drawn('card', 4_990),
+  ],
+  'Card prop bound to a 1.9 MB object x 1,000': () => [
+    create({ dataModel: { big: bigStrings() } }),
+    update([
+      { id: 'card', component: 'Card', child: 'l', blob: { '@path': '/big' } },
+      { id: 'l', component: 'Text', text: 'x' },
+    ]),
+    drawn('card', 1_000),
+  ],
+  'Card with as many scalar props as a message may carry, x 1,000': () => [
+    create(),
+    update([
+      { id: 'card', component: 'Card', child: 'l', ...wide(V) },
+      { id: 'l', component: 'Text', text: 'x' },
+    ]),
+    drawn('card', 1_000),
+  ],
+  // Many small things in one component.
+  'Button with as many empty checks as a message may carry, x 1,000': () => [
+    create(),
+    update([
+      {
+        id: 'b',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+        '@checks': Array(V).fill({}),
+      },
+      { id: 'l', component: 'Text', text: 'go' },
+    ]),
+    drawn('b', 1_000),
+  ],
+  'Button with as many failing checks as a message may carry, x 10': () => [
+    create(),
+    update([
+      {
+        id: 'b',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+        '@checks': Array(Math.floor(V / 3)).fill({
+          condition: false,
+          message: 'm',
+        }),
+      },
+      { id: 'l', component: 'Text', text: 'go' },
+    ]),
+    drawn('b', 10),
+  ],
+  'Button with 19 failing checks of 100,000-char messages x 100': () => [
+    create(),
+    update([
+      {
+        id: 'b',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+        '@checks': Array(19).fill({
+          condition: false,
+          message: 'lorem ipsum '.repeat(8_334).slice(0, 100_000),
+        }),
+      },
+      { id: 'l', component: 'Text', text: 'go' },
+    ]),
+    drawn('b', 100),
+  ],
+  'Button whose checks each call a distinct unknown function': () => [
+    create(),
+    update([
+      {
+        id: 'root',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+        '@checks': Array.from({ length: Math.floor(V / 4) }, (_, i) => ({
+          condition: { '@call': `f${i}` },
+          message: 'm',
+        })),
+      },
+      { id: 'l', component: 'Text', text: 'go' },
+    ]),
+  ],
+  '900 relative paths of 2,047 chars in one Text x 370': () => [
+    create(),
+    update([
+      {
+        id: 't',
+        component: 'Text',
+        text: and(
+          Array(900).fill({ '@path': 'a/'.repeat(1024).slice(0, 2047) }),
+        ),
+      },
+    ]),
+    drawn('t', 370),
+  ],
+  'markdown of 20,000 chars of *a* x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/md' } }, 100, {
+      md: '*a*'.repeat(6_666),
+    }),
+  // Text priced by its length alone, where laying it out costs far more (the sixth audit).
+  'TextFields labelled with 99,000 characters alternating direction, x 19':
+    () => textFields((i) => 'a\u05d0'.repeat(49_500).slice(i)),
+  'TextFields labelled with bidi words, x 19': () =>
+    textFields(() => '\u05e9\u05dc\u05d5\u05dd hello '.repeat(9_000)),
+  'TextFields labelled with Arabic and Latin, x 19': () =>
+    textFields(() => '\u0645\u0631\u062d\u0628\u0627 abc '.repeat(9_900)),
+  'TextFields labelled with Thai, x 19': () =>
+    textFields(() =>
+      '\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u0e04\u0e23\u0e31\u0e1a'.repeat(
+        9_900,
+      ),
+    ),
+  'TextFields labelled with rotating scripts, x 19': () =>
+    textFields(() => 'a\u03b1\u0431\u05d0\u4e2d\u0905'.repeat(16_500)),
+  // As much as a draw's text budget allows, of each kind of text it prices: what layout costs
+  // the browser at the budget is what the budget is for.
+  ...Object.fromEntries(
+    Object.entries(EXPENSIVE).flatMap(([kind, unit]) => [
+      [
+        `one Text of ${kind}, just inside the text budget`,
+        () => [
+          create(),
+          update([{ id: 'root', component: 'Text', text: atBudget(unit) }]),
+        ],
+      ],
+      [
+        `98 Texts of ${kind} in a Row, together just inside the text budget`,
+        () => [
+          create({ dataModel: { w: atBudget(unit, 98) } }),
+          update([
+            { id: 'root', component: 'Row', children: Array(98).fill('t') },
+            { id: 't', component: 'Text', text: { '@path': '/w' } },
+          ]),
+        ],
+      ],
+      [
+        `1,000 Texts of ${kind}, together just inside the text budget`,
+        () =>
+          templated({ component: 'Text', text: { '@path': '/w' } }, 1_000, {
+            w: atBudget(unit, 1_000),
+          }),
+      ],
+    ]),
+  ),
+  // from the sixth verification: text in many fonts, and Braid fragments, each a realm
+  'Texts of 20,000 characters rotating through seventeen scripts, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000'
+        .repeat(1_200)
+        .slice(0, 20_000),
+    }),
+  'Texts of 20,000 characters of emoji families, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: '\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66'
+        .repeat(1_819)
+        .slice(0, 20_000),
+    }),
+  'Texts of 20,000 characters of combining marks, x 100': () =>
+    templated({ component: 'Text', text: { '@path': '/s' } }, 100, {
+      s: 'a\u0301\u0302\u0303'.repeat(5_000),
+    }),
+  'longText TextFields of 99,000 characters rotating scripts, x 20': () => [
+    create({
+      dataModel: {
+        v: '\u0905\u0985\u0b85\u0c05\u0c85\u0d05\u0d85\u0f40\u10d0\u0531\u1200\u13a0\ud55c\u3042\u4e2d\u1820\ua000'
+          .repeat(6_000)
+          .slice(0, 99_000),
+      },
+    }),
+    update([
+      { id: 'root', component: 'Column', children: Array(20).fill('f') },
+      {
+        id: 'f',
+        component: 'TextField',
+        label: 'x',
+        variant: 'longText',
+        value: { '@path': '/v' },
+      },
+    ]),
+  ],
+  'FlightCard (a registry fragment) x 1,000': () =>
+    templated(
+      { component: 'FlightCard', flight: 'TP 1351', status: 'x', gate: 'B12' },
+      1_000,
+    ),
+  'FlightCard (a registry fragment) x 4,990': () =>
+    templated(
+      { component: 'FlightCard', flight: 'TP 1351', status: 'x', gate: 'B12' },
+      4_990,
+    ),
+  ...Object.fromEntries(
+    [
+      'a\u2b50',
+      'a\u231a',
+      'a\u2b50 ',
+      'a\u2500',
+      'a\u2200',
+      '\u00a9\ufe0fa',
+      'a\u2801',
+      'a\u0085',
+      'a\u3001',
+      '1\ufe0f\u20e3a',
+      '\u05d0(((((',
+    ].map((unit) => [
+      `19 Texts of 20,000 characters of ${JSON.stringify(unit)}`,
+      () => texts19(unit),
+    ]),
+  ),
+  // text that reached the page without being priced (the seventh verification)
+  'a ChoicePicker option shown by its value: 99,000 characters rotating scripts, x 3':
+    () => [
+      create({ dataModel: { v: [] } }),
+      update([
+        { id: 'root', component: 'Column', children: ['p', 'p', 'p'] },
+        {
+          id: 'p',
+          component: 'ChoicePicker',
+          label: 'x',
+          value: { '@path': '/v' },
+          options: [
+            { label: '', value: ROTATING.repeat(6_000).slice(0, 99_000) },
+          ],
+        },
+      ]),
+    ],
+  'TextFields bound to a list of 20,000 characters rotating scripts, x 10':
+    () => [
+      create({ dataModel: { v: [ROTATING.repeat(1_200).slice(0, 20_000)] } }),
+      update([
+        { id: 'root', component: 'Column', children: Array(10).fill('f') },
+        {
+          id: 'f',
+          component: 'TextField',
+          label: 'x',
+          value: { '@path': '/v' },
+        },
+      ]),
+    ],
+  'FlightCards handed a list of 16,000 characters rotating scripts, x 32':
+    () => [
+      create({ dataModel: { f: [ROTATING.repeat(1_000).slice(0, 15_900)] } }),
+      update([
+        { id: 'root', component: 'Column', children: Array(32).fill('c') },
+        {
+          id: 'c',
+          component: 'FlightCard',
+          flight: { '@path': '/f' },
+          status: { '@path': '/f' },
+        },
+      ]),
+    ],
+  // from the eighth audit: elements that cost more than a component, and text the host's CSS cases
+  'video players x 4,999': () => [
+    create({ dataModel: { u: '/x.mp4' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('v') },
+      { id: 'v', component: 'Video', url: { '@path': '/u' } },
+    ]),
+    ...Array.from({ length: 5 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: { surfaceId: H, path: '/u', value: `/x${n}.mp4` },
+    })),
+  ],
+  'audio players x 4,999': () => [
+    create({ dataModel: { u: '/x.mp3' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('a') },
+      { id: 'a', component: 'AudioPlayer', url: { '@path': '/u' } },
+    ]),
+  ],
+  'date-time inputs x 4,999, their value changed 5 times': () => [
+    create({ dataModel: { v: '2026-01-01T10:00' } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(4_999).fill('d') },
+      {
+        id: 'd',
+        component: 'DateTimeInput',
+        enableTime: true,
+        value: { '@path': '/v' },
+      },
+    ]),
+    ...Array.from({ length: 5 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: {
+        surfaceId: H,
+        path: '/v',
+        value: `2026-01-0${n + 2}T10:00`,
+      },
+    })),
+  ],
+  'Fare badges the host upper-cases, x 98': () => [
+    create({ dataModel: { w: 'a\u0250'.repeat(2_500) } }),
+    update([
+      { id: 'root', component: 'Column', children: Array(98).fill('f') },
+      {
+        id: 'f',
+        component: 'Fare',
+        label: 'x',
+        amount: { value: 1, currency: 'USD' },
+        badge: { '@path': '/w' },
+      },
+    ]),
+  ],
+  'one Text of stars between letters, changed by 6 messages': () => [
+    create({ dataModel: { s: '' } }),
+    update([{ id: 'root', component: 'Text', text: { '@path': '/s' } }]),
+    ...Array.from({ length: 6 }, (_, n) => ({
+      version: '1.0',
+      updateDataModel: {
+        surfaceId: H,
+        path: '/s',
+        value: `${n}${'a\u2b50'.repeat(10_000)}`,
+      },
+    })),
+  ],
+  'a Text of 20,000 characters alternating direction': () => [
+    create(),
+    update([{ id: 'root', component: 'Text', text: 'a\u05d0'.repeat(10_000) }]),
+  ],
+  'a long TextField value alternating direction': () => [
+    create({ dataModel: { v: 'a\u05d0'.repeat(49_500) } }),
+    update([
+      {
+        id: 'root',
+        component: 'TextField',
+        label: 'note',
+        variant: 'longText',
+        value: { '@path': '/v' },
+      },
+    ]),
+  ],
+  'a Button labelled with 99,000 characters alternating direction': () => [
+    create({ dataModel: { v: 'a\u05d0'.repeat(49_500) } }),
+    update([
+      {
+        id: 'root',
+        component: 'Button',
+        child: 'l',
+        action: { event: { name: 'go' } },
+      },
+      { id: 'l', component: 'Text', text: { '@path': '/v' } },
+    ]),
+  ],
+  'Fare (a registry view) x 9,990': () => [
+    create(),
+    update([
+      {
+        id: 'f',
+        component: 'Fare',
+        label: 'x',
+        amount: { value: 12.5, currency: 'EUR' },
+      },
+    ]),
+    drawn('f', 9_990),
+  ],
+};
+
+describe('a hostile stream within A2UI_LIMITS leaves the page responsive', () => {
+  it.each(Object.keys(CASES))(
+    '%s',
+    async (name) => {
+      const outcome = await stream(withinLimits(CASES[name]!()), ROOT);
+      try {
+        responsive(outcome);
+      } finally {
+        await outcome.close();
+      }
+    },
+    120_000,
+  );
+
+  it('Tabs of 9,900 tabs under 62 nested Columns with long ids', async () => {
+    const sid = 'S'.repeat(512);
+    const ids = Array.from({ length: 62 }, (_, i) => `c${i}`.padEnd(128, 'x'));
+    const components: unknown[] = ids.map((id, i) => ({
+      id: i === 0 ? 'root' : id,
+      component: 'Column',
+      children: [i + 1 < ids.length ? ids[i + 1] : 'tabs'],
+    }));
+    components.push(
+      {
+        id: 'tabs',
+        component: 'Tabs',
+        tabs: Array.from({ length: 9_900 }, () => ({ title: 't', child: 'x' })),
+      },
+      { id: 'x', component: 'Text', text: 'x' },
+    );
+    const outcome = await stream(
+      withinLimits([
+        { version: '1.0', createSurface: { surfaceId: sid, catalogId } },
+        update(components, sid),
+      ]),
+      `[data-a2ui-surface="${sid}"] [data-a2ui-id="root"]`,
+    );
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('the widest data model a message may carry, then 1,000 one-number updates', async () => {
+    const N = 1_000;
+    const lines = [
+      create({ dataModel: wide(V) }),
+      update([{ id: 'root', component: 'Text', text: { '@path': '/x' } }]),
+      ...Array.from({ length: N }, (_, i) => ({
+        version: '1.0',
+        updateDataModel: { surfaceId: H, path: '/x', value: i },
+      })),
+    ];
+    const outcome = await stream(withinLimits(lines), (page) =>
+      page.waitForFunction(
+        ([selector, last]) =>
+          document.querySelector(selector)?.textContent === last,
+        [ROOT, String(N - 1)] as const,
+        { timeout: 60_000 },
+      ),
+    );
+    try {
+      responsive(outcome);
+      expect(await outcome.page.textContent(ROOT)).toBe(String(N - 1));
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('20,000 malformed lines: the agent hears a bounded number of errors', async () => {
+    const lines = [
+      create(),
+      update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ...Array.from({ length: 20_000 }, () => ({})),
+    ];
+    const outcome = await stream(withinLimits(lines, 2), ROOT);
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('1,000 refused updates to a sendDataModel surface holding 1.9 MB', async () => {
+    const lines = [
+      create({ sendDataModel: true, dataModel: { big: bigStrings() } }),
+      update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ...Array.from({ length: 1_000 }, () => update([])),
+    ];
+    const outcome = await stream(withinLimits(lines, 2), ROOT);
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('typing beside 150 Cards bound to the widest object a message may carry', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create({ dataModel: { w: wide(V), q: '' } }),
+        update([
+          {
+            id: 'card',
+            component: 'Card',
+            child: 'l',
+            blob: { '@path': '/w' },
+          },
+          { id: 'l', component: 'Text', text: 'x' },
+          {
+            id: 'tf',
+            component: 'TextField',
+            label: 'q',
+            value: { '@path': '/q' },
+          },
+        ]),
+        update([
+          {
+            id: 'root',
+            component: 'Column',
+            children: ['tf', ...Array(150).fill('card')],
+          },
+        ]),
+      ]),
+      ROOT,
+    );
+    try {
+      responsive(outcome);
+      const input = outcome.page.locator(
+        `[data-a2ui-surface="${H}"] [data-a2ui-id="tf"] input`,
+      );
+      await input.click();
+      for (const ch of 'abcdef') {
+        await outcome.page.evaluate(() => {
+          const w = window as unknown as {
+            __hb: { max: number; last: number };
+          };
+          w.__hb.max = 0;
+          w.__hb.last = performance.now();
+        });
+        await outcome.page.keyboard.type(ch);
+        await settle(outcome.page, 200, 5_000);
+        const block = await outcome.page.evaluate(
+          () => (window as unknown as { __hb: { max: number } }).__hb.max,
+        );
+        expect(block).toBeLessThan(BLOCK_MS);
+      }
+      expect(await input.inputValue()).toBe('abcdef');
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a draw that runs out of components stops putting things in the page', () => {
+  it('62 nested Columns, each naming 5,000 more children than a draw can draw, then updates', async () => {
+    const depth = 62;
+    const columns = Array.from({ length: depth }, (_, i) => ({
+      id: i === 0 ? 'root' : `c${i}`,
+      component: 'Column',
+      children: [
+        ...(i + 1 < depth ? [`c${i + 1}`] : []),
+        ...Array(5_000).fill('x'),
+      ],
+    }));
+    const lines: Line[] = [
+      create({ dataModel: { n: 0 } }),
+      update([{ id: 'x', component: 'Text', text: { '@path': '/n' } }]),
+      ...Array.from({ length: Math.ceil(depth / 9) }, (_, i) =>
+        update(columns.slice(i * 9, i * 9 + 9)),
+      ),
+      ...Array.from({ length: 10 }, (_, n) => ({
+        version: '1.0',
+        updateDataModel: { surfaceId: H, path: '/n', value: n + 1 },
+      })),
+    ];
+    const outcome = await stream(withinLimits(lines), ROOT);
+    try {
+      responsive(outcome);
+      const nodes = await outcome.page.evaluate(
+        () => document.querySelectorAll('#assistant *').length,
+      );
+      expect(nodes).toBeLessThan(20_000);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a host pushing a lot at once leaves the page responsive', () => {
+  it('one push() of a JSON array, as text, of 300 updates of the widest object a message may carry', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create(),
+        update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ]),
+      ROOT,
+    );
+    try {
+      await outcome.page.evaluate((V) => {
+        const value = Object.fromEntries(
+          Array.from({ length: V }, (_, i) => [`k${i}`, i]),
+        );
+        (window as unknown as { __text: string }).__text = JSON.stringify(
+          Array.from({ length: 300 }, (_, n) => ({
+            version: '1.0',
+            updateDataModel: { surfaceId: 'h', path: `/d${n % 4}`, value },
+          })),
+        );
+      }, V);
+      await outcome.page.evaluate(() => {
+        const w = window as unknown as {
+          __hb: { max: number; last: number };
+          __text: string;
+        };
+        w.__hb.max = 0;
+        w.__hb.last = performance.now();
+        (
+          document.querySelector('#assistant') as unknown as {
+            push(text: string): void;
+          }
+        ).push(w.__text);
+      });
+      await settle(outcome.page);
+      const block = await outcome.page.evaluate(() => {
+        const w = window as unknown as { __hb: { max: number; last: number } };
+        return Math.max(w.__hb.max, performance.now() - w.__hb.last);
+      });
+      expect(outcome.errors).toEqual([]);
+      expect(block).toBeLessThan(BLOCK_MS);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('one push() of 60 updates of the widest object a message may carry', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create(),
+        update([{ id: 'root', component: 'Text', text: 'x' }]),
+      ]),
+      ROOT,
+    );
+    try {
+      // the host builds its messages in a task of its own
+      await outcome.page.evaluate((V) => {
+        (window as unknown as { __messages: unknown[] }).__messages =
+          Array.from({ length: 60 }, (_, n) => ({
+            version: '1.0',
+            updateDataModel: {
+              surfaceId: 'h',
+              path: `/d${n}`,
+              value: Object.fromEntries(
+                Array.from({ length: V }, (_, i) => [`k${i}`, i]),
+              ),
+            },
+          }));
+      }, V);
+      // and pushes them in another: from here, what the page waits on is the renderer
+      await outcome.page.evaluate(() => {
+        const w = window as unknown as {
+          __hb: { max: number; last: number };
+          __messages: unknown[];
+        };
+        w.__hb.max = 0;
+        w.__hb.last = performance.now();
+        (
+          document.querySelector('#assistant') as unknown as {
+            push(messages: unknown[]): void;
+          }
+        ).push(w.__messages);
+      });
+      await settle(outcome.page);
+      const block = await outcome.page.evaluate(() => {
+        const w = window as unknown as { __hb: { max: number; last: number } };
+        return Math.max(w.__hb.max, performance.now() - w.__hb.last);
+      });
+      expect(outcome.errors).toEqual([]);
+      expect(block).toBeLessThan(BLOCK_MS);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('slow text does not come back', () => {
+  it('maths between letters at the budget, redrawn every 400 ms for 10 s', async () => {
+    const outcome = await stream(
+      withinLimits([
+        create({ dataModel: { w: atBudget('a\u2200', 98), n: 0 } }),
+        update([
+          {
+            id: 'root',
+            component: 'Column',
+            children: [...Array(98).fill('t'), 'n'],
+          },
+          { id: 't', component: 'Text', text: { '@path': '/w' } },
+          { id: 'n', component: 'Text', text: { '@path': '/n' } },
+        ]),
+      ]),
+      ROOT,
+    );
+    try {
+      const freezes = await outcome.page.evaluate(async () => {
+        const element = document.querySelector('#assistant') as unknown as {
+          push(messages: unknown[]): void;
+        };
+        let freezes = 0;
+        let last = performance.now();
+        const beat = setInterval(() => {
+          const now = performance.now();
+          if (now - last > 300) freezes++;
+          last = now;
+        }, 5);
+        for (let n = 1; n <= 25; n++) {
+          element.push([
+            {
+              version: '1.0',
+              updateDataModel: { surfaceId: 'h', path: '/n', value: n },
+            },
+          ]);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        clearInterval(beat);
+        return freezes;
+      });
+      expect(outcome.crashed).toBe(false);
+      expect(freezes).toBe(0);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a click sends a bounded message', () => {
+  it('a Button whose context names 1.9 M characters of control characters 150 times', async () => {
+    const lines: Line[] = [
+      create({ sendDataModel: true }),
+      ...Array.from({ length: 19 }, (_, i) => ({
+        version: '1.0',
+        updateDataModel: {
+          surfaceId: H,
+          path: `/s${i}`,
+          value: '\u0001'.repeat(100_000),
+        },
+      })),
+      update([
+        {
+          id: 'root',
+          component: 'Button',
+          child: 'l',
+          action: {
+            event: {
+              name: 'go',
+              context: Object.fromEntries(
+                Array.from({ length: 150 }, (_, i) => [
+                  `k${i}`,
+                  { '@path': `/s${i % 19}` },
+                ]),
+              ),
+            },
+          },
+        },
+        { id: 'l', component: 'Text', text: 'go' },
+      ]),
+    ];
+    let largest = 0;
+    const outcome = await stream(
+      withinLimits(lines),
+      ROOT,
+      60_000,
+      (posted) => {
+        largest = Math.max(largest, posted.length);
+        return (
+          JSON.stringify(
+            update([
+              { id: 'l', component: 'Text', text: `go ${posted.length}` },
+            ]),
+          ) + '\n'
+        );
+      },
+    );
+    try {
+      responsive(outcome);
+      for (let i = 0; i < 3; i++) {
+        await outcome.page.evaluate(() => {
+          const w = window as unknown as {
+            __hb: { max: number; last: number };
+          };
+          w.__hb.max = 0;
+          w.__hb.last = performance.now();
+        });
+        await outcome.page.click(`${ROOT} button`);
+        await settle(outcome.page);
+        const block = await outcome.page.evaluate(
+          () => (window as unknown as { __hb: { max: number } }).__hb.max,
+        );
+        expect(block).toBeLessThan(BLOCK_MS);
+      }
+      expect(largest).toBeLessThan(13_000_000);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('an agent cannot make the renderer talk without end', () => {
+  const call = (i: number) =>
+    JSON.stringify({
+      version: '1.0',
+      callRendererFunction: {
+        functionCallId: `c${i}`,
+        callFunction: {
+          '@call': 'formatString',
+          catalogId,
+          args: { value: 'x' },
+        },
+      },
+    });
+
+  it('20,000 renderer function calls are a bounded number of answers', async () => {
+    const body =
+      [create(), update([{ id: 'root', component: 'Text', text: 'x' }])]
+        .map((line) => JSON.stringify(line))
+        .join('\n') +
+      '\n' +
+      Array.from({ length: 20_000 }, (_, i) => call(i)).join('\n') +
+      '\n';
+    const outcome = await stream(body, ROOT);
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('an agent whose every answer asks for two more calls is held to a rate', async () => {
+    let n = 0;
+    const body =
+      [create(), update([{ id: 'root', component: 'Text', text: 'x' }])]
+        .map((line) => JSON.stringify(line))
+        .join('\n') +
+      '\n' +
+      call(n++) +
+      '\n';
+    const outcome = await stream(
+      body,
+      ROOT,
+      60_000,
+      () => `${call(n++)}\n${call(n++)}\n`,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      const posts = await outcome.page.evaluate(
+        () => (window as unknown as { __posts: number }).__posts,
+      );
+      // the burst, five a second after it, and the errors refusing the rest
+      expect(posts).toBeLessThan(120);
+      expect(outcome.crashed).toBe(false);
+      expect(outcome.errors).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+
+  it('errors on a sendDataModel surface holding 1.78 M characters do not write it out', async () => {
+    const lines: Line[] = [
+      create({ sendDataModel: true }),
+      update([
+        { id: 'root', component: 'Column', children: ['t'] },
+        { id: 't', component: 'Text', text: 'x' },
+      ]),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        version: '1.0',
+        updateDataModel: {
+          surfaceId: H,
+          path: `/d${i}`,
+          value: Array.from({ length: 3 }, () => '\u0001'.repeat(99_000)),
+        },
+      })),
+      update(
+        Array.from({ length: 10 }, (_, i) => ({
+          id: `u${i}`,
+          component: `Unknown${i}`,
+        })).concat([
+          {
+            id: 'root',
+            component: 'Column',
+            children: Array.from({ length: 10 }, (_, i) => `u${i}`),
+          } as never,
+        ]),
+      ),
+    ];
+    const outcome = await stream(withinLimits(lines), ROOT);
+    try {
+      responsive(outcome);
+    } finally {
+      await outcome.close();
+    }
+  }, 120_000);
+});
+
+describe('a stream cannot make a page hold more than the limits', () => {
+  it('3,000 updates of 1.9 MB each, at new paths: refused past the limit, the stream closed', async () => {
+    const COUNT = 3_000;
+    let sent = 0;
+    let closed = false;
+    const line = (i: number) =>
+      JSON.stringify({
+        version: '1.0',
+        updateDataModel: {
+          surfaceId: H,
+          path: `/d${i}`,
+          value: Object.fromEntries(
+            Array.from({ length: 19 }, (_, j) => [
+              `s${j}`,
+              (String(i).padStart(6, '0') + String.fromCharCode(97 + j))
+                .repeat(14_286)
+                .slice(0, 100_000),
+            ]),
+          ),
+        },
+      });
+    const agent = createServer(async (_request, response) => {
+      response.writeHead(200, {
+        'content-type': 'application/jsonl; charset=utf-8',
+      });
+      response.on('close', () => {
+        closed = true;
+      });
+      response.write(JSON.stringify(create()) + '\n');
+      response.write(
+        JSON.stringify(update([{ id: 'root', component: 'Text', text: 'x' }])) +
+          '\n',
+      );
+      for (let i = 0; i < COUNT && !response.destroyed; i++) {
+        sent = i + 1;
+        if (!response.write(line(i) + '\n'))
+          await new Promise((resolve) => response.once('drain', resolve));
+      }
+      response.end();
+    });
+    await new Promise<void>((resolve) => agent.listen(0, '127.0.0.1', resolve));
+    const port = (agent.address() as AddressInfo).port;
+    const outcome = await stream(
+      { url: `http://127.0.0.1:${port}/stream` },
+      ROOT,
+    );
+    try {
+      // until the agent finishes, or the renderer hangs up on it
+      for (
+        let t = 0;
+        t < 120 && !outcome.crashed && sent < COUNT && !closed;
+        t++
+      )
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      await settle(outcome.page);
+      expect(outcome.crashed).toBe(false);
+      const heap = await outcome.page.evaluate(
+        () =>
+          (performance as unknown as { memory?: { usedJSHeapSize: number } })
+            .memory?.usedJSHeapSize ?? 0,
+      );
+      expect(heap).toBeLessThan(400e6);
+      const blockMs = await outcome.page.evaluate(() => {
+        const w = window as unknown as { __hb: { max: number; last: number } };
+        return Math.max(w.__hb.max, performance.now() - w.__hb.last);
+      });
+      expect(blockMs).toBeLessThan(BLOCK_MS);
+      expect(sent).toBeLessThan(COUNT); // hung up on, not read to the end
+    } finally {
+      await outcome.close();
+      agent.close();
+    }
+  }, 180_000);
+});

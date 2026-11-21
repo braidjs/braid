@@ -14,25 +14,25 @@ fragment on a page in about ten minutes. Then take Tutorial 1.
 
 ## Composition
 
-| # | Tutorial | Package | You will build |
-| - | -------- | ------- | -------------- |
-| 1 | [Compose without colliding](01-braid.md) | `@braidlabs/core` · `@braidlabs/gateway` | An enterprise microfrontend shell with server-side piercing, isolated iframe realms, and zero-blast-radius degradation |
+| #   | Tutorial                                 | Package                                  | You will build                                                                                                         |
+| --- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1   | [Compose without colliding](01-braid.md) | `@braidlabs/core` · `@braidlabs/gateway` | An enterprise microfrontend shell with server-side piercing, isolated iframe realms, and zero-blast-radius degradation |
 
 ## Data versioning
 
-| # | Tutorial | Package | You will build |
-| - | -------- | ------- | -------------- |
-| 2 | [Version the data, not the deploy](02-skew.md) | `@braidlabs/skew` | A draft schema that survives three shape changes, migrates in both directions, and refuses dishonestly-shaped data |
-| 3 | [Give your build a name](03-build.md) | `@braidlabs/build` | A stamped build identity, a served manifest, a stale-origin detector, and generated frozen types |
+| #   | Tutorial                                       | Package            | You will build                                                                                                     |
+| --- | ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 2   | [Version the data, not the deploy](02-skew.md) | `@braidlabs/skew`  | A draft schema that survives three shape changes, migrates in both directions, and refuses dishonestly-shaped data |
+| 3   | [Give your build a name](03-build.md)          | `@braidlabs/build` | A stamped build identity, a served manifest, a stale-origin detector, and generated frozen types                   |
 
 ## State management
 
-| # | Tutorial | Package | You will build |
-| - | -------- | ------- | -------------- |
-| 4 | [Client storage that survives a reload](04-data-storage.md) | `@braidlabs/data` | A framework-free cache on IndexedDB — shared across apps, invalidated by tag, with a durable queue for writes the network never took |
-| 5 | [Versioned stores, the Angular way](05-angular-core.md) | `@braidlabs/angular-core` | A draft editor on DI + Signals with zero flicker and typed failure states |
-| 6 | [One graph, durable writes](06-angular-data.md) | `@braidlabs/angular-data` | A normalized fund list with optimistic, outbox-durable order submission |
-| 7 | [Build a storefront, end to end](07-storefront.md) | `@braidlabs/data` | The whole layer in build order — guest and customer partitions, a shared catalogue, orders that survive the network dropping, a shipping event pushed from the server, and a sign-out that destroys it all |
+| #   | Tutorial                                                    | Package                   | You will build                                                                                                                                                                                             |
+| --- | ----------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4   | [Client storage that survives a reload](04-data-storage.md) | `@braidlabs/data`         | A framework-free cache on IndexedDB — shared across apps, invalidated by tag, with a durable queue for writes the network never took                                                                       |
+| 5   | [Versioned stores, the Angular way](05-angular-core.md)     | `@braidlabs/angular-core` | A draft editor on DI + Signals with zero flicker and typed failure states                                                                                                                                  |
+| 6   | [One graph, durable writes](06-angular-data.md)             | `@braidlabs/angular-data` | A normalized fund list with optimistic, outbox-durable order submission                                                                                                                                    |
+| 7   | [Build a storefront, end to end](07-storefront.md)          | `@braidlabs/data`         | The whole layer in build order — guest and customer partitions, a shared catalogue, orders that survive the network dropping, a shipping event pushed from the server, and a sign-out that destroys it all |
 
 Tutorials 1–6 take one package at a time. **Tutorial 7 is the one to read if you
 want to build something end to end**: it uses the whole data layer in the order

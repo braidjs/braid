@@ -1,0 +1,424 @@
+{
+  "sduiCatalog": "1",
+  "a2ui": {
+    "catalogId": "https://concierge.example/a2ui/catalog.json",
+    "title": "Concierge",
+    "instructions": "Use Fare for prices, FlightCard for a flight. Everything else is the basic catalog."
+  },
+  "components": {
+    "Text": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Text",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Image": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Image",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Icon": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Icon",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Video": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Video",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "AudioPlayer": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.AudioPlayer",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Row": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Row",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "children": {}
+      }
+    },
+    "Column": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Column",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "children": {}
+      }
+    },
+    "List": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.List",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "children": {}
+      }
+    },
+    "Card": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Card",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "child": {
+          "max": 1
+        }
+      }
+    },
+    "Tabs": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Tabs",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "tabs": {
+          "a2ui": {
+            "list": "tabs",
+            "key": "child"
+          }
+        }
+      }
+    },
+    "Modal": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Modal",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "trigger": {
+          "max": 1
+        },
+        "content": {
+          "max": 1
+        }
+      }
+    },
+    "Divider": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Divider",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Button": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Button",
+        "current": 1,
+        "steps": []
+      },
+      "slots": {
+        "child": {
+          "max": 1
+        }
+      },
+      "a2ui": {
+        "actions": ["action"]
+      }
+    },
+    "TextField": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.TextField",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "CheckBox": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.CheckBox",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "ChoicePicker": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.ChoicePicker",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Slider": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Slider",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "DateTimeInput": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.DateTimeInput",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "Fare": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Fare",
+        "current": 3,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "the amount becomes an object that carries its currency",
+            "ops": [
+              {
+                "wrap": {
+                  "path": "amount",
+                  "key": "value",
+                  "also": {
+                    "currency": "USD"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "from": 2,
+            "to": 3,
+            "description": "an optional badge",
+            "ops": [
+              {
+                "default": {
+                  "path": "badge",
+                  "value": null
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              }
+            },
+            "required": ["label", "amount"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "object",
+                "properties": {
+                  "value": {},
+                  "currency": {}
+                }
+              }
+            },
+            "required": ["label", "amount"]
+          },
+          "3": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "object",
+                "properties": {
+                  "value": {},
+                  "currency": {}
+                }
+              },
+              "badge": {}
+            },
+            "required": ["label", "amount"]
+          }
+        }
+      },
+      "criticalPaths": ["amount.currency"],
+      "fallback": {
+        "type": "Text",
+        "props": {
+          "text": {
+            "$from": "label"
+          }
+        }
+      },
+      "editor": {
+        "label": "Fare",
+        "group": "Travel"
+      }
+    },
+    "Rating": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.Rating",
+        "current": 2,
+        "steps": [
+          {
+            "from": 1,
+            "to": 2,
+            "description": "stars become a number",
+            "ops": [
+              {
+                "convert": {
+                  "path": "stars",
+                  "to": "number"
+                }
+              }
+            ]
+          }
+        ],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "stars": {
+                "type": "string"
+              }
+            },
+            "required": ["stars"]
+          },
+          "2": {
+            "type": "object",
+            "properties": {
+              "stars": {}
+            },
+            "required": ["stars"]
+          }
+        }
+      },
+      "fallback": "omit"
+    },
+    "FlightCard": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.component.FlightCard",
+        "current": 1,
+        "steps": [],
+        "schemas": {
+          "1": {
+            "type": "object",
+            "properties": {
+              "flight": {},
+              "status": {},
+              "gate": {}
+            },
+            "required": ["flight"]
+          }
+        }
+      },
+      "a2ui": {
+        "actions": ["select"]
+      },
+      "fallback": {
+        "type": "Text",
+        "props": {
+          "text": {
+            "$from": "flight"
+          }
+        }
+      }
+    }
+  },
+  "actions": {
+    "a2ui.event": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.action.a2ui.event",
+        "current": 1,
+        "steps": []
+      }
+    },
+    "a2ui.call": {
+      "contract": {
+        "skewContract": "1",
+        "name": "sdui.action.a2ui.call",
+        "current": 1,
+        "steps": []
+      }
+    }
+  },
+  "functions": {
+    "required": {
+      "returnType": "validationResult"
+    },
+    "regex": {
+      "returnType": "validationResult"
+    },
+    "length": {
+      "returnType": "validationResult"
+    },
+    "numeric": {
+      "returnType": "validationResult"
+    },
+    "email": {
+      "returnType": "validationResult"
+    },
+    "formatString": {
+      "returnType": "string"
+    },
+    "formatNumber": {
+      "returnType": "string"
+    },
+    "formatCurrency": {
+      "returnType": "string"
+    },
+    "formatDate": {
+      "returnType": "string"
+    },
+    "pluralize": {
+      "returnType": "string"
+    },
+    "and": {
+      "returnType": "boolean"
+    },
+    "or": {
+      "returnType": "boolean"
+    },
+    "not": {
+      "returnType": "boolean"
+    },
+    "openUrl": {
+      "returnType": "void",
+      "requiresUserActivation": true
+    }
+  }
+}

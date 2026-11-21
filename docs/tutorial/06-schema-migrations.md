@@ -30,24 +30,19 @@ export interface InvoiceV2 {
 }
 
 // Versioned schema with pure forward migration function
-export const InvoiceSchema = versioned<InvoiceV1>('invoice')
-  .next<InvoiceV2>('promote string amount to numeric amount and currency', (v1) => {
-    const rawNumber = parseFloat(v1.amount.replace(/[^0-9.-]+/g, '')) || 0;
-    const currency = v1.amount.includes('€')
-      ? 'EUR'
-      : v1.amount.includes('£')
-      ? 'GBP'
-      : 'USD';
+export const InvoiceSchema = versioned<InvoiceV1>('invoice').next<InvoiceV2>('promote string amount to numeric amount and currency', (v1) => {
+  const rawNumber = parseFloat(v1.amount.replace(/[^0-9.-]+/g, '')) || 0;
+  const currency = v1.amount.includes('€') ? 'EUR' : v1.amount.includes('£') ? 'GBP' : 'USD';
 
-    return {
-      id: v1.id,
-      amount: rawNumber,
-      currency,
-      status: v1.status,
-      dueDate: v1.dueDate,
-      paidAt: v1.status === 'Paid' ? Date.now() : undefined,
-    };
-  });
+  return {
+    id: v1.id,
+    amount: rawNumber,
+    currency,
+    status: v1.status,
+    dueDate: v1.dueDate,
+    paidAt: v1.status === 'Paid' ? Date.now() : undefined,
+  };
+});
 ```
 
 ---
@@ -106,9 +101,7 @@ export function App() {
               <td style={{ padding: '8px' }}>{inv.amount.toFixed(2)}</td>
               <td style={{ padding: '8px' }}>{inv.currency}</td>
               <td style={{ padding: '8px' }}>{inv.status}</td>
-              <td style={{ padding: '8px' }}>
-                {inv.paidAt ? new Date(inv.paidAt).toLocaleTimeString() : '—'}
-              </td>
+              <td style={{ padding: '8px' }}>{inv.paidAt ? new Date(inv.paidAt).toLocaleTimeString() : '—'}</td>
               <td style={{ padding: '8px' }}>
                 {inv.status === 'Pending' && (
                   <button
