@@ -4,7 +4,7 @@ Welcome to the end-to-end Braid tutorial. In this guide, you will build a comple
 
 > [!TIP]
 > **Prefer an interactive sandbox?** You can run and explore the completed tutorial project directly in your browser with zero local setup:
-> 
+>
 > [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/braidjs/braid/tree/main/examples/acme-portal)
 
 ---
@@ -12,6 +12,7 @@ Welcome to the end-to-end Braid tutorial. In this guide, you will build a comple
 ## What You Will Build
 
 You will construct **Acme Cloud Portal**, an enterprise application composed of:
+
 1. **Host Shell:** An Angular application providing global navigation, user context, and layout.
 2. **Billing Remote:** An independently deployed React application responsible for invoices and checkout.
 3. **Braid Gateway:** A single-origin gateway performing parallel streaming, server-side piercing, and exact namespace routing.

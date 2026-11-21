@@ -4,7 +4,7 @@
 any bundled web app (Angular CLI, Vite, webpack — the tool is agnostic).
 
 Version skew is two parties disagreeing about which version of the world they
-are in. Tutorial 2 gave the *data* a version; this one gives the *deployment*
+are in. Tutorial 2 gave the _data_ a version; this one gives the _deployment_
 one — a stamped identity, a manifest the origin serves, and the comparison
 that tells a running tab whether reloading will fix things or loop forever.
 You will finish with `skew-contract gen`, which generates frozen types from a
@@ -26,8 +26,8 @@ npm install --save-dev @braidlabs/build
   "scripts": {
     "prebuild": "skew-stamp --out src/generated/build-id.ts",
     "build": "ng build",
-    "postbuild": "skew-stamp --manifest dist/app/browser/skew-manifest.json --assets dist/app/browser"
-  }
+    "postbuild": "skew-stamp --manifest dist/app/browser/skew-manifest.json --assets dist/app/browser",
+  },
 }
 ```
 
@@ -39,7 +39,7 @@ export const BUILD_ID = 'a3f9c21';
 export const BUILT_AT = '2026-08-10T21:14:23.380Z';
 ```
 
-Identity is a generated *file*, not a bundler `define`, on purpose: it works
+Identity is a generated _file_, not a bundler `define`, on purpose: it works
 identically under Angular CLI, Vite, webpack, and — more usefully — in tests
 and Node without running a build at all.
 
@@ -65,14 +65,14 @@ The **post** step writes a small JSON file into your deploy output:
   "buildId": "a3f9c21",
   "builtAt": "2026-08-10T21:14:23.380Z",
   "modules": {
-    "admin.routes": { "file": "chunk-XK2M9.js", "hash": "…" }
-  }
+    "admin.routes": { "file": "chunk-XK2M9.js", "hash": "…" },
+  },
 }
 ```
 
 Three fields, three jobs:
 
-- `buildId` — what the origin is *currently* serving.
+- `buildId` — what the origin is _currently_ serving.
 - `builtAt` — **mandatory, and the load-bearing one.** Timestamps are the
   only reliable way to order two builds, and ordering is the difference
   between "reloading will fix this" and "reloading will loop forever".
@@ -125,7 +125,7 @@ switch (status.kind) {
 `staleOrigin` is the case that justifies the whole exercise. Every naive
 `location.reload()`-on-error handler ever written turns a rollback into a
 bricked, infinitely-reloading tab; `builtAt` is what makes the loop
-*knowable* before you enter it. (The demo reproduces this live: scenario 2 in
+_knowable_ before you enter it. (The demo reproduces this live: scenario 2 in
 the README, "The origin is behind you".)
 
 The probe is also polite by default: answers are cached for ten seconds
@@ -146,7 +146,7 @@ if (moduleWasRemoved(probe.lastManifest()!, 'admin.routes')) {
 
 ## Step 4 — Generate frozen types from a contract
 
-Tutorial 2's hardest rule — *never edit a past version's interface* — is
+Tutorial 2's hardest rule — _never edit a past version's interface_ — is
 discipline, and discipline erodes. If you publish contract documents
 (`@braidlabs/contract`), the second CLI in this package retires the discipline
 by generating the frozen snapshots:
@@ -182,7 +182,9 @@ export interface PortfolioFundV2 {
 export type PortfolioFund = PortfolioFundV2;
 
 /** The contract document, verbatim. Feed it to `versionedFromContract`. */
-export const portfolioFundContract = { /* … */ } as const;
+export const portfolioFundContract = {
+  /* … */
+} as const;
 ```
 
 Add it beside your build step and regenerate instead of ever editing:
@@ -191,8 +193,8 @@ Add it beside your build step and regenerate instead of ever editing:
 {
   "scripts": {
     "contracts": "skew-contract gen --in contracts/portfolio-fund.json --out src/generated/portfolio-fund.contract.ts",
-    "prebuild": "npm run contracts && skew-stamp --out src/generated/build-id.ts"
-  }
+    "prebuild": "npm run contracts && skew-stamp --out src/generated/build-id.ts",
+  },
 }
 ```
 

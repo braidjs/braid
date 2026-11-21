@@ -17,6 +17,7 @@ npm install @braidlabs/angular-router @braidlabs/build
 When a deployment lands while users are active, navigating to a lazy-loaded route throws a `ChunkLoadError` because the older hashed chunk was removed from the CDN. Blindly calling `location.reload()` can cause infinite reload loops if CDN edges or service workers are out of sync.
 
 `@braidlabs/angular-router` solves this with:
+
 1. **Pre-Classification Retry:** Retries transient CDN misses with exponential backoff before failing.
 2. **Manifest Probing:** Probes `skew-manifest.json` on the origin to confirm that a newer deployment actually exists before reloading.
 3. **Target Navigation Preservation:** Uses `location.assign(targetUrl)` rather than `location.reload()` so the user lands on their intended destination route.

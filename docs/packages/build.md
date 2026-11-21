@@ -21,12 +21,14 @@ npx skew-stamp --out src/build-id.ts --manifest public/skew-manifest.json
 ```
 
 ### Generated `build-id.ts`
+
 ```ts
 export const BUILD_ID = '20260825.142033.a8f1e2c';
 export const BUILT_AT = 1787670033000;
 ```
 
 ### Emitted `skew-manifest.json`
+
 ```json
 {
   "buildId": "20260825.142033.a8f1e2c",

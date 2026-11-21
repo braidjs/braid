@@ -43,6 +43,7 @@ every event.
   error. Their `error.type` is `timeout`, `braid.circuit_open`, the status code, or the error's
   name. A 4xx is the fragment's answer, not a failed fetch, and is left unmarked. A method HTTP
   doesn't define is recorded as `_OTHER` and names the span `HTTP <fragment id>`.
+
 - **One trace through the fragment.** The fragment request carries the trace context of its
   own span, written by your registered propagator (W3C `traceparent`, B3, …), and never what the
   browser sent. An instrumented fragment backend joins the same trace.

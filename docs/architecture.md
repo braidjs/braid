@@ -12,18 +12,18 @@ graph TD
         A[skew-stamp] --> B(build-id.ts)
         A --> C(skew-manifest.json)
     end
-    
+
     subgraph AngularIntegration [Angular Integration]
         D["@braidlabs/angular-router"] -->|Recovers from Stale Chunks| E[SkewRecoveryService]
         F["@braidlabs/angular-data"] -->|Normalized Store & Outbox| G[EntityStore]
         H["@braidlabs/angular-workflow"] -->|Durable Flows| I[WorkflowRuntime]
     end
-    
+
     subgraph CorePrimitives [Core Primitives]
         J["@braidlabs/skew"]
         J -->|Versioned Envelopes| K[Schemas & Migrations]
     end
-    
+
     E -.->|Depends on| J
     G -.->|Depends on| J
     I -.->|Depends on| J
@@ -75,14 +75,14 @@ classDiagram
         +fetch()
         +data
     }
-    
+
     class EntityStore {
         <<@braidlabs/angular-data>>
         +selectAll()
         +select()
         +transaction()
     }
-    
+
     class OutboxService {
         <<Durable Mutations>>
         +queue()
@@ -97,14 +97,14 @@ classDiagram
         +read(envelope)
         +write(payload)
     }
-    
+
     class Draft {
         <<@braidlabs/angular-workflow>>
         +id: string
         +payload: unknown
         +schemaVersion: number
     }
-    
+
     EntityStore ..> Angular_httpResource : Replaces for shared identity
     EntityStore --> Schema : Normalizes versioned shapes
     OutboxService --> Schema : Queues versioned mutations
@@ -112,6 +112,6 @@ classDiagram
 ```
 
 **Narrative:**
-This entity diagram highlights Braid's structural answer to state and mutation management. Standard Angular primitives like `httpResource()` are excellent for simple reads, but they operate as per-call caches without shared identity or durable write capabilities. `@braidlabs/angular-data` replaces this gap with a normalized `EntityStore` and a durable `OutboxService`. 
+This entity diagram highlights Braid's structural answer to state and mutation management. Standard Angular primitives like `httpResource()` are excellent for simple reads, but they operate as per-call caches without shared identity or durable write capabilities. `@braidlabs/angular-data` replaces this gap with a normalized `EntityStore` and a durable `OutboxService`.
 
 Crucially, all of these state containers tie into `@braidlabs/skew`'s `Schema` concept. This ensures that data at rest (such as a parked `Draft` or a queued `OutboxService` mutation) is safely stamped with the `schemaVersion` it was authored under. When a newer build attempts to process an older draft or outbox entry, the `Schema` automatically migrates the payload forward, or fails predictably if the payload was written by a build from the future, preventing silent data corruption.

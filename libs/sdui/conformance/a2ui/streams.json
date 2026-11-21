@@ -1,0 +1,713 @@
+{
+  "description": "A2UI v1.0 streams this package refuses, each with the error the last message gets, and streams it accepts that look as if they might be refused. Messages are applied in order: parse, then apply to the surfaces, then convert the surface to the SDUI model.",
+  "refused": [
+    {
+      "name": "an update before its surface exists",
+      "messages": [
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "hi"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "INTEGRITY_ERROR",
+        "path": "/surfaceId"
+      }
+    },
+    {
+      "name": "a data model update before its surface exists",
+      "messages": [
+        {
+          "version": "1.0",
+          "updateDataModel": {
+            "surfaceId": "s",
+            "value": {}
+          }
+        }
+      ],
+      "error": {
+        "code": "INTEGRITY_ERROR",
+        "path": "/surfaceId"
+      }
+    },
+    {
+      "name": "deleting a surface that does not exist",
+      "messages": [
+        {
+          "version": "1.0",
+          "deleteSurface": {
+            "surfaceId": "s"
+          }
+        }
+      ],
+      "error": {
+        "code": "INTEGRITY_ERROR",
+        "path": "/surfaceId"
+      }
+    },
+    {
+      "name": "creating a surface twice",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        }
+      ],
+      "error": {
+        "code": "INTEGRITY_ERROR",
+        "path": "/surfaceId"
+      }
+    },
+    {
+      "name": "an unknown @ key on a component",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "hi",
+                "@style": {
+                  "color": "red"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/0/@style"
+      }
+    },
+    {
+      "name": "an unknown @ key inside a value",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": {
+                  "@eval": "1+1"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/0/text/@eval"
+      }
+    },
+    {
+      "name": "a binding with extra keys",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": {
+                  "@path": "/a",
+                  "fallback": "x"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/0/text"
+      }
+    },
+    {
+      "name": "theme on createSurface, removed in v1.0",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+            "theme": {
+              "primaryColor": "#f00"
+            }
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/theme"
+      }
+    },
+    {
+      "name": "a v0.9 message",
+      "messages": [
+        {
+          "version": "0.9",
+          "createSurface": {
+            "surfaceId": "s"
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/version"
+      }
+    },
+    {
+      "name": "a message with two kinds",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s"
+          },
+          "deleteSurface": {
+            "surfaceId": "s"
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": ""
+      }
+    },
+    {
+      "name": "__proto__ as a prop",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "x",
+                "__proto__": {
+                  "polluted": true
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/0/__proto__"
+      }
+    },
+    {
+      "name": "constructor inside the data model",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+            "dataModel": {
+              "user": {
+                "constructor": {
+                  "prototype": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/dataModel/user/constructor"
+      }
+    },
+    {
+      "name": "a pointer through __proto__",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateDataModel": {
+            "surfaceId": "s",
+            "path": "/__proto__/polluted",
+            "value": true
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/path"
+      }
+    },
+    {
+      "name": "Surface sent as a component",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Surface",
+                "child": "x"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/0/component"
+      }
+    },
+    {
+      "name": "updateDataModel without a value",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateDataModel": {
+            "surfaceId": "s",
+            "path": "/a"
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/value"
+      }
+    },
+    {
+      "name": "a value nested past the limit",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+            "dataModel": {
+              "a": {
+                "a": {
+                  "a": {
+                    "a": {
+                      "a": {
+                        "a": {
+                          "a": {
+                            "a": {
+                              "a": {
+                                "a": {
+                                  "a": {
+                                    "a": {
+                                      "a": {
+                                        "a": {
+                                          "a": {
+                                            "a": {
+                                              "a": {
+                                                "a": {
+                                                  "a": {
+                                                    "a": {
+                                                      "a": {
+                                                        "a": {
+                                                          "a": {
+                                                            "a": {
+                                                              "a": {
+                                                                "a": {
+                                                                  "a": {
+                                                                    "a": {
+                                                                      "a": {
+                                                                        "a": {
+                                                                          "a": {
+                                                                            "a": {
+                                                                              "a": {
+                                                                                "a": {
+                                                                                  "a": {
+                                                                                    "a": {
+                                                                                      "a": {
+                                                                                        "a": {
+                                                                                          "a": {
+                                                                                            "a": {
+                                                                                              "a": "x"
+                                                                                            }
+                                                                                          }
+                                                                                        }
+                                                                                      }
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED"
+      }
+    },
+    {
+      "name": "one id twice in one message",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "hi"
+              },
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "again"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/1/id"
+      }
+    },
+    {
+      "name": "a cycle of components",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Column",
+                "children": ["a"]
+              },
+              {
+                "id": "a",
+                "component": "Card",
+                "child": "root"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/a"
+      }
+    },
+    {
+      "name": "a component that is its own child",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Card",
+                "child": "root"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/root"
+      }
+    },
+    {
+      "name": "an action that is not an action",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Button",
+                "child": "t",
+                "action": {
+                  "run": "alert(1)"
+                }
+              },
+              {
+                "id": "t",
+                "component": "Text",
+                "text": "hi"
+              }
+            ]
+          }
+        }
+      ],
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "path": "/components/root"
+      }
+    }
+  ],
+  "accepted": [
+    {
+      "name": "a child that has not arrived is a placeholder, not an error",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Column",
+                "children": ["a", "later"]
+              },
+              {
+                "id": "a",
+                "component": "Text",
+                "text": "hi"
+              }
+            ]
+          }
+        }
+      ],
+      "dangling": ["later"],
+      "orphans": []
+    },
+    {
+      "name": "a component nothing references yet is kept, and reported",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "hi"
+              },
+              {
+                "id": "spare",
+                "component": "Text",
+                "text": "hi"
+              }
+            ]
+          }
+        }
+      ],
+      "dangling": [],
+      "orphans": ["spare"]
+    },
+    {
+      "name": "no root yet: nothing to draw, nothing wrong",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "a",
+                "component": "Text",
+                "text": "hi"
+              }
+            ]
+          }
+        }
+      ],
+      "dangling": [],
+      "orphans": ["a"],
+      "screen": null
+    },
+    {
+      "name": "an escaped @@ key is a literal prop",
+      "messages": [
+        {
+          "version": "1.0",
+          "createSurface": {
+            "surfaceId": "s",
+            "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+          }
+        },
+        {
+          "version": "1.0",
+          "updateComponents": {
+            "surfaceId": "s",
+            "components": [
+              {
+                "id": "root",
+                "component": "Text",
+                "text": "x",
+                "@@type": "literal"
+              }
+            ]
+          }
+        }
+      ],
+      "dangling": [],
+      "orphans": []
+    }
+  ]
+}

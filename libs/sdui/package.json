@@ -23,6 +23,14 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
     },
+    "./a2ui": {
+      "types": "./src/a2ui.d.ts",
+      "default": "./src/a2ui.js"
+    },
+    "./web": {
+      "types": "./src/web.d.ts",
+      "default": "./src/web.js"
+    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {

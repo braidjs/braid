@@ -44,12 +44,12 @@ problem class is gone. This plan targets the classes.
 
 **Invariants (safety).**
 
-- *No orphan:* no partition holds data for a user while no partition record names it, outside an
+- _No orphan:_ no partition holds data for a user while no partition record names it, outside an
   in-progress purge that holds the lock.
-- *No foreign replay:* every sent mutation is sent under the session of the principal that
+- _No foreign replay:_ every sent mutation is sent under the session of the principal that
   queued it.
-- *At most once:* no queued entry is sent twice.
-- *No resurrection:* after a clear completes, no cache entry written by a refresh that started
+- _At most once:_ no queued entry is sent twice.
+- _No resurrection:_ after a clear completes, no cache entry written by a refresh that started
   before it exists.
 
 **Liveness, under weak fairness.**
@@ -157,6 +157,7 @@ to a fresh field, wrap with no `also`, and convert integer→string with no `via
 `rename` the wrong way fails both round-trip laws.
 
 Not yet covered:
+
 - the "lossy steps drop exactly the fields they name" law;
 - a read chained through v2;
 - prototype safety, which waits for the DS-3 fix.

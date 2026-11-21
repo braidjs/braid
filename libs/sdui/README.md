@@ -33,6 +33,20 @@ Also here, all pure and dependency-free beyond `@braidlabs/skew` and `@braidlabs
 | `checkCatalog`, `createClientManifest`                                                 | The append-only rule, and what one binary can render                                |
 | `sdui` (bin)                                                                           | `catalog check`, `catalog id`, `manifest gen`, `manifest fingerprint`               |
 
+## A2UI
+
+Two subpaths make [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) first-class:
+
+- **`@braidlabs/sdui/a2ui`** — A2UI as a wire format of the same model. Agents author against a
+  catalog's own id; each renderer names an id derived from what it can draw; `createA2uiProjector`
+  sends each one the agent's surface at its own versions, and `sdui a2ui prerender` writes every
+  variant ahead of time, as A2UI and as HTML.
+- **`@braidlabs/sdui/web`** — `<a2ui-surface>`, a renderer that draws into the host's own page in
+  light DOM, where any component type can be the host's own custom element or a Braid fragment
+  from another team.
+
+`examples/concierge` shows both.
+
 `conformance/` holds the specification as data — the vectors a client in any language is checked
 against.
 

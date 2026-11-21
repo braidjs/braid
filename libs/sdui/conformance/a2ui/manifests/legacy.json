@@ -1,0 +1,49 @@
+{
+  "sduiManifest": "1",
+  "protocol": [1, 1],
+  "app": "concierge-web",
+  "platform": "web",
+  "version": "1.9.0",
+  "components": {
+    "Text": 1,
+    "Image": 1,
+    "Icon": 1,
+    "Video": 1,
+    "AudioPlayer": 1,
+    "Row": 1,
+    "Column": 1,
+    "List": 1,
+    "Card": 1,
+    "Tabs": 1,
+    "Modal": 1,
+    "Divider": 1,
+    "Button": 1,
+    "TextField": 1,
+    "CheckBox": 1,
+    "ChoicePicker": 1,
+    "Slider": 1,
+    "DateTimeInput": 1,
+    "Fare": 1,
+    "Rating": 1
+  },
+  "actions": {
+    "a2ui.call": 1,
+    "a2ui.event": 1
+  },
+  "functions": [
+    "and",
+    "email",
+    "formatCurrency",
+    "formatDate",
+    "formatNumber",
+    "formatString",
+    "length",
+    "not",
+    "numeric",
+    "openUrl",
+    "or",
+    "pluralize",
+    "regex",
+    "required"
+  ]
+}

@@ -16,12 +16,12 @@ npm install @braidlabs/registry
 
 Because the registry is on the critical request path during server-side piercing, querying a live relational database on every document load can introduce latency and single-point-of-failure risks.
 
-| Feature | Benefit |
-| :--- | :--- |
-| **Cacheable Forever** | A snapshot hash identifies a byte-identical manifest document that never mutates. |
-| **Instant Rollback** | Rollback is an atomic pointer move to a previous snapshot ID with zero database migrations. |
-| **Survives Store Outages** | The gateway memoizes the pinned snapshot on boot; store outages never disrupt live traffic. |
-| **Deterministic Diffs** | Reviewable diff analysis between two snapshot hashes before promoting changes to production. |
+| Feature                    | Benefit                                                                                      |
+| :------------------------- | :------------------------------------------------------------------------------------------- |
+| **Cacheable Forever**      | A snapshot hash identifies a byte-identical manifest document that never mutates.            |
+| **Instant Rollback**       | Rollback is an atomic pointer move to a previous snapshot ID with zero database migrations.  |
+| **Survives Store Outages** | The gateway memoizes the pinned snapshot on boot; store outages never disrupt live traffic.  |
+| **Deterministic Diffs**    | Reviewable diff analysis between two snapshot hashes before promoting changes to production. |
 
 ---
 
@@ -75,10 +75,7 @@ fragments pierce straight into your shell instead of arriving as a shell within 
 import { subgraph, supergraph } from '@braidlabs/registry';
 
 createGateway({
-  registry: supergraph([
-    orgManifests,
-    subgraph({ name: 'orders', url: 'https://orders.internal', registry: 'https://orders.internal/braid-registry.json' }),
-  ]),
+  registry: supergraph([orgManifests, subgraph({ name: 'orders', url: 'https://orders.internal', registry: 'https://orders.internal/braid-registry.json' })]),
 });
 ```
 
@@ -219,7 +216,7 @@ where there is no server: in a service worker, beside the in-worker gateway.
 ```ts
 import { cacheSnapshotStore, createRegistryApi, snapshotRegistry } from '@braidlabs/registry';
 
-const store = cacheSnapshotStore();          // { cacheName: 'braid-registry' } by default
+const store = cacheSnapshotStore(); // { cacheName: 'braid-registry' } by default
 const registry = snapshotRegistry({ store }); // for the gateway
 const api = createRegistryApi({ store, authorize: () => true }); // for the console
 ```
@@ -241,13 +238,13 @@ const api = createRegistryApi({
 const response = await api.handle(request); // null when the path is not the API's
 ```
 
-| Route | Does |
-| :--- | :--- |
-| `GET /head` | the pinned snapshot, shells included |
+| Route                                  | Does                                                                                                |
+| :------------------------------------- | :-------------------------------------------------------------------------------------------------- |
+| `GET /head`                            | the pinned snapshot, shells included                                                                |
 | `GET /snapshots`, `GET /snapshots/:id` | a page of history (`?limit=`, up to 100, and `?before=` a previous page's `next`), and one snapshot |
-| `GET /permissions` | the caller's `{ read, publish, pin, actor }` |
-| `POST /snapshots` | `{ manifests, shells?, labels?, pin?, baseId? }` → validate, mint, store, pin |
-| `POST /head` | `{ id }` — re-pin. Rollback is this. |
+| `GET /permissions`                     | the caller's `{ read, publish, pin, actor }`                                                        |
+| `POST /snapshots`                      | `{ manifests, shells?, labels?, pin?, baseId? }` → validate, mint, store, pin                       |
+| `POST /head`                           | `{ id }` — re-pin. Rollback is this.                                                                |
 
 - **Writes need `authorize`.** Without it they are refused. A publish that pins needs both `publish`
   and `pin`, so a contributor role publishes candidates with `pin: false`.
@@ -341,12 +338,12 @@ createRegistryApi({
 createGateway({ registry: snapshotRegistry({ store, environment: 'production' }), registryRefreshMs: 15_000 });
 ```
 
-| Route | Does |
-| :--- | :--- |
-| `GET /environments` | each environment, where it points, and any promotion awaiting approval |
-| `POST /environments/:env/promote` | `{ id? }`: move the environment, or with `approvals`, ask to (202) |
-| `POST /environments/:env/approve` | approve the pending promotion |
-| `POST /environments/:env/reject` | withdraw it (the requester) or decline it (an approver) |
+| Route                             | Does                                                                   |
+| :-------------------------------- | :--------------------------------------------------------------------- |
+| `GET /environments`               | each environment, where it points, and any promotion awaiting approval |
+| `POST /environments/:env/promote` | `{ id? }`: move the environment, or with `approvals`, ask to (202)     |
+| `POST /environments/:env/approve` | approve the pending promotion                                          |
+| `POST /environments/:env/reject`  | withdraw it (the requester) or decline it (an approver)                |
 
 - **What can be promoted.** An environment with a `from` source takes that source's current
   snapshot, so production gets exactly what staging was tested with. It can also be promoted back
@@ -482,7 +479,7 @@ createRegistryApi({
 ```
 
 ```json
-{"version":1,"at":"2026-10-22T09:14:03.112Z","action":"pin","outcome":"success","actor":"ada@example.com","status":200,"previousId":"reg_9f…","snapshotId":"reg_41…"}
+{ "version": 1, "at": "2026-10-22T09:14:03.112Z", "action": "pin", "outcome": "success", "actor": "ada@example.com", "status": 200, "previousId": "reg_9f…", "snapshotId": "reg_41…" }
 ```
 
 Sinks are best effort. They run after the response is decided, and a sink that throws or rejects

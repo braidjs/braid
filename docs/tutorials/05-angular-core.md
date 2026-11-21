@@ -7,7 +7,7 @@ standalone components, Signals, and `inject()`; no NgModules anywhere).
 `@braidlabs/skew` is framework-free. This package is the thin, honest bridge to
 Angular: a versioned store provided through DI, and a Signal wrapper that
 reads it without flicker and without ever throwing at a component. You will
-build a draft editor that survives a schema change *and* a reload — the demo's
+build a draft editor that survives a schema change _and_ a reload — the demo's
 remote editor, reduced to its essentials.
 
 ```sh
@@ -19,7 +19,7 @@ npm install @braidlabs/skew @braidlabs/angular-core
 ## Step 1 — The schema (from Tutorial 2)
 
 Contracts live in one file, exported once, imported everywhere. If two parts
-of your app declare the same contract separately, they *will* drift:
+of your app declare the same contract separately, they _will_ drift:
 
 ```ts
 // src/app/domain.ts
@@ -41,26 +41,23 @@ export interface DraftV2 {
   summary: string;
 }
 
-export const DraftSchema = versioned<DraftV1>('draft').next<DraftV2>(
-  'structure the author and derive a summary',
-  {
-    up: (v1) => ({
-      id: v1.id,
-      title: v1.title,
-      author: { name: v1.author, email: '' },
-      body: v1.body,
-      summary: v1.body.slice(0, 60),
-    }),
-    down: (v2) => ({
-      id: v2.id,
-      title: v2.title,
-      author: v2.author.name,
-      body: v2.body,
-    }),
-    derives: ['author.email', 'summary'],
-    lossy: ['author.email', 'summary'],
-  },
-);
+export const DraftSchema = versioned<DraftV1>('draft').next<DraftV2>('structure the author and derive a summary', {
+  up: (v1) => ({
+    id: v1.id,
+    title: v1.title,
+    author: { name: v1.author, email: '' },
+    body: v1.body,
+    summary: v1.body.slice(0, 60),
+  }),
+  down: (v2) => ({
+    id: v2.id,
+    title: v2.title,
+    author: v2.author.name,
+    body: v2.body,
+  }),
+  derives: ['author.email', 'summary'],
+  lossy: ['author.email', 'summary'],
+});
 
 export const DRAFT_KEY = 'current';
 ```
@@ -87,22 +84,21 @@ import { webStorageDriver } from '@braidlabs/skew';
 import { provideSkewStore } from '@braidlabs/angular-core';
 import { DraftSchema } from './domain';
 import { DRAFT_STORE } from './draft-store';
-import { BUILD_ID } from '../generated/build-id';   // from Tutorial 3
+import { BUILD_ID } from '../generated/build-id'; // from Tutorial 3
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideSkewStore(DRAFT_STORE, DraftSchema, {
       driver: webStorageDriver('local'),
-      buildId: BUILD_ID,   // stamps envelopes, so a bad record names its writer
-      onReadFailure: (key, failure) =>
-        console.warn('[draft-store]', key, failure.reason, failure.message),
+      buildId: BUILD_ID, // stamps envelopes, so a bad record names its writer
+      onReadFailure: (key, failure) => console.warn('[draft-store]', key, failure.reason, failure.message),
     }),
   ],
 };
 ```
 
 Why a token instead of injecting a concrete class: the token carries the
-*payload type*, so every consumer gets a `VersionedStore<DraftV2>` without a
+_payload type_, so every consumer gets a `VersionedStore<DraftV2>` without a
 cast, and tests can provide the same token with a memory driver (step 5).
 
 ---
@@ -131,21 +127,14 @@ import { DRAFT_KEY, type DraftV2 } from './domain';
       <div class="failure">
         <strong>Could not read the draft — {{ failure.reason }}</strong>
         @if (failure.reason === 'ahead') {
-          <p>
-            This draft was written by a newer deployment (v{{ failure.found }};
-            this build understands v{{ failure.expected }}).
-            The record is intact — it is this tab that is stale.
-          </p>
+          <p>This draft was written by a newer deployment (v{{ failure.found }}; this build understands v{{ failure.expected }}). The record is intact — it is this tab that is stale.</p>
           <button (click)="reloadApp()">Update this tab</button>
         } @else {
           <button (click)="draft.reload()">Try again</button>
         }
       </div>
     } @else if (draft.data(); as value) {
-      <input
-        [value]="value.title"
-        (change)="rename(value, $any($event.target).value)"
-      />
+      <input [value]="value.title" (change)="rename(value, $any($event.target).value)" />
       <p>{{ value.author.name }} · {{ value.summary }}</p>
     } @else {
       <button (click)="create()">Start a draft</button>
@@ -180,7 +169,7 @@ export class DraftEditor {
 What just happened, step by step:
 
 1. On construction, the signal `peek()`ed synchronously. A v1 record written
-   by *last month's build* migrated forward on the way out; the template
+   by _last month's build_ migrated forward on the way out; the template
    never saw the old shape.
 2. `draft.error()` is a typed `SkewErr | null` — the component branches on
    `reason` in the template, and the `ahead` branch gets its own honest UI
@@ -188,7 +177,7 @@ What just happened, step by step:
 3. `set()` updates the signal immediately and writes the envelope behind it.
 
 This is the same pattern the demo's remote editor uses to read a record the
-*host* build wrote — migrated at the boundary, once, instead of defensively
+_host_ build wrote — migrated at the boundary, once, instead of defensively
 in every consumer:
 
 ![The demo's remote editor reading the host's v1 record, migrated to v2](assets/angular-core-editor.png)
@@ -213,10 +202,7 @@ export class DraftAdmin {
   async inspect(): Promise<void> {
     const result = await this.store.get(DRAFT_KEY);
     if (result.ok && result.migratedFrom) {
-      console.log(
-        `draft was written under v${result.migratedFrom}; ` +
-          `guessed fields: ${result.derivedPaths.join(', ') || 'none'}`,
-      );
+      console.log(`draft was written under v${result.migratedFrom}; ` + `guessed fields: ${result.derivedPaths.join(', ') || 'none'}`);
     }
   }
 }
@@ -254,9 +240,7 @@ it('opens a v1 draft at the v2 shape', async () => {
   ]);
 
   TestBed.configureTestingModule({
-    providers: [
-      provideSkewStore(DRAFT_STORE, DraftSchema, { driver: memoryDriver(seed) }),
-    ],
+    providers: [provideSkewStore(DRAFT_STORE, DraftSchema, { driver: memoryDriver(seed) })],
   });
 
   const store = TestBed.inject(DRAFT_STORE);
@@ -270,7 +254,7 @@ it('opens a v1 draft at the v2 shape', async () => {
 });
 ```
 
-Note what the seed is: the literal *bytes on disk*, envelope and all. Tests
+Note what the seed is: the literal _bytes on disk_, envelope and all. Tests
 that seed through `store.set()` only ever test the current version reading
 itself — the case that never breaks.
 
