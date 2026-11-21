@@ -687,7 +687,14 @@ describe('the Starport example', () => {
     await inWindow.locator('#in').click();
     await expect.poll(() => open(page)).toEqual(['flights', 'cargo']);
     const closed = popup.waitForEvent('close');
-    await popup.locator('#back').click();
+    // The button closes its own window. When that happens before the click has finished reporting
+    // back, the click rejects although it was delivered — so only that rejection is let through.
+    await popup
+      .locator('#back')
+      .click()
+      .catch((error: unknown) => {
+        if (!popup.isClosed()) throw error;
+      });
     await closed;
     await expect.poll(() => open(page), { timeout: 5000 }).toEqual(['flights', 'star-map', 'cargo']);
     await expect.poll(() => app(page, 'star-map').locator('#zoom-label').textContent()).toBe('Zoom 2×');

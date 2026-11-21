@@ -130,14 +130,19 @@ describe('what the sixth verification found', () => {
         updateDataModel: { surfaceId: 's', path: `/d${n}`, value: wide(n) },
       })),
     ];
-    const started = performance.now();
+    // A task of the page's own, queued before the push. If the push hands the page back between
+    // messages, this runs while the batch is still being applied; if it applied them all in one
+    // go, the four the data model has room for would already be there. Counted in what has been
+    // applied, not in milliseconds, so a slow or busy machine reads the same as a fast one.
+    let appliedWhenThePageRan = Number.NaN;
+    setTimeout(() => {
+      appliedWhenThePageRan = Object.keys(
+        element.surfaces.get('s')?.dataModel ?? {},
+      ).length;
+    }, 0);
     element.push(messages);
-    const returned = performance.now() - started;
-    // twenty of these, applied at once, would take many times this
-    expect(returned).toBeLessThan(250);
-    expect(
-      Object.keys(element.surfaces.get('s')?.dataModel ?? {}).length,
-    ).toBeLessThan(20);
+    await flush();
+    expect(appliedWhenThePageRan).toBeLessThan(4);
     for (let i = 0; i < 200; i++) {
       if (Object.keys(element.surfaces.get('s')!.dataModel).length === 4) break;
       await flush();

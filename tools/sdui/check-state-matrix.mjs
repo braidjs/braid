@@ -12,14 +12,21 @@
  *   - every state has at least one vector (a state nobody specified), and
  *   - every vector names a state that exists (a specification for a state that was renamed away).
  *
- * It also insists that each state type is exactly its list, that the file has no cast, and that each
- * resolver is declared as returning exactly its state type — so that the compiler, not this script,
- * is what stops a resolver returning a state that is not in a list. It reads that one file: it
- * cannot see a state invented in another, and it is a guard against mistakes, not against someone
- * set on getting round it.
+ * The lists are only the whole truth if nothing else can produce a state, so this also holds the
+ * file to a shape in which the compiler guarantees that: each state type is exactly its list, each
+ * resolver is declared as returning exactly its state type, and the file has none of the things
+ * that tell the compiler to take a value's type on trust — a cast, `any`, a type predicate, an
+ * overload, a class, a `declare`, a `@ts-` directive.
  *
- * This reads the source file rather than importing the built package, so it runs before a build
- * and cannot be satisfied by a stale `dist/`.
+ * It reads the file with the TypeScript parser, so it sees what the compiler sees: a declaration
+ * in a comment or a string is not one. It reads that one file. A state invented in another is
+ * outside its view, and so is a value typed `any` by a library, as `JSON.parse` gives. And the
+ * compiler it leans on is not sound: a list of states can be handed to something that takes a
+ * list of strings, and written to through that. It is a guard against mistakes, not against
+ * someone set on getting round it.
+ *
+ * It reads the source rather than importing the built package, so it runs before a build and
+ * cannot be satisfied by a stale `dist/`.
  *
  *   node tools/sdui/check-state-matrix.mjs [--states <states.ts>] [--vectors <dir>]
  *
@@ -27,6 +34,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import ts from 'typescript';
 
 const root = resolve(new URL('../../', import.meta.url).pathname);
 const args = process.argv.slice(2);
@@ -37,182 +45,269 @@ const flag = (name, fallback) => {
 const statesPath = flag('states', join(root, 'libs/sdui/src/lib/states.ts'));
 const vectorsDir = flag('vectors', join(root, 'libs/sdui/conformance/states'));
 
-const LEVELS = {
-  SESSION_STATES: 'session',
-  SCREEN_STATES: 'screen',
-  NODE_STATES: 'node',
-  ACTION_STATES: 'action',
+/** Each list, the level it describes, its type, and the resolver that returns that type. */
+const LISTS = {
+  SESSION_STATES: {
+    level: 'session',
+    type: 'SessionState',
+    resolver: 'resolveSessionState',
+    returns: '{state:SessionState;source:UiSource;}',
+  },
+  SCREEN_STATES: {
+    level: 'screen',
+    type: 'ScreenState',
+    resolver: 'resolveScreenState',
+    returns: '{state:ScreenState;source:UiSource;}',
+  },
+  NODE_STATES: {
+    level: 'node',
+    type: 'NodeState',
+    resolver: 'resolveNodeStates',
+    returns: 'NodeState[]',
+  },
+  ACTION_STATES: {
+    level: 'action',
+    type: 'ActionState',
+    resolver: 'resolveActionState',
+    returns: 'ActionState',
+  },
 };
 const failures = [];
-
-// Comments are removed first, so nothing in one can stand in for a declaration: a list or a type
-// left behind in a comment is not the list or the type. Strings are stepped over while doing it,
-// so a comment opener inside one hides nothing.
-function withoutComments(text, { blankStrings = false } = {}) {
-  let out = '';
-  let quote = null;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (quote !== null) {
-      if (char === '\\') {
-        if (!blankStrings) out += char + (text[i + 1] ?? '');
-        i++;
-      } else if (char === quote) {
-        quote = null;
-        out += char;
-      } else if (quote === '`' && char === '$' && text[i + 1] === '{') {
-        // What is inside `${…}` is code again, and this scanner does not follow it there.
-        templateExpressions++;
-        if (!blankStrings) out += char;
-      } else if (!blankStrings) {
-        out += char;
-      }
-    } else if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-      out += char;
-    } else if (char === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') i++;
-      out += '\n';
-    } else if (char === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      i = end < 0 ? text.length : end + 1;
-      out += ' ';
-    } else {
-      out += char;
-    }
-  }
-  return out;
-}
-let templateExpressions = 0;
-const raw = readFileSync(statesPath, 'utf8');
-const source = withoutComments(raw);
-// The same, with what is inside every string removed: for looking at the code, where the text of
-// a string must not be taken for a declaration or hide one.
-const code = withoutComments(raw, { blankStrings: true });
-if (templateExpressions > 0)
-  failures.push(
-    `a template literal with an expression ("\${…}") in ${statesPath} — this check cannot read inside one; build the string another way`,
-  );
-const declared = new Map();
-// Found by position, not by one regex across the file: each list is located at its `export const`
-// and read up to the first `] as const`, which is linear however large the file is.
-const seenConstants = new Set();
-const OPENING = /^export const (\w+_STATES) = \[/gm;
-for (let match = OPENING.exec(source); match; match = OPENING.exec(source)) {
-  const constant = match[1];
-  const start = match.index + match[0].length;
-  const end = source.indexOf('] as const', start);
-  if (end < 0) {
-    failures.push(`${constant} has no closing "] as const" in ${statesPath}`);
-    break; // nothing after this point closes either, so there is no reason to look again
-  }
-  // Exactly `] as const;` and nothing more: a cast after it could widen the list's type to
-  // admit a state that is not in it.
-  if (!source.startsWith('] as const;', end)) {
-    failures.push(
-      `${constant} must end with "] as const;" and nothing else — a cast there can add states this check cannot see`,
+const finish = () => {
+  if (failures.length > 0) {
+    process.stderr.write(
+      `state matrix: ${failures.length} problem${failures.length === 1 ? '' : 's'}\n${failures.map((failure) => `  - ${failure}\n`).join('')}`,
     );
+    process.exit(1);
   }
-  if (seenConstants.has(constant))
-    failures.push(`${constant} is declared more than once`);
-  seenConstants.add(constant);
-  const level = LEVELS[constant];
-  if (!level) {
+};
+
+const raw = readFileSync(statesPath, 'utf8');
+// A states file is a few hundred lines. One far beyond that is not one, and is not parsed.
+if (raw.length > 500_000) {
+  failures.push(
+    `${statesPath} is ${raw.length} characters — too large to be a list of states`,
+  );
+  finish();
+}
+let file;
+try {
+  file = ts.createSourceFile(
+    statesPath,
+    raw,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+} catch (error) {
+  failures.push(`${statesPath} could not be parsed (${error.message})`);
+  finish();
+}
+if (file.parseDiagnostics.length > 0) {
+  failures.push(
+    `${statesPath} does not parse: ${ts.flattenDiagnosticMessageText(file.parseDiagnostics[0].messageText, ' ')}`,
+  );
+  finish();
+}
+// The compiler lowercases a directive's name before it reads it, so this does exactly that —
+// which also folds the few characters that are not letters of this alphabet and lowercase to
+// one, as the Kelvin sign does to "k".
+if (/@ts-(?:ignore|expect-error|nocheck)/.test(raw.toLowerCase()))
+  failures.push(
+    `a "@ts-" directive in ${statesPath} — it tells the compiler not to check a line, and this check relies on the compiler`,
+  );
+
+const text = (node) => node.getText(file).replace(/\s+/g, ' ');
+const squeezed = (node) => node.getText(file).replace(/\s+/g, '');
+const exportedAtTopLevel = (statement) =>
+  statement.parent === file &&
+  (statement.modifiers ?? []).some(
+    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+  );
+const isConst = (type) =>
+  ts.isTypeReferenceNode(type) && type.typeName.getText(file) === 'const';
+
+// One walk of the whole tree, however a declaration is nested: everything that is named like a
+// list, a state type or a resolver, and everything that takes a type on trust.
+const TYPE_NAMES = new Set(Object.values(LISTS).map((list) => list.type));
+const RESOLVERS = new Set(Object.values(LISTS).map((list) => list.resolver));
+const lists = new Map(); // constant → its declarations
+const types = new Map(); // type name → whatever declares that name
+const resolvers = new Map(); // function name → its declarations
+const note = (map, key, node) => map.set(key, [...(map.get(key) ?? []), node]);
+const visit = (node) => {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+    if (node.name.text.endsWith('_STATES')) note(lists, node.name.text, node);
+    if (RESOLVERS.has(node.name.text)) note(resolvers, node.name.text, node);
+  }
+  if (
+    (ts.isTypeAliasDeclaration(node) ||
+      ts.isInterfaceDeclaration(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isTypeParameterDeclaration(node) ||
+      ts.isImportSpecifier(node) ||
+      ts.isImportClause(node) ||
+      ts.isNamespaceImport(node) ||
+      ts.isModuleDeclaration(node)) &&
+    node.name &&
+    TYPE_NAMES.has(node.name.text)
+  )
+    note(types, node.name.text, node);
+  if (
+    ts.isFunctionDeclaration(node) &&
+    node.name &&
+    RESOLVERS.has(node.name.text)
+  )
+    note(resolvers, node.name.text, node);
+  if (ts.isAsExpression(node) && !isConst(node.type))
     failures.push(
-      `${constant} is a state list this check does not know — add its level to LEVELS in tools/sdui/check-state-matrix.mjs`,
+      `a cast ("as ${text(node.type)}") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
+    );
+  if (ts.isTypeAssertionExpression(node))
+    failures.push(
+      `a cast ("<${text(node.type)}>") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
+    );
+  if (node.kind === ts.SyntaxKind.AnyKeyword)
+    failures.push(
+      `the type "any" in ${statesPath} — a value typed "any" can be returned as a state without being one`,
+    );
+  if (ts.isTypePredicateNode(node))
+    failures.push(
+      `a type predicate ("${text(node)}") in ${statesPath} — it tells the compiler a value is a state on the function's say-so`,
+    );
+  if (
+    (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+    !node.body
+  )
+    failures.push(
+      `a function signature with no body ("${node.name ? text(node.name) : 'function'}") in ${statesPath} — an overload promises a return type its implementation is not held to`,
+    );
+  if (ts.isClassDeclaration(node) || ts.isClassExpression(node))
+    failures.push(
+      `a class ("${node.name ? text(node.name) : 'class'}") in ${statesPath} — a class merges with an interface of its name, whose signatures it is not held to; this file is lists, types and plain functions`,
+    );
+  if (node.kind === ts.SyntaxKind.DeclareKeyword)
+    failures.push(
+      `a "declare" in ${statesPath} — it gives a value a type with nothing behind it`,
+    );
+  ts.forEachChild(node, visit);
+};
+try {
+  visit(file);
+} catch (error) {
+  failures.push(`${statesPath} could not be read (${error.message})`);
+  finish();
+}
+
+const declared = new Map(); // level → the names in its list
+for (const [constant, declarations] of lists) {
+  const known = LISTS[constant];
+  if (!known) {
+    failures.push(
+      `${constant} is a state list this check does not know — add its level to LISTS in tools/sdui/check-state-matrix.mjs`,
     );
     continue;
   }
-  const body = source.slice(start, end).replace(/\/\/[^\n]*/g, '');
-  // Any quote style: a state added as "x" or `x` is still a state.
-  const names = [...body.matchAll(/'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`/g)].map(
-    (name) => name[1] ?? name[2] ?? name[3],
-  );
-  // Whatever is left once the names and commas are gone is something this check cannot read —
-  // a spread, a variable — and a list it cannot read is a list it cannot vouch for.
-  const rest = body
-    .replace(/'[^'\n]*'|"[^"\n]*"|`[^`\n]*`/g, '')
-    .replace(/[\s,]/g, '');
-  if (rest.length > 0)
-    failures.push(
-      `${constant} holds something other than string literals ("${rest.slice(0, 30)}") — list every state by name`,
-    );
-  const seen = new Set();
-  for (const name of names) {
-    if (seen.has(name))
-      failures.push(`${level}: "${name}" is listed twice in ${constant}`);
-    seen.add(name);
+  if (declarations.length > 1) {
+    failures.push(`${constant} is declared more than once`);
+    continue;
   }
-  declared.set(level, seen);
+  const declaration = declarations[0];
+  const statement = declaration.parent.parent;
+  if (
+    !ts.isVariableStatement(statement) ||
+    !exportedAtTopLevel(statement) ||
+    !(declaration.parent.flags & ts.NodeFlags.Const)
+  ) {
+    failures.push(
+      `${constant} must be an "export const" at the top of the file`,
+    );
+    continue;
+  }
+  // Exactly `[…] as const`, with no annotation: anything else could give the list a type that
+  // admits a state it does not hold.
+  const initializer = declaration.initializer;
+  if (
+    declaration.type ||
+    !initializer ||
+    !ts.isAsExpression(initializer) ||
+    !isConst(initializer.type) ||
+    !ts.isArrayLiteralExpression(initializer.expression)
+  ) {
+    failures.push(
+      `${constant} must end with "] as const;" and nothing else — an annotation or a cast there can add states this check cannot see`,
+    );
+    continue;
+  }
+  const names = new Set();
+  for (const element of initializer.expression.elements) {
+    // Any quote style: a state written as "x" or `x` is still a state.
+    if (
+      !ts.isStringLiteral(element) &&
+      !ts.isNoSubstitutionTemplateLiteral(element)
+    ) {
+      failures.push(
+        `${constant} holds something other than string literals ("${text(element).slice(0, 30)}") — list every state by name`,
+      );
+      continue;
+    }
+    if (names.has(element.text))
+      failures.push(
+        `${known.level}: "${element.text}" is listed twice in ${constant}`,
+      );
+    names.add(element.text);
+  }
+  declared.set(known.level, names);
 }
-for (const [constant, level] of Object.entries(LEVELS)) {
-  if (!declared.has(level))
+
+for (const [constant, known] of Object.entries(LISTS)) {
+  if (!lists.has(constant))
     failures.push(`${constant} was not found in ${statesPath}`);
-}
 
-// The lists are only the whole truth if the state types are exactly the lists. A type widened on
-// the side — directly, or through an alias — adds a state this check never sees. So each of the
-// four state types must be declared as exactly its list, and nothing else.
-const TYPES = {
-  SESSION_STATES: 'SessionState',
-  SCREEN_STATES: 'ScreenState',
-  NODE_STATES: 'NodeState',
-  ACTION_STATES: 'ActionState',
-};
-const typeAliases = new Map();
-for (const alias of code.matchAll(
-  /^export type (\w+)(?:<[^>]*>)? =([^;]*);/gm,
-)) {
-  if (typeAliases.has(alias[1]))
-    failures.push(`type ${alias[1]} is declared more than once`);
-  typeAliases.set(alias[1], alias[2].replace(/\s+/g, ''));
-}
-for (const [constant, type] of Object.entries(TYPES)) {
+  // The type is exactly the list, and nothing else in the file goes by its name.
+  const named = types.get(known.type) ?? [];
   const exact = `(typeof${constant})[number]`;
-  const declared = typeAliases.get(type);
-  if (declared === undefined)
+  if (named.length === 0)
     failures.push(
-      `type ${type} is not declared in ${statesPath} — it must be exactly (typeof ${constant})[number]`,
+      `type ${known.type} is not declared in ${statesPath} — it must be exactly (typeof ${constant})[number]`,
     );
-  else if (declared !== exact)
+  else if (named.length > 1)
+    failures.push(`type ${known.type} is declared more than once`);
+  else if (
+    !ts.isTypeAliasDeclaration(named[0]) ||
+    !exportedAtTopLevel(named[0]) ||
+    named[0].typeParameters ||
+    squeezed(named[0].type) !== exact
+  )
     failures.push(
-      `type ${type} is not exactly (typeof ${constant})[number] — every state must be in the ${constant} list, where this check can see it`,
+      `type ${known.type} is not exactly (typeof ${constant})[number] — every state must be in the ${constant} list, where this check can see it`,
     );
-}
 
-// A cast can make a value a state without it being in a list, and a resolver whose return type
-// names more than the state type can return one. Neither is needed in this file, so neither is
-// allowed: the only `as` is `as const`, and each resolver returns exactly its state type.
-// `as` in any spelling — `as X`, `as (X)`, `as (typeof LIST)[number]` — and the older `<X>value`.
-const STATE_TYPES =
-  'SessionState|ScreenState|NodeState|ActionState|unknown|any|never';
-for (const cast of [
-  ...code.matchAll(/\bas\b(?!\s+const\b)\s*[^\s;,)]*/g),
-  ...code.matchAll(
-    new RegExp(
-      `(?<![\\w$])<\\s*(?:${STATE_TYPES})(?:\\[\\])?\\s*>\\s*[\\w(<]`,
-      'g',
-    ),
-  ),
-])
-  failures.push(
-    `a cast ("${cast[0].replace(/\s+/g, ' ').trim()}") in ${statesPath} — a value cast to a state need not be in a list; find it in the list instead`,
-  );
-const RESOLVERS = {
-  resolveSessionState: '{state:SessionState;source:UiSource;}',
-  resolveScreenState: '{state:ScreenState;source:UiSource;}',
-  resolveNodeStates: 'NodeState[]',
-  resolveActionState: 'ActionState',
-};
-for (const [name, returns] of Object.entries(RESOLVERS)) {
-  const signature = new RegExp(
-    `^export function ${name}\\(facts: \\w+\\):\\s*(\\{[^{}]*\\}|[^{}]*?)\\s*\\{\\n`,
-    'm',
-  ).exec(code);
-  const found = signature?.[1].replace(/\s+/g, '');
-  if (found !== returns)
+  // The resolver says it returns exactly that type, so the compiler holds it to the list.
+  const functions = resolvers.get(known.resolver) ?? [];
+  const only = functions.length === 1 ? functions[0] : undefined;
+  const returns =
+    only && ts.isFunctionDeclaration(only) && only.type
+      ? squeezed(only.type)
+      : undefined;
+  if (
+    !only ||
+    !ts.isFunctionDeclaration(only) ||
+    !exportedAtTopLevel(only) ||
+    only.typeParameters ||
+    returns !== known.returns
+  )
     failures.push(
-      `${name} must be declared as returning exactly ${returns} — ${found === undefined ? 'it was not found' : `it returns ${found}`}`,
+      `${known.resolver} must be declared as returning exactly ${known.returns} — ${
+        functions.length === 0
+          ? 'it was not found'
+          : functions.length > 1
+            ? 'it is declared more than once'
+            : returns === undefined
+              ? 'it is not a plain exported function with a return type'
+              : `it returns ${returns}`
+      }`,
     );
 }
 
@@ -262,12 +357,7 @@ for (const [level, states] of declared) {
   }
 }
 
-if (failures.length > 0) {
-  process.stderr.write(
-    `state matrix: ${failures.length} problem${failures.length === 1 ? '' : 's'}\n${failures.map((failure) => `  - ${failure}\n`).join('')}`,
-  );
-  process.exit(1);
-}
+finish();
 process.stdout.write(
   `state matrix: ${stateCount} states, ${vectorCount} vectors, every state specified\n`,
 );
