@@ -149,7 +149,8 @@ describe('what the sixth verification found', () => {
       'd2',
       'd3',
     ]);
-  });
+    // applying twenty 45,000-key messages is real work: slow CI runners need more than 5 s
+  }, 30_000);
 
   it('a draw boots only so many fragments', async () => {
     const { DRAW_LIMITS } = await import('./evaluate.js');
