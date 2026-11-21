@@ -50,13 +50,7 @@ import { BraidFragment } from '@braidlabs/angular';
     <div class="checkout-container">
       <h2>Host Checkout Shell</h2>
 
-      <braid-fragment
-        name="billing"
-        [props]="{ cartId: cartId(), theme: 'dark' }"
-        (ready)="onFragmentReady($event)"
-        (failed)="onFragmentFailed($event)"
-        (fragmentEvent)="onFragmentEvent($event)"
-      />
+      <braid-fragment name="billing" [props]="{ cartId: cartId(), theme: 'dark' }" (ready)="onFragmentReady($event)" (failed)="onFragmentFailed($event)" (fragmentEvent)="onFragmentEvent($event)" />
     </div>
   `,
 })
@@ -102,25 +96,26 @@ The guard runs before the URL changes, so declining leaves the router and the ad
 - **By default it looks at the whole document.** A dirty fragment in a layout that outlives the route, such as a sidebar, would ask on every route change. Pass `within` to ask only about the view being left:
 
   ```ts
-  braidLeaveGuard<BillingPage>(confirmFn, { within: (page) => page.host.nativeElement })
+  braidLeaveGuard<BillingPage>(confirmFn, { within: (page) => page.host.nativeElement });
   ```
 
   Here `host` is the component's `ElementRef`.
+
 - **For links that leave the app**, use `initBraid({ confirmLeave })` (see the core docs).
 
 ## Component API Reference
 
-| Input / Output / Signal | Type | Description |
-| :--- | :--- | :--- |
-| `[name]` | `string` (Required) | The fragment ID registered in the gateway manifest. |
-| `[src]` | `string` | Fixed sub-route to render. If omitted, fragment follows host URL. |
-| `[props]` | `Record<string, unknown>` | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`, or set as properties on a `custom-element` fragment's element. A compat fragment has no `env` and does not see them. |
-| `(ready)` | `EventEmitter<{ fragmentId: string }>` | Emitted when fragment completes mounting and hydration. |
-| `(failed)` | `EventEmitter<BraidFragmentError>` | Emitted on load/mount error with failure stage & fix hint. |
-| `(fragmentEvent)` | `EventEmitter<{ type: string; detail: unknown }>` | Emitted when the fragment calls `env.emit(type, detail)`, or raises an event its `custom-element` manifest lists. A compat fragment's `window.dispatchEvent` does not arrive here. |
-| content | projected | `<div slot="loading">` and `<p slot="fallback">` children reach the slot: shown while the fragment boots, and if it fails. See `@braidlabs/core`, "Loading and fallback". |
-| `state()` | `Signal<'idle' \| 'loading' \| 'ready' \| 'error'>` | Signal reflecting current slot lifecycle state. |
-| `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
+| Input / Output / Signal | Type                                                | Description                                                                                                                                                                                                              |
+| :---------------------- | :-------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[name]`                | `string` (Required)                                 | The fragment ID registered in the gateway manifest.                                                                                                                                                                      |
+| `[src]`                 | `string`                                            | Fixed sub-route to render. If omitted, fragment follows host URL.                                                                                                                                                        |
+| `[props]`               | `Record<string, unknown>`                           | Structured-cloned properties passed across the realm boundary, read by the fragment as `env.props`, or set as properties on a `custom-element` fragment's element. A compat fragment has no `env` and does not see them. |
+| `(ready)`               | `EventEmitter<{ fragmentId: string }>`              | Emitted when fragment completes mounting and hydration.                                                                                                                                                                  |
+| `(failed)`              | `EventEmitter<BraidFragmentError>`                  | Emitted on load/mount error with failure stage & fix hint.                                                                                                                                                               |
+| `(fragmentEvent)`       | `EventEmitter<{ type: string; detail: unknown }>`   | Emitted when the fragment calls `env.emit(type, detail)`, or raises an event its `custom-element` manifest lists. A compat fragment's `window.dispatchEvent` does not arrive here.                                       |
+| content                 | projected                                           | `<div slot="loading">` and `<p slot="fallback">` children reach the slot: shown while the fragment boots, and if it fails. See `@braidlabs/core`, "Loading and fallback".                                                |
+| `state()`               | `Signal<'idle' \| 'loading' \| 'ready' \| 'error'>` | Signal reflecting current slot lifecycle state.                                                                                                                                                                          |
+| `reload()`              | `() => Promise<void>`                               | Destroys current realm and forces a fresh network fetch & boot.                                                                                                                                                          |
 
 ---
 

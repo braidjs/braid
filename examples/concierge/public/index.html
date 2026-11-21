@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Concierge</title>
+    <link rel="stylesheet" href="/host.css" />
+    <script type="module" src="/main.js"></script>
+  </head>
+  <body data-renderer="__RENDERER__">
+    <header class="bar">
+      <span class="brand">Concierge</span>
+      <nav>
+        <a href="/">Trips</a><a href="/?renderer=legacy">As build 1.9 sees it</a
+        ><a href="/?sale=1">With the sale on</a>
+      </nav>
+    </header>
+    <main class="layout">
+      <section class="trip" aria-label="Your trip">
+        <h2 class="section">Trip</h2>
+        <!-- prerendered by the server for this renderer: shown before, and without, any script -->
+        <!--trip-->
+      </section>
+      <aside class="assistant" aria-label="Assistant">
+        <h2 class="section">Assistant</h2>
+        <a2ui-surface
+          id="assistant"
+          src="/agent/stream"
+          action-url="/agent/actions"
+          catalog-ids="__CATALOG_ID__"
+          locale="en-US"
+          time-zone="UTC"
+        ></a2ui-surface>
+        <details class="traffic">
+          <summary>What the surfaces sent</summary>
+          <ol id="traffic"></ol>
+        </details>
+      </aside>
+    </main>
+  </body>
+</html>

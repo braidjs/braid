@@ -2,7 +2,7 @@
 
 Server-driven UI that survives app version skew. Every component, action and analytics event is a [`@braidlabs/contract`](./contract.md) document, so a screen is authored once and **projected** to exactly what each binary in the field was built to render.
 
-This package is the core: the document model and its parsers, the projection engine and its fallback ladder, handshake resolution, flag and rollout evaluation, the state specification, and a contract-aware screen diff. It holds no state and does no I/O, and runs unchanged on Node, Workers, Deno, browsers and Hermes. The delivery API, the client and the CMS described in the [plan](../sdui-cms-plan.md) are built on it.
+This package is the core: the document model and its parsers, the projection engine and its fallback ladder, handshake resolution, flag and rollout evaluation, the state specification, and a contract-aware screen diff. It holds no state and does no I/O, and runs unchanged on Node, Workers, Deno, browsers and Hermes. The delivery API, the client and the CMS described in the [plan](../sdui-cms-plan.md) are built on it. Two subpaths add [A2UI](#a2ui): `@braidlabs/sdui/a2ui`, the same model on A2UI's wire format, and `@braidlabs/sdui/web`, a renderer that draws it into the host's own page.
 
 ---
 
@@ -360,6 +360,92 @@ Content already in the field was authored under the published steps and is decod
 A component's `fallback`, `accepts`, `max` and editor metadata are policy and may change. A catalog whose ops cannot be compiled is a usage error (exit 2), not an addition.
 
 `checkCatalog`, `createClientManifest`, `catalogId` and `runSdui` are the same things as functions. `migrate(contract, value, from, to, options)` is the single-payload migration projection is built on; its options are `codeSteps`, `context` and `allowance`.
+
+---
+
+## A2UI
+
+[A2UI](https://a2ui.org/specification/v1.0-a2ui/) is how agents describe UI to renderers: surfaces of components from a catalog, a data model they bind to, and actions back. `@braidlabs/sdui/a2ui` speaks v1.0 and joins it to everything above — an A2UI surface is a screen, and a renderer's catalog is a client manifest — so the projection that keeps native binaries safe from version skew keeps A2UI renderers safe too. `@braidlabs/sdui/web` is a renderer that draws A2UI into the host's own page.
+
+A2UI on its own identifies a catalog by an id and nothing else. A renderer built last spring and one built today look the same if they name the same catalog, and an agent writing for one breaks the other. Here:
+
+- **The agent authors against the catalog's own id** (`catalog.a2ui.catalogId`): the newest version of every component.
+- **Each renderer names a catalog id derived from what it can draw** — `…/catalog.json?caps=cv_9f2c…`, from `a2uiCatalogId(catalog, manifest)`. Builds that draw alike share an id.
+- **Between them, `createA2uiProjector`** projects each surface to that renderer: downgraded where the steps allow, down the fallback ladder where they do not, never with a guessed value. An update reaches the renderer as just the components whose projection changed. A surface a renderer cannot show honestly is not sent; the agent receives an `INCOMPATIBLE` error and can choose something else.
+
+```ts
+import { createA2uiProjector, resolveRendererCapabilities } from '@braidlabs/sdui/a2ui';
+
+// `a2uiRendererCapabilities` from the transport: which renderer is this?
+const renderer = resolveRendererCapabilities(capabilities, { catalogs: [catalog], manifests });
+if (renderer.status !== 'ok') return refuse(renderer.status); // manifest-unknown, protocol-unsupported
+
+const projector = createA2uiProjector({ catalog, manifest: renderer.manifest, catalogId: renderer.catalogId });
+for await (const message of agent) {
+  const { toRenderer, toAgent } = projector.push(message);
+  toRenderer.forEach(sendToRenderer);
+  toAgent.forEach(sendToAgent); // INCOMPATIBLE, or a function the renderer lacks
+}
+```
+
+### The model, in A2UI terms
+
+| A2UI                                      | SDUI model                                                                                                                                                   |
+| :---------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a surface's components, a flat list by id | a screen's tree; `surfaceToScreen` and `treeToComponents` convert; every upstream example round-trips, its unreferenced components reported rather than kept |
+| `children: ["a", "b"]`, `child: "a"`      | slots; `max: 1` is a single child. `Tabs.tabs[].child` is a slot with `a2ui: { list, key }`                                                                  |
+| `children: { path, componentId }`         | a slot whose one node has `repeat: "<path>"`                                                                                                                 |
+| a referenced id not yet sent              | an `sdui.placeholder` node, written back as the same dangling reference                                                                                      |
+| one component under two parents           | a copy with `copyOf`, written back as a reference                                                                                                            |
+| `@accessibility`, `@checks`, `@metadata`  | `annotations`, carried through projection untouched                                                                                                          |
+| `action: { event }` / `{ functionCall }`  | the `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions are written as events of their name                                                    |
+| `{ "@path" }`, `{ "@call" }` in props     | bound values. A step may move, wrap or drop one; a step that converts, maps or reaches into one is a `gap`                                                   |
+| catalog functions                         | `catalog.functions`; `manifest.functions` lists what a renderer implements, and a node calling one it lacks goes down the ladder                             |
+| the data model                            | `screen.data`                                                                                                                                                |
+
+`parseA2uiMessage` and `parseA2uiStream` refuse what the v1.0 schemas refuse — and reserved keys, unknown `@` directives, `theme` (removed in v1.0), values past the size limits — with the spec's error codes and a JSON Pointer. `A2uiSurfaces` applies messages by the spec's state rules. `a2uiBasicCatalog` and `a2uiBasicManifest` are the basic catalog as a catalog and as a renderer.
+
+### Prerendering
+
+Projection is a pure function of immutable inputs, and a release serves a finite set of manifests, so every variant can be computed when a screen is published:
+
+```bash
+sdui a2ui prerender --catalog catalog.json --screen screens/trip.json \
+  --manifest manifests/web-3.0.json --manifest manifests/web-1.9.json \
+  --context summer-sale=contexts/summer-sale.json --out prerendered/
+```
+
+Each variant is written as the A2UI stream that renderer receives (`.jsonl`) and as the HTML a browser shows before any script runs (`.html`), content-addressed, with `index.json` mapping each catalog id to its variant. `selectPrerendered(index, slug, supportedCatalogIds)` picks one per request. `prerenderA2ui` is the same as a function, and takes a renderer's registry so host components prerender too.
+
+### The renderer: `@braidlabs/sdui/web`
+
+```ts
+import { defineA2uiSurface, h } from '@braidlabs/sdui/web';
+
+defineA2uiSurface({
+  registry: {
+    Card: { element: 'acme-panel' }, // the host's own custom element
+    FlightCard: { fragment: { name: 'flight-card', entry: 'https://flights.example/card.js' }, events: { select: 'select' } }, // another team's Braid fragment
+    Fare: (c) => h('div', { class: 'fare' }, c.text('label')), // a view, drawn the same on a server
+  },
+});
+```
+
+```html
+<a2ui-surface src="/agent/stream" action-url="/agent/actions" catalog-ids="https://acme.example/a2ui/catalog.json?caps=cv_9f2c…"></a2ui-surface>
+```
+
+- **Light DOM.** Components are semantic HTML with classes (`a2ui-Button`) and data attributes (`data-variant="primary"`) and no styles of their own: the host's stylesheet is what they look like. `A2UI_DEFAULT_CSS` is a starting point at zero specificity.
+- **Braided components.** A component type can be the host's own custom element (props as its `a2ui` property and scalar attributes; children slotted by prop name) or a Braid fragment in contract mode (props as its `props`; a `braid:event` becomes the A2UI action named in `events`, with its detail in the context).
+- **Patching, not replacing.** An agent's update never replaces an input under the cursor: focus, caret and selection survive. Prerendered HTML (from `renderA2uiHtml`, or the prerender command) carries `data-a2ui-key`s and the messages that built it, and is adopted in place.
+- **Closed and checked.** Bindings, `@checks` and the basic catalog's functions are evaluated by a closed interpreter; a `formatString` template is interpolated only where it was written as one, never from data. Regular expressions are parsed in the A2UI dialect, refused when the spec's rules say they could backtrack or when they would compile to more than 20,000 instructions (nested lookaheads and counted repeats included), and matched by a linear-time NFA. Markdown is the spec's subset — no HTML, images or links; a link is its words.
+- **URLs pass a policy** (`urlPolicy`). `javascript:` and `data:text` URLs are never written, and a URL padded with whitespace the URL parser keeps is refused. Links (which need a click) may go to any http(s) host unless `hosts` narrows them. **Media load by themselves**, so a URL built from bound data would send what someone types to whoever it names: absolute media URLs are refused unless their host is in `mediaHosts`.
+- **A draw has a budget.** `DRAW_LIMITS` charges each draw for function calls, text (labels, titles, values, check messages, paragraphs — priced by what laying it out costs a browser, `layoutCost`: 1 a character of the letters and punctuation every text font has (Latin-1 and Extended-A, the Romanian and Vietnamese letters, basic Greek and Cyrillic, dashes, quotes and the like); 8 for the scripts measured to cost a few times that (Hebrew, Arabic, Devanagari, Chinese, Japanese, Korean, emoji, combining marks) and for symbols, each 128 code points of which count as a script of their own, since a browser draws them from fonts of their own; 50 for a script broken into lines by dictionary, for every script not measured, and for the letters and punctuation a font may lack (IPA, archaic Latin, polytonic Greek, old Cyrillic, rare punctuation and currency signs, each 32 code points a group); and 1,000 for each change of script, group or direction, and for each control character, unassigned code point, emoji presentation selector and invisible break (a soft hyphen, a zero-width space, a line separator), and 50 for each bracket in right-to-left text, since a browser shapes each run, and may pick a font for it, on its own — so 20,000 characters alternating Latin and Hebrew cost what 20 million plain ones do. A text costs the dearest of itself upper-cased and lower-cased, since CSS may change its case. A draw's text is at most 500,000 of these: layout depends on where text is as well as what, and a flex row measuring every line break of 2,000,000 plain characters of short words took over half a second. An element that sees a draw's layout run long anyway draws less text next time, and lets the limit back slowly), Braid fragments (32 a draw; each is a realm of its own), components and repeated parts drawn (template items, tabs, options — 5,000, a video or audio player counting as 25 and a date input as 4, and fewer after a slow layout), regex steps, and work: every value read — bound or literal, a scalar too — costs what it holds, one unit per value and one per 16 characters of its strings and keys, every time it is read. So whatever a draw does with a value afterwards (walk it, stringify it, hand it to a host element) is paid for before it is done, and a function over a large binding costs as much as the binding is large. Each check, each prop handed to a host element, each date-format letter and each pattern compiled is charged too. The budget is shared by every surface on an element and every renderer function call between draws; in a browser a draw also ends after `DRAW_LIMITS.ms` (100 ms), whatever its units say. Past a limit one placeholder marks where the draw stopped, the rest is not drawn, and the agent is told. A host element is never handed a prop larger than 16,000 characters; a surface that fails to draw is reported (`RENDER_ERROR`) without taking its neighbours with it. Components an agent draws carry opaque ids and names, sit outside any host form (`form="a2ui-detached"`), and a host element is given attributes only for the scalar props its catalog schema declares.
+- **What is measured not to freeze or fill the page.** One message carries at most 50,000 values (`A2UI_LIMITS`), which bounds the longest a page spends applying one, and a draw puts at most 5,000 components, repeated parts and markup elements in the page, and one placeholder past them. Messages — from a stream, an action's answer or `push()` — are applied a few milliseconds at a time (a `push()` of one JSON array as text is parsed in one go first, and checked a message at a time; no line may be longer than one message) with the page let run in between, and drawn in a task of their own once a batch is applied — never half of one — with as long between draws as the last one took — so `push()` returns before the page shows what it pushed: `await element.settled()` (or wait for `a2ui:render`), not a microtask. (Prerendered markup is still adopted synchronously, when the element connects.) An update costs what it changes: the data model is written in place, not copied. What a renderer holds is counted in characters as well as values — `DATA_MODEL_LIMITS` (200,000 values and 2,000,000 characters a surface), `SURFACES_LIMITS` (64 surfaces, 2,000,000 characters of components each, 8,000,000 characters in all) — and an update past them is refused. Renderer functions an agent calls are limited too, `CALL_LIMITS` (20 at once, then five a second), since each answer is a request to the agent and its reply may ask for more. The agent hears a bounded amount, `ERROR_LIMITS`: a burst of 20 errors then two a second, each cut to 1,000 characters, and a stream that has had 100 messages refused is hung up on. `e2e/a2ui-exhaustion.e2e.ts` runs, in Chromium, every stream eight rounds of review used to freeze or crash the renderer, and text of each kind the budget prices at the most the budget allows, and holds each to under 300 ms of main-thread time at once. That is evidence, not proof: the renderer runs on the page's thread, layout is the browser's, and pricing it is measurement, so a kind of content nobody has measured may still cost more than it is charged. The renderer prices the text it hands a host's own components as its own, but cannot see their CSS: a host view that sets text in a font of its own should bound what it shows (the example's Fare badge shows 32 characters). For agents you do not trust at all, put `<a2ui-surface>` in a frame of its own origin, where a browser that isolates sites gives it a thread of its own.
+- **Not a confidentiality boundary.** `sendDataModel` says whether the data model rides along with messages to the agent; an agent can read any value anyway, by binding it into an action's context. Keep secrets out of a surface's data model.
+- **Messages out** are dispatched as a cancelable `a2ui:message` event and POSTed to `action-url` as `{ message, metadata }`, with `a2uiRendererCapabilities` and, for an action on a surface created with `sendDataModel`, `a2uiRendererDataModel`. Errors and renderer functions' answers carry no data model: they happen when the agent says, and writing a large model out for each would be work the agent could ask for without end. A response of more messages is applied.
+
+`examples/concierge` puts it together: a CMS-authored screen prerendered per renderer, an agent's surface through the projector, `Card` drawn by the host's element and `FlightCard` by a Braid fragment.
 
 ---
 

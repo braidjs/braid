@@ -40,6 +40,8 @@
       "@braidlabs/data": ["./libs/data/src/index.ts"],
       "@braidlabs/studio": ["./libs/studio/src/index.ts"],
       "@braidlabs/sdui": ["./libs/sdui/src/index.ts"],
+      "@braidlabs/sdui/a2ui": ["./libs/sdui/src/a2ui.ts"],
+      "@braidlabs/sdui/web": ["./libs/sdui/src/web.ts"],
       "@braidlabs/angular-core": ["./libs/angular/core/src/index.ts"]
     }
   },

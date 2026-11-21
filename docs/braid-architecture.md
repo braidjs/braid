@@ -1,13 +1,13 @@
 # Braid Architecture
 
-> **New here?** This document assumes the vocabulary — *fragment*, *realm*, *slot*, *piercing*,
-> *the `/__braid/` namespace*. [**Braid, explained**](braid-explained.md) introduces all of it from
+> **New here?** This document assumes the vocabulary — _fragment_, _realm_, _slot_, _piercing_,
+> _the `/__braid/` namespace_. [**Braid, explained**](braid-explained.md) introduces all of it from
 > scratch, with a walkthrough of one page load, and takes about fifteen minutes. Start there and
 > come back.
 
 - **Status:** Draft for review.
 - **Name:** **Braid** — independent strands composed into one strong cord, where every strand keeps its own identity and dependencies, while remaining unbraidable (incremental migration is completely reversible).
-- **Positioning:** Braid is a **composition layer with skew handling built in**. Its thesis is the elimination of version-skew errors across independently deployed frontend applications. It removes *dependency skew* structurally (isolated JavaScript realms prevent co-deployed apps from colliding) and surfaces *contract skew* at the fragment boundary, where the contract-migration engine in `@braidlabs/skew` bridges version differences over the context bus.
+- **Positioning:** Braid is a **composition layer with skew handling built in**. Its thesis is the elimination of version-skew errors across independently deployed frontend applications. It removes _dependency skew_ structurally (isolated JavaScript realms prevent co-deployed apps from colliding) and surfaces _contract skew_ at the fragment boundary, where the contract-migration engine in `@braidlabs/skew` bridges version differences over the context bus.
 - **Provenance:** Successor concept to [web-fragments](https://github.com/web-fragments/web-fragments) (MIT, Cloudflare-sponsored). Key subsystems were rebuilt and matrix-tested in our research forks (document facade, strict host isolation, exact gateway routing), and empirical results from those tests inform the architecture below.
 
 ---
@@ -19,7 +19,7 @@ Modern organizations want independent teams to ship frontend applications on the
 Braid builds upon two foundational techniques:
 
 1. **Splitting the JS Execution Context from the Rendered DOM:** Fragment code runs inside its own isolated realm (a hidden same-origin iframe), while its visual DOM is rendered directly into the host page within a Shadow Root. This provides the isolation benefits of iframes without the typical drawbacks (such as broken layout flow, accessibility fragmentation, and SEO barriers).
-2. **The Single-Origin Gateway:** A lightweight server middleware that sits in front of the application shell and microfrontend endpoints. It routes fragment traffic and streams server-rendered fragment HTML directly into the page stream during initial document requests (a process called *piercing*).
+2. **The Single-Origin Gateway:** A lightweight server middleware that sits in front of the application shell and microfrontend endpoints. It routes fragment traffic and streams server-rendered fragment HTML directly into the page stream during initial document requests (a process called _piercing_).
 
 ### What Braid Changes from Earlier Approaches
 
@@ -41,16 +41,16 @@ Independently deployed frontends naturally introduce version skew: pages compose
 
 To ensure Braid remains practical and maintainable in production, the architecture adheres to concrete developer experience budgets:
 
-| Goal | Target Budget |
-| :--- | :--- |
-| **Hosting a fragment** | $\le$ 5 lines of code (1 script tag, 1 `<fragment-slot>` element) |
-| **Authoring a fragment (modern framework)** | 0 app logic changes + $\le$ 5 lines of adapter setup |
-| **Authoring a fragment (legacy app, compat mode)** | 0 code changes (configuration only) |
-| **Local development startup** | 1 command (`braid dev`), starts all services in under 30s |
-| **Time to first working demo** | Under 10 minutes from `npm create @braidlabs/core` |
-| **Actionable error messages** | Every runtime error identifies the fragment, the failure stage, and a clear fix hint |
-| **Host page overhead when idle** | Zero — no global patches, listeners, or observers on the host window |
-| **Version safety** | Client and gateway package versions stay aligned; mismatches throw descriptive named errors |
+| Goal                                               | Target Budget                                                                               |
+| :------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **Hosting a fragment**                             | $\le$ 5 lines of code (1 script tag, 1 `<fragment-slot>` element)                           |
+| **Authoring a fragment (modern framework)**        | 0 app logic changes + $\le$ 5 lines of adapter setup                                        |
+| **Authoring a fragment (legacy app, compat mode)** | 0 code changes (configuration only)                                                         |
+| **Local development startup**                      | 1 command (`braid dev`), starts all services in under 30s                                   |
+| **Time to first working demo**                     | Under 10 minutes from `npm create @braidlabs/core`                                          |
+| **Actionable error messages**                      | Every runtime error identifies the fragment, the failure stage, and a clear fix hint        |
+| **Host page overhead when idle**                   | Zero — no global patches, listeners, or observers on the host window                        |
+| **Version safety**                                 | Client and gateway package versions stay aligned; mismatches throw descriptive named errors |
 
 ---
 
@@ -158,6 +158,7 @@ Fragments register with the gateway through structured JSON manifests (loaded fr
 ### 6. Two Trust Tiers
 
 `<fragment-slot>` supports two trust tiers with a consistent component API:
+
 - **Trusted Tier (`trust="trusted"`):** High-performance realm isolation with direct DOM projection into shadow roots.
 - **Untrusted Tier (`trust="untrusted"`):** Standard cross-origin sandboxed iframes for untrusted third-party widgets, with progressive enhancement via `credentialless` where supported. **Shipped.** Its DOM stays in its own document — none of the trusted tier's shared-document benefits apply across it. See [Trust tiers](./braid-boundary.md).
 
@@ -187,19 +188,19 @@ erDiagram
   CONFORMANCE_KIT }o--o{ FRAGMENT_ENDPOINT : certifies
 ```
 
-| Entity | Description |
-| :--- | :--- |
-| **Fragment Slot** | The custom HTML element rendered by the host; manages lifecycle, shadow roots, and trust tiers. |
-| **Fragment Instance** | A single mounted execution of a fragment. |
-| **Realm** | The isolated JavaScript execution context (blob iframe, HTTP iframe, or sandbox). |
-| **FragmentEnv** | The contract object graph passed to modern fragments in place of global variables. |
-| **Adapter** | Framework-specific bridge mapping `FragmentEnv` into framework mount APIs. |
-| **Manifest** | Versioned JSON describing a fragment's endpoint, entry point, adapter, routing, and events. |
-| **Registry** | The collection of manifests consulted by the gateway for routing and SSR piercing. |
-| **Gateway** | Origin-front middleware handling namespace routing, HTML piercing, and shell proxying. |
-| **Context Bus** | Typed channel for props, custom events, and shared state between host and fragments. |
+| Entity                 | Description                                                                                         |
+| :--------------------- | :-------------------------------------------------------------------------------------------------- |
+| **Fragment Slot**      | The custom HTML element rendered by the host; manages lifecycle, shadow roots, and trust tiers.     |
+| **Fragment Instance**  | A single mounted execution of a fragment.                                                           |
+| **Realm**              | The isolated JavaScript execution context (blob iframe, HTTP iframe, or sandbox).                   |
+| **FragmentEnv**        | The contract object graph passed to modern fragments in place of global variables.                  |
+| **Adapter**            | Framework-specific bridge mapping `FragmentEnv` into framework mount APIs.                          |
+| **Manifest**           | Versioned JSON describing a fragment's endpoint, entry point, adapter, routing, and events.         |
+| **Registry**           | The collection of manifests consulted by the gateway for routing and SSR piercing.                  |
+| **Gateway**            | Origin-front middleware handling namespace routing, HTML piercing, and shell proxying.              |
+| **Context Bus**        | Typed channel for props, custom events, and shared state between host and fragments.                |
 | **Migration Registry** | The contract-migration repository (`@braidlabs/skew`) used to translate versioned context payloads. |
-| **Conformance Kit** | Test runner certifying that a fragment behaves consistently standalone and slotted. |
+| **Conformance Kit**    | Test runner certifying that a fragment behaves consistently standalone and slotted.                 |
 
 ---
 
@@ -216,7 +217,7 @@ The host page mounts microfrontends using the custom element `<fragment-slot>`:
 
 ```ts
 interface FragmentSlotElement extends HTMLElement {
-  name: string;                   // Fragment ID registered in the gateway
+  name: string; // Fragment ID registered in the gateway
   trust: 'trusted' | 'untrusted'; // Trust tier (default: 'trusted')
   props: Record<string, unknown>; // Reactive property binding
   readonly state: 'idle' | 'loading' | 'ready' | 'error';
@@ -243,11 +244,11 @@ interface RealmHandle {
 }
 ```
 
-| Realm Kind | URL Scheme | Session History | Typical Use Case |
-| :--- | :--- | :--- | :--- |
-| **contract-blob** | `blob:` | None | Contract-mode modern fragments |
-| **compat-http** | `/__braid/frag/...` | Managed via replaceState | Compat adapter (legacy apps) |
-| **sandbox** | Cross-origin URL | Browser-managed | Untrusted third-party fragments |
+| Realm Kind        | URL Scheme          | Session History          | Typical Use Case                |
+| :---------------- | :------------------ | :----------------------- | :------------------------------ |
+| **contract-blob** | `blob:`             | None                     | Contract-mode modern fragments  |
+| **compat-http**   | `/__braid/frag/...` | Managed via replaceState | Compat adapter (legacy apps)    |
+| **sandbox**       | Cross-origin URL    | Browser-managed          | Untrusted third-party fragments |
 
 ### 3. `FragmentEnv` (The Contract)
 
@@ -256,14 +257,14 @@ Modern fragments interact with the host and browser through the `FragmentEnv` co
 ```ts
 interface FragmentEnv {
   readonly contractVersion: '1.0';
-  readonly root: HTMLElement;        // Mount container inside the Shadow Root
-  readonly document: EnvDocument;    // Scoped head, title, styles, and activeElement
-  readonly location: EnvLocation;    // Logical URL for the fragment
-  readonly history: EnvHistory;      // Scoped navigation controls
-  readonly context: EnvContext;      // Shared state subscription and retrieval
+  readonly root: HTMLElement; // Mount container inside the Shadow Root
+  readonly document: EnvDocument; // Scoped head, title, styles, and activeElement
+  readonly location: EnvLocation; // Logical URL for the fragment
+  readonly history: EnvHistory; // Scoped navigation controls
+  readonly context: EnvContext; // Shared state subscription and retrieval
   readonly props: Readonly<Record<string, unknown>>;
   emit(type: string, detail?: unknown): void; // Dispatches typed events to host
-  readonly signal: AbortSignal;      // Signals unmount for automatic cleanup
+  readonly signal: AbortSignal; // Signals unmount for automatic cleanup
 }
 ```
 
@@ -295,6 +296,7 @@ export default defineFragment(AppComponent, {
 ### 5. Compat Adapter (Contained Emulation)
 
 For legacy applications, the Compat Adapter provides a complete browser environment emulation:
+
 - Virtualized `Document` proxy facade.
 - Per-node prototype stamping inside the fragment's shadow root.
 - Born-inert script neutralization and ordered script execution.
@@ -315,6 +317,7 @@ app.use(toNodeMiddleware(gateway));
 ```
 
 Key features:
+
 - **Namespace Routing:** Directs subresource requests to fragment origins with prefixes stripped.
 - **HTML Piercing:** Concurrently fetches shell and fragment SSR responses, interleaving fragments into declarative shadow roots in the initial HTML stream.
 - **Resilience:** Configurable timeouts, error fallbacks (`omit`, `placeholder`, `error-html`), and WebSocket pass-through.
@@ -333,7 +336,7 @@ Each microfrontend exports a `braid.manifest.json`:
   "pierce": ["/checkout/*"],
   "events": { "checkout:done": { "detail": "object" } },
   "timeoutMs": 1500,
-  "fallback": "placeholder"
+  "fallback": "placeholder",
 }
 ```
 
@@ -368,13 +371,13 @@ When microfrontends are deployed with differing schema versions, Braid's contrac
 
 ## 8. Isolation Boundaries
 
-| Boundary Scope | Mechanism | Mode |
-| :--- | :--- | :--- |
-| **Compat Realm (Window)** | Virtualized observers, constructor checks, and sizing proxies | Compat only |
-| **Compat Realm (Document)** | Proxy facade over document prototype | Compat only |
-| **Fragment DOM Nodes** | Per-node prototype stamping inside shadow root | Compat only |
-| **Fragment Scripts** | Born-inert script neutralization until realm activation | Compat only |
-| **Contract Realm** | Standard unpatched JavaScript environment (dev warning for global leaks) | Contract mode |
+| Boundary Scope              | Mechanism                                                                | Mode          |
+| :-------------------------- | :----------------------------------------------------------------------- | :------------ |
+| **Compat Realm (Window)**   | Virtualized observers, constructor checks, and sizing proxies            | Compat only   |
+| **Compat Realm (Document)** | Proxy facade over document prototype                                     | Compat only   |
+| **Fragment DOM Nodes**      | Per-node prototype stamping inside shadow root                           | Compat only   |
+| **Fragment Scripts**        | Born-inert script neutralization until realm activation                  | Compat only   |
+| **Contract Realm**          | Standard unpatched JavaScript environment (dev warning for global leaks) | Contract mode |
 
 ---
 
@@ -409,9 +412,9 @@ flowchart TD
   Bus --> DevTooling
 ```
 
-| Phase | Core Deliverables |
-| :--- | :--- |
-| **Phase 0** | Validate blob-URL realms across Chromium, WebKit, and Firefox; build Angular/React DI mount probes. |
-| **Phase 1** | Contract path end-to-end: React and vanilla adapters, core gateway, registry loader, and `braid dev`. |
-| **Phase 2** | Compat adapter with full WebIDL audit manifest; Angular and Vue adapters; conformance test kit. |
+| Phase       | Core Deliverables                                                                                                                     |
+| :---------- | :------------------------------------------------------------------------------------------------------------------------------------ |
+| **Phase 0** | Validate blob-URL realms across Chromium, WebKit, and Firefox; build Angular/React DI mount probes.                                   |
+| **Phase 1** | Contract path end-to-end: React and vanilla adapters, core gateway, registry loader, and `braid dev`.                                 |
+| **Phase 2** | Compat adapter with full WebIDL audit manifest; Angular and Vue adapters; conformance test kit.                                       |
 | **Phase 3** | ~~Untrusted sandbox tier~~ (shipped); Context Bus schema migration integration; per-fragment capability grants; production demo apps. |

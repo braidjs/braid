@@ -4,12 +4,12 @@ An honest status of the developer-facing surface, and the shape of what should c
 
 ## What exists today
 
-| Command | Status | What it does |
-| --- | --- | --- |
-| `braid dev` | **works** | starts the shell and fragment dev servers, waits for them, serves the gateway in front on one origin, proxies HTTP and websockets, prefixes logs |
-| `braid init` | **works** | writes a starter `braid.config.json` |
-| `braid add <id>` | **works** | registers a fragment in the config (`--endpoint`, `--port`, `--pierce`) |
-| `@braidlabs/cli/nx` | **works** | Nx plugin inferring a `braid-dev` target from any `braid.config.*` |
+| Command             | Status    | What it does                                                                                                                                     |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `braid dev`         | **works** | starts the shell and fragment dev servers, waits for them, serves the gateway in front on one origin, proxies HTTP and websockets, prefixes logs |
+| `braid init`        | **works** | writes a starter `braid.config.json`                                                                                                             |
+| `braid add <id>`    | **works** | registers a fragment in the config (`--endpoint`, `--port`, `--pierce`)                                                                          |
+| `@braidlabs/cli/nx` | **works** | Nx plugin inferring a `braid-dev` target from any `braid.config.*`                                                                               |
 
 See [the dev workflow](https://github.com/braidjs/braid/blob/main/skills/using-braid/references/dev-workflow.md) for how to use them, and
 what dev servers still need configured by hand.
@@ -22,7 +22,7 @@ Nest `app.use`, a wrapped fetch handler for Nitro/Workers) and per rendering mod
 knowledge lives only in the README.
 
 **Nothing wires a host app's provider.** For Angular that means `provideBraid()` in the right
-bootstrap, `provideClientHydration()` in a config *shared with the server bootstrap*, and — for
+bootstrap, `provideClientHydration()` in a config _shared with the server bootstrap_, and — for
 SSR — per-request render mode on pierced routes. Getting hydration on only one side is the single
 most common failure, and it is exactly what a generator should make impossible.
 
@@ -48,20 +48,20 @@ $ braid add-gateway
 
 The detection matrix is the valuable part, because the right answer really does differ:
 
-| Detected | Where the gateway goes |
-| --- | --- |
-| Angular SSR (`ssr.entry`) | the app's `server.ts`, before the Angular handler |
-| Angular SPA (no `ssr`) | no server exists — scaffold a minimal one, or configure `braid dev` only and print how to deploy |
-| NestJS | `app.use(...)` in `main.ts`, before `app.listen` |
-| Express / Connect | first `app.use` in the entry file |
-| Nitro / h3 | wrap the exported handler with `toFetchHandler` |
-| Unknown | print the snippet and where it belongs; change nothing |
+| Detected                  | Where the gateway goes                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------ |
+| Angular SSR (`ssr.entry`) | the app's `server.ts`, before the Angular handler                                                |
+| Angular SPA (no `ssr`)    | no server exists — scaffold a minimal one, or configure `braid dev` only and print how to deploy |
+| NestJS                    | `app.use(...)` in `main.ts`, before `app.listen`                                                 |
+| Express / Connect         | first `app.use` in the entry file                                                                |
+| Nitro / h3                | wrap the exported handler with `toFetchHandler`                                                  |
+| Unknown                   | print the snippet and where it belongs; change nothing                                           |
 
 **SPA hosts deserve a real answer, not a shrug.** A pure SPA has no server to mount middleware
 in, so the honest options are: run `braid dev` locally and put the gateway at the edge in
 production, or adopt a thin server. The command should say which it did and why.
 
-### `braid add-fragment <id>` — prepare an app to *be* a fragment
+### `braid add-fragment <id>` — prepare an app to _be_ a fragment
 
 Zero application code, by design. It configures the dev server's serve path, adds the manifest
 entry with the matching endpoint, and — where it can detect one — sets `outputHashing` so stale
@@ -70,7 +70,7 @@ bundles stop biting.
 ### `braid ng-add` (or `nx g @braidlabs/angular:setup`)
 
 Host-side wiring for Angular, as a generator so it is idempotent and reviewable in a diff:
-`provideBraid()`, hydration in a *shared* config, per-request render mode for pierced routes, and
+`provideBraid()`, hydration in a _shared_ config, per-request render mode for pierced routes, and
 a `<braid-fragment>` placed where you point it.
 
 ### `braid doctor`

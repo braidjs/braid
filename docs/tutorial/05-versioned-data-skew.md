@@ -92,7 +92,7 @@ export function App() {
         detail: { invoiceId: invoice.id, amount: invoice.amount, timestamp: Date.now() },
         bubbles: true,
         composed: true,
-      })
+      }),
     );
   };
 

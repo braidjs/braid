@@ -114,7 +114,7 @@ All packages are published under [`@braidlabs`](https://www.npmjs.com/org/braidl
 |                        | [`@braidlabs/build`](libs/build)                       | `skew-stamp` and `skew-contract`: build identity and contract types             |
 |                        | [`@braidlabs/data`](libs/data)                         | Local-first data layer, tolerant of skew between independently deployed readers |
 |                        | [`@braidlabs/studio`](libs/studio)                     | Payload diffs for inspecting migrations                                         |
-|                        | [`@braidlabs/sdui`](libs/sdui)                         | Server-driven UI for native apps, projected per app version through contracts   |
+|                        | [`@braidlabs/sdui`](libs/sdui)                         | Server-driven UI and A2UI, projected per app version; a renderer for the web    |
 | **Angular toolkit**    | [`@braidlabs/angular-core`](libs/angular/core)         | DI and signal wrappers for versioned stores                                     |
 |                        | [`@braidlabs/angular-router`](libs/angular/router)     | Recovery from stale lazy chunks after a deploy, without reload loops            |
 |                        | [`@braidlabs/angular-data`](libs/angular/data)         | Entity store, tag invalidation and a durable mutation outbox                    |

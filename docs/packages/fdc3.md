@@ -62,9 +62,9 @@ Each fragment's `fdc3` and `appd` manifest blocks become an App Directory record
 
 Either of two endpoints serves those records:
 
-| Endpoint | Serves | Filtered by |
-| :--- | :--- | :--- |
-| Gateway: `discovery: { appd: true }` → `/__braid/registry/appd/v2/apps` | what this gateway is serving | the caller's `access.list` |
+| Endpoint                                                                                     | Serves                                            | Filtered by                                 |
+| :------------------------------------------------------------------------------------------- | :------------------------------------------------ | :------------------------------------------ |
+| Gateway: `discovery: { appd: true }` → `/__braid/registry/appd/v2/apps`                      | what this gateway is serving                      | the caller's `access.list`                  |
 | Registry: `createRegistryApi({ appd: { origin, environment } })` → `{basePath}/appd/v2/apps` | HEAD, or an environment's pin (e.g. `production`) | the `read` right, or `read:directory` alone |
 
 For a page's own agent, use the gateway endpoint: it shows each user only the apps they may list.

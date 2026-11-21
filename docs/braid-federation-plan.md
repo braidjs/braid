@@ -173,16 +173,17 @@ Planned again, simplified and approved after the first build merged.
 
 **Built:**
 
-| Item | PR |
-| --- | --- |
-| WebSocket upgrades no longer leak `cookie` or `authorization` past `forwardCredentials` | #28 |
-| `forwardCredentials` decided per fragment; `credentialHeaders` for identity headers a proxy injects | #28 |
-| Loop guard: `x-braid-via` with a 508 at four hops, for fetches and upgrades (it also fixed a single-flight self-deadlock) | #28 |
-| `x-braid-fragment-id` set once through chained gateways | #28 |
-| `braid registry … --source <module>` in place of a `braid graph compose` command | #29 |
-| Route outlet: `<fragment-slot outlet>` | this PR |
+| Item                                                                                                                      | PR      |
+| ------------------------------------------------------------------------------------------------------------------------- | ------- |
+| WebSocket upgrades no longer leak `cookie` or `authorization` past `forwardCredentials`                                   | #28     |
+| `forwardCredentials` decided per fragment; `credentialHeaders` for identity headers a proxy injects                       | #28     |
+| Loop guard: `x-braid-via` with a 508 at four hops, for fetches and upgrades (it also fixed a single-flight self-deadlock) | #28     |
+| `x-braid-fragment-id` set once through chained gateways                                                                   | #28     |
+| `braid registry … --source <module>` in place of a `braid graph compose` command                                          | #29     |
+| Route outlet: `<fragment-slot outlet>`                                                                                    | this PR |
 
 **Declined, with reasons:**
+
 - **`/__braid/graph` export endpoint:** any registry source already works with `subgraph()`, and no
   drift has been reported.
 - **Managed registry refresh:** it reverses the pinned-snapshot model and touches the breaker,
@@ -193,7 +194,7 @@ Planned again, simplified and approved after the first build merged.
 - **Nested piercing, id prefixing:** these stay non-goals. Nested piercing brings back the
   shell-within-a-shell problem, and prefixing breaks slot names, realm URLs and team references.
 
-**Amended in verification:** "a named slot wins over the outlet" holds for a named slot *before*
+**Amended in verification:** "a named slot wins over the outlet" holds for a named slot _before_
 the outlet. A streaming rewriter cannot let a later slot take a fragment it has already placed. A
-named slot *after* the outlet is therefore unnamed (`data-braid-in-outlet`) instead of booting a
+named slot _after_ the outlet is therefore unnamed (`data-braid-in-outlet`) instead of booting a
 second copy, and the gateway warns.

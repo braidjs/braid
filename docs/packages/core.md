@@ -33,24 +33,29 @@ flowchart LR
 ```
 
 ### 1. The `<fragment-slot>` Element
+
 `<fragment-slot>` is the custom HTML element that marks insertion points in the host page. It handles:
+
 - **Shadow Root Lifecycle:** Creates and manages open Shadow Roots (including Declarative Shadow DOM adoption from SSR piercing).
 - **Realm Creation:** Spawns and manages hidden, same-origin iframe execution realms.
 - **Dynamic Props & Events:** Translates host properties into the fragment and bubbles fragment events.
 
 ### 2. Execution Realms
+
 Braid uses hidden, same-origin iframes as synchronous, DOM-capable JavaScript execution contexts:
 
-| Realm Kind | URL Scheme | Session History Impact | Typical Use Case |
-| :--- | :--- | :--- | :--- |
-| `compat-http` | `/__braid/frag/:id/…` | Managed via `replaceState` | Legacy applications with zero code changes |
-| `contract-blob` | `blob:` | None (Zero history pollution) | Modern contract-mode fragments |
-| `sandbox` | Cross-origin URL | Isolated | Untrusted third-party widgets |
+| Realm Kind      | URL Scheme            | Session History Impact        | Typical Use Case                           |
+| :-------------- | :-------------------- | :---------------------------- | :----------------------------------------- |
+| `compat-http`   | `/__braid/frag/:id/…` | Managed via `replaceState`    | Legacy applications with zero code changes |
+| `contract-blob` | `blob:`               | None (Zero history pollution) | Modern contract-mode fragments             |
+| `sandbox`       | Cross-origin URL      | Isolated                      | Untrusted third-party widgets              |
 
-The `sandbox` realm (`trust="untrusted"`) is a performance option as well as a security one. Under site isolation, a cross-*site* frame gets its own renderer process, so a CPU-heavy fragment runs off the host's main thread. This needs a different registrable domain: a sibling subdomain shares the host's process. It doesn't apply on Android, where Chrome isolates only some sites, or in Safari. See [the trust tiers](../braid-boundary.md).
+The `sandbox` realm (`trust="untrusted"`) is a performance option as well as a security one. Under site isolation, a cross-_site_ frame gets its own renderer process, so a CPU-heavy fragment runs off the host's main thread. This needs a different registrable domain: a sibling subdomain shares the host's process. It doesn't apply on Android, where Chrome isolates only some sites, or in Safari. See [the trust tiers](../braid-boundary.md).
 
 ### 3. The Compat Adapter
+
 For applications that cannot be altered during a migration, the **Compat Adapter** provides full browser emulation strictly contained inside that fragment's realm:
+
 - **Zero Host Pollution:** Never modifies global variables (`window.*`), DOM prototypes, or listeners on the host page.
 - **Document Facade:** Proxies `document.getElementById`, `querySelector`, and DOM insertions directly into the fragment's shadow root.
 - **Script Neutralization:** Scripts rendered via SSR are neutralized into `<script type="inert">` so they do not execute on the host, then activated safely inside the realm.
@@ -135,7 +140,6 @@ A slot can carry host content for two moments: while its fragment boots, and if 
 - **Not for untrusted fragments yet.** Their cross-origin frame doesn't show the loading slot.
 - Listen to `braid:state` on the slot (it doesn't bubble) to follow every state change.
 
-
 ### A header of the host's own
 
 A `slot="header"` child shows above the fragment: while it loads, once it is ready, and if it fails.
@@ -165,16 +169,15 @@ By default a slot boots its fragment as soon as it connects. `boot` defers all o
 iframe, the document fetch, and the fragment's framework and app.
 
 ```html
-<fragment-slot name="reviews" boot="visible" style="min-height: 480px"></fragment-slot>
-<fragment-slot name="cart" boot="interaction"></fragment-slot>
+<fragment-slot name="reviews" boot="visible" style="min-height: 480px"></fragment-slot> <fragment-slot name="cart" boot="interaction"></fragment-slot>
 ```
 
-| `boot` | Boots |
-| --- | --- |
-| `eager` (default) | at once, as before |
-| `idle` | after the page's `load`, when the browser is next idle, or 2 seconds after `load` at the latest |
-| `visible` | when the slot comes within one viewport of the screen |
-| `interaction` | on the first hover, pointer, key or focus inside the slot, after the next paint |
+| `boot`            | Boots                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `eager` (default) | at once, as before                                                                              |
+| `idle`            | after the page's `load`, when the browser is next idle, or 2 seconds after `load` at the latest |
+| `visible`         | when the slot comes within one viewport of the screen                                           |
+| `interaction`     | on the first hover, pointer, key or focus inside the slot, after the next paint                 |
 
 - **Keep the page's main content eager.** A deferred slot's content waits for its trigger, so a
   fragment that holds the largest element on screen (the LCP element) should stay `eager`.
@@ -278,7 +281,10 @@ UI libraries render modals, menus and tooltips by appending to `document.body`, 
 For a fragment below the fold, the browser can skip rendering it until it's near the viewport:
 
 ```css
-fragment-slot.below-fold { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+fragment-slot.below-fold {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px;
+}
 ```
 
 - **It clips.** `content-visibility: auto` brings paint containment, so anything the fragment draws outside its slot is cut off: dropdowns, tooltips, modals portaled to its body. Portals lifted with `overlays="top-layer"` escape it; everything else doesn't. Use it on slots whose content stays inside them, or together with `overlays="top-layer"`.
@@ -301,6 +307,7 @@ initBraid({ confirmLeave: (slots) => myDialog.confirm(`Leave ${slots.length} uns
     if (dirtySlots().length && !leaveConfirmed()) event.preventDefault();
   });
   ```
+
 - **Slots in shadow DOM count.** `dirtySlots()` looks inside every open shadow root, fragments' and components' alike (a Lit element, an Angular `ShadowDom` view).
 - **Calling `initBraid` again** only changes the guard if it passes `confirmLeave`. Pass `null` to remove it.
 - **Navigations inside a single-page app belong to its router.** Cancelling a router's own `pushState` would leave the router believing it navigated. Use the router's guard and `dirtySlots()` from `@braidlabs/core`, or `braidLeaveGuard` from `@braidlabs/angular`.
@@ -349,9 +356,9 @@ initBraid({ recover: true }); // or { attempts: 3, delayMs: 1000 }
 
 ### Sanitizing a fragment's own HTML writes (opt-in)
 
-The gateway neutralizes the markup a fragment *sends*: no handler, script, `javascript:` frame or
+The gateway neutralizes the markup a fragment _sends_: no handler, script, `javascript:` frame or
 meta refresh in its server-rendered HTML runs in the host page. Markup a compat fragment's code
-*writes* at runtime has had no such treatment. `el.innerHTML = untrusted` with an `<img onerror>`
+_writes_ at runtime has had no such treatment. `el.innerHTML = untrusted` with an `<img onerror>`
 compiles that handler in the host page's realm, because the element belongs to the host document.
 An XSS in one fragment becomes script in the shell.
 
@@ -553,6 +560,7 @@ and copy the wrong value back. `capabilities.storage` gives a fragment a store o
     - `navigator.storage.persist()` and `estimate()`, which apply to the shared store.
 
   Without a `partition`, the grant also partitions Web Storage and cookies under the fragment's id, as `'partitioned'` does.
+
 - **An accident barrier, not a security boundary.** Same-origin code can still reach the shared store:
   - `top.localStorage` and the raw cookie jar;
   - `parent.indexedDB` and `top.caches`;
@@ -627,6 +635,7 @@ The custom element upgrades inside the isolated realm and is adopted into the ho
 ## API Reference
 
 ### `initBraid(options?: InitBraidOptions): void`
+
 Registers the `<fragment-slot>` custom element and sets up global runtime observers.
 
 ```ts
@@ -649,27 +658,31 @@ interface InitBraidOptions {
 ```
 
 ### `prefetchFragment(fragmentId: string, route: string): void`
+
 Starts loading a compat fragment's document and scripts before its slot mounts. The next slot for
 that fragment and route to mount within 10 seconds uses the document. See "Prefetching before a
 slot exists".
 
 ### `clearPrefetchedFragments(): void`
+
 Drops every held prefetch. Call it when the user signs out or switches account.
 
 ### `FragmentSlotElement` (`<fragment-slot>`)
+
 DOM Properties and methods on the custom element:
 
-| Property / Method | Type | Description |
-| :--- | :--- | :--- |
-| `name` | `string` | The fragment ID registered in the gateway manifest. |
-| `trust` | `'trusted' \| 'untrusted'` | Trust level (`'trusted'` for realm isolation; `'untrusted'` for sandboxed iframe). |
-| `outlet` | attribute | Marks the slot the gateway fills with the page's routed fragment and names after it. A nameless outlet waits quietly, and boots when it is given a `name`. |
-| `boot` | attribute | When to boot: `eager` (default), `idle`, `visible`, or `interaction`. See "Booting on intent". |
-| `props` | `Record<string, unknown>` | Reactive props passed into the fragment. |
-| `state` | `'idle' \| 'loading' \| 'ready' \| 'error'` | Current lifecycle state of the slot. |
-| `reload()` | `() => Promise<void>` | Destroys current realm and forces a fresh network fetch & boot. |
+| Property / Method | Type                                        | Description                                                                                                                                                |
+| :---------------- | :------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | `string`                                    | The fragment ID registered in the gateway manifest.                                                                                                        |
+| `trust`           | `'trusted' \| 'untrusted'`                  | Trust level (`'trusted'` for realm isolation; `'untrusted'` for sandboxed iframe).                                                                         |
+| `outlet`          | attribute                                   | Marks the slot the gateway fills with the page's routed fragment and names after it. A nameless outlet waits quietly, and boots when it is given a `name`. |
+| `boot`            | attribute                                   | When to boot: `eager` (default), `idle`, `visible`, or `interaction`. See "Booting on intent".                                                             |
+| `props`           | `Record<string, unknown>`                   | Reactive props passed into the fragment.                                                                                                                   |
+| `state`           | `'idle' \| 'loading' \| 'ready' \| 'error'` | Current lifecycle state of the slot.                                                                                                                       |
+| `reload()`        | `() => Promise<void>`                       | Destroys current realm and forces a fresh network fetch & boot.                                                                                            |
 
 ### Events Dispatched by `<fragment-slot>`
+
 - `braid:ready`: Dispatched when the fragment has completed booting — its code has run. It does not
   wait for the fragment's images or its window `load` event, which fires later inside the realm; a
   host that needs the fragment fully loaded should have the fragment say so with an event.

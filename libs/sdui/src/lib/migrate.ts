@@ -9,7 +9,8 @@ import type {
   SkewContractDocument,
   SkewContractStep,
 } from '@braidlabs/contract';
-import { measure } from './internal.js';
+import { boundConflict, changedBinding, hasDynamicValues } from './dynamic.js';
+import { measure, outgrows } from './internal.js';
 import { type Path, formatPath, lostSegments } from './paths.js';
 
 /**
@@ -141,6 +142,21 @@ function ownStep(
 }
 
 const lenses = new WeakMap<SkewContractStep, CompiledLens>();
+const opLenses = new WeakMap<object, CompiledLens>();
+
+/** One op on its own, for walking a step op by op. */
+function opLens(
+  op: SkewContractStep['ops'] extends readonly (infer O)[] | undefined
+    ? O
+    : never,
+): CompiledLens {
+  let lens = opLenses.get(op as object);
+  if (!lens) {
+    lens = compileLens([op]);
+    opLenses.set(op as object, lens);
+  }
+  return lens;
+}
 
 function lensOf(step: SkewContractStep): CompiledLens | null {
   if (!step.ops) return null;
@@ -180,6 +196,9 @@ function walk(
   const derived = new Set<string>();
   let current = value;
   const up = to > from;
+  // A payload with values bound to data has each step checked against them before it runs: a
+  // step that would need their value is a gap, not a mangled binding. See `dynamic.ts`.
+  const bound = hasDynamicValues(value);
 
   for (let v = up ? from + 1 : from; up ? v <= to : v > to; up ? v++ : v--) {
     const step = doc.steps[v - 2] as SkewContractStep;
@@ -189,6 +208,31 @@ function walk(
       // Compiling is inside the try: a catalog that was never run through `parseCatalog` may
       // carry ops the lens compiler refuses, and that must cost one node, not the whole screen.
       const lens = lensOf(step);
+      if (bound && step.ops && lens && (up || lens.down)) {
+        // Op by op, each checked against the value as the ops before it left it: a step that
+        // renames a bound value and then converts it is caught at the convert.
+        const ops = up ? step.ops : [...step.ops].reverse();
+        for (const op of ops) {
+          const conflict = boundConflict([op], current, up);
+          if (conflict !== null)
+            return {
+              ok: false,
+              reason: 'gap',
+              step: span,
+              message: `${label} ${conflict}`,
+            };
+          const single = opLens(op);
+          current = up
+            ? single.up(current, ctx)
+            : (single.down as NonNullable<CompiledLens['down']>)(
+                current as never,
+                ctx,
+              );
+        }
+        for (const path of up ? lens.derivedUp : lens.derivedDown)
+          derived.add(path);
+        continue;
+      }
       const code = step.code
         ? ownStep(options.codeSteps, step.code)
         : undefined;
@@ -287,6 +331,17 @@ export function migrate(
 
   const forward = walk(doc, value, from, to, options, ctx);
   if (!forward.ok) return forward;
+  // The backstop for what the per-step check sees only approximately, and for code steps, which
+  // it cannot see into at all: a binding comes out of a migration unchanged, or not at all.
+  const altered = hasDynamicValues(forward.value)
+    ? changedBinding(value, forward.value)
+    : null;
+  if (altered !== null)
+    return {
+      ok: false,
+      reason: 'gap',
+      message: `"${doc.name}" v${from} → v${to} changes "${altered}", a value bound to data that is only known when it is rendered`,
+    };
   if (to >= from)
     return {
       ok: true,

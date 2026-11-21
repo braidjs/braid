@@ -44,13 +44,13 @@ That falls apart in a predictable order:
 
 ## The model, borrowed from Apollo Federation
 
-| Apollo | Braid |
-| --- | --- |
-| **Subgraph:** a service that owns part of the schema | a team gateway that owns a set of fragment manifests |
-| **Supergraph:** the composed schema | `supergraph([...])`: one registry made of every source |
-| **Router:** plans each query across subgraphs | the org gateway, which pierces any composed fragment directly |
-| **Composition errors** | a fragment id claimed twice, plus any `validateRegistry` error |
-| **Static supergraph** in CI | compose once, publish a snapshot, serve it with `snapshotRegistry` |
+| Apollo                                               | Braid                                                              |
+| ---------------------------------------------------- | ------------------------------------------------------------------ |
+| **Subgraph:** a service that owns part of the schema | a team gateway that owns a set of fragment manifests               |
+| **Supergraph:** the composed schema                  | `supergraph([...])`: one registry made of every source             |
+| **Router:** plans each query across subgraphs        | the org gateway, which pierces any composed fragment directly      |
+| **Composition errors**                               | a fragment id claimed twice, plus any `validateRegistry` error     |
+| **Static supergraph** in CI                          | compose once, publish a snapshot, serve it with `snapshotRegistry` |
 
 The idea is Apollo's: **flatten at composition time, not at request time.** The org gateway knows
 every fragment in the graph before a request arrives, so there is nothing left to discover at
@@ -87,11 +87,11 @@ the exception, see Caveats).
 A team's registry is partly trusted input to the org gateway, so `subgraph()` also enforces three
 limits:
 
-| Field | Rule | Why |
-| --- | --- | --- |
-| `pierce` | must stay inside the subgraph's `routes`. Without `routes`, only whole-site claims (`/`, `/*`, a leading parameter) fail | a pierce pattern decides which org pages the team's HTML lands in, and with `forwardCredentials`, which pages send the user's cookies to the team |
-| `capabilities` | the team's are dropped. The org grants them per fragment with `subgraph({ capabilities: { orders: {…} } })` | capabilities are host-owned, and a grant the grantee can write is not a grant |
-| `entry` | must be a path on the endpoint, not an absolute or protocol-relative URL | module code is then served through the org gateway, like everything else, and pinned by a snapshot |
+| Field          | Rule                                                                                                                     | Why                                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pierce`       | must stay inside the subgraph's `routes`. Without `routes`, only whole-site claims (`/`, `/*`, a leading parameter) fail | a pierce pattern decides which org pages the team's HTML lands in, and with `forwardCredentials`, which pages send the user's cookies to the team |
+| `capabilities` | the team's are dropped. The org grants them per fragment with `subgraph({ capabilities: { orders: {…} } })`              | capabilities are host-owned, and a grant the grantee can write is not a grant                                                                     |
+| `entry`        | must be a path on the endpoint, not an absolute or protocol-relative URL                                                 | module code is then served through the org gateway, like everything else, and pinned by a snapshot                                                |
 
 A violation fails composition and names the subgraph and the fragment.
 
@@ -155,6 +155,7 @@ upgrade, unless `forwardCredentials` allows that fragment. In a federated graph:
   Don't key on `id` alone: a team chooses its own fragment ids. Composition stops two teams claiming
   the same id, but nothing stops a team naming one to match your rule. A predicate that throws
   forwards nothing.
+
 - **Proxy-added identity headers.** `cookie`, `authorization` and `proxy-authorization` are
   stripped by default. An auth proxy in front of the org may add its own, such as
   `x-auth-request-access-token` or `cf-access-jwt-assertion`. List them in the gateway's
@@ -211,7 +212,7 @@ the slot after it, so a new subgraph's routes need no change to the org shell. T
 - **Which fragment.** The first routed fragment, in registration order, that the page matched and
   no earlier named slot claimed. Unbound widgets never fill an outlet, because they have a `src`
   and a slot of their own.
-- **Named slots.** A named slot *before* the outlet wins its fragment. One *after* it is too late,
+- **Named slots.** A named slot _before_ the outlet wins its fragment. One _after_ it is too late,
   because the gateway streams the page and cannot look ahead. The gateway unnames that slot (it
   gets `data-braid-in-outlet="<id>"` instead), so the client does not boot a second copy, and it
   warns. Put named slots before the outlet.

@@ -7,3 +7,6 @@
 
 # Emitted by `skew-stamp` on every build — the formatter would fight the generator.
 apps/*/src/generated/
+
+# Vendored verbatim from upstream A2UI at a pinned commit; never reformatted.
+libs/sdui/conformance/a2ui/upstream/

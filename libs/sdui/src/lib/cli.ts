@@ -1,4 +1,7 @@
+import { prerenderA2ui } from '../a2ui/prerender.js';
+import { renderA2uiHtml } from '../web/html.js';
 import { catalogId, checkCatalog, parseCatalog } from './catalog.js';
+import { parseScreen } from './model.js';
 import { printable } from './internal.js';
 import {
   createClientManifest,
@@ -37,6 +40,14 @@ export const SDUI_USAGE = `sdui — catalogs and client manifests for server-dri
 
   sdui manifest fingerprint --in <client-manifest.json>
       Prints the manifest's fingerprint: what a device sends at handshake.
+
+  sdui a2ui prerender --catalog <catalog.json> --screen <screen.json>… --manifest <manifest.json>…
+                      --out <dir> [--context <name>=<context.json>]… [--locale en-US]
+                      [--time-zone UTC] [--no-html]
+      Writes every screen as each manifest's renderer will receive it — A2UI JSON Lines, and the
+      HTML a browser shows before any script runs — content-addressed under <dir>, with
+      index.json mapping each renderer's catalog id to its variant. Unchanged files are not
+      rewritten.
 
   --help
 `;
@@ -187,6 +198,91 @@ export function runSdui(argv: readonly string[], io: CliIo): number {
         const input = one('in');
         if (!input) return usage('--in is required');
         out(manifestFingerprint(parseClientManifest(readJson(input))));
+        return 0;
+      }
+
+      case 'a2ui prerender': {
+        const catalogPath = one('catalog');
+        const screens = flags.get('screen') ?? [];
+        const manifests = flags.get('manifest') ?? [];
+        const outDir = one('out');
+        if (
+          !catalogPath ||
+          screens.length === 0 ||
+          manifests.length === 0 ||
+          !outDir
+        )
+          return usage(
+            '--catalog, --out, and at least one --screen and --manifest are required',
+          );
+        const contexts: { name: string; context: Record<string, unknown> }[] =
+          [];
+        for (const entry of flags.get('context') ?? []) {
+          const match = /^([A-Za-z0-9_-]{1,64})=(.+)$/.exec(entry);
+          if (!match)
+            return usage(
+              `--context takes <name>=<context.json>, got "${entry}"`,
+            );
+          const context = readJson(match[2] as string);
+          if (
+            typeof context !== 'object' ||
+            context === null ||
+            Array.isArray(context)
+          )
+            return usage(`${match[2]} is not a condition context`);
+          contexts.push({
+            name: match[1] as string,
+            context: context as Record<string, unknown>,
+          });
+        }
+        const locale = one('locale') ?? 'en-US';
+        const timeZone = one('time-zone') ?? 'UTC';
+        const catalog = parseCatalog(readJson(catalogPath));
+        const { files } = prerenderA2ui({
+          catalog,
+          screens: screens.map((path) => parseScreen(readJson(path))),
+          manifests: manifests.map((path) =>
+            parseClientManifest(readJson(path)),
+          ),
+          // The variant with no conditions met is always written: it is what everyone else gets.
+          ...(contexts.length > 0
+            ? { contexts: [{ name: '', context: {} }, ...contexts] }
+            : {}),
+          ...(flags.has('no-html')
+            ? {}
+            : {
+                html: (messages: readonly unknown[]) => {
+                  const ids = messages.flatMap((m) => {
+                    const created = (
+                      m as { createSurface?: { catalogId?: string } }
+                    ).createSurface;
+                    return created?.catalogId ? [created.catalogId] : [];
+                  });
+                  return renderA2uiHtml(messages, {
+                    catalog,
+                    locale,
+                    timeZone,
+                    catalogIds: [...new Set(ids)],
+                  }).html;
+                },
+              }),
+        });
+        let written = 0;
+        for (const [path, content] of files) {
+          const target = `${outDir.replace(/\/+$/, '')}/${path}`;
+          let existing: string | null;
+          try {
+            existing = io.readFile(target);
+          } catch {
+            existing = null;
+          }
+          if (existing === content) continue;
+          io.writeFile(target, content);
+          written++;
+        }
+        out(
+          `sdui: ${files.size} files in ${outDir} — ${written} written, ${files.size - written} unchanged`,
+        );
         return 0;
       }
 

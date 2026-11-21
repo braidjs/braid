@@ -25,7 +25,7 @@ const readResult = UserSchemaV1.read(serverPayload);
 if (readResult.ok) {
   const { lines, stats } = diffPayloads(serverPayload, readResult.value, {
     derivedPaths: readResult.derivedPaths, // Guessed values
-    lossyPaths: readResult.lossyPaths,     // Discarded fields
+    lossyPaths: readResult.lossyPaths, // Discarded fields
   });
 
   console.log(`Diff Summary: +${stats.added} -${stats.removed} (~${stats.derived} derived, ~${stats.lost} lost)`);

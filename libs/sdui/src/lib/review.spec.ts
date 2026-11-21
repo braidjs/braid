@@ -4475,6 +4475,16 @@ describe('the text of paths is bounded too', () => {
 });
 
 describe('the tenth pass: a key that is the empty string', () => {
+  it("is allowed in a screen's data model, addressed by JSON Pointer, as is a long key", () => {
+    const screen = parseScreen({
+      id: 's',
+      slug: 's',
+      root: { id: 'n', type: 'note', v: 1, props: {} },
+      data: { '': 1, ['k'.repeat(500)]: { '': 'x' }, 'price.usd': 2 },
+    });
+    expect(Object.keys(screen.data ?? {})).toHaveLength(3);
+  });
+
   it('is refused in props, where no path could show it', () => {
     const withProps = (props: unknown) => () =>
       parseScreen({

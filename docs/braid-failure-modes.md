@@ -14,11 +14,11 @@ Every entry here was observed in a real browser during development, not imagined
 ## A routed fragment mounted by client-side navigation hijacks the host URL
 
 **Fixed.** Kept here because the trace is the clearest illustration of how realm navigation reaches
-the top document, and because the first fix for it was wrong in an instructive way. See *The fix*
+the top document, and because the first fix for it was wrong in an instructive way. See _The fix_
 below for what actually holds.
 
 **Symptom.** The host router navigates to a route — say `/reports` — and the URL immediately becomes
-one of the *fragment's* routes instead. The page renders the wrong component. A direct load or a
+one of the _fragment's_ routes instead. The page renders the wrong component. A direct load or a
 full reload of the same URL works perfectly.
 
 **Trace.** Instrumenting `history` on the host shows the host's own navigation succeeding and then
@@ -35,11 +35,11 @@ No `history.back()`, `forward()`, or `go()` runs in the top document. The traver
 join the top document's session history, and a traversal there moves the top document with it.
 
 **Cause.** A compat fragment whose own application has a router, mounted onto a route reached by
-*client-side* navigation. When the realm boots, the fragment's router performs its initial
+_client-side_ navigation. When the realm boots, the fragment's router performs its initial
 navigation; that navigation lands in the joint session history alongside the host's just-pushed
 entry, and the resulting traversal replaces it.
 
-Setting `src` does **not** avoid it. An unbound fragment does not *drive* host navigation through
+Setting `src` does **not** avoid it. An unbound fragment does not _drive_ host navigation through
 Braid, but its realm is still an iframe in the same session history, which is a lower level than
 `bound` operates at.
 
@@ -51,7 +51,7 @@ does not.
 
 **The fix, and the wrong version of it.**
 
-The first attempt gated the privilege on *boot*: a bound fragment's history calls were confined to
+The first attempt gated the privilege on _boot_: a bound fragment's history calls were confined to
 its own realm until its scripts had finished running. That is the right shape and the wrong clock.
 **Scripts having run is not the same as the router having settled** — Angular resolves its initial
 route asynchronously, measured at ~170ms after mount, long after the last `<script>` returned. The
@@ -108,16 +108,14 @@ providers: [provideClientHydration()];
 **Symptom.** Clicking a host link changes the URL and the host's own UI, but the fragment still
 shows the previous screen. Back/forward works correctly, which makes it look intermittent.
 
-**Cause.** `onHostNavigation` was wired to *every* router event. Routers report navigation in
+**Cause.** `onHostNavigation` was wired to _every_ router event. Routers report navigation in
 phases, and the early ones fire before the URL changes — Angular's `NavigationStart` is the
 common case — so the fragment is told about a location the page has not reached yet.
 
-**Prevention.** Wire an *after*-navigation hook only:
+**Prevention.** Wire an _after_-navigation hook only:
 
 ```ts
-router.events
-  .pipe(filter((e) => e instanceof NavigationEnd || e instanceof NavigationSkipped))
-  .subscribe(() => notify());
+router.events.pipe(filter((e) => e instanceof NavigationEnd || e instanceof NavigationSkipped)).subscribe(() => notify());
 ```
 
 The navigation bus also defends against this (it keys duplicate-suppression on the URL rather
@@ -159,7 +157,7 @@ const angularApp = new AngularNodeAppEngine({
 
 **Symptom.** Unstyled fragment content; a request for `/some/host/path/styles.css`.
 
-**Cause.** A fragment's markup lives in the *host* page's DOM, so its relative URLs resolve
+**Cause.** A fragment's markup lives in the _host_ page's DOM, so its relative URLs resolve
 against the host page. The gateway re-roots subresource URLs into `/__braid/frag/:id/…` to
 prevent exactly this — if you are seeing it, the response did not go through that transform.
 
@@ -231,7 +229,7 @@ changed. Another fragment on the same origin deployed recently.
 
 **Cause (fixed, but worth recognising).** `indexedDbRecordDriver` used to derive the database version
 from the number of collections it declared. Two applications sharing an origin rarely declare the
-same number, so each demanded its own version — and the one with the *shorter* list ended up
+same number, so each demanded its own version — and the one with the _shorter_ list ended up
 requesting a version lower than the database already had. IndexedDB refuses that permanently. The
 sibling that "broke" it had done nothing wrong.
 
@@ -248,7 +246,7 @@ clients. An edit queued offline for the first client shows up as pending on the 
 id, wrong tenant. It corrects itself on reload, which makes it look like a rendering glitch.
 
 **Cause (fixed).** The optimistic overlay was keyed by record id alone. The outbox is deliberately
-*session*-scoped — a queued write belongs to the session that made it, not to whichever client was on
+_session_-scoped — a queued write belongs to the session that made it, not to whichever client was on
 screen — so both tabs read one queue, and `holding:h1` means something different in each.
 
 **Fix.** Upgrade `@braidlabs/data`. Overlays now carry the partition they were made for, and a reader
@@ -275,7 +273,7 @@ version or etag check and reject the stale write; the losing fragment's `mutate`
 `{ expected, actual, paths }` rather than losing silently. See
 [the storefront tutorial's composition section](tutorials/07-storefront.md#7-what-happens-when-two-fragments-race).
 
-Note the asymmetry while you are here: two fragments *reading* the same key are serialized by a
+Note the asymmetry while you are here: two fragments _reading_ the same key are serialized by a
 per-key Web Lock and produce one fetch. Reads are coordinated; writes are not.
 
 ### A widget renders an empty shell, or 404s, on every page
@@ -398,7 +396,7 @@ sends can execute in the host realm or navigate the host page.
 because they require a user to click, and a trusted fragment is allowed to navigate a page the
 user clicks through. (On frames they run on parse, so there the gateway removes them — along with
 `iframe[srcdoc]` and `data:`/`blob:` frame URLs — and marks the tag `data-braid-blocked`.) And the
-trusted tier is *namespace isolation, not a security boundary*: fragments are same-origin and
+trusted tier is _namespace isolation, not a security boundary_: fragments are same-origin and
 share the host's cookies and storage. Treat a manifest entry as granting that endpoint the user's
 session. What the gateway strips from fragment markup, what that costs, and what it deliberately
 leaves alone: [What the gateway does to fragment markup](./braid-fragment-markup.md).

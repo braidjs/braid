@@ -16,7 +16,7 @@ npm install @braidlabs/angular-data @braidlabs/data @braidlabs/skew
 
 1. **Normalized Entity Store:** Shared identity across components and fragments without duplicate network queries.
 2. **Tag-Based Invalidation:** Queries declare tags (e.g. `['funds', 'fund:123']`); mutations invalidate tags to trigger precise background refetches.
-3. **Durable Mutation Outbox:** Mutations are recorded to IndexedDB *before* making network requests. If the network drops or the browser crashes, mutations resume automatically on reconnect.
+3. **Durable Mutation Outbox:** Mutations are recorded to IndexedDB _before_ making network requests. If the network drops or the browser crashes, mutations resume automatically on reconnect.
 4. **Optimistic Updates:** Immediate UI updates with automatic rollback or conflict resolution on server mismatch.
 
 ---

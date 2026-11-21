@@ -1,6 +1,6 @@
 # A CMS for server-driven native UI, on Braid contracts — plan
 
-Status: approved — P1 built, P2–P7 to do · Packages: `@braidlabs/sdui` (new), `@braidlabs/cms` (new) · Builds on: `@braidlabs/skew`,
+Status: approved — P1–P3 built (core; A2UI; the Braided web renderer — exhaustion measured, not proven: isolating untrusted surfaces in an own-origin frame is the follow-up), P4–P9 to do · Packages: `@braidlabs/sdui` (new, with `/a2ui` and `/web`), `@braidlabs/cms` (new) · Speaks: [A2UI v1.0](https://a2ui.org/specification/v1.0-a2ui/) · Builds on: `@braidlabs/skew`,
 `@braidlabs/contract`, `@braidlabs/build`, `@braidlabs/studio` · Borrows patterns from: `@braidlabs/registry`,
 `@braidlabs/console`, `@braidlabs/data`
 
@@ -88,13 +88,15 @@ That gives four things no hand-rolled SDUI stack has:
                                    events ◄── census, projection outcomes, product analytics
 ```
 
-| Package                          | What it is                                                                                                                                                                                                                                                                                                            | Depends on                                            |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `@braidlabs/sdui`                | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.                                                             | `skew`, `contract`                                    |
-| `@braidlabs/sdui/server`         | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                                                               | core; optional peer `jose`                            |
-| `@braidlabs/sdui/client`         | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                                                                       | core                                                  |
-| `@braidlabs/cms`                 | The CMS: WYSIWYG editor, web and emulator preview, history and compare, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Includes a web preview renderer for the starter catalog. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
-| `sdui` bin, in `@braidlabs/sdui` | `sdui catalog check\|id`, `sdui manifest gen\|fingerprint` (P1); `catalog publish`, `manifest register` and `bundle` arrive with the server in P2. Lives here, not in `@braidlabs/build`, which stays dependency-free.                                                                                                | —                                                     |
+| Package                          | What it is                                                                                                                                                                                                                                                                                        | Depends on                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `@braidlabs/sdui`                | Platform-neutral core: document model, catalog, client manifest, projection engine, fallback ladder, flag and rollout evaluation, handshake resolution, state unions, conformance vectors. Pure functions. Runs on Node, Workers, Deno, Hermes, browsers.                                         | `skew`, `contract`                                    |
+| `@braidlabs/sdui/a2ui`           | A2UI v1.0 as a wire format of the same model: parsers, surfaces, the codec between A2UI's flat component list and the tree, catalog ids per manifest, the streaming projector, prerendering. Pure, like the core.                                                                                 | core                                                  |
+| `@braidlabs/sdui/web`            | A renderer that draws A2UI into the host's own page: `<a2ui-surface>` in light DOM, component types drawn by the host's custom elements or Braid fragments, a keyed patcher, a closed evaluator, and the same views as HTML on a server. The CMS canvas is this renderer.                         | core, `/a2ui`; Braid fragments need `@braidlabs/core` |
+| `@braidlabs/sdui/server`         | Fetch-native delivery API and admin API (`createSduiApi`), stores, environments, audit, authorizers. Same shape as `createRegistryApi`.                                                                                                                                                           | core; optional peer `jose`                            |
+| `@braidlabs/sdui/client`         | Headless reference client: handshake, release pin, fetch, cache, fallback, event outbox. No UI. Usable from React Native as-is.                                                                                                                                                                   | core                                                  |
+| `@braidlabs/cms`                 | The CMS: WYSIWYG editor, web and emulator preview, history and compare, releases board, flags, clients, catalog browser, insights, audit. Mountable React components or a standalone app with OIDC sign-in — the console's structure (`libs/braid-console`). Its canvas is `@braidlabs/sdui/web`. | `sdui`, `studio`, `react`; app only: `oidc-client-ts` |
+| `sdui` bin, in `@braidlabs/sdui` | `sdui catalog check\|id`, `sdui manifest gen\|fingerprint` (P1); `sdui a2ui prerender` (P2); `catalog publish`, `manifest register` and `bundle` arrive with the server in P4. Lives here, not in `@braidlabs/build`, which stays dependency-free.                                                | —                                                     |
 
 Subpath exports with optional peers are this repo's existing convention (`@braidlabs/registry/oidc`),
 and keep the count at two new packages.
@@ -260,7 +262,7 @@ a real phone needs the server to serve the draft. Drafts are stored through
 | step not invertible / `code` step missing (`gap`)                | `unsupported`                                      | go down the ladder                                     |
 | client lacks the component, or an operator kill switch covers it | `unsupported`                                      | go down the ladder                                     |
 | action not supported                                             | per action: `hide` \| `disable` \| fallback action | control stays honest: never a dead button              |
-| projected props fail the client version's JSON Schema (P2)       | `unsupported`                                      | defence in depth; reported as a server bug             |
+| projected props fail the client version's JSON Schema (P4)       | `unsupported`                                      | defence in depth; reported as a server bug             |
 
 **The ladder** — each rung is tried only when the one above cannot be honest. Each rung emits
 telemetry naming itself, so "how far down are people falling" is a chart.
@@ -284,6 +286,80 @@ as a debug overlay on the device.
 Projection is a pure function of immutable inputs, and the set of registered manifests is finite, so
 the projected template is computed once per `(release, manifest)` and cached. Per-request work is
 pruning by visibility and resolving strings.
+
+## A2UI: first-class, prerendered, Braided
+
+[A2UI](https://a2ui.org/specification/v1.0-a2ui/) (v1.0, Apache-2.0) is how agents describe UI to
+renderers: a surface of components from a catalog, sent as a flat list that references by id, a
+data model the components bind to with JSON Pointers, a closed list of catalog functions, and
+actions back. It has official renderers for the web (Lit, Angular, React), Flutter, SwiftUI and
+Jetpack Compose. It is the same problem this plan solves from the other side — UI described as data
+by a server — and it has the same hole: **a catalog is identified by an id and nothing else.** A
+renderer built last spring and one built today look identical if they name the same catalog, and an
+agent that writes for one breaks the other.
+
+So A2UI is not a second system beside the SDUI model. It is a wire format _of_ the model, and every
+mechanism above applies to it:
+
+| A2UI                                        | This plan                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| a surface, its flat component list          | a screen, its tree — converted both ways; every upstream example round-trips exactly, bar components nothing references, which are reported |
+| a catalog                                   | a catalog: components, actions and **functions** are contracts or closed lists, and `catalog.a2ui.catalogId` names it                       |
+| a renderer's `supportedCatalogIds`          | a client manifest: each manifest gets a catalog id of its own, derived from what it can draw                                                |
+| an agent writing against a catalog          | an author writing at the newest version: the agent authors against the catalog's own id                                                     |
+| what the renderer receives                  | a projection: per component, exact, downgraded, or down the ladder — never a guessed value                                                  |
+| `{ "@path" }`, `{ "@call" }`                | bound values: a step may move, wrap or drop one; one that converts, maps or reaches into one is a `gap`                                     |
+| a dangling reference (drawn as placeholder) | an `sdui.placeholder` node — and the placeholder fallback is written as a dangling reference                                                |
+| `action: { event }` / `{ functionCall }`    | `a2ui.event` / `a2ui.call` actions; an SDUI catalog's own actions (`navigate`) are written as events                                        |
+| `@checks` failing disables a control        | how a disabled action is written: an always-failing check, so an old renderer shows an honest, inert control                                |
+
+**Catalog ids name capabilities.** A manifest's A2UI id is the catalog's id plus a key over its
+component, action and function versions — `…/catalog.json?caps=cv_9f2c…` — and not over which binary
+it is. Two builds that draw alike (3.0.0 and 3.0.1; the web app and the iOS app on one catalog)
+share an id, a projection and every prerendered file. `resolveRendererCapabilities` maps a
+renderer's `a2uiRendererCapabilities` back to its manifest; an unknown id is the handshake's
+`manifest-unknown`, a renderer that does not speak v1.0 is `protocol-unsupported`.
+
+**The projector** (`createA2uiProjector`) stands between an agent and one renderer for the length of
+a connection. It keeps both sides' state, so an agent's update reaches the renderer as only the
+components whose projection changed. When a surface cannot be shown honestly, the renderer is not
+sent half of it; the agent receives a renderer-style `error` with code `INCOMPATIBLE` and the reasons,
+and can choose different components. A function call the renderer lacks is answered for it
+(`UNKNOWN_FUNCTION`) rather than forwarded.
+
+**Prerendering variants.** Projection is pure and a release serves a finite set of manifests, so
+`sdui a2ui prerender` (and `prerenderA2ui`) writes every screen × manifest × context variant at
+publish time: the A2UI stream that renderer receives (`.jsonl`) and the HTML a browser shows before
+any script runs (`.html`), content-addressed, with `index.json` mapping each catalog id to its
+variant and how faithful it is. Delivery serves a variant by the renderer's catalog ids
+(`selectPrerendered`) and falls back to live projection for what was not prerendered. The HTML
+carries the messages that built it, and the renderer adopts it in place — patching, not replacing.
+
+**Braided on the web.** `@braidlabs/sdui/web` draws surfaces into the host's own page, in light DOM:
+the host's stylesheet styles the agent's buttons, its layout lays them out, its accessibility tree
+reads them. A component type can be drawn by the host: its own custom element (`Card` → the app's
+panel), a view function (drawn identically on a server), or **a Braid fragment** — another team's
+independently deployed app, mounted with `<fragment-slot>` in contract mode, given the component's
+props, its `braid:event`s turned into the A2UI actions the agent attached. An agent can compose
+another team's product into its answer, and that team keeps shipping it on its own schedule. Content
+stays data: a closed evaluator with a budget, the A2UI regex dialect with its backtracking rules, a
+URL policy under which `javascript:` and `data:text` are unwritable, Markdown in which raw HTML is
+text, and no `innerHTML` anywhere in the renderer (a test enforces it).
+
+**What A2UI changes in the rest of this plan.**
+
+- _Native._ The official SwiftUI, Compose and Flutter renderers are A2UI renderers, so a native app
+  can render server-driven UI with them, and Braid supplies what they lack — the version-skew
+  projection, the publish gate, rollouts, flags, history. Swift and Kotlin SDKs (see "Later") shrink
+  to the handshake, pin and cache; rendering is theirs.
+- _Delivery (P4)._ The server speaks A2UI as well as the native SDUI shape: an A2UI stream per
+  connection, negotiated by `a2uiRendererCapabilities`, through a projector; prerendered variants
+  first. Transport bindings (A2A, AG-UI, MCP) are adapters over the same projector.
+- _The CMS (P6)._ The canvas is `@braidlabs/sdui/web`: what an editor sees is what a web renderer
+  draws, host components and fragments included. A screen can be exported to an agent as a catalog
+  definition (`a2uiCatalogFor`) and an agent's surface can be imported as a draft (`surfaceToScreen`).
+- _Previews (P8)._ Emulator preview can run an official A2UI renderer pinned to an old catalog id —
+  the same "show, don't predict" check, without an SDK of Braid's own.
 
 ## Handshake
 
@@ -346,8 +422,8 @@ top — `VersionedOptions.base` as designed.
 
 These tables are the specification. Each `id` is a member of a const union in
 `libs/sdui/src/lib/states.ts`; `tools/sdui/check-state-matrix.mjs` fails the build if an id lacks a
-conformance vector. The same check gains the reference client's tests in P3 and the editor's state
-switcher in P4, as each comes to exist.
+conformance vector. The same check gains the reference client's tests in P5 and the editor's state
+switcher in P6, as each comes to exist.
 
 ### Session
 
@@ -849,12 +925,65 @@ Decisions the review forced, which the sections above should be read with:
   worked around.
 - **`hide` removes the node**; it does not swap in the catalog's fallback.
 
-Two things the tables above describe are left for P2, where their acceptance criteria are:
+Two things the tables above describe are left for P4, where their acceptance criteria are:
 validating projected props against the client version's JSON Schema, and enforcing a manifest's
 `limits`. Projection reports four screen outcomes — `exact`, `degraded`, `fallback`, `blocked` —
 and `blocked` is what the `incompatible` screen state is resolved from.
 
-### P2 — Delivery and control plane (`@braidlabs/sdui/server`)
+### P2 — A2UI in the core (`@braidlabs/sdui/a2ui`)
+
+- [x] Every vendored upstream basic-catalog example round-trips: parse → surface → SDUI model →
+      A2UI → an identical component map (every component reachable from the root; one nothing
+      references is reported, not kept) and data model, and everything emitted validates against
+      the upstream v1.0 JSON Schemas.
+- [x] Malformed streams are refused with the spec's error codes and a JSON Pointer — an update
+      before `createSurface`, a duplicate surface (`INTEGRITY_ERROR`), unknown `@` keys, `theme`,
+      reserved keys, cycles, size and depth limits; a dangling id is a reported placeholder.
+- [x] A stream authored at v3, through `createA2uiProjector` for v3/v2/v1 manifests, is exact /
+      downgraded with `lossyPaths` / a fallback, never a guessed value; a step that converts, maps
+      or reaches into a bound prop takes the ladder naming the path; an update sends only the
+      components whose projection changed.
+- [x] `a2uiCatalogFor` emits catalog definitions valid against `catalog_definition.json`, with an id
+      naming what the manifest can draw; capabilities resolve to a registered manifest, the basic
+      catalog, `manifest-unknown` or `protocol-unsupported`.
+- [x] `sdui a2ui prerender` writes one `.jsonl` and one `.html` per screen × manifest × context,
+      content-addressed and shared between manifests that draw alike, with `index.json`; a rerun
+      writes nothing.
+
+Built. Decisions that came out of building it:
+
+- **A component two parents share** (upstream uses this: a template for two lists, a button that is
+  also a modal's trigger) is a copy in the tree (`copyOf`), written back as a reference.
+- **Catalog ids name capabilities, not binaries** — a fingerprint in every `createSurface` would
+  have made sharing prerendered files between identical builds impossible.
+- **Agents author against the catalog's own id**; the projector refuses a stream written against a
+  renderer's id, since that would mean authoring for one renderer.
+
+### P3 — The Braided web renderer (`@braidlabs/sdui/web`)
+
+- [x] In Chromium, a host page with its own stylesheet draws every upstream example through
+      `<a2ui-surface>` with no page error and no A2UI error; the host's `button` rule is what an
+      A2UI Button looks like.
+- [x] The host's own custom element draws `Card`; a Braid fragment draws `FlightCard`, and its
+      `braid:event` reaches the agent as one A2UI action with `sourceComponentId` and the resolved
+      context.
+- [x] Typing into a field updates what is bound to the same path; an agent's `updateDataModel`
+      keeps focus and caret; a button with failing `@checks` is disabled and says why, and a valid
+      click sends exactly one action.
+- [x] Prerendered HTML shows with JavaScript off; with it, the renderer takes it over with the same
+      text and no error; an old build's capabilities are served the downgraded variant.
+- [x] Hostile content — `javascript:` URLs, `<script>` in text, raw HTML in Markdown, catastrophic
+      regexes — runs nothing, makes no element outside the allowlist, and reports `blocked-url` /
+      `EXPRESSION_ERROR`; the renderer source has no `innerHTML`, by test.
+- [x] A hostile stream within `A2UI_LIMITS` — huge or wide bound values, components with many
+      props or checks, long paths, write storms, error floods, gigabytes of data model updates —
+      never blocks the page's main thread for 300 ms, never crashes it, and is told a bounded
+      number of times (`e2e/a2ui-exhaustion.e2e.ts`: every stream from eight review rounds, the
+      worst 136 ms). Measured, not proven — see the risk "Pricing layout is measurement".
+
+Built, with `examples/concierge` and `e2e/concierge-example.e2e.ts` as the proof.
+
+### P4 — Delivery and control plane (`@braidlabs/sdui/server`)
 
 - [ ] Over HTTP against an in-memory server: publish lands in `dev`; promote to `test` succeeds;
       promote to `prod` is pending; the requester approving gets 403; a second subject approving
@@ -877,8 +1006,12 @@ and `blocked` is what the `incompatible` screen state is resolved from.
 - [ ] `POST /admin/compare` between two releases returns the change list and both documents as
       delivered to a named manifest; `POST /admin/restore` of a revision creates a new revision
       with identical content and leaves the log intact.
+- [ ] `GET /a2ui/v1/screens/:slug` with an `A2UI-Renderer-Capabilities` header returns that
+      renderer's prerendered variant when there is one and a live projection when there is not,
+      byte-identical between the two; an unknown renderer gets `409`. An agent session
+      (`/a2ui/v1/sessions`) runs its stream through a projector per renderer connection.
 
-### P3 — Reference client (`@braidlabs/sdui/client`)
+### P5 — Reference client (`@braidlabs/sdui/client`)
 
 - [ ] Every session, screen, node and action state id has a named test in the headless client, and
       the matrix check enforces it.
@@ -892,7 +1025,7 @@ and `blocked` is what the `incompatible` screen state is resolved from.
       id, locale, theme, flags, frozen clock), reports node rectangles, and emits a settled signal
       exactly once per screen load; outside preview mode it ignores all of them.
 
-### P4 — The CMS: editor and web preview (`@braidlabs/cms`)
+### P6 — The CMS: editor and web preview (`@braidlabs/cms`)
 
 - [ ] Playwright, against the demo server and the mock issuer (`tools/braid-console/mock-oidc.mjs`):
       an editor signs in, drags a component onto the canvas, types into it in place, sees the
@@ -910,8 +1043,11 @@ and `blocked` is what the `incompatible` screen state is resolved from.
       updates it without a reload; the matrix view renders the demo screen for every registered
       app version and none is blank.
 - [ ] The library entry stays under a size budget checked like `tools/braid-console/check-size.mjs`.
+- [ ] The canvas is `@braidlabs/sdui/web` with the app's registry: a host component and a Braid
+      fragment render on the canvas as they do in the app, and an agent's surface imports as a
+      draft that publishes like any other.
 
-### P5 — History, compare and visual diff
+### P7 — History, compare and visual diff
 
 - [ ] Playwright: the history timeline lists the demo screen's revisions and releases with authors
       and environment moves; selecting two opens Compare.
@@ -927,7 +1063,7 @@ and `blocked` is what the `incompatible` screen state is resolved from.
 - [ ] The approval dialog for a pending promotion shows the comparison and enables Approve only
       after it has been opened.
 
-### P6 — Emulator and device preview
+### P8 — Emulator and device preview
 
 - [ ] Against a fake `EmulatorProvider` in tests: starting a session frames its embed in the
       Emulator tab; state, locale and flag controls reach the session as remote-control commands;
@@ -943,7 +1079,7 @@ and `blocked` is what the `incompatible` screen state is resolved from.
       developer machine, not in CI**; the command's argument handling and the commands it would
       run are unit-tested here.
 
-### P7 — Example, end to end, docs
+### P9 — Example, end to end, docs
 
 - [ ] `npm run sdui:demo` starts the server, the CMS and three simulated devices pinned at three
       manifests; an e2e asserts they render the same release three ways and that a rollback reaches
@@ -953,7 +1089,9 @@ and `blocked` is what the `incompatible` screen state is resolved from.
 
 ### Later (not in this plan's build)
 
-Swift and Kotlin SDKs written against the conformance vectors and the state unions; React Native
+Swift and Kotlin SDKs written against the conformance vectors and the state unions — now thin, with
+the official A2UI renderers doing the drawing; A2A, AG-UI and MCP bindings over the projector;
+`callAgentFunction` routing in the web renderer for functions it lacks; React Native
 bindings over `@braidlabs/sdui/client`; an OTel bridge in `@braidlabs/otel`; a GitOps publisher for
 releases like `githubPublisher`.
 
@@ -979,14 +1117,40 @@ Folded in above; listed so the removals are visible.
   restore; the three-way view exists only to resolve a conflicting save.
 - **Comments, AI authoring, a marketplace of templates.**
 - **Seven packages** → two, with subpaths.
+- **A2UI v0.8 and v0.9** → v1.0 only; the official renderers cover the older versions.
+- **Framework adapters for the renderer's registry** (React, Angular components) → custom
+  elements, view functions and Braid fragments; a React component arrives as a fragment
+  (`defineReactFragment`).
+- **True hydration** → prerendered markup is adopted by key and patched; nothing is re-attached
+  that a patch would not touch.
+- **Full Markdown** → headings, paragraphs, lists, strong, emphasis, code and links.
 
 ## Risks and open questions
 
+- **A2UI is young.** v1.0 is current and v1.1 is on its roadmap. The upstream schemas, basic
+  catalog and examples are vendored at a pinned commit and everything is checked against them;
+  moving to a new version is replacing those files and fixing what the round-trip tests say.
+- **Pricing layout is measurement.** The web renderer runs on the page's main thread. Every
+  value a draw reads is charged by what it holds, text by what laying it out costs the browser
+  (each change of script or direction a thousand characters, scripts not measured and letters a
+  font may lack fifty), players and date inputs count as many components, a draw in a browser
+  ends after 100 ms, messages are applied in slices, and what a renderer holds is counted in
+  characters. Every hostile stream eight review rounds found now stays under 300 ms at once in
+  Chromium. A host's own components are styled by the host, which the renderer cannot see. But layout is the browser's, and a kind of content nobody has measured may
+  cost more than it is charged: an element draws less text after a slow layout, which bounds how
+  often, not whether. Agents nobody trusts at all belong in a frame of their own origin.
+- **The projector re-projects a whole surface per agent message**, so a long stream of small
+  updates to a large surface costs the server messages × surface. The server phase (P4) should
+  project incrementally or batch messages.
+- **Contract fragments under a strict host CSP.** A contract realm inherits the host's
+  Content-Security-Policy, and its bootstrap needs an inline script and a `<base>`; the gateway-free
+  docs mention only `blob:` in `frame-src`. Hosts with a strict CSP cannot mount a fragment as an
+  A2UI component until that is fixed in `@braidlabs/core`.
 - **Which native stacks, and in what order?** Assumed: protocol first, with a TypeScript reference
   client that React Native can use directly, and Swift/Kotlin SDKs as a later phase built against
   the conformance vectors. Nothing in this repository can build or run an iOS or Android app, so
   native SDKs need a machine with Xcode and the Android SDK. If Swift and Kotlin must come first,
-  P3 changes shape and the order of P3/P4 swaps.
+  P5 changes shape and the order of P5/P6 swaps.
 - **Web preview fidelity.** The canvas approximates native rendering. Mitigated by tokens, platform
   skins and device preview; a customer with a large custom catalog must supply web previews to get
   true WYSIWYG for those components.
@@ -994,17 +1158,17 @@ Folded in above; listed so the removals are visible.
   proves fragile, canvas editing stays plain text and marks move to the inspector.
 - **Reusing registry code vs. copying its shape.** `SnapshotStore` and `createOidcAuthorizer` are
   typed to fragment manifests and `RegistryAction`. The plan generalises them where the change is
-  type-only and backward compatible, and otherwise mirrors them; which applies is decided in P2
+  type-only and backward compatible, and otherwise mirrors them; which applies is decided in P4
   with the code open, and any change to `@braidlabs/registry` ships as its own commit.
 - **Variant explosion in caches.** Flags, audience and locale multiply response variants. The
   projected template is cached per `(release, manifest)` and the rest is applied per request;
-  whether that is fast enough at the edge is measured in P2, not assumed.
+  whether that is fast enough at the edge is measured in P4, not assumed.
 - **Guardrail quality depends on event volume.** Small audiences give noisy rates; guardrails need
   minimum-sample thresholds, and auto-rollback stays opt-in.
 - **Attestation and payload signing** are designed as hooks; the provider integrations are the
   adopter's, and are untested here.
 - **Emulator preview cannot be proven in this repository.** iOS simulators need macOS hosts; a
-  streamed emulator needs a provider account; none of that exists in CI here. P6 is tested against
+  streamed emulator needs a provider account; none of that exists in CI here. P8 is tested against
   a fake provider and the local command is verified by hand. The hosted adapter's first target
   service is an open choice. Emulator preview also depends on a native SDK with preview mode, so it
   is only real once the Swift and Kotlin SDKs exist — until then it runs a React Native build or
@@ -1016,6 +1180,7 @@ Folded in above; listed so the removals are visible.
 - **Capture volume.** Screens × states × locales × themes × app versions grows quickly. Captures
   run for a configured set, content-addressed so unchanged screens cost nothing, and on demand
   otherwise.
-- **Scope.** This is seven phases. P1–P2 prove the idea and are useful alone (a headless SDUI
-  backend with a compatibility gate). The editor is the largest single piece of work; history and
-  compare (P5) depend only on P1–P4, and emulator preview (P6) can ship after everything else.
+- **Scope.** This is nine phases. P1–P4 prove the idea and are useful alone (a headless SDUI and
+  A2UI backend with a compatibility gate, and a renderer for the web). The editor is the largest
+  single piece of work; history and compare (P7) depend only on P1–P6, and emulator preview (P8)
+  can ship after everything else.

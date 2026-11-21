@@ -8,7 +8,7 @@ Trusted (compat) fragments share the host origin. When fragments use different O
 servers, or need different groups, their auth state collides in three places:
 
 1. **Web Storage.**
-   - Every realm's `localStorage`/`sessionStorage` *is* the host's, so clients with fixed default
+   - Every realm's `localStorage`/`sessionStorage` _is_ the host's, so clients with fixed default
      keys (okta-auth-js `okta-token-storage`, transaction and PKCE keys) overwrite each other.
    - Their sync listeners react to `storage` events, which reach other realms on the page.
 2. **Session cookies.**
@@ -36,21 +36,21 @@ checks, by decision). Each test pins today's behaviour, so the fix that changes 
 
 #### Results (Chromium 141, Playwright 1.56.1)
 
-| Question | Result |
-| --- | --- |
-| Realm `localStorage` is an own, configurable accessor on the realm window | **yes** — a per-realm override is possible |
-| Two fragments with default keys: last writer wins for both | **yes** — confirmed collision |
-| A realm's `addEventListener('storage')` hears another fragment's writes | **yes** — via the host-window relay |
-| A realm's `window.onstorage` hears another fragment's writes | **yes** — natively: browsers fire `storage` at every same-origin window, realms included |
-| Hidden iframe in the fragment DOM → `parent.postMessage` → `addEventListener` | **delivered** |
-| …the same reply → `window.onmessage =` | **lost** (it lands on the host window) |
-| Popup → `opener.postMessage`, and a self-post → `addEventListener` | **lost** (they land on the realm window) |
-| …the same → `window.onmessage =` | **delivered** |
-| Relative `src` on an iframe created by fragment code | **resolves against the host page**, so the reply never comes |
+| Question                                                                      | Result                                                                                   |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Realm `localStorage` is an own, configurable accessor on the realm window     | **yes** — a per-realm override is possible                                               |
+| Two fragments with default keys: last writer wins for both                    | **yes** — confirmed collision                                                            |
+| A realm's `addEventListener('storage')` hears another fragment's writes       | **yes** — via the host-window relay                                                      |
+| A realm's `window.onstorage` hears another fragment's writes                  | **yes** — natively: browsers fire `storage` at every same-origin window, realms included |
+| Hidden iframe in the fragment DOM → `parent.postMessage` → `addEventListener` | **delivered**                                                                            |
+| …the same reply → `window.onmessage =`                                        | **lost** (it lands on the host window)                                                   |
+| Popup → `opener.postMessage`, and a self-post → `addEventListener`            | **lost** (they land on the realm window)                                                 |
+| …the same → `window.onmessage =`                                              | **delivered**                                                                            |
+| Relative `src` on an iframe created by fragment code                          | **resolves against the host page**, so the reply never comes                             |
 
 #### Decisions from the results
 
-- **P2 filters `storage` events in both places:** the host-window relay *and* native events on
+- **P2 filters `storage` events in both places:** the host-window relay _and_ native events on
   the realm window (`onstorage` and any native listener).
 - **P4 is needed,** with three parts:
   - deliver realm-window messages (popup replies, self-posts) to compat listeners;
@@ -64,11 +64,7 @@ deterministic HTTP semantics.
       its first script works. A realm script sees the override, and the host is untouched.
 - [ ] Storage events, each answered yes or no: a realm write reaches the host window, reaches the
       writer's own compat listener (echo), and reaches a second realm's listener.
-- [ ] Four message styles, each recorded as delivered or lost:
-      - a hidden iframe in the fragment DOM posting to `parent`, caught by `addEventListener`;
-      - the same reply caught by `window.onmessage =`;
-      - a popup posting to `opener`;
-      - a realm posting to itself.
+- [ ] Four message styles, each recorded as delivered or lost: - a hidden iframe in the fragment DOM posting to `parent`, caught by `addEventListener`; - the same reply caught by `window.onmessage =`; - a popup posting to `opener`; - a realm posting to itself.
 - [ ] The table ends with two decisions: whether P4 is needed, and whether `onstorage` needs
       handling.
 
@@ -174,7 +170,7 @@ browser" policies.
   the gateway namespace. A fragment calling the host origin directly gets renamed cookies its
   backend won't recognise. P3 adds a check that fragment requests, including the OIDC callback,
   land in the namespace.
-- **Edge proxies.** Cookies set by a proxy *in front of* the gateway are never renamed. The fix
+- **Edge proxies.** Cookies set by a proxy _in front of_ the gateway are never renamed. The fix
   there is per-route cookie names (docs recipe).
 - **Header size.** Every scoped cookie rides every request; the later cookie jar is the fix.
 - **Uncovered storage.** IndexedDB, Cache Storage, BroadcastChannel and Web Locks are not

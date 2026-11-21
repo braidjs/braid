@@ -14,6 +14,7 @@ import {
   hiddenByFlagsAlone,
 } from './conditions.js';
 import type { ClientManifest } from './manifest.js';
+import { callsIn } from './dynamic.js';
 import { type CodeSteps, MIGRATION_ALLOWANCE, migrate } from './migrate.js';
 import {
   type Condition,
@@ -99,6 +100,12 @@ export interface ProjectedNode {
   /** Still to be evaluated per request — see {@link applyVisibility}. Never sent to a device. */
   readonly visibility?: Condition;
   readonly analytics?: { readonly name?: string };
+  /** See {@link SduiNode.repeat}. */
+  readonly repeat?: string;
+  /** See {@link SduiNode.annotations}: carried through untouched. */
+  readonly annotations?: SduiNode['annotations'];
+  /** See {@link SduiNode.copyOf}. */
+  readonly copyOf?: string;
 }
 
 export interface ActionReport {
@@ -231,6 +238,24 @@ export function projectScreen(
     context: migrateOptions.context,
   };
 
+  /**
+   * The first function a value calls that this device does not have — only when its manifest
+   * lists functions at all; one that predates them says nothing either way.
+   */
+  const supportedFunctions =
+    manifest.functions === undefined ? null : new Set(manifest.functions);
+  const unsupportedCall = (...values: unknown[]): string | null => {
+    if (supportedFunctions === null) return null;
+    for (const value of values) {
+      if (value === undefined) continue;
+      const missing = callsIn(value).find(
+        (name) => !supportedFunctions.has(name),
+      );
+      if (missing !== undefined) return missing;
+    }
+    return null;
+  };
+
   const isRequired = (
     node: SduiNode,
     definition: ComponentDefinition | undefined = own(
@@ -306,6 +331,9 @@ export function projectScreen(
           return `this app version has no "${candidate.type}" action`;
         if (clientVersion > definition.contract.current)
           return `this app's "${candidate.type}" is v${clientVersion}, newer than the catalog's v${definition.contract.current}`;
+        const missing = unsupportedCall(candidate.props);
+        if (missing !== null)
+          return `this app version has no "${missing}" function, which the "${candidate.type}" action calls`;
         const migrated = migrate(
           definition.contract,
           candidate.props ?? {},
@@ -474,6 +502,13 @@ export function projectScreen(
         reason: `this app's "${node.type}" is v${clientVersion}, newer than the catalog's v${contract.current}`,
       };
 
+    const missingFunction = unsupportedCall(node.props, node.annotations);
+    if (missingFunction !== null)
+      return {
+        ok: false,
+        reason: `this app version has no "${missingFunction}" function, which "${node.type}" calls`,
+      };
+
     const migrated = migrate(
       contract,
       node.props ?? {},
@@ -570,7 +605,13 @@ export function projectScreen(
       for (const child of children) {
         const result = ladder(child, local);
         for (const id of result.blocked) blocked.push(id);
-        if (result.node) projectedChildren.push(result.node);
+        if (!result.node) continue;
+        // A template's stand-in is repeated as the template was: it stands in for every item.
+        projectedChildren.push(
+          child.repeat !== undefined && result.node.repeat === undefined
+            ? { ...result.node, repeat: child.repeat }
+            : result.node,
+        );
       }
       slots.push([slot, projectedChildren]);
     }
@@ -587,6 +628,9 @@ export function projectScreen(
       ...(disabled ? { disabled: true as const } : {}),
       ...(node.visibility ? { visibility: node.visibility } : {}),
       ...(node.analytics ? { analytics: node.analytics } : {}),
+      ...(node.repeat !== undefined ? { repeat: node.repeat } : {}),
+      ...(node.annotations ? { annotations: node.annotations } : {}),
+      ...(node.copyOf !== undefined ? { copyOf: node.copyOf } : {}),
     };
     const outcome: NodeOutcome =
       clientVersion === node.v

@@ -8,30 +8,30 @@ This document exists because Braid's other documentation has, in places, describ
 in language that implies more than it delivers. The correction, stated plainly:
 
 > **The trusted tier is namespace isolation, not a security boundary.** It protects one application
-> from another application's runtime *accidents*. It does not protect one application when another
-> application's runtime has gone *bad*.
+> from another application's runtime _accidents_. It does not protect one application when another
+> application's runtime has gone _bad_.
 
 ---
 
 ## The two tiers
 
-| | **Trusted** (default) | **Untrusted** |
-| --- | --- | --- |
-| Mount | `<fragment-slot name="checkout">` | `<fragment-slot trust="untrusted" src="https://…">` |
-| Realm | hidden same-origin iframe | visible cross-origin iframe |
-| Where its DOM lives | **projected into the host document**, in a shadow root | its own document |
-| Isolation | JS globals, module registry, framework identity | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy |
-| Cookies & storage | **the host's**; Web Storage can be per fragment (`capabilities.storage`) | none: the frame's opaque origin has no cookies, Web Storage or IndexedDB |
-| Host globals | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own |
-| Layout | participates in host layout | a rectangle the host sizes |
-| Accessibility | one tree | nested documents |
-| Overlays | can escape the fragment's box | clipped by the frame |
-| Printing & selection | normal | frame-bound |
-| SSR piercing | yes — fragment HTML in the host's first response | no |
-| Gateway | required for compat mode | **not involved at all** |
-| Zero app-code change | yes, via the compat adapter | no — the fragment calls `connectToBraidHost()` |
+|                      | **Trusted** (default)                                                                          | **Untrusted**                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Mount                | `<fragment-slot name="checkout">`                                                              | `<fragment-slot trust="untrusted" src="https://…">`                      |
+| Realm                | hidden same-origin iframe                                                                      | visible cross-origin iframe                                              |
+| Where its DOM lives  | **projected into the host document**, in a shadow root                                         | its own document                                                         |
+| Isolation            | JS globals, module registry, framework identity                                                | browser-enforced: Same-Origin Policy, sandbox, Permissions-Policy        |
+| Cookies & storage    | **the host's**; Web Storage can be per fragment (`capabilities.storage`)                       | none: the frame's opaque origin has no cookies, Web Storage or IndexedDB |
+| Host globals         | its own realm's, plus any the host lists in `sharedGlobals` or hands it through `realmGlobals` | its own                                                                  |
+| Layout               | participates in host layout                                                                    | a rectangle the host sizes                                               |
+| Accessibility        | one tree                                                                                       | nested documents                                                         |
+| Overlays             | can escape the fragment's box                                                                  | clipped by the frame                                                     |
+| Printing & selection | normal                                                                                         | frame-bound                                                              |
+| SSR piercing         | yes — fragment HTML in the host's first response                                               | no                                                                       |
+| Gateway              | required for compat mode                                                                       | **not involved at all**                                                  |
+| Zero app-code change | yes, via the compat adapter                                                                    | no — the fragment calls `connectToBraidHost()`                           |
 
-Everything in the trusted column below "where its DOM lives" is a *consequence* of sharing a
+Everything in the trusted column below "where its DOM lives" is a _consequence_ of sharing a
 document. None of it survives a boundary the browser enforces. The untrusted tier gives up all of it.
 
 **Shared globals widen the trusted tier on purpose.** A trusted fragment's JavaScript runs in its
@@ -68,7 +68,7 @@ the code on the other side is hostile, compromised, or merely has a compromised 
 
 ### A performance option as well
 
-An untrusted fragment runs in a cross-origin frame. Under site isolation the browser gives a cross-*site* frame its own renderer process, so a CPU-heavy fragment (a chart engine, a large grid, a third-party widget) runs off the host's main thread and can't slow the host's input or rendering. The caveats:
+An untrusted fragment runs in a cross-origin frame. Under site isolation the browser gives a cross-_site_ frame its own renderer process, so a CPU-heavy fragment (a chart engine, a large grid, a third-party widget) runs off the host's main thread and can't slow the host's input or rendering. The caveats:
 
 - **It has to be cross-site, not only cross-origin.** `widgets.example.com` inside `www.example.com` is the same site, so it shares the host's process. Use a different registrable domain for the isolation to apply.
 - **Android isolates only some sites.** Chrome on Android gives separate processes only to sites it judges sensitive, so don't count on the separation there.
@@ -101,12 +101,7 @@ read another's storage can still reach `top.localStorage`.
 Host:
 
 ```html
-<fragment-slot
-  name="vendor-analytics"
-  trust="untrusted"
-  src="https://vendor.example.com/widget"
-  allow="clipboard-write"
-  sandbox="allow-popups">
+<fragment-slot name="vendor-analytics" trust="untrusted" src="https://vendor.example.com/widget" allow="clipboard-write" sandbox="allow-popups">
   <p slot="fallback">Analytics are unavailable.</p>
 </fragment-slot>
 ```
@@ -141,15 +136,15 @@ session.emit('impression', { slot: 'sidebar' });
 
 ### What is enforced, and by whom
 
-| Control | Enforced by | Notes |
-| --- | --- | --- |
-| DOM, storage, cookie separation | **the browser** (Same-Origin Policy) | the reason this tier exists |
-| `sandbox` tokens | **the browser** | `allow-scripts allow-forms` by default; additions are host-declared |
-| `allow=` features | **the browser** (Permissions-Policy) | a deny list: unlisted features are unavailable in the frame |
-| `credentialless` | **the browser**, where supported | ephemeral storage, so a fragment cannot correlate the user across sites |
-| Window pinning | **Braid**, both directions | the frame runs in an opaque origin, so the host answers only its own frame's window; the guest accepts a port only from the window that framed it, on the pinned host origin |
-| Contract terms | **Braid** | negotiated before state crosses |
-| Context grants | **Braid** | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification. With no grant declared, an untrusted fragment reads nothing (a trusted one reads everything) |
+| Control                         | Enforced by                          | Notes                                                                                                                                                                                        |
+| ------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DOM, storage, cookie separation | **the browser** (Same-Origin Policy) | the reason this tier exists                                                                                                                                                                  |
+| `sandbox` tokens                | **the browser**                      | `allow-scripts allow-forms` by default; additions are host-declared                                                                                                                          |
+| `allow=` features               | **the browser** (Permissions-Policy) | a deny list: unlisted features are unavailable in the frame                                                                                                                                  |
+| `credentialless`                | **the browser**, where supported     | ephemeral storage, so a fragment cannot correlate the user across sites                                                                                                                      |
+| Window pinning                  | **Braid**, both directions           | the frame runs in an opaque origin, so the host answers only its own frame's window; the guest accepts a port only from the window that framed it, on the pinned host origin                 |
+| Contract terms                  | **Braid**                            | negotiated before state crosses                                                                                                                                                              |
+| Context grants                  | **Braid**                            | `capabilities.context.read`; an ungranted key is not mirrored and sends no change notification. With no grant declared, an untrusted fragment reads nothing (a trusted one reads everything) |
 
 ### Refusals worth knowing about
 

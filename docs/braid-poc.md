@@ -17,20 +17,20 @@ why it exists, and this page will read very differently afterwards.
 **Requires Node 24 or newer.** The gateway compiles pierce patterns with `URLPattern`, which is a
 global only from Node 23.8; the runner checks for it before building anything.
 
-| Piece | Where | What it is | Adapter |
-| --- | --- | --- | --- |
-| Host | `apps/braid-poc-host` | Angular SSR app; its Express server mounts the gateway in front | — |
-| billing | `apps/braid-poc-remote` | Stock Angular SPA with its own router | compat (default) |
-| reviews | `apps/braid-poc-react-remote` | A React 19 app, built with esbuild | compat (default) |
-| rating | `apps/braid-poc-widget` | A single custom element, no build step, no framework | `custom-element` |
-| notifications | `apps/braid-poc-notifications` | Angular app with **its own SSR**, unbound from the host router | compat (default) |
+| Piece         | Where                          | What it is                                                      | Adapter          |
+| ------------- | ------------------------------ | --------------------------------------------------------------- | ---------------- |
+| Host          | `apps/braid-poc-host`          | Angular SSR app; its Express server mounts the gateway in front | —                |
+| billing       | `apps/braid-poc-remote`        | Stock Angular SPA with its own router                           | compat (default) |
+| reviews       | `apps/braid-poc-react-remote`  | A React 19 app, built with esbuild                              | compat (default) |
+| rating        | `apps/braid-poc-widget`        | A single custom element, no build step, no framework            | `custom-element` |
+| notifications | `apps/braid-poc-notifications` | Angular app with **its own SSR**, unbound from the host router  | compat (default) |
 
 **Three frameworks on one page.** Angular hosts, Angular and React fragments render inside it,
 and a framework-free web component sits beside them — none of them imported by the host, each in
 its own realm with its own dependency graph.
 
 **And one of them is chrome, not a screen.** The notifications panel in the header is a separately
-deployed Angular app with its own server-side rendering, composed into *every* page — see
+deployed Angular app with its own server-side rendering, composed into _every_ page — see
 [Unbound fragments](#unbound-fragments-chrome-rather-than-a-screen) below.
 
 ![Braid POC Demo running Angular host, Angular remote, React remote, and Web Component widget](tutorials/assets/mfes.png)
@@ -47,11 +47,11 @@ That distinction is two fields in the manifest:
 {
   "id": "notifications",
   "endpoint": "http://localhost:4505",
-  "bound": false,        // does not participate in host navigation
-  "src": "/panel",       // where its content lives — fetched instead of the page path
+  "bound": false, // does not participate in host navigation
+  "src": "/panel", // where its content lives — fetched instead of the page path
   "pierce": ["/", "/*"], // appears on every page
   "timeoutMs": 400,
-  "fallback": "placeholder"
+  "fallback": "placeholder",
 }
 ```
 
@@ -61,7 +61,7 @@ and one attribute in the host's template:
 <fragment-slot name="notifications" src="/panel"></fragment-slot>
 ```
 
-The path is declared in both places on purpose. The slot is what tells the *client* where to boot
+The path is declared in both places on purpose. The slot is what tells the _client_ where to boot
 the fragment, so writing it in the template makes an unbound fragment's mount path visible in the
 host's own markup and identical whether or not the page was pierced — no metadata round trip, and no
 dependence on `pierce` patterns happening to cover every route. The gateway fills the attribute in
@@ -76,7 +76,7 @@ that the gateway asked for `/panel`.
 **Angular hydrates inside the realm.** This was the open question the POC existed to answer. The
 fragment's own Angular boots in its realm and hydrates against DOM living in the host's shadow root,
 reached through the compat document facade — cleanly, with no NG0500-series errors, and with
-incremental hydration intact: a `@defer (hydrate on interaction)` block *inside* the fragment stays
+incremental hydration intact: a `@defer (hydrate on interaction)` block _inside_ the fragment stays
 server-rendered and dehydrated until someone uses it.
 
 **Every page pays for it, so the budget is tight.** With `pierce: ['/*']`, the widget's fetch is on
@@ -94,12 +94,12 @@ fragments. A widget that is down or slow costs its own absence, and nothing else
 own proof**. The evidence is rendered in the panel on purpose: "open devtools and check the network
 tab" is homework, not a demonstration.
 
-| Act | Panels | What is claimed |
-| --- | --- | --- |
-| Composition | 1–3 | three apps, none importing the others; typing in one appears in another; neither can see the other's globals |
-| Shared data | 4–7 | two apps fetched a record once between them; a rename in one refreshes the other; an edit shows before it is sent, and a server that disagrees says so |
-| Offline and durability | 8–11 | queued work survives going offline, survives a reload, is flushed by exactly one tab, and is never taken by another app |
-| Skew | 12–13 | one record on disk read at two contract versions, the older reader reporting what it could not carry |
+| Act                    | Panels | What is claimed                                                                                                                                        |
+| ---------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Composition            | 1–3    | three apps, none importing the others; typing in one appears in another; neither can see the other's globals                                           |
+| Shared data            | 4–7    | two apps fetched a record once between them; a rename in one refreshes the other; an edit shows before it is sent, and a server that disagrees says so |
+| Offline and durability | 8–11   | queued work survives going offline, survives a reload, is flushed by exactly one tab, and is never taken by another app                                |
+| Skew                   | 12–13  | one record on disk read at two contract versions, the older reader reporting what it could not carry                                                   |
 
 Panel 9 is the one that earns `persistOutbox: true`. It runs two outboxes side by side that differ
 in exactly one variable — the driver — queues the same mutation into both, and asks you to reload.
@@ -144,22 +144,22 @@ and `signal()` exactly as it would standalone. Its manifest entry declares no `a
 gets compat, which is the default.
 
 **The composition is server-rendered.** A document request to `/billing/invoices` returns one
-response containing the host's SSR output *with the remote's markup already inside the slot* as a
+response containing the host's SSR output _with the remote's markup already inside the slot_ as a
 declarative shadow root. `curl` it and read the HTML — the remote's `<billing-root>` is there,
 its scripts are `type="inert"`, and its `styles.css` has been re-rooted to
 `/__braid/frag/billing/styles-*.css`. The client adopts that markup instead of fetching it.
 
 **Routing works in every direction**, with one realm throughout:
 
-| Navigation                              | Result                                            |
-| --------------------------------------- | ------------------------------------------------- |
-| Host router → `/billing/settings`       | fragment switches to its Settings route           |
-| Fragment `routerLink` → `/billing/…`    | host URL changes, host nav highlights update      |
-| Browser back / forward                  | both stay in sync, natively via `popstate`        |
+| Navigation                           | Result                                       |
+| ------------------------------------ | -------------------------------------------- |
+| Host router → `/billing/settings`    | fragment switches to its Settings route      |
+| Fragment `routerLink` → `/billing/…` | host URL changes, host nav highlights update |
+| Browser back / forward               | both stay in sync, natively via `popstate`   |
 
 **The host page stays pristine.** `Node.prototype` and the History API are untouched; each
 remote's globals stay in its own realm. Verified on the composed page: `window.React` is
-`undefined` in the host, and `star-rating` is defined in the *fragment's* custom element registry
+`undefined` in the host, and `star-rating` is defined in the _fragment's_ custom element registry
 and not the host's — yet the upgraded element lives in the host's DOM. That is how the
 `custom-element` adapter works: the element is created in the realm, where it upgrades against
 the fragment's own definition, then moved into the host page, which preserves its class.
@@ -214,14 +214,14 @@ keeps the page's templates strictly checked (no `CUSTOM_ELEMENTS_SCHEMA`) and tu
 
 ## Two things worth knowing
 
-**Use an after-navigation hook, not every router event.** `NavigationStart` fires *before* the
+**Use an after-navigation hook, not every router event.** `NavigationStart` fires _before_ the
 URL changes; notifying then reports a location the page hasn't reached. The bus now tolerates
 this (it keys duplicate-suppression on the URL, not on time alone), but filtering to
 `NavigationEnd` is the correct wiring.
 
 **Hydration is load-bearing.** Without `provideClientHydration()` on both bootstraps, Angular
 discards the server-rendered DOM and re-creates it — destroying the slot the gateway just filled
-and booting a *second* realm to fetch the fragment again. With hydration there is exactly one
+and booting a _second_ realm to fetch the fragment again. With hydration there is exactly one
 realm, and the pierced content is what you see.
 
 State note: navigating away from a fragment route and back re-creates the remote's routed
