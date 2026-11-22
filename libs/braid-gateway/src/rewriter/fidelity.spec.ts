@@ -96,3 +96,71 @@ describe('throughput', () => {
     expect(rebuilt / legacy).toBeLessThanOrEqual(2);
   }, 300_000);
 });
+
+describe('cost on hostile markup', () => {
+  // Tracking the tree must not make a tag cost more the deeper the document is: a fragment of
+  // deep nesting and many end tags would otherwise hold the gateway for minutes.
+  const shapes: [string, (depth: number) => string][] = [
+    ['unmatched end tags under deep nesting', (n) => '<div>'.repeat(n) + '</span>'.repeat(n)],
+    ['end tags blocked by a table cell', (n) => '<b><table><tr><td>' + '<span>'.repeat(n) + '</b>'.repeat(n)],
+    ['block tags under deep nesting', (n) => '<p>' + '<span>'.repeat(n) + '<div></div>'.repeat(n)],
+    ['table structure under deep nesting', (n) => '<table><tr><td>' + '<span>'.repeat(n) + '<tr>'.repeat(n)],
+    ['end tags in deep SVG', (n) => '<svg>' + '<g>'.repeat(n) + '</x>'.repeat(n)],
+    ['end tags in a deep HTML island', (n) => '<svg><foreignObject>' + '<span>'.repeat(n) + '</b>'.repeat(n)],
+    ['list items in a deep HTML island', (n) => '<svg><foreignObject><li>' + '<span>'.repeat(n) + '<li>'.repeat(n)],
+    ['select content under deep nesting', (n) => '<div>'.repeat(n) + '<select>' + '<option>'.repeat(n)],
+  ];
+
+  it.each(shapes)('%s: linear in the size of the input', async (_, shape) => {
+    const run = async (depth: number) => {
+      const started = performance.now();
+      await prepare(shape(depth));
+      return performance.now() - started;
+    };
+    await run(2_000);
+    const [small, large] = [await run(10_000), await run(40_000)];
+    // four times the input in well under sixteen times the time
+    expect(large / Math.max(small, 1)).toBeLessThan(8);
+  }, 120_000);
+});
+
+describe('cost on long tokens split across many chunks', () => {
+  // A tag, comment or section still incomplete at the end of a chunk is not read again from its start
+  // when the next chunk arrives: one long value in small chunks would cost its length squared.
+  const shapes: [string, (size: number) => string][] = [
+    ['a quoted attribute value', (n) => `<div title="${'a'.repeat(n)}">x</div>`],
+    ['an unquoted attribute value', (n) => `<div title=${'a'.repeat(n)}>x</div>`],
+    ['many attributes', (n) => `<div ${'a '.repeat(n / 2)}>x</div>`],
+    ['a tag name', (n) => `<d${'a'.repeat(n)}>x`],
+    ['a comment', (n) => `<!--${'a-'.repeat(n / 2)}-->`],
+    ['a bogus comment', (n) => `<?${'a'.repeat(n)}>`],
+    ['raw text', (n) => `<style>${'a<'.repeat(n / 2)}</style>`],
+    ['script data', (n) => `<script><!--${'<s'.repeat(n / 2)}--></script>`],
+  ];
+
+  it.each(shapes)('%s: linear in its length', async (_, shape) => {
+    const run = async (size: number) => {
+      const markup = shape(size);
+      const chunks: string[] = [];
+      for (let at = 0; at < markup.length; at += 1_024) chunks.push(markup.slice(at, at + 1_024));
+      const started = performance.now();
+      await new Response(
+        prepareFragmentHtml(
+          new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+              controller.close();
+            },
+          }),
+          { fragmentId: 'f' },
+        ),
+      ).text();
+      return performance.now() - started;
+    };
+    await run(100_000);
+    const [small, large] = [await run(500_000), await run(2_000_000)];
+    console.info(`${_}: 0.5 MB ${small.toFixed(1)} ms, 2 MB ${large.toFixed(1)} ms`);
+    expect(large / Math.max(small, 1)).toBeLessThan(8);
+  }, 300_000);
+});
+

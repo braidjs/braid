@@ -61,14 +61,20 @@ let browser: Browser;
 let server: Server;
 let origin: string;
 const pages = new Map<string, string>();
-/** Requests a live preload would make: the payloads' `/p/<id>`, namespaced or not. */
+/**
+ * Requests a live preload of a link the rewriter saw would make: the payloads' `/p/<id>`, which the
+ * rewriter namespaced. A link the rewriter took for text keeps its `/p/<id>`, and Chromium's preload
+ * scanner — a speculative tokenizer that fetches ahead of the parser, and reads SVG more loosely than
+ * it — may fetch that. A speculative fetch runs nothing (a fragment can have the host fetch any URL
+ * with an `<img>`), so only the DOM check decides whether such a link went live.
+ */
 const preloads: string[] = [];
 
 beforeAll(async () => {
   browser = await launch();
   server = createServer((request, response) => {
     const path = request.url ?? '/';
-    if (/\/p\/\d+/.test(path)) preloads.push(path);
+    if (/^\/__braid\/frag\/f\/p\/\d+/.test(path)) preloads.push(path);
     const body = pages.get(path);
     response.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     response.end(body ?? '');

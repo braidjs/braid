@@ -49,11 +49,39 @@ const enum Integration {
 /** How a `<template>`'s content is parsed: decided by its first start tag. */
 type TemplateMode = 'undecided' | 'body' | 'table' | 'colgroup' | 'tablebody' | 'row';
 
-interface Entry {
+/** An element as created, before the stack fills in what it knows from below. */
+interface NewEntry {
   name: string;
   namespace: Namespace;
   integration: Integration;
   templateMode?: TemplateMode;
+}
+
+/**
+ * An open element, with what the rules ask of the stack precomputed from the entry below when it is
+ * pushed — so no question costs more the deeper the document is. Each `…At` is the index of the
+ * nearest entry at or below this one that is such an element, 0 (the root) when there is none.
+ */
+interface Entry extends NewEntry {
+  /** The element "reset the insertion mode" stops at. */
+  modeAt: number;
+  /** Whether a foreign element is open at or below this, above the nearest template. */
+  foreign: boolean;
+  htmlAt: number;
+  templateAt: number;
+  /** Boundaries of the default, button and list item scopes, and of {@link OpenElements.findOpen}. */
+  scopeAt: number;
+  buttonScopeAt: number;
+  listScopeAt: number;
+  openAt: number;
+  /** Special elements, and the ones the `<li>` and `<dd>` loops stop at (all but address, div, p). */
+  specialAt: number;
+  listLoopAt: number;
+  /** The nearest table element or template, and the lowest marker element above it (-1 for none). */
+  tableAt: number;
+  markerAt: number;
+  /** Whether the nearest table or template below is a table: a select here is in a table. */
+  inTable: boolean;
 }
 
 export type ContentState = 'rcdata' | 'rawtext' | 'script' | 'plaintext';
@@ -162,12 +190,42 @@ const TEMPLATE_HEAD_TAGS = new Set([
   'base', 'basefont', 'bgsound', 'link', 'meta', 'noframes', 'script', 'style', 'template', 'title',
 ]);
 
+/** HTML elements "reset the insertion mode appropriately" stops at. */
+const MODE_SETTING = new Set(['select', 'td', 'th', 'tr', 'tbody', 'thead', 'tfoot', 'caption', 'colgroup', 'table', 'template']);
+
+/** Foreign elements that bound every scope, and are special: the integration points, and annotation-xml. */
+function isForeignBoundary(namespace: Namespace, name: string): boolean {
+  if (namespace === 'svg') return name === 'foreignobject' || name === 'desc' || name === 'title';
+  if (namespace === 'math') return name === 'mi' || name === 'mo' || name === 'mn' || name === 'ms' || name === 'mtext' || name === 'annotation-xml';
+  return false;
+}
+
 type Mode = 'body' | 'select' | 'select-in-table' | 'colgroup' | 'colgroup-template' | 'table' | 'tablebody' | 'row' | 'cell' | 'caption' | 'template';
 
-const ROOT: Entry = { name: '#root', namespace: 'html', integration: Integration.None };
+const ROOT: Entry = {
+  name: '#root',
+  namespace: 'html',
+  integration: Integration.None,
+  modeAt: 0,
+  foreign: false,
+  htmlAt: 0,
+  templateAt: 0,
+  scopeAt: 0,
+  buttonScopeAt: 0,
+  listScopeAt: 0,
+  openAt: 0,
+  specialAt: 0,
+  listLoopAt: 0,
+  tableAt: 0,
+  markerAt: -1,
+  inTable: false,
+};
 
 export class OpenElements {
   private readonly stack: Entry[] = [ROOT];
+  /** The indices of the open elements of each name, innermost last: HTML ones and foreign ones. */
+  private readonly html = new Map<string, number[]>();
+  private readonly foreignByName = new Map<string, number[]>();
 
   /**
    * @param contain Fragment markup: write the canonical output described above, and keep it inside
@@ -213,7 +271,7 @@ export class OpenElements {
     let mode = this.mode();
     if (mode === 'colgroup' && tagName !== 'col' && tagName !== 'template') {
       // a colgroup ends at anything but a col; the tag is reprocessed in table mode
-      this.stack.pop();
+      this.pop();
       mode = this.mode();
     }
 
@@ -263,17 +321,11 @@ export class OpenElements {
 
     if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
       if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
-        const names = tagName === 'li' ? ['li'] : ['dd', 'dt'];
-        for (let index = this.stack.length - 1; index > 0; index--) {
-          const entry = this.stack[index];
-          if (entry.namespace === 'html' && names.includes(entry.name)) {
-            closers.push(...this.closeThrough(index));
-            break;
-          }
-          if (this.isSpecial(entry) && !(entry.namespace === 'html' && ['address', 'div', 'p'].includes(entry.name))) break;
-        }
+        // the nearest li (or dd/dt) not below a special element other than address, div and p
+        const open = tagName === 'li' ? this.last('li') : Math.max(this.last('dd'), this.last('dt'));
+        if (open > 0 && open >= this.current.listLoopAt) closers.push(...this.closeThrough(open));
       }
-      const p = this.inScope((entry) => entry.name === 'p', 'button');
+      const p = this.inScope('p', 'buttonScopeAt');
       if (p !== -1) closers.push(...this.closeThrough(p));
       if (HEADINGS.has(tagName) && this.current.namespace === 'html' && HEADINGS.has(this.current.name)) {
         closers.push(this.popWithCloser());
@@ -282,7 +334,7 @@ export class OpenElements {
     }
 
     if (tagName === 'button' || tagName === 'a' || tagName === 'nobr') {
-      const open = this.inScope((entry) => entry.name === tagName);
+      const open = this.inScope(tagName);
       if (open !== -1) closers.push(...this.closeThrough(open));
       return plan(false);
     }
@@ -293,7 +345,7 @@ export class OpenElements {
     }
 
     if (tagName === 'rb' || tagName === 'rtc' || tagName === 'rp' || tagName === 'rt') {
-      if (this.inScope((entry) => entry.name === 'ruby') !== -1) {
+      if (this.inScope('ruby') !== -1) {
         const except = tagName === 'rp' || tagName === 'rt' ? 'rtc' : '';
         while (
           this.current.namespace === 'html' &&
@@ -315,12 +367,12 @@ export class OpenElements {
    */
   pushStart(plan: StartPlan, name: string, selfClosing: boolean, attribute: (name: string) => string | null): ContentState | null {
     if (plan.foreign) {
-      if (!selfClosing) this.stack.push(foreignEntry(plan.foreign, name, attribute));
+      if (!selfClosing) this.push(foreignEntry(plan.foreign, name, attribute));
       return null;
     }
 
     if (name === 'svg' || name === 'math') {
-      if (!selfClosing) this.stack.push(foreignEntry(name, name, attribute));
+      if (!selfClosing) this.push(foreignEntry(name, name, attribute));
       this.decideTemplateMode(name);
       return null;
     }
@@ -334,9 +386,9 @@ export class OpenElements {
       this.closeImpliedOutsideForeignContent(name);
     }
 
-    const entry: Entry = { name, namespace: 'html', integration: Integration.None };
+    const entry: NewEntry = { name, namespace: 'html', integration: Integration.None };
     if (name === 'template') entry.templateMode = 'undecided';
-    this.stack.push(entry);
+    this.push(entry);
     return RAW_TEXT[name] ?? null;
   }
 
@@ -351,7 +403,7 @@ export class OpenElements {
     const plan = (drop: boolean): EndPlan => ({ closers, drop });
 
     if (this.isRawTextCurrent(name)) {
-      this.stack.pop();
+      this.pop();
       return plan(false);
     }
 
@@ -364,20 +416,17 @@ export class OpenElements {
       } else {
         // end tags in foreign content — at an integration point too — close the nearest foreign
         // element of the name, or are handed to HTML rules at the first HTML element below
-        let index = this.stack.length - 1;
-        for (;;) {
-          if (this.stack[index].name === name) {
-            closers.push(...this.closeThrough(index, true));
-            return plan(false);
-          }
-          index--;
-          if (this.stack[index].namespace === 'html') break;
+        const html = this.current.htmlAt;
+        const match = this.foreignByName.get(name)?.at(-1) ?? -1;
+        if (match > html) {
+          closers.push(...this.closeThrough(match, true));
+          return plan(false);
         }
         // One a fragment cannot have: of table structure dropped in foreign content, or of an element
         // it was placed in. Dropped as it is, rather than after closing the foreign content to reach
         // HTML rules that would drop it anyway.
         if (this.contain && this.droppedInForeignContent(name)) return plan(true);
-        closers.push(...this.closeThrough(index + 1));
+        closers.push(...this.closeThrough(html + 1));
       }
     }
 
@@ -388,11 +437,11 @@ export class OpenElements {
     const plan = (drop: boolean): EndPlan => ({ closers, drop });
 
     if (name === 'template') {
-      const template = this.stack.findLastIndex((entry) => entry.namespace === 'html' && entry.name === 'template');
-      if (template === -1) return plan(this.contain);
+      const template = this.current.templateAt;
+      if (template === 0) return plan(this.contain);
       // each element in it closed by its own end tag, so each clears its own formatting marker
       if (this.contain) closers.push(...this.closeThrough(template, true));
-      else this.stack.length = template;
+      else this.truncate(template);
       return plan(false);
     }
 
@@ -404,11 +453,11 @@ export class OpenElements {
       if (name === 'select') {
         const select = this.findOpen('select');
         if (select === -1) return plan(this.contain);
-        this.stack.length = select;
+        this.truncate(select);
         return plan(false);
       }
       if (name === 'option' || name === 'optgroup') {
-        if (this.current.namespace === 'html' && this.current.name === name) this.stack.pop();
+        if (this.current.namespace === 'html' && this.current.name === name) this.pop();
         return plan(false);
       }
       if (mode === 'select-in-table' && TABLE_STRUCTURE.has(name) && name !== 'col' && name !== 'colgroup') {
@@ -426,23 +475,19 @@ export class OpenElements {
 
       let target = -1;
       if (name === 'p') {
-        target = this.inScope((entry) => entry.name === 'p', 'button');
+        target = this.inScope('p', 'buttonScopeAt');
         if (target === -1) return plan(false); // an empty <p>, created and closed
       } else if (name === 'li') {
-        target = this.inScope((entry) => entry.name === 'li', 'list');
+        target = this.inScope('li', 'listScopeAt');
       } else if (HEADINGS.has(name)) {
-        target = this.inScope((entry) => HEADINGS.has(entry.name));
+        const heading = Math.max(...[...HEADINGS].map((level) => this.last(level)));
+        target = heading > 0 && heading >= this.current.scopeAt ? heading : -1;
       } else if (SCOPED_END.has(name) || FORMATTING.has(name)) {
-        target = this.inScope((entry) => entry.name === name);
+        target = this.inScope(name);
       } else {
-        for (let index = this.stack.length - 1; index > 0; index--) {
-          const entry = this.stack[index];
-          if (entry.namespace === 'html' && entry.name === name) {
-            target = index;
-            break;
-          }
-          if (this.isSpecial(entry)) break;
-        }
+        // any other end tag: the nearest element of the name, not below a special element
+        const open = this.last(name);
+        target = open > 0 && open >= this.current.specialAt ? open : -1;
       }
       if (target === -1) return plan(true);
       closers.push(...this.closeThrough(target, true));
@@ -453,7 +498,7 @@ export class OpenElements {
     if (this.contain && TABLE_STRUCTURE.has(name)) closers.push(...this.closeMarkersAboveTable());
     const open = this.findOpen(name);
     if (open === -1) return plan(this.contain && HOST_ELEMENTS.has(name));
-    this.stack.length = open;
+    this.truncate(open);
     return plan(false);
   }
 
@@ -482,7 +527,7 @@ export class OpenElements {
 
   /** Pops the current element after a raw-text element the input ended inside was closed. */
   popRawText(): void {
-    if (this.current.namespace === 'html' && this.current.name in RAW_TEXT) this.stack.pop();
+    if (this.current.namespace === 'html' && this.current.name in RAW_TEXT) this.pop();
   }
 
   // --- the stack ---
@@ -491,7 +536,7 @@ export class OpenElements {
   private droppedInForeignContent(name: string): boolean {
     if (TABLE_STRUCTURE.has(name) || name === 'select') return true;
     if (!HOST_ELEMENTS.has(name) || name === 'template') return false;
-    return this.findOpen(name) === -1 && !this.stack.some((entry) => entry.namespace === 'html' && entry.name === name);
+    return this.last(name) === 0;
   }
 
   /** A foreign element that is not an integration point: what a breakout pops. */
@@ -509,59 +554,45 @@ export class OpenElements {
 
   /** Whether a foreign element is open above the nearest template: HTML parsed here is an island. */
   private inForeignContent(): boolean {
-    for (let index = this.stack.length - 1; index > 0; index--) {
-      const entry = this.stack[index];
-      if (entry.namespace !== 'html') return true;
-      if (entry.name === 'template') return false;
-    }
-    return false;
+    return this.current.foreign;
   }
 
   /** The insertion mode, as "reset the insertion mode appropriately" finds it. */
   private mode(): Mode {
-    for (let index = this.stack.length - 1; index > 0; index--) {
-      const entry = this.stack[index];
-      if (entry.namespace !== 'html') continue;
-      switch (entry.name) {
-        case 'select':
-          for (let below = index - 1; below > 0; below--) {
-            const ancestor = this.stack[below];
-            if (ancestor.namespace !== 'html') continue;
-            if (ancestor.name === 'template') return 'select';
-            if (ancestor.name === 'table') return 'select-in-table';
-          }
-          return 'select';
-        case 'td':
-        case 'th':
-          return 'cell';
-        case 'tr':
-          return 'row';
-        case 'tbody':
-        case 'thead':
-        case 'tfoot':
-          return 'tablebody';
-        case 'caption':
-          return 'caption';
-        case 'colgroup':
-          return 'colgroup';
-        case 'table':
-          return 'table';
-        case 'template':
-          switch (entry.templateMode) {
-            case 'colgroup':
-              return 'colgroup-template';
-            case 'table':
-            case 'tablebody':
-            case 'row':
-              return entry.templateMode === 'tablebody' ? 'tablebody' : entry.templateMode;
-            case 'body':
-              return 'body';
-            default:
-              return 'template';
-          }
-      }
+    const entry = this.stack[this.current.modeAt];
+    switch (entry.name) {
+      case 'select':
+        return entry.inTable ? 'select-in-table' : 'select';
+      case 'td':
+      case 'th':
+        return 'cell';
+      case 'tr':
+        return 'row';
+      case 'tbody':
+      case 'thead':
+      case 'tfoot':
+        return 'tablebody';
+      case 'caption':
+        return 'caption';
+      case 'colgroup':
+        return 'colgroup';
+      case 'table':
+        return 'table';
+      case 'template':
+        switch (entry.templateMode) {
+          case 'colgroup':
+            return 'colgroup-template';
+          case 'table':
+          case 'tablebody':
+          case 'row':
+          case 'body':
+            return entry.templateMode;
+          default:
+            return 'template';
+        }
+      default:
+        return 'body';
     }
-    return 'body';
   }
 
   /** A template's first start tag decides how the rest of its content is parsed. */
@@ -584,49 +615,30 @@ export class OpenElements {
   /** Implied end tags outside foreign content: followed, not written, to keep the stack close. */
   private closeImpliedOutsideForeignContent(name: string): void {
     if (CLOSES_P.has(name)) {
-      const p = this.inScope((entry) => entry.name === 'p', 'button');
-      if (p !== -1) this.stack.length = p;
+      const p = this.inScope('p', 'buttonScopeAt');
+      if (p !== -1) this.truncate(p);
     }
     if (name === 'li' || name === 'dd' || name === 'dt' || name === 'option') {
       const names = name === 'li' ? ['li'] : name === 'option' ? ['option'] : ['dd', 'dt'];
-      if (this.current.namespace === 'html' && names.includes(this.current.name)) this.stack.pop();
+      if (this.current.namespace === 'html' && names.includes(this.current.name)) this.pop();
     }
   }
 
-  private isSpecial(entry: Entry): boolean {
-    if (entry === ROOT) return true;
-    if (entry.namespace === 'html') return SPECIAL.has(entry.name);
-    return entry.integration !== Integration.None;
+  /** The index of the innermost open HTML element of this name, or 0 for none. */
+  private last(name: string): number {
+    return this.html.get(name)?.at(-1) ?? 0;
   }
 
-  /** The index of the nearest HTML element matching, in scope, or -1. */
-  private inScope(matches: (entry: Entry) => boolean, extra?: 'button' | 'list'): number {
-    for (let index = this.stack.length - 1; index > 0; index--) {
-      const entry = this.stack[index];
-      if (entry.namespace === 'html' && matches(entry)) return index;
-      if (entry.namespace === 'html') {
-        if (SCOPE_BOUNDARIES.has(entry.name)) return -1;
-        if (extra === 'button' && entry.name === 'button') return -1;
-        if (extra === 'list' && (entry.name === 'ol' || entry.name === 'ul')) return -1;
-      } else if (entry.integration !== Integration.None) {
-        return -1;
-      }
-    }
-    return -1;
+  /** The index of the innermost open HTML element of this name, if it is in the given scope; or -1. */
+  private inScope(name: string, scope: 'scopeAt' | 'buttonScopeAt' | 'listScopeAt' = 'scopeAt'): number {
+    const open = this.last(name);
+    return open > 0 && open >= this.current[scope] ? open : -1;
   }
 
   /** The nearest open HTML element of this name, not looking past a template, cell, table or select. */
   private findOpen(name: string): number {
-    for (let index = this.stack.length - 1; index > 0; index--) {
-      const entry = this.stack[index];
-      if (entry.namespace === 'html' && entry.name === name) return index;
-      if (entry.namespace !== 'html') {
-        if (entry.integration !== Integration.None) return -1;
-        continue;
-      }
-      if (SCOPE_BOUNDARIES.has(entry.name) || entry.name === 'select') return -1;
-    }
-    return -1;
+    const open = this.last(name);
+    return open > 0 && open >= this.current.openAt ? open : -1;
   }
 
   /**
@@ -637,24 +649,59 @@ export class OpenElements {
    * `<a href>` would be reconstructed around the host's markup after the fragment.
    */
   private closeMarkersAboveTable(): string[] {
-    let marker = -1;
-    for (let index = this.stack.length - 1; index > 0; index--) {
-      const entry = this.stack[index];
-      if (entry.namespace !== 'html') continue;
-      if (MARKERS.has(entry.name)) marker = index;
-      else if (TABLE_ELEMENTS.has(entry.name)) return marker === -1 ? [] : this.closeThrough(marker);
-      else if (entry.name === 'template') return [];
-    }
-    return [];
+    const { tableAt, markerAt } = this.current;
+    if (tableAt === 0 || this.stack[tableAt].name === 'template' || markerAt === -1) return [];
+    return this.closeThrough(markerAt);
   }
 
   private popUntil(name: string): void {
     const index = this.findOpen(name);
-    if (index !== -1) this.stack.length = index;
+    if (index !== -1) this.truncate(index);
+  }
+
+  private push(created: NewEntry): void {
+    const below = this.current;
+    const index = this.stack.length;
+    const { name, namespace } = created;
+    const html = namespace === 'html';
+    const boundary = html ? SCOPE_BOUNDARIES.has(name) : isForeignBoundary(namespace, name);
+    const special = html ? SPECIAL.has(name) : isForeignBoundary(namespace, name);
+    const tableElement = html && (TABLE_ELEMENTS.has(name) || name === 'template');
+    const entry: Entry = {
+      ...created,
+      modeAt: html && MODE_SETTING.has(name) ? index : below.modeAt,
+      foreign: html ? name !== 'template' && below.foreign : true,
+      htmlAt: html ? index : below.htmlAt,
+      templateAt: html && name === 'template' ? index : below.templateAt,
+      scopeAt: boundary ? index : below.scopeAt,
+      buttonScopeAt: boundary || (html && name === 'button') ? index : below.buttonScopeAt,
+      listScopeAt: boundary || (html && (name === 'ol' || name === 'ul')) ? index : below.listScopeAt,
+      openAt: boundary || (html && name === 'select') ? index : below.openAt,
+      specialAt: special ? index : below.specialAt,
+      listLoopAt: special && !(html && (name === 'address' || name === 'div' || name === 'p')) ? index : below.listLoopAt,
+      tableAt: tableElement ? index : below.tableAt,
+      markerAt: tableElement ? -1 : html && MARKERS.has(name) && below.markerAt === -1 ? index : below.markerAt,
+      inTable: html && name === 'table' ? true : html && name === 'template' ? false : below.inTable,
+    };
+    this.stack.push(entry);
+    const byName = html ? this.html : this.foreignByName;
+    const indices = byName.get(name);
+    if (indices) indices.push(index);
+    else byName.set(name, [index]);
+  }
+
+  private pop(): Entry {
+    const entry = this.stack.pop()!;
+    (entry.namespace === 'html' ? this.html : this.foreignByName).get(entry.name)!.pop();
+    return entry;
+  }
+
+  private truncate(length: number): void {
+    while (this.stack.length > length) this.pop();
   }
 
   private popWithCloser(): string {
-    return `</${this.stack.pop()!.name}>`;
+    return `</${this.pop().name}>`;
   }
 
   /**
@@ -665,13 +712,13 @@ export class OpenElements {
   private closeThrough(index: number, excludeLast = false): string[] {
     const closers: string[] = [];
     while (this.stack.length > index + 1) closers.push(this.popWithCloser());
-    const last = this.stack.pop()!;
+    const last = this.pop();
     if (!excludeLast) closers.push(`</${last.name}>`);
     return closers;
   }
 }
 
-function foreignEntry(namespace: Namespace, name: string, attribute: (name: string) => string | null): Entry {
+function foreignEntry(namespace: Namespace, name: string, attribute: (name: string) => string | null): NewEntry {
   let integration = Integration.None;
   if (namespace === 'svg') {
     if (name === 'foreignobject' || name === 'desc' || name === 'title') integration = Integration.Html;

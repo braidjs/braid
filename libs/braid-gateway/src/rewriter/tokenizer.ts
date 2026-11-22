@@ -49,6 +49,19 @@ export type Token =
 
 export type ContentState = 'data' | 'rcdata' | 'rawtext' | 'script' | 'plaintext';
 
+/** How far reading an incomplete tag got (see {@link Tokenizer.tag}). */
+interface PendingTag {
+  /** The tag's `<`. */
+  at: number;
+  /** Null while the name itself is incomplete. */
+  name: string | null;
+  attributes: RawAttribute[];
+  /** Where the attribute being read when the input ran out starts. */
+  resumeAt: number;
+  /** Where to go on looking for the closing quote of that attribute's value, or -1. */
+  quoteFrom: number;
+}
+
 /** Where script data is: plain, after `<!--`, or after `<!--` and then `<script>`. */
 type ScriptState = 'data' | 'escaped' | 'double';
 
@@ -71,14 +84,29 @@ export class Tokenizer {
   /** For a comment, bogus comment or doctype still incomplete: where to resume looking for its end. */
   private resumeAt = -1;
   private resumeFrom = 0;
+  /** A tag still incomplete at the end of the input so far, and how far reading it got. */
+  private pendingTag: PendingTag | null = null;
+  /**
+   * A tag, comment, bogus comment or doctype is incomplete, and no `>` — which all of them end at —
+   * has arrived since. Checked against each new piece of input alone, so a long token arriving in
+   * many pieces is not read again (nor its buffer flattened) for every piece.
+   */
+  private waitingForGreaterThan = false;
 
   /** Appends input. */
   feed(text: string): void {
+    if (this.waitingForGreaterThan && text.includes('>')) this.waitingForGreaterThan = false;
     if (this.index > 0) {
       this.buffer = this.buffer.slice(this.index);
       if (this.resumeAt !== -1) {
         this.resumeAt -= this.index;
         this.resumeFrom -= this.index;
+      }
+      const tag = this.pendingTag;
+      if (tag) {
+        tag.at -= this.index;
+        tag.resumeAt -= this.index;
+        if (tag.quoteFrom !== -1) tag.quoteFrom -= this.index;
       }
       this.index = 0;
     }
@@ -105,6 +133,7 @@ export class Tokenizer {
 
   /** The next token, or null when more input is needed (or, once ended, when there is none). */
   next(): Token | null {
+    if (this.waitingForGreaterThan && !this.ended) return null;
     if (this.index >= this.buffer.length) return null;
     switch (this.state) {
       case 'plaintext':
@@ -300,6 +329,7 @@ export class Tokenizer {
     }
     this.resumeAt = at;
     this.resumeFrom = resumeFrom;
+    this.waitingForGreaterThan = true;
     return null;
   }
 
@@ -334,31 +364,49 @@ export class Tokenizer {
   private waitFrom(at: number, from: number): null {
     this.resumeAt = at;
     this.resumeFrom = from;
+    this.waitingForGreaterThan = true;
     return null;
   }
 
-  /** A start or end tag, starting at its `<`. */
+  /**
+   * A start or end tag, starting at its `<`.
+   *
+   * A tag can end only at a `>`, so one still incomplete is not read again until a `>` arrives (see
+   * {@link Tokenizer.waitingForGreaterThan}); and then reading resumes after the last attribute it
+   * completed. A long tag arriving in many small chunks — one value of megabytes, or many thousands
+   * of attributes — costs its length once, not once per chunk.
+   */
   private tag(at: number, isEnd: boolean): Token | null {
     const { buffer } = this;
     const length = buffer.length;
-    let index = at + (isEnd ? 2 : 1);
+    const pending = this.pendingTag?.at === at ? this.pendingTag : null;
 
-    const nameStart = index;
-    while (index < length && !isWhitespace(buffer[index]) && buffer[index] !== '/' && buffer[index] !== '>') index++;
-    if (index >= length) return this.unterminated(at);
-    const name = normalizeName(buffer.slice(nameStart, index));
-
-    const attributes: RawAttribute[] = [];
+    let index: number;
+    let name: string;
+    let attributes: RawAttribute[];
+    if (pending?.name != null) {
+      ({ name, attributes } = pending);
+      index = pending.resumeAt;
+    } else {
+      index = at + (isEnd ? 2 : 1);
+      const nameStart = index;
+      while (index < length && !isWhitespace(buffer[index]) && buffer[index] !== '/' && buffer[index] !== '>') index++;
+      if (index >= length) return this.incompleteTag(at, null, [], index, -1);
+      name = normalizeName(buffer.slice(nameStart, index));
+      attributes = [];
+    }
     let selfClosing = false;
 
     for (;;) {
+      // where reading resumes if the input ends before this attribute does
+      const attributeAt = index;
       while (index < length && isWhitespace(buffer[index])) index++;
-      if (index >= length) return this.unterminated(at);
+      if (index >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
       const char = buffer[index];
 
       if (char === '>') break;
       if (char === '/') {
-        if (index + 1 >= length) return this.unterminated(at);
+        if (index + 1 >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
         if (buffer[index + 1] === '>') {
           selfClosing = true;
           index++;
@@ -382,22 +430,23 @@ export class Tokenizer {
       ) {
         index++;
       }
-      if (index >= length) return this.unterminated(at);
+      if (index >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
       const rawName = buffer.slice(attributeStart, index);
 
       let cursor = index;
       while (cursor < length && isWhitespace(buffer[cursor])) cursor++;
-      if (cursor >= length) return this.unterminated(at);
+      if (cursor >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
 
       let raw: string | null = null;
       if (buffer[cursor] === '=') {
         cursor++;
         while (cursor < length && isWhitespace(buffer[cursor])) cursor++;
-        if (cursor >= length) return this.unterminated(at);
+        if (cursor >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
         const quote = buffer[cursor];
         if (quote === '"' || quote === "'") {
-          const close = buffer.indexOf(quote, cursor + 1);
-          if (close === -1) return this.unterminated(at);
+          const searchFrom = pending?.resumeAt === attributeAt && pending.quoteFrom > cursor ? pending.quoteFrom : cursor + 1;
+          const close = buffer.indexOf(quote, searchFrom);
+          if (close === -1) return this.incompleteTag(at, name, attributes, attributeAt, length);
           raw = buffer.slice(cursor + 1, close);
           cursor = close + 1;
         } else if (quote === '>') {
@@ -405,13 +454,11 @@ export class Tokenizer {
         } else {
           const valueStart = cursor;
           while (cursor < length && !isWhitespace(buffer[cursor]) && buffer[cursor] !== '>') cursor++;
-          if (cursor >= length) return this.unterminated(at);
+          if (cursor >= length) return this.incompleteTag(at, name, attributes, attributeAt, -1);
           raw = buffer.slice(valueStart, cursor);
         }
-        index = cursor;
-      } else {
-        index = cursor;
       }
+      index = cursor;
 
       // the first of a repeated attribute is the one the browser keeps
       const lowered = normalizeName(rawName);
@@ -420,9 +467,26 @@ export class Tokenizer {
       }
     }
 
+    this.pendingTag = null;
     const raw = buffer.slice(at, index + 1);
     this.index = index + 1;
     return isEnd ? { type: 'end', raw, name } : { type: 'start', raw, name, attributes, selfClosing };
+  }
+
+  private incompleteTag(
+    at: number,
+    name: string | null,
+    attributes: RawAttribute[],
+    resumeAt: number,
+    quoteFrom: number,
+  ): Token | null {
+    if (this.ended) {
+      this.pendingTag = null;
+      return this.unterminated(at);
+    }
+    this.pendingTag = { at, name, attributes, resumeAt, quoteFrom };
+    this.waitingForGreaterThan = true;
+    return null;
   }
 
   private unterminated(at: number): Token | null {
