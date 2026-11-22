@@ -311,7 +311,8 @@ function applyDeferredStylesheetMedia(tag: StartTag): void {
  * decode for certain is removed before this reads it (see the rewriter's `contain`).
  */
 function blockInlineFrameDocuments(tag: StartTag): void {
-  const sourceAttribute = FRAME_SOURCE_ATTRIBUTES[tag.tagName];
+  // own properties only: a tag named `constructor` is not a frame
+  const sourceAttribute = Object.hasOwn(FRAME_SOURCE_ATTRIBUTES, tag.tagName) ? FRAME_SOURCE_ATTRIBUTES[tag.tagName] : undefined;
   if (!sourceAttribute) return;
 
   const blocked: string[] = [];

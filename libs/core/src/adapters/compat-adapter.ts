@@ -122,6 +122,10 @@ export function parseFragmentContent(html: string, mainDocument: Document): HTML
   outer.innerHTML = trustedHTML(`<template><braid-document>${html}</braid-document></template>`, mainDocument.defaultView ?? globalThis);
   const inner = outer.content.firstElementChild as HTMLTemplateElement | null;
   const braidDocument = inner?.content.firstElementChild ?? mainDocument.createElement('braid-document');
+  if (isDevMode() && (outer.content.childNodes.length !== 1 || inner?.content.childNodes.length !== 1)) {
+    // a gateway older than this runtime may not keep a fragment inside its element: what got out is lost
+    console.warn('[braid] fragment markup closed the element it was parsed in; what followed is dropped');
+  }
 
   const braidHtml = braidDocument.querySelector('braid-html');
   if (braidHtml) {

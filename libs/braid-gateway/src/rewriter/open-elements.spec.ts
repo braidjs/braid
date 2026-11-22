@@ -31,7 +31,8 @@ async function canonical(markup: string): Promise<string> {
 describe('foreign content is closed explicitly', () => {
   it.each([
     ['a breakout tag closes the SVG it leaves', '<svg><g><div>x</div>', '<svg><g></g></svg><div>x</div>'],
-    ['font breaks out with or without attributes', '<svg><font>x</font>', '<svg></svg><font>x</font>'],
+    ['font with a color, face or size breaks out', '<svg><font color=red>x</font>', '<svg></svg><font color=red>x</font>'],
+    ['font without one stays in the SVG', '<svg><font>x</font></svg>', '<svg><font>x</font></svg>'],
     ['</p> breaks out too', '<math><mi><mglyph></p>', '<math><mi><mglyph></mglyph></p></mi></math>'],
     ['an end tag for an element below closes the foreign ones above it', '<span><svg><g></span>', '<span><svg><g></g></svg></span>'],
     ['what is open at the end is closed', '<svg><foreignObject><b>x', '<svg><foreignObject><b>x</b></foreignobject></svg>'],
@@ -89,7 +90,45 @@ describe('a fragment stays inside its element', () => {
   });
 });
 
+describe('what the code review found', () => {
+  it.each([
+    ['a tag named after an Object property is an ordinary element', '<p>a<constructor>b</constructor><toString>c</p>', '<p>a<constructor>b</constructor><toString>c</p>'],
+    ['text across a dropped token does not join into a reference', '&no</body>t;x&am</template>p;y', '&amp;not;x&amp;amp;y'],
+    ['a reference split only by a chunk is kept', 'a &amp; b &copy c', 'a &amp; b &copy c'],
+    ['a rename survives an end tag that closes nothing', '<head><template></head></template></head><body>x', '<braid-head><template></braid-head></template></braid-head><braid-body>x'],
+    ['a self-closing head is opened, and closed under its new name', '<head/><title>t</title></head>', '<braid-head/><title>t</title></braid-head>'],
+    ['an authored data-braid-blocked keeps its references', '<img data-braid-blocked="a&amp;b" src="x&NotAName;">', '<img data-braid-blocked="a&amp;b src">'],
+  ])('%s', async (_, markup, expected) => {
+    expect(await canonical(markup)).toBe(expected);
+  });
+});
+
 describe('a shell is not contained', () => {
+  const ended = (markup: string) =>
+    new Response(rewriteHtmlStream(streamOf([markup]), { handlers: {}, onEnd: () => '<script>late()</script>' })).text();
+
+  it.each([
+    ['a comment', '<p>x<!-- open', '<p>x<!-- open--><script>late()</script>'],
+    ['a bogus comment', '<p>x<?pi', '<p>x<?pi><script>late()</script>'],
+    ['a doctype', '<!DOCTYPE html', '<!DOCTYPE html><script>late()</script>'],
+    ['a bare </', '<p>x</', '<p>x&lt;/<script>late()</script>'],
+    ['a tag', '<p>x<div title="', '<p>x<script>late()</script>'],
+  ])('closes %s the input ends inside, so what is appended is not swallowed', async (_, markup, expected) => {
+    expect(await ended(markup)).toBe(expected);
+  });
+
+  it('leaves an <image> as written, and reads a tag named constructor as a tag', async () => {
+    const markup = '<image src=a.png><constructor>x</constructor><p>after';
+    expect(await new Response(rewriteHtmlStream(streamOf([markup]), { handlers: {} })).text()).toBe(markup);
+  });
+
+  it('reads <font> in SVG as the browser does: as SVG, unless it has a color, face or size', async () => {
+    const seen: string[] = [];
+    const markup = '<svg><font><style><b></b></style></font><font face=x><style><i></i></style></svg>';
+    await new Response(rewriteHtmlStream(streamOf([markup]), { handlers: { '*': { element: (tag) => void seen.push(tag.tagName) } } })).text();
+    expect(seen).toEqual(['svg', 'font', 'style', 'b', 'font', 'style']);
+  });
+
   const shell = (markup: string) => new Response(rewriteHtmlStream(streamOf([markup]), { handlers: {} })).text();
 
   it('passes malformed markup through as it is', async () => {

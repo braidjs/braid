@@ -117,29 +117,29 @@ const HOST_ELEMENTS = new Set([
   'head',
 ]);
 
-const VOID = new Set([
+export const VOID = new Set([
   'area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta',
   'param', 'source', 'track', 'wbr',
 ]);
 
-const RAW_TEXT: Record<string, ContentState> = {
-  script: 'script',
-  style: 'rawtext',
-  xmp: 'rawtext',
-  iframe: 'rawtext',
-  noembed: 'rawtext',
-  noframes: 'rawtext',
-  noscript: 'rawtext', // with scripting on, which is every context fragment markup is parsed in
-  textarea: 'rcdata',
-  title: 'rcdata',
-  plaintext: 'plaintext',
-};
+const RAW_TEXT = new Map<string, ContentState>([
+  ['script', 'script'],
+  ['style', 'rawtext'],
+  ['xmp', 'rawtext'],
+  ['iframe', 'rawtext'],
+  ['noembed', 'rawtext'],
+  ['noframes', 'rawtext'],
+  ['noscript', 'rawtext'], // with scripting on, which is every context fragment markup is parsed in
+  ['textarea', 'rcdata'],
+  ['title', 'rcdata'],
+  ['plaintext', 'plaintext'],
+]);
 
-/** Start tags that leave foreign content (`font` only with color/face/size; here, always). */
+/** Start tags that leave foreign content; `font` only with a color, face or size attribute. */
 const BREAKOUT = new Set([
   'b', 'big', 'blockquote', 'body', 'br', 'center', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'embed', 'h1', 'h2', 'h3',
   'h4', 'h5', 'h6', 'head', 'hr', 'i', 'img', 'li', 'listing', 'menu', 'meta', 'nobr', 'ol', 'p', 'pre', 'ruby', 's',
-  'small', 'span', 'strong', 'strike', 'sub', 'sup', 'table', 'tt', 'u', 'ul', 'var', 'font',
+  'small', 'span', 'strong', 'strike', 'sub', 'sup', 'table', 'tt', 'u', 'ul', 'var',
 ]);
 
 const SPECIAL = new Set([
@@ -165,7 +165,8 @@ const CLOSES_P = new Set([
   'ul', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'listing', 'form', 'hr', 'xmp', 'table',
 ]);
 
-const HEADINGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+const HEADING_LIST = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+const HEADINGS = new Set(HEADING_LIST);
 
 /** End tags closed when in scope, as the in-body rules list them. */
 const SCOPED_END = new Set([
@@ -202,7 +203,7 @@ function isForeignBoundary(namespace: Namespace, name: string): boolean {
 
 type Mode = 'body' | 'select' | 'select-in-table' | 'colgroup' | 'colgroup-template' | 'table' | 'tablebody' | 'row' | 'cell' | 'caption' | 'template';
 
-const ROOT: Entry = {
+const ROOT: Entry = Object.freeze({
   name: '#root',
   namespace: 'html',
   integration: Integration.None,
@@ -219,7 +220,7 @@ const ROOT: Entry = {
   tableAt: 0,
   markerAt: -1,
   inTable: false,
-};
+});
 
 export class OpenElements {
   private readonly stack: Entry[] = [ROOT];
@@ -242,8 +243,13 @@ export class OpenElements {
     return this.current.namespace !== 'html';
   }
 
-  /** Decides how a start tag is processed, popping what it implicitly closes. */
-  planStart(name: string): StartPlan {
+  /**
+   * Decides how a start tag is processed, popping what it implicitly closes.
+   *
+   * @param fontBreaksOut for a `font`, whether it has a `color`, `face` or `size` attribute, which
+   *   makes it leave foreign content
+   */
+  planStart(name: string, fontBreaksOut = false): StartPlan {
     const closers: string[] = [];
     let tagName = name;
 
@@ -251,7 +257,7 @@ export class OpenElements {
     for (;;) {
       const current = this.current;
       if (this.htmlRulesFor(current, tagName)) break;
-      if (!BREAKOUT.has(tagName)) {
+      if (!BREAKOUT.has(tagName) && !(tagName === 'font' && fontBreaksOut)) {
         return { closers, drop: false, foreign: current.namespace, name: tagName };
       }
       while (this.isPlainForeign(this.current)) {
@@ -299,7 +305,7 @@ export class OpenElements {
         return this.continueHtmlStart(tagName, closers);
       }
       if (tagName === 'svg' || tagName === 'math') return plan(true);
-      if (tagName in RAW_TEXT && tagName !== 'script') return plan(true);
+      if (RAW_TEXT.has(tagName) && tagName !== 'script') return plan(true);
       if (TABLE_STRUCTURE.has(tagName) || MARKERS.has(tagName)) return plan(true);
       return plan(false);
     }
@@ -389,12 +395,17 @@ export class OpenElements {
     const entry: NewEntry = { name, namespace: 'html', integration: Integration.None };
     if (name === 'template') entry.templateMode = 'undecided';
     this.push(entry);
-    return RAW_TEXT[name] ?? null;
+    return RAW_TEXT.get(name) ?? null;
+  }
+
+  /** How many HTML elements of this name are open. */
+  openCount(name: string): number {
+    return this.html.get(name)?.length ?? 0;
   }
 
   /** A raw-text element's end tag arrived, ending its content. */
   isRawTextCurrent(name: string): boolean {
-    return this.current.namespace === 'html' && this.current.name === name && name in RAW_TEXT;
+    return this.current.namespace === 'html' && this.current.name === name && RAW_TEXT.has(name);
   }
 
   /** Decides how an end tag is processed, popping what it closes. */
@@ -480,7 +491,7 @@ export class OpenElements {
       } else if (name === 'li') {
         target = this.inScope('li', 'listScopeAt');
       } else if (HEADINGS.has(name)) {
-        const heading = Math.max(...[...HEADINGS].map((level) => this.last(level)));
+        const heading = Math.max(...HEADING_LIST.map((level) => this.last(level)));
         target = heading > 0 && heading >= this.current.scopeAt ? heading : -1;
       } else if (SCOPED_END.has(name) || FORMATTING.has(name)) {
         target = this.inScope(name);
@@ -527,7 +538,7 @@ export class OpenElements {
 
   /** Pops the current element after a raw-text element the input ended inside was closed. */
   popRawText(): void {
-    if (this.current.namespace === 'html' && this.current.name in RAW_TEXT) this.pop();
+    if (this.current.namespace === 'html' && RAW_TEXT.has(this.current.name)) this.pop();
   }
 
   // --- the stack ---
@@ -692,7 +703,11 @@ export class OpenElements {
 
   private pop(): Entry {
     const entry = this.stack.pop()!;
-    (entry.namespace === 'html' ? this.html : this.foreignByName).get(entry.name)!.pop();
+    const byName = entry.namespace === 'html' ? this.html : this.foreignByName;
+    const indices = byName.get(entry.name)!;
+    indices.pop();
+    // a name no longer open is forgotten, so many distinct names cost nothing once closed
+    if (!indices.length) byName.delete(entry.name);
     return entry;
   }
 

@@ -31,7 +31,7 @@
  */
 
 import { decodeAttributeValue } from './character-references.js';
-import { OpenElements } from './open-elements.js';
+import { OpenElements, VOID } from './open-elements.js';
 import { type RawAttribute, type Token, Tokenizer } from './tokenizer.js';
 
 /** Content that can be injected: literal HTML, or a stream of it (interleaved as it arrives). */
@@ -92,23 +92,6 @@ export interface RewriteOptions {
   contain?: boolean;
 }
 
-/** Elements that never have an end tag, so renaming one must not open a rename scope. */
-const VOID_ELEMENTS = new Set([
-  'area',
-  'base',
-  'br',
-  'col',
-  'embed',
-  'hr',
-  'img',
-  'input',
-  'link',
-  'meta',
-  'source',
-  'track',
-  'wbr',
-]);
-
 const encoder = new TextEncoder();
 
 export function rewriteHtmlStream(
@@ -148,6 +131,14 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
   /** After a fragment's `<plaintext>`: everything is text, written as text. */
   let escapingRest = false;
   /**
+   * The end of a fragment's text that could be the start of a character reference (`&am`), held
+   * until what follows it is known. Text after it completes it as it would have anyway; markup
+   * after it ends it. But a dropped token between would join it to the text after the drop —
+   * `&am</body>p;` read as `&amp;` — so after a drop the `&` is written as `&amp;`.
+   */
+  let heldReference = '';
+  let droppedSinceHeld = false;
+  /**
    * Open elements whose start tag a handler renamed. Renaming an element must rename its end
    * tag too — otherwise the renamed element is never closed, and everything that follows nests
    * inside it (a `<braid-head>` left open swallows the whole `<braid-body>`).
@@ -165,25 +156,23 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
         const token = tokenizer.next();
         if (!token) break;
 
-        if (token.type === 'start') {
-          const parts = startTag(token);
+        if (token.type === 'start' || token.type === 'end') {
+          const parts = token.type === 'start' ? startTag(token) : endTag(token);
           if (parts instanceof Promise) {
             // everything before the tag goes out before the stream waits on it
+            releaseHeld();
             yield* flush();
             yield* emitParts(await parts);
           } else {
             yield* emitParts(parts);
           }
-        } else if (token.type === 'end') {
-          const parts = endTag(token);
-          if (parts instanceof Promise) {
-            yield* flush();
-            yield* emitParts(await parts);
-          } else {
-            yield* emitParts(parts);
-          }
+        } else if (token.type === 'text' && contain && !escapingRest && !droppingRawText && (token.state === 'data' || token.state === 'rcdata')) {
+          // A literal `<` in text is next to whatever is written after it — and what is written after it
+          // is not always what followed it, once something between was dropped: `<` and a dropped
+          // `</body>` and `x` would be `<x`, a tag. As `&lt;` it is the same text, and next to nothing.
+          writeText(token.raw.replaceAll('<', '&lt;'));
         } else {
-          out += other(token);
+          write(other(token));
         }
       }
 
@@ -194,6 +183,7 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
     reader.releaseLock();
   }
 
+  releaseHeld();
   if (contain) out += closeWhatIsOpen();
   yield* flush();
 
@@ -212,12 +202,46 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
   async function* emitParts(parts: Part[]): AsyncGenerator<Uint8Array> {
     for (const part of parts) {
       if (typeof part === 'string') {
-        out += part;
+        write(part);
       } else {
+        releaseHeld();
         yield* flush();
         yield* emit(part);
       }
     }
+    if (!parts.length) write('');
+  }
+
+  /** Writes markup (or nothing, for a dropped token). */
+  function write(markup: string): void {
+    if (!markup) {
+      if (heldReference) droppedSinceHeld = true;
+      return;
+    }
+    releaseHeld();
+    out += markup;
+  }
+
+  /** Writes a fragment's text, holding back a trailing `&…` until what follows is known. */
+  function writeText(text: string): void {
+    if (heldReference) {
+      text = (droppedSinceHeld ? `&amp;${heldReference.slice(1)}` : heldReference) + text;
+      heldReference = '';
+      droppedSinceHeld = false;
+    }
+    const reference = /&[A-Za-z0-9#]*$/.exec(text);
+    if (reference) {
+      heldReference = reference[0];
+      text = text.slice(0, reference.index);
+    }
+    out += text;
+  }
+
+  function releaseHeld(): void {
+    if (!heldReference) return;
+    out += heldReference;
+    heldReference = '';
+    droppedSinceHeld = false;
   }
 
   function other(token: Exclude<Token, { type: 'start' | 'end' }>): string {
@@ -225,21 +249,23 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       case 'text':
         if (droppingRawText) return '';
         if (escapingRest) return escapeText(token.raw);
-        // A literal `<` in text is next to whatever is written after it — and what is written after it
-        // is not always what followed it, once something between was dropped: `<` and a dropped
-        // `</body>` and `x` would be `<x`, a tag. As `&lt;` it is the same text, and next to nothing.
-        if (contain && (token.state === 'data' || token.state === 'rcdata')) return token.raw.replaceAll('<', '&lt;');
+        // `</` the input ended on would open a bogus comment with whatever is appended after it
+        if (token.state === 'data' && token.raw === '</' && tokenizer.isEnded) return '&lt;/';
         return token.raw;
       case 'cdata':
         // as text, which reads the same whether or not the browser takes it for a CDATA section
         return contain ? escapeText(token.text) : token.raw;
+      // What the input ended inside of is closed, so whatever is appended after it — the end of a
+      // fragment's document, or a shell's late content — is not read as part of it.
       case 'comment':
         // `-->` closes a comment from any state the input can end it in
-        return token.complete || !contain ? token.raw : `${token.raw}-->`;
+        return token.complete ? token.raw : `${token.raw}-->`;
       case 'bogus':
-        return contain ? canonicalComment(token.data) : token.raw;
+        if (contain) return canonicalComment(token.data);
+        return token.raw.endsWith('>') ? token.raw : `${token.raw}>`;
       case 'doctype':
-        return options.stripDoctype ? '' : token.raw;
+        if (options.stripDoctype) return '';
+        return token.raw.endsWith('>') ? token.raw : `${token.raw}>`;
       case 'nothing':
         return contain ? '' : token.raw;
       case 'unterminated':
@@ -250,7 +276,10 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
   }
 
   function startTag(token: Extract<Token, { type: 'start' }>): Part[] | Promise<Part[]> {
-    const plan = tree.planStart(token.name);
+    const plan = tree.planStart(
+      token.name,
+      token.name === 'font' && token.attributes.some(({ name }) => name === 'color' || name === 'face' || name === 'size'),
+    );
     const parts: Part[] = [];
     if (contain && plan.closers.length) parts.push(plan.closers.join(''));
 
@@ -269,8 +298,10 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       return parts;
     }
 
-    const tag = new Tag(plan.name, token, contain);
-    const elementHandlers = [options.handlers['*']?.element, options.handlers[plan.name]?.element];
+    // A fragment's `<image>` is written as the `<img>` the browser makes of it, so the transforms see
+    // an img; a shell's is left as written.
+    const tag = new Tag(contain ? plan.name : token.name, token, contain);
+    const elementHandlers = [handlerFor('*')?.element, handlerFor(tag.tagName)?.element];
 
     let pending: Promise<void> | undefined;
     for (const element of elementHandlers) {
@@ -293,8 +324,10 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
         tag.block('plaintext');
       }
 
-      const name = tag.tagName;
-      if (name !== plan.name && !token.selfClosing && !VOID_ELEMENTS.has(plan.name)) {
+      const name = tag.tagName === token.name ? plan.name : tag.tagName;
+      // a self-closing HTML element is opened all the same; only a void one, or a foreign one, is not
+      const opens = !VOID.has(plan.name) && !(plan.foreign && token.selfClosing);
+      if (name !== plan.name && opens) {
         openRenames.push({ original: plan.name, renamed: name });
       }
 
@@ -320,22 +353,22 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       return [];
     }
 
-    // close the innermost open element that was renamed under this name, discarding any renames
-    // nested inside it (their end tags were implied, or never arrived)
+    // An end tag for an element that was renamed is written under the new name. The rename is
+    // forgotten — with any nested inside it, whose end tags were implied or never arrived — once the
+    // element is actually closed: an end tag dropped, or one that closes nothing, leaves it open.
     const renameIndex = openRenames.findLastIndex((entry) => entry.original === token.name);
     const renamedTo = renameIndex === -1 ? null : openRenames[renameIndex].renamed;
-    if (renameIndex !== -1) {
-      openRenames.length = renameIndex;
-    }
     const name = renamedTo ?? token.name;
 
+    const openBefore = renamedTo ? tree.openCount(renamedTo) : 0;
     const plan = tree.planEnd(name);
+    if (renamedTo && tree.openCount(renamedTo) < openBefore) openRenames.length = renameIndex;
     const parts: Part[] = [];
     if (contain && plan.closers.length) parts.push(plan.closers.join(''));
     if (contain && plan.drop) return parts;
 
     const text = renamedTo ? `</${renamedTo}>` : token.raw;
-    const handler = options.handlers[token.name];
+    const handler = handlerFor(token.name);
     if (!handler?.endTag) {
       parts.push(text);
       return parts;
@@ -353,6 +386,11 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       return parts;
     };
     return pending ? pending.then(finish) : finish();
+  }
+
+  /** A handler by tag name: own keys only, so a tag named `constructor` has none. */
+  function handlerFor(name: string): ElementHandler | undefined {
+    return Object.hasOwn(options.handlers, name) ? options.handlers[name] : undefined;
   }
 
   /** What a fragment the input ended inside of needs, so nothing after it is read as part of it. */
@@ -464,8 +502,11 @@ class Tag implements StartTag {
     let markup = `<${this.name}`;
     for (const attribute of this.attributes) {
       if (blocked && attribute.name === 'data-braid-blocked') {
-        const value = attribute.modified ? (attribute.value ?? '') : (attribute.raw ?? '');
-        markup += ` ${attribute.rawName}="${escapeAttributeValue(value ? `${value} ${blocked}` : blocked)}"`;
+        // the authored value as authored, references and all; an assigned one escaped
+        const value = attribute.modified
+          ? escapeAttributeValue(attribute.value ?? '')
+          : (attribute.raw ?? '').replaceAll('"', '&quot;');
+        markup += ` ${attribute.rawName}="${value ? `${value} ` : ''}${escapeAttributeValue(blocked)}"`;
         blocked = '';
         continue;
       }
