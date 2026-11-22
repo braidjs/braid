@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostileCases, random, REVIEW_CASES } from '../../testing/hostile-markup.js';
+import { hostileCases, random, REBUILD_CASES, REVIEW_CASES } from '../../testing/hostile-markup.js';
 import { violations } from '../../testing/invariants.js';
 import { prepareFragmentHtml as legacyPrepareFragmentHtml } from '../../testing/legacy-transforms.js';
 import { prepareFragmentHtml } from './transforms.js';
@@ -49,6 +49,18 @@ describe('the cases the review found', () => {
     }
     expect(live).toEqual(Object.keys(REVIEW_CASES));
   });
+});
+
+describe('the cases the goal verification found', () => {
+  for (const [name, markup] of Object.entries(REBUILD_CASES)) {
+    it(name, async () => {
+      const output = await prepare(markup);
+      expect(violations(output), output).toEqual([]);
+      for (let cut = 1; cut < markup.length; cut++) {
+        expect(await prepare(markup, [cut]), `split at ${cut}`).toBe(output);
+      }
+    });
+  }
 });
 
 describe('generated hostile fragments', () => {

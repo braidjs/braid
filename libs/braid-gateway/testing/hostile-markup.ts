@@ -26,6 +26,11 @@ export const PAYLOADS = [
   '<link rel=preload href=/p/ID as=script>',
   '<link rel="&#112;reload" href=/p/ID as=script>',
   '<input autofocus onfocus=pwn(ID)>',
+  '<link rel=PRELOAD href=/p/ID as=script>',
+  // with a link type that fetches nothing itself (a stylesheet would load the url, as any does)
+  '<link rel=" preload nofollow" href=/p/ID as=script>',
+  '<link rel="ModulePreload" href=/p/ID>',
+  '<link rel="prefetch noopener" href=/p/ID>',
 ];
 
 /** Constructs that change how what follows is read, or that browsers recover from differently. */
@@ -60,6 +65,17 @@ const PIECES = [
   '&', '&#106;', '&lt;', '&amp;', '&colon;', '&NotAName;',
   // text
   'x', ' ', '\n',
+  // more of the same, found by the goal verification: marker elements, table parts, case and spacing
+  '<applet>', '</applet>', '<marquee>', '</marquee>', '</object>', '<th>', '</th>', '<thead>', '</thead>', '<tfoot>',
+  '</tfoot>', '</tbody>', '</caption>', '</colgroup>', '</col>', '<mo>', '<mn>', '<ms>', '</mi>', '</mo>', '<mrow>',
+  '<annotation-xml encoding="text/html ">', '<annotation-xml encoding="&#116;ext/html">', '<annotation-xml ENCODING=TEXT/HTML>',
+  '<font face=x>', '<font size=1>', '<font COLOR=red>', '<listing>', '<dialog>', '<details>', '<summary>', '<ol>', '<dl>',
+  '<dt>', '<hr>', '<em>', '</em>', '<i>', '</i>', '<span>', '</span>', '<template shadowrootmode="closed">',
+  '<SVG>', '<ForeignObject>', '</TEMPLATE>', '</Braid-Document>', '</template >', '</template/>', '</template\t>',
+  '</braid-document x=">">', '<svg\n>', '</svg\f>', '</math/>', '<selectedcontent>', '</option>', '</optgroup>',
+  '<datalist>', '<title/>', '<textarea/>', '<xmp/>', '</p >', '<p/>', '<br/>', '</br >', '<svg><desc>', '<math><mi>',
+  '<math><annotation-xml encoding="text/html">', '<svg><foreignObject>', '<table><tr><td>', '<select><option>',
+  '<!--x--!>', '<!---x-->', '<!-- <!-- -->', '\r', '\r\n', '\t', '\f',
 ];
 
 /** A seeded generator, so a failing case can be found again by its seed. */
@@ -128,3 +144,30 @@ export const REVIEW_CASES: Record<string, string> = {
   'a link left open around a table cell wraps the host': '<a href=#x><table><td>',
   'a template in column-group mode ignores raw text': '<template><col><style></template><img src=x onerror=pwn(34)></style>',
 };
+
+/**
+ * Holes the goal verification found in the rebuilt rewriter itself (not all were open in the old
+ * one, which wrote none of the closers whose gaps these are).
+ */
+export const REBUILD_CASES: Record<string, string> = {
+  'an object foster-parented in a column-group template': '<a href=#x><template><colgroup><object><td></template>',
+  'a marquee in a table-mode template': '<a href=#x><template><caption></caption><marquee><td></template>',
+  'an applet in a table-body template': '<a href=#x><template><tbody></tbody><applet><tr></template>',
+  'an object in a template left open': '<a href=#x><template><colgroup><object><td>',
+  'braid-document closed by an implied </p>': '<p><braid-document><hr></braid-document><img src=x onerror=pwn(1)>',
+  'braid-document closed by an implied </li>': '<li><braid-document><li></braid-document><img src=x onerror=pwn(2)>',
+  'braid-document closed by an implied </dd>': '<dd><braid-document><dt></braid-document><img src=x onerror=pwn(3)>',
+  'braid-document closed by a nested button': '<button><braid-document><button></braid-document><img src=x onerror=pwn(4)>',
+  'braid-document closed by the adoption agency, a': '<a><braid-document><a></braid-document><img src=x onerror=pwn(5)>',
+  'braid-document closed by the adoption agency, nobr': '<nobr><braid-document><nobr></braid-document><img src=x onerror=pwn(6)>',
+  'braid-document closed by a table': '<table><braid-document><tr><table></table></braid-document><img src=x onerror=pwn(7)>',
+  'braid-document closed by misnesting': '<b><braid-document><div></b></braid-document><img src=x onerror=pwn(8)>',
+  'braid-document closed implicitly, then by a closer at the end': '<table><td><p><braid-document><dd>x',
+  // from the security review: <a> removes an out-of-scope <a> from the stack, across an integration point
+  'an <a> removing an <a> below a MathML text integration point': '<math><mi><a><svg><foreignObject><a></a></foreignObject></svg><mglyph><style><img src=x onerror=pwn(12)></style>',
+  'an <a> removing an <a> below an SVG one': '<svg><a><foreignObject><a><svg><foreignObject><a></a></foreignObject></svg></a><style><img src=x onerror=pwn(13)></style>',
+  'head in an island, which in-body rules ignore': '<math><mi><head><mglyph><style><img src=x onerror=pwn(14)></style>',
+  'a preload in another case': '<link rel=PRELOAD href=/p/9 as=script>',
+  'a preload among other link types': '<link rel="preload nofollow" href=/p/10 as=script>',
+};
+

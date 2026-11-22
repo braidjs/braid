@@ -68,6 +68,9 @@ export const BRAID_FRAGMENT_STYLES =
  */
 const INLINE_EVENT_HANDLER = /^on[a-z]+$/;
 
+/** The link types that fetch ahead: in a fragment, the host would load the fragment's code a second time. */
+const PRELOAD_RELS = new Set(['preload', 'prefetch', 'modulepreload']);
+
 /**
  * Attributes that point at a **subresource** the fragment owns, per element.
  *
@@ -226,11 +229,20 @@ export function prepareFragmentHtml(
             tag.setAttribute('data-braid-blocked', 'rel');
             return;
           }
-          if (rel === 'modulepreload') hint(href, crossorigin ?? '');
-          if (rel === 'preload' && tag.getAttribute('as') === 'script') hint(href, crossorigin);
-          if (rel === 'preload' || rel === 'prefetch' || rel === 'modulepreload') {
-            tag.setAttribute('rel', `inert-${rel}`);
+          // rel is a list of ASCII-case-insensitive tokens: `PRELOAD`, ` preload` and `preload
+          // stylesheet` all preload
+          const tokens = (rel ?? '').split(/[\t\n\f\r ]+/).filter(Boolean);
+          const lowered = tokens.map((token) => token.toLowerCase());
+          if (!lowered.some((token) => PRELOAD_RELS.has(token))) return;
+          if (tokens.length > 1) {
+            // neutralized, but not the single marker the client revives: the other tokens still apply
+            tag.setAttribute('rel', tokens.map((token, index) => (PRELOAD_RELS.has(lowered[index]) ? `inert-${lowered[index]}` : token)).join(' '));
+            return;
           }
+          const [kind] = lowered;
+          if (kind === 'modulepreload') hint(href, crossorigin ?? '');
+          if (kind === 'preload' && tag.getAttribute('as')?.toLowerCase() === 'script') hint(href, crossorigin);
+          tag.setAttribute('rel', `inert-${kind}`);
         },
       },
       meta: {

@@ -77,7 +77,11 @@ describe('where browsers disagree, the construct is dropped', () => {
 describe('a fragment stays inside its element', () => {
   it.each([
     ['end tags for the elements it is placed in are dropped', '</template></braid-document></fragment-slot></body>x', 'x'],
-    ['but match the fragment’s own', '<template></template><braid-document></braid-document>', '<template></template><braid-document></braid-document>'],
+    [
+      'but match the fragment’s own inside a template of its own, which they cannot reach past',
+      '<template><braid-document></braid-document></template><braid-document></braid-document>',
+      '<template><braid-document></braid-document></template><braid-document>',
+    ],
     ['raw text left open is closed', '<textarea>x', '<textarea>x</textarea>'],
     ['so is a script left inside an escape', '<script><!--<script>x', '<script type="inert"><!--<script>x--></script>'],
     ['and a comment', '<!-- x', '<!-- x-->'],
@@ -93,7 +97,7 @@ describe('a fragment stays inside its element', () => {
 describe('what the code review found', () => {
   it.each([
     ['a tag named after an Object property is an ordinary element', '<p>a<constructor>b</constructor><toString>c</p>', '<p>a<constructor>b</constructor><toString>c</p>'],
-    ['text across a dropped token does not join into a reference', '&no</body>t;x&am</template>p;y', '&amp;not;x&amp;amp;y'],
+    ['text across a dropped token does not join into a reference', '&no</body>t;x&am</template>p;y', '&no<!---->t;x&am<!---->p;y'],
     ['a reference split only by a chunk is kept', 'a &amp; b &copy c', 'a &amp; b &copy c'],
     ['a rename survives an end tag that closes nothing', '<head><template></head></template></head><body>x', '<braid-head><template></braid-head></template></braid-head><braid-body>x'],
     ['a self-closing head is opened, and closed under its new name', '<head/><title>t</title></head>', '<braid-head/><title>t</title></braid-head>'],

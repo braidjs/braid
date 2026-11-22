@@ -608,7 +608,7 @@ signed manifests. Until those land, treat the registry as trusted configuration.
 sees, so the rewriter tokenizes as the WHATWG spec does. It also follows enough of tree construction
 to know how the rest is tokenized: SVG and MathML, integration points, `<select>`, templates.
 Fragment markup is written out so that every browser reads it one way. What browsers recover from
-differently is closed explicitly or removed. A fragment cannot close the elements it is placed in,
+differently is closed explicitly or removed. A fragment cannot write an end tag that closes the elements it is placed in,
 or leave one of its own open to swallow the host's markup after it. The details are in
 [how the gateway reads fragment markup](../../docs/braid-fragment-markup.md#how-the-gateway-reads-it).
 A differential suite checks this. It runs hostile fragments through the rewriter at random chunk

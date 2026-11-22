@@ -82,14 +82,19 @@ mistake. A fragment's markup is written out so that it can only be read one way:
 
 A removed element leaves a comment where it was, such as `<!--braid-blocked noscript-->`.
 
-The fragment is also kept inside the element it is placed in. Suppose it writes an end tag for an
-element it did not open, such as `</template>`, `</braid-document>` or `</fragment-slot>`. That end
-tag is removed. Whatever the fragment leaves open is closed at its end: templates, selects, SVG and
-MathML, raw text, a comment, and the elements that would let its formatting outlive it (`<object>`,
-table cells, captions). A tag cut off by the end of the fragment is dropped, as the browser drops it.
+The fragment is also kept inside the element it is placed in. An end tag for one of those elements,
+such as `</template>`, `</braid-document>` or `</fragment-slot>`, is removed. The exception is an
+end tag inside a template the fragment opened itself, which cannot reach past that template. When
+the fragment ends, the gateway closes whatever could swallow or wrap the host's markup after it:
+templates, selects, SVG and MathML, raw text, a comment, and the elements that would let its
+formatting outlive it (`<object>`, `<applet>`, `<marquee>`, table cells, captions). Other elements
+it leaves open are closed by the template it is placed in. A tag cut off by the end of the fragment
+is dropped, as the browser drops it.
 
-A fetched fragment is parsed where a pierced one is: inside a `<braid-document>` in a template of
-the host page, with scripting on. So both paths read the markup the same way, and a bare snippet's
+A fetched fragment is parsed in the same structure as a pierced one: inside a `<braid-document>` in
+a template of the host page. A template's content is parsed with scripting off, while a pierced
+fragment is parsed with it on. The only thing that changes is how `<noscript>` reads, and the
+gateway removes `<noscript>`. So both paths read the markup the same way, and a bare snippet's
 leading `<style>` stays with it.
 
 On well-formed markup none of this changes the DOM, with three exceptions. `<noscript>` goes, and

@@ -107,11 +107,13 @@ export const compatAdapter: InstalledAdapter = {
  * inert scripts, namespaced subresource URLs), so this only parses and adopts it — parsing
  * happens in a template's content, where nothing executes.
  *
- * It is parsed where a pierced fragment's markup is: inside a `<braid-document>` in a template, in
- * the host document, so with scripting on. The gateway writes fragment markup to be read one way in
- * that context (see the gateway's `open-elements.ts`), and a parse anywhere else could read it
- * another — a `DOMParser` document has scripting off and starts at the top of a document, where
- * `<noscript>` is markup and a leading `<style>` goes to a `<head>` that is then lost.
+ * It is parsed in the structure a pierced fragment's markup is: inside a `<braid-document>` in a
+ * template, in the host document. The gateway writes fragment markup to be read one way there (see
+ * the gateway's `open-elements.ts`), and a parse anywhere else could read it another — a `DOMParser`
+ * document starts at the top of a document, where a leading `<style>` goes to a `<head>` that is
+ * then lost, and nested forms and table text follow other rules. (A template's content is parsed with
+ * scripting off where a pierced fragment has it on; that changes only `<noscript>`, which the gateway
+ * removes.)
  *
  * The fragment's root is `braid-html` when the gateway saw a full document, and a wrapper is
  * synthesized when it saw a bare markup snippet.

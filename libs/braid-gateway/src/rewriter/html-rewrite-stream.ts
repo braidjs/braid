@@ -112,6 +112,8 @@ interface Attribute {
   value?: string | null;
   /** Assigned by a handler, so serialized from `value` rather than `raw`. */
   modified: boolean;
+  /** Removed by a handler: left in place and skipped, so a removal costs nothing per attribute. */
+  removed?: boolean;
 }
 
 /** One part of the output: markup, or a stream to splice in. */
@@ -131,19 +133,34 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
   /** After a fragment's `<plaintext>`: everything is text, written as text. */
   let escapingRest = false;
   /**
-   * The end of a fragment's text that could be the start of a character reference (`&am`), held
-   * until what follows it is known. Text after it completes it as it would have anyway; markup
-   * after it ends it. But a dropped token between would join it to the text after the drop —
-   * `&am</body>p;` read as `&amp;` — so after a drop the `&` is written as `&amp;`.
+   * Whether the fragment's text written so far ends in what could be the start of a character
+   * reference (`&am`). A token dropped there would join it to the text after the drop —
+   * `&am</body>p;` read as `&amp;` — so a dropped token is written as an empty comment instead,
+   * which ends the reference and is inserted in every mode.
    */
-  let heldReference = '';
-  let droppedSinceHeld = false;
+  let inReference = false;
   /**
    * Open elements whose start tag a handler renamed. Renaming an element must rename its end
    * tag too — otherwise the renamed element is never closed, and everything that follows nests
-   * inside it (a `<braid-head>` left open swallows the whole `<braid-body>`).
+   * inside it (a `<braid-head>` left open swallows the whole `<braid-body>`). Indexed by original
+   * name, so finding one costs the same however many are open.
    */
   const openRenames: { original: string; renamed: string }[] = [];
+  const renamesByName = new Map<string, number[]>();
+  const pushRename = (original: string, renamed: string) => {
+    const indices = renamesByName.get(original);
+    if (indices) indices.push(openRenames.length);
+    else renamesByName.set(original, [openRenames.length]);
+    openRenames.push({ original, renamed });
+  };
+  const truncateRenames = (length: number) => {
+    while (openRenames.length > length) {
+      const { original } = openRenames.pop()!;
+      const indices = renamesByName.get(original)!;
+      indices.pop();
+      if (!indices.length) renamesByName.delete(original);
+    }
+  };
 
   try {
     for (;;) {
@@ -160,7 +177,6 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
           const parts = token.type === 'start' ? startTag(token) : endTag(token);
           if (parts instanceof Promise) {
             // everything before the tag goes out before the stream waits on it
-            releaseHeld();
             yield* flush();
             yield* emitParts(await parts);
           } else {
@@ -183,7 +199,6 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
     reader.releaseLock();
   }
 
-  releaseHeld();
   if (contain) out += closeWhatIsOpen();
   yield* flush();
 
@@ -204,7 +219,7 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       if (typeof part === 'string') {
         write(part);
       } else {
-        releaseHeld();
+        inReference = false;
         yield* flush();
         yield* emit(part);
       }
@@ -215,33 +230,19 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
   /** Writes markup (or nothing, for a dropped token). */
   function write(markup: string): void {
     if (!markup) {
-      if (heldReference) droppedSinceHeld = true;
-      return;
+      if (inReference) out += '<!---->';
+    } else {
+      out += markup;
     }
-    releaseHeld();
-    out += markup;
+    inReference = false;
   }
 
-  /** Writes a fragment's text, holding back a trailing `&…` until what follows is known. */
+  /** Writes a fragment's text, noting whether it ends inside what could be a reference. */
   function writeText(text: string): void {
-    if (heldReference) {
-      text = (droppedSinceHeld ? `&amp;${heldReference.slice(1)}` : heldReference) + text;
-      heldReference = '';
-      droppedSinceHeld = false;
-    }
-    const reference = /&[A-Za-z0-9#]*$/.exec(text);
-    if (reference) {
-      heldReference = reference[0];
-      text = text.slice(0, reference.index);
-    }
+    if (!text) return;
+    const ampersand = text.lastIndexOf('&');
+    inReference = ampersand === -1 ? inReference && REFERENCE_TAIL.test(text) : REFERENCE_TAIL.test(text.slice(ampersand + 1));
     out += text;
-  }
-
-  function releaseHeld(): void {
-    if (!heldReference) return;
-    out += heldReference;
-    heldReference = '';
-    droppedSinceHeld = false;
   }
 
   function other(token: Exclude<Token, { type: 'start' | 'end' }>): string {
@@ -290,8 +291,8 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
 
     const html = plan.foreign === null;
     if (contain && html && plan.name === 'noscript') {
-      // Raw text with scripting on and markup with it off: either way it shows nothing with
-      // scripting on, which is how fragment markup is always parsed. Dropped whole.
+      // Raw text with scripting on (a pierced fragment) and markup with it off (a fetched one,
+      // parsed in a template's content): the two would read it differently. Dropped whole.
       parts.push(blockedMarker('noscript'));
       tokenizer.switchTo('rawtext', 'noscript');
       droppingRawText = true;
@@ -328,7 +329,7 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       // a self-closing HTML element is opened all the same; only a void one, or a foreign one, is not
       const opens = !VOID.has(plan.name) && !(plan.foreign && token.selfClosing);
       if (name !== plan.name && opens) {
-        openRenames.push({ original: plan.name, renamed: name });
+        pushRename(plan.name, name);
       }
 
       const content = tree.pushStart(plan, name, token.selfClosing, (attribute) => tag.getAttribute(attribute));
@@ -356,13 +357,13 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
     // An end tag for an element that was renamed is written under the new name. The rename is
     // forgotten — with any nested inside it, whose end tags were implied or never arrived — once the
     // element is actually closed: an end tag dropped, or one that closes nothing, leaves it open.
-    const renameIndex = openRenames.findLastIndex((entry) => entry.original === token.name);
+    const renameIndex = renamesByName.get(token.name)?.at(-1) ?? -1;
     const renamedTo = renameIndex === -1 ? null : openRenames[renameIndex].renamed;
     const name = renamedTo ?? token.name;
 
     const openBefore = renamedTo ? tree.openCount(renamedTo) : 0;
     const plan = tree.planEnd(name);
-    if (renamedTo && tree.openCount(renamedTo) < openBefore) openRenames.length = renameIndex;
+    if (renamedTo && tree.openCount(renamedTo) < openBefore) truncateRenames(renameIndex);
     const parts: Part[] = [];
     if (contain && plan.closers.length) parts.push(plan.closers.join(''));
     if (contain && plan.drop) return parts;
@@ -414,6 +415,8 @@ class Tag implements StartTag {
   private name: string;
   private dirty: boolean;
   private readonly attributes: Attribute[];
+  /** The attributes not removed, by name: lookups cost the same however many a tag has. */
+  private readonly byName = new Map<string, Attribute>();
   /** Attributes removed because their value could not be read for certain. */
   private readonly blocked: string[] = [];
 
@@ -427,6 +430,7 @@ class Tag implements StartTag {
     this.dirty = name !== token.name;
     this.selfClosing = token.selfClosing;
     this.attributes = token.attributes.map((attribute) => ({ ...attribute, modified: false }));
+    for (const attribute of this.attributes) this.byName.set(attribute.name, attribute);
   }
 
   get tagName(): string {
@@ -439,12 +443,12 @@ class Tag implements StartTag {
   }
 
   get attributeNames(): string[] {
-    return this.attributes.map((attribute) => attribute.name);
+    return [...this.byName.keys()];
   }
 
   getAttribute(attributeName: string): string | null {
     const lowercased = attributeName.toLowerCase();
-    const attribute = this.attributes.find((candidate) => candidate.name === lowercased);
+    const attribute = this.byName.get(lowercased);
     if (!attribute) return null;
     if (attribute.modified || attribute.value !== undefined) return attribute.value ?? null;
     if (attribute.raw === null) return null;
@@ -463,21 +467,24 @@ class Tag implements StartTag {
 
   setAttribute(attributeName: string, value: string): void {
     const lowercased = attributeName.toLowerCase();
-    const existing = this.attributes.find((attribute) => attribute.name === lowercased);
+    const existing = this.byName.get(lowercased);
     if (existing) {
       existing.value = value;
       existing.modified = true;
     } else {
-      this.attributes.push({ name: lowercased, rawName: attributeName, raw: null, value, modified: true });
+      const added: Attribute = { name: lowercased, rawName: attributeName, raw: null, value, modified: true };
+      this.attributes.push(added);
+      this.byName.set(lowercased, added);
     }
     this.dirty = true;
   }
 
   removeAttribute(attributeName: string): void {
     const lowercased = attributeName.toLowerCase();
-    const at = this.attributes.findIndex((attribute) => attribute.name === lowercased);
-    if (at !== -1) {
-      this.attributes.splice(at, 1);
+    const attribute = this.byName.get(lowercased);
+    if (attribute) {
+      attribute.removed = true;
+      this.byName.delete(lowercased);
       this.dirty = true;
     }
   }
@@ -501,6 +508,7 @@ class Tag implements StartTag {
     let blocked = this.blocked.join(' ');
     let markup = `<${this.name}`;
     for (const attribute of this.attributes) {
+      if (attribute.removed) continue;
       if (blocked && attribute.name === 'data-braid-blocked') {
         // the authored value as authored, references and all; an assigned one escaped
         const value = attribute.modified
@@ -534,6 +542,9 @@ function canonicalComment(data: string): string {
   // `<!-->` and `<!--->` would end it at once
   return `<!--${data.startsWith('>') || data.startsWith('-') ? ' ' : ''}${data}-->`;
 }
+
+/** What may follow an `&` and still be part of a character reference. */
+const REFERENCE_TAIL = /^[A-Za-z0-9#]*$/;
 
 function escapeText(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;');

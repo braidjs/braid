@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Browser, Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hostileCases, random, REVIEW_CASES } from '../libs/braid-gateway/testing/hostile-markup.js';
+import { hostileCases, random, REBUILD_CASES, REVIEW_CASES } from '../libs/braid-gateway/testing/hostile-markup.js';
 import { prepareFragmentHtml as legacyPrepareFragmentHtml } from '../libs/braid-gateway/testing/legacy-transforms.js';
 import { wellFormedPages } from '../libs/braid-gateway/testing/well-formed-markup.js';
 import { prepareFragmentHtml } from '../libs/braid-gateway/src/rewriter/transforms.js';
@@ -205,8 +205,8 @@ async function failures(cases: string[], outputs: string[]): Promise<string[]> {
 }
 
 describe('prepared fragments in Chromium', () => {
-  it('the review’s cases: nothing runs, nothing is left live, nothing gets out', async () => {
-    const cases = Object.values(REVIEW_CASES);
+  it('the review’s and verification’s cases: nothing runs, nothing is left live, nothing gets out', async () => {
+    const cases = [...Object.values(REVIEW_CASES), ...Object.values(REBUILD_CASES)];
     const outputs = await Promise.all(cases.map((markup) => prepare(markup)));
     expect((await failures(cases, outputs)).join('\n\n')).toBe('');
   });

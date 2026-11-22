@@ -32,7 +32,12 @@
  *
  * What this does not model — implied end tags outside foreign content, the adoption agency, foster
  * parenting — can change which HTML element is current, but never whether it is HTML, whether a tag
- * opens raw text, or which templates are open, which is all that decides how the rest is read.
+ * opens raw text, or which templates are open, which is all that decides how the rest is read. Two
+ * rules that could are kept from running instead: an `<a>` while an out-of-scope `<a>` is open, which
+ * removes that one from the stack wherever it is, is dropped; and end tags (and closers) for the
+ * elements a fragment is placed in are written only inside a template it opened, so a wrong guess
+ * about them cannot reach the host. Both parse contexts have a template on the stack, which is also
+ * what keeps a nested `<form>` from being ignored there.
  */
 
 export type Namespace = 'html' | 'svg' | 'math';
@@ -129,7 +134,7 @@ const RAW_TEXT = new Map<string, ContentState>([
   ['iframe', 'rawtext'],
   ['noembed', 'rawtext'],
   ['noframes', 'rawtext'],
-  ['noscript', 'rawtext'], // with scripting on, which is every context fragment markup is parsed in
+  ['noscript', 'rawtext'], // with scripting on, as a pierced fragment is parsed (a fragment's is dropped)
   ['textarea', 'rcdata'],
   ['title', 'rcdata'],
   ['plaintext', 'plaintext'],
@@ -162,7 +167,7 @@ const FORMATTING = new Set(['a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 
 const CLOSES_P = new Set([
   'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset',
   'figcaption', 'figure', 'footer', 'header', 'hgroup', 'main', 'menu', 'nav', 'ol', 'p', 'search', 'section', 'summary',
-  'ul', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'listing', 'form', 'hr', 'xmp', 'table',
+  'ul', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'listing', 'form', 'hr', 'xmp', 'table', 'plaintext',
 ]);
 
 const HEADING_LIST = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
@@ -316,6 +321,12 @@ export class OpenElements {
   /** An HTML start tag outside select and column-group templates, in a fragment. */
   private continueHtmlStart(tagName: string, closers: string[]): StartPlan {
     const plan = (drop: boolean): StartPlan => ({ closers, drop, foreign: null, name: tagName });
+
+    // An `<a>` while another is open makes the browser remove the open one from the stack even when
+    // it is out of scope — below an integration point, say — which nothing here could follow. An
+    // `<a>` in scope is closed explicitly (below, or by the adoption agency outside foreign content);
+    // one out of scope is not written.
+    if (tagName === 'a' && this.last('a') > 0 && this.inScope('a') === -1) return plan(true);
     if (!this.inForeignContent()) {
       if (TABLE_STRUCTURE.has(tagName)) closers.push(...this.closeMarkersAboveTable());
       return plan(false);
@@ -323,7 +334,10 @@ export class OpenElements {
 
     // An HTML island inside foreign content: close explicitly what the in-body rules would close
     // implicitly, and drop what a table mode would clear the stack through.
-    if (TABLE_STRUCTURE.has(tagName) || tagName === 'select') return plan(true);
+    // and html/head/body, which in-body rules ignore while the tracker would record them
+    if (TABLE_STRUCTURE.has(tagName) || tagName === 'select' || tagName === 'html' || tagName === 'head' || tagName === 'body') {
+      return plan(true);
+    }
 
     if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
       if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
@@ -447,6 +461,11 @@ export class OpenElements {
   private planHtmlEnd(name: string, closers: string[]): EndPlan {
     const plan = (drop: boolean): EndPlan => ({ closers, drop });
 
+    // An end tag for one of the elements the fragment is placed in passes only inside a template the
+    // fragment opened, and for an element it opened there: even if the tracker is wrong about that
+    // element still being open, the end tag cannot reach past the fragment's own template.
+    if (this.contain && this.reachesHost(name)) return plan(true);
+
     if (name === 'template') {
       const template = this.current.templateAt;
       if (template === 0) return plan(this.contain);
@@ -545,9 +564,14 @@ export class OpenElements {
 
   /** An end tag that, in foreign content, matches nothing a fragment could have opened. */
   private droppedInForeignContent(name: string): boolean {
-    if (TABLE_STRUCTURE.has(name) || name === 'select') return true;
+    return TABLE_STRUCTURE.has(name) || name === 'select' || this.reachesHost(name);
+  }
+
+  /** An end tag for an element the fragment is placed in, not safely inside a template of its own. */
+  private reachesHost(name: string): boolean {
     if (!HOST_ELEMENTS.has(name) || name === 'template') return false;
-    return this.last(name) === 0;
+    const template = this.current.templateAt;
+    return template === 0 || this.last(name) <= template;
   }
 
   /** A foreign element that is not an integration point: what a breakout pops. */
@@ -625,7 +649,7 @@ export class OpenElements {
 
   /** Implied end tags outside foreign content: followed, not written, to keep the stack close. */
   private closeImpliedOutsideForeignContent(name: string): void {
-    if (CLOSES_P.has(name)) {
+    if (CLOSES_P.has(name) || name === 'li' || name === 'dd' || name === 'dt') {
       const p = this.inScope('p', 'buttonScopeAt');
       if (p !== -1) this.truncate(p);
     }
@@ -661,7 +685,10 @@ export class OpenElements {
    */
   private closeMarkersAboveTable(): string[] {
     const { tableAt, markerAt } = this.current;
-    if (tableAt === 0 || this.stack[tableAt].name === 'template' || markerAt === -1) return [];
+    if (tableAt === 0 || markerAt === -1) return [];
+    // a template clears the stack back to itself only once its first child put it in a table mode
+    const table = this.stack[tableAt];
+    if (table.name === 'template' && !['table', 'tablebody', 'row'].includes(table.templateMode ?? '')) return [];
     return this.closeThrough(markerAt);
   }
 
@@ -716,7 +743,17 @@ export class OpenElements {
   }
 
   private popWithCloser(): string {
-    return `</${this.pop().name}>`;
+    return this.closerFor(this.pop());
+  }
+
+  /**
+   * The end tag that closes an entry — none for one named like an element the fragment is placed in
+   * and not inside a template of its own: the browser may have closed it already, and the end tag
+   * would close the host's instead.
+   */
+  private closerFor(entry: Entry): string {
+    if (HOST_ELEMENTS.has(entry.name) && entry.name !== 'template' && entry.namespace === 'html' && entry.templateAt === 0) return '';
+    return `</${entry.name}>`;
   }
 
   /**
@@ -728,7 +765,7 @@ export class OpenElements {
     const closers: string[] = [];
     while (this.stack.length > index + 1) closers.push(this.popWithCloser());
     const last = this.pop();
-    if (!excludeLast) closers.push(`</${last.name}>`);
+    if (!excludeLast) closers.push(this.closerFor(last));
     return closers;
   }
 }

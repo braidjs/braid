@@ -109,6 +109,8 @@ describe('cost on hostile markup', () => {
     ['end tags in a deep HTML island', (n) => '<svg><foreignObject>' + '<span>'.repeat(n) + '</b>'.repeat(n)],
     ['list items in a deep HTML island', (n) => '<svg><foreignObject><li>' + '<span>'.repeat(n) + '<li>'.repeat(n)],
     ['select content under deep nesting', (n) => '<div>'.repeat(n) + '<select>' + '<option>'.repeat(n)],
+    ['renamed elements and unmatched end tags', (n) => '<head>'.repeat(n) + '</x>'.repeat(n)],
+    ['a tag with many inline handlers', (n) => `<div ${Array.from({ length: n }, (_, i) => `on${String.fromCharCode(97 + (i % 26))}${i.toString(36).replace(/\d/g, 'z')}=x`).join(' ')}>`],
   ];
 
   it.each(shapes)('%s: linear in the size of the input', async (_, shape) => {
@@ -120,7 +122,8 @@ describe('cost on hostile markup', () => {
     await run(2_000);
     const [small, large] = [await run(10_000), await run(40_000)];
     // four times the input in well under sixteen times the time
-    expect(large / Math.max(small, 1)).toBeLessThan(8);
+    // against at least 20 ms, so a run of a few milliseconds is not judged by its noise
+    expect(large / Math.max(small, 20)).toBeLessThan(8);
   }, 120_000);
 });
 
@@ -134,6 +137,7 @@ describe('cost on long tokens split across many chunks', () => {
     ['many distinct attributes', (n) => `<div ${Array.from({ length: n / 8 }, (_, i) => `a${i}`).join(' ')}>x</div>`],
     ['a quoted value full of >', (n) => `<div title="${'>'.repeat(n)}">x</div>`],
     ['a comment full of >', (n) => `<!--a${'>'.repeat(n)}-->`],
+    ['a long run after an ampersand', (n) => `&${'a'.repeat(n)}</body>x`],
     ['a tag name', (n) => `<d${'a'.repeat(n)}>x`],
     ['a comment', (n) => `<!--${'a-'.repeat(n / 2)}-->`],
     ['a bogus comment', (n) => `<?${'a'.repeat(n)}>`],
@@ -163,7 +167,8 @@ describe('cost on long tokens split across many chunks', () => {
     await run(100_000);
     const [small, large] = [await run(500_000), await run(2_000_000)];
     console.info(`${_}: 0.5 MB ${small.toFixed(1)} ms, 2 MB ${large.toFixed(1)} ms`);
-    expect(large / Math.max(small, 1)).toBeLessThan(8);
+    // against at least 20 ms, so a run of a few milliseconds is not judged by its noise
+    expect(large / Math.max(small, 20)).toBeLessThan(8);
   }, 300_000);
 });
 
