@@ -82,9 +82,11 @@ mistake. A fragment's markup is written out so that it can only be read one way:
 
 A removed element leaves a comment where it was, such as `<!--braid-blocked noscript-->`.
 
-The fragment is also kept inside the element it is placed in. An end tag for one of those elements,
-such as `</template>`, `</braid-document>` or `</fragment-slot>`, is removed. The exception is an
-end tag inside a template the fragment opened itself, which cannot reach past that template. When
+The fragment is also kept inside the element it is placed in. A `</template>` or
+`</braid-document>` is removed unless it closes one the fragment opened itself. A `</braid-document>`
+is also removed when it is outside a template the fragment opened, so it cannot reach the host's.
+A `</fragment-slot>` without a match is removed too, but one that closes the fragment's own nested
+slot is kept. When
 the fragment ends, the gateway closes whatever could swallow or wrap the host's markup after it:
 templates, selects, SVG and MathML, raw text, a comment, and the elements that would let its
 formatting outlive it (`<object>`, `<applet>`, `<marquee>`, table cells, captions). Other elements
@@ -97,11 +99,15 @@ fragment is parsed with it on. The only thing that changes is how `<noscript>` r
 gateway removes `<noscript>`. So both paths read the markup the same way, and a bare snippet's
 leading `<style>` stays with it.
 
-On well-formed markup none of this changes the DOM, with three exceptions. `<noscript>` goes, and
-so does table structure inside `<foreignObject>`. Markup that customizable select allows inside a
-`<select>`, such as an SVG icon in an `<option>`, is removed too. The rewriter's tests check this against the previous rewriter
-in parse5 and in Chromium. They also run the holes the November review found, and thousands of
-generated hostile fragments, through both parsers in both contexts.
+On well-formed markup none of this changes the DOM, with these exceptions:
+
+- `<noscript>` is removed.
+- Inside HTML in SVG or MathML (`<foreignObject>`, `<desc>`, `<mi>`…), table structure and
+  `<select>` are removed, and so is a `<form>` when a table is open around the SVG.
+- Markup that customizable select allows inside a `<select>` is removed, such as an SVG icon in an
+  `<option>`. The rewriter's tests check this against the previous rewriter
+  in parse5 and in Chromium. They also run the holes the November review found, and thousands of
+  generated hostile fragments, through both parsers in both contexts.
 
 ## Deliberate trade-offs
 

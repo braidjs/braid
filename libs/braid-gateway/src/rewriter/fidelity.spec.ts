@@ -1,7 +1,7 @@
 import { type DefaultTreeAdapterTypes, parse, serialize } from 'parse5';
 import { describe, expect, it } from 'vitest';
 import { prepareFragmentHtml as legacyPrepareFragmentHtml } from '../../testing/legacy-transforms.js';
-import { wellFormedPages } from '../../testing/well-formed-markup.js';
+import { WELL_FORMED_CASES, wellFormedPages } from '../../testing/well-formed-markup.js';
 import { prepareFragmentHtml } from './transforms.js';
 
 /**
@@ -53,6 +53,10 @@ describe('fidelity on well-formed markup', () => {
     }
     expect(failures.join('\n\n')).toBe('');
   }, 120_000);
+
+  it.each(WELL_FORMED_CASES)('the DOM is the old rewriter’s for %s', async (page) => {
+    expect(dom(await prepare(page))).toBe(dom(await legacyPrepare(page)));
+  });
 
   it('a tag nothing modifies is written byte for byte', async () => {
     for (const page of pages.slice(0, 300)) {

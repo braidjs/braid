@@ -15,6 +15,21 @@ const ATTRIBUTES = [
   'data-json="{&quot;a&quot;:1}"', 'style="color: red"', 'tabindex=0',
 ];
 
+/** Valid markup the fourth goal verification found the rebuilt rewriter changing; every page may hold one. */
+export const WELL_FORMED_CASES = [
+  '<svg viewBox="0 0 10 10"><foreignObject width="10" height="10"><form action="/s"><input name="q"><button>Go</button></form></foreignObject></svg>',
+  '<a href="/card">Card<template id="t"><a href="/inner">inner</a></template></a>',
+  '<a href="/o"><table><tr><td><a href="/i">x</a></td></tr></table></a>',
+  '<a href="/o"><object data="x.svg"><a href="/i">fallback</a></object></a>',
+  '<template><svg viewBox="0 0 1 1"><rect/></svg><p>row</p></template>',
+  '<main><fragment-slot name="o"></fragment-slot><p>Totals</p></main>',
+  '<template id="row"><tr><td>Name</td><td><table><tr><td>nested</td></tr></table></td></tr></template>',
+  '<template><caption>Cap<table><tr><td>n</td></tr></table></caption></template>',
+  '<table><tr><td><table><tr><td>nested in a real table</td></tr></table></td></tr></table>',
+  '<template id="row"><tr><td class="record"></td><td></td></tr></template>',
+  '<math><annotation-xml encoding="text/html"><form><input name="a"></form></annotation-xml></math>',
+];
+
 export function wellFormedPages(count: number, seed = 1): string[] {
   const next = random(seed);
   const pick = <T>(list: readonly T[]): T => list[Math.floor(next() * list.length)];
@@ -89,6 +104,8 @@ export function wellFormedPages(count: number, seed = 1): string[] {
       else if (roll < 0.78) markup += `<video src="v.mp4" poster="p.png" controls></video>`;
       else if (roll < 0.8) markup += `<pre><code>${phrasing(depth + 1)}</code></pre>`;
       else if (roll < 0.82) markup += `<fragment-slot name="orders" src="/orders"></fragment-slot>`;
+      // at the top only: inside a table cell, an island's <form> is removed on purpose (see the docs)
+      else if (roll < 0.86 && depth === 0) markup += pick(WELL_FORMED_CASES);
       else {
         const tag = pick(FLOW);
         markup += `<${tag}${attributes()}>${flow(depth + 1)}</${tag}>`;

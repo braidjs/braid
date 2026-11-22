@@ -87,6 +87,8 @@ interface Entry extends NewEntry {
   markerAt: number;
   /** Whether the nearest table or template below is a table: a select here is in a table. */
   inTable: boolean;
+  /** The nearest element that puts a marker in the list of active formatting elements. */
+  formattingMarkerAt: number;
 }
 
 export type ContentState = 'rcdata' | 'rawtext' | 'script' | 'plaintext';
@@ -231,6 +233,7 @@ const ROOT: Entry = Object.freeze({
   tableAt: 0,
   markerAt: -1,
   inTable: false,
+  formattingMarkerAt: 0,
 });
 
 export class OpenElements {
@@ -335,9 +338,12 @@ export class OpenElements {
     // it is out of scope — below an integration point, say — which nothing here could follow. An
     // `<a>` in scope is closed explicitly (below, or by the adoption agency outside foreign content);
     // one out of scope is not written.
-    if (tagName === 'a' && this.last('a') > 0 && this.inScope('a') === -1) return plan(true);
+    // (The browser looks for that `<a>` only after the last marker in the list of active formatting
+    // elements — a template, cell, caption or object between them shields it.)
+    const openA = this.last('a');
+    if (tagName === 'a' && openA > this.current.formattingMarkerAt && this.inScope('a') === -1) return plan(true);
     if (!this.inForeignContent()) {
-      if (tagName === 'table' && this.tableBelowTemplate('table')) return plan(true);
+      if (tagName === 'table' && this.tableBelowTemplate('table', false)) return plan(true);
       if (TABLE_STRUCTURE.has(tagName)) closers.push(...this.closeMarkersAboveTable());
       return plan(false);
     }
@@ -353,7 +359,7 @@ export class OpenElements {
     // it as in body except for `<form>`: with a template open, ignored. The tracker follows the table
     // modes only approximately, so a `<form>` in an island is never written: with it gone, nothing an
     // island lets through is read differently in any mode.
-    if (tagName === 'form') return plan(true);
+    if (tagName === 'form' && this.tableBelow()) return plan(true);
 
     if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
       if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
@@ -408,8 +414,8 @@ export class OpenElements {
     }
 
     if (name === 'svg' || name === 'math') {
-      if (!selfClosing) this.push(foreignEntry(name, name, attribute));
       this.decideTemplateMode(name);
+      if (!selfClosing) this.push(foreignEntry(name, name, attribute));
       return null;
     }
 
@@ -553,7 +559,7 @@ export class OpenElements {
     }
 
     // outside foreign content: follow approximately, never past a template, table cell or select
-    if (this.contain && TABLE_STRUCTURE.has(name) && this.tableBelowTemplate(name)) return plan(true);
+    if (this.contain && TABLE_STRUCTURE.has(name) && this.tableBelowTemplate(name, true)) return plan(true);
     if (this.contain && TABLE_STRUCTURE.has(name)) closers.push(...this.closeMarkersAboveTable());
     const open = this.findOpen(name);
     if (open === -1) return plan(this.contain && HOST_ELEMENTS.has(name));
@@ -603,14 +609,28 @@ export class OpenElements {
   }
 
   /**
+   * Whether a table element, or a template its first child put in a table mode, is open below: only
+   * then can the insertion mode be a table mode, which the tracker follows only approximately.
+   */
+  private tableBelow(): boolean {
+    const { tableAt } = this.current;
+    if (tableAt === 0) return false;
+    const entry = this.stack[tableAt];
+    return entry.name !== 'template' || ['table', 'tablebody', 'row', 'colgroup'].includes(entry.templateMode ?? '');
+  }
+
+  /**
    * Whether, in a table mode, the nearest open element of this name is only below the nearest
    * template, or none is open. The spec ignores the token then — table scope stops at a template —
    * but parse5 (and with it jsdom) looks past the template and closes the fragment's outer table, and
    * its template with it. Not written, so no parser has the choice.
    */
-  private tableBelowTemplate(name: string): boolean {
+  private tableBelowTemplate(name: string, isEnd: boolean): boolean {
     const mode = this.mode();
-    if (mode !== 'table' && mode !== 'tablebody' && mode !== 'row' && mode !== 'cell' && mode !== 'caption') return false;
+    // a `<table>` start tag in a cell or caption is processed as in body, which nests it; the end tags
+    // check table scope there too
+    const modes = name === 'table' && !isEnd ? ['table', 'tablebody', 'row'] : ['table', 'tablebody', 'row', 'cell', 'caption'];
+    if (!modes.includes(mode)) return false;
     return this.last(name) <= this.current.templateAt;
   }
 
@@ -621,6 +641,9 @@ export class OpenElements {
    */
   private reachesHost(name: string): boolean {
     if (name !== 'braid-document') return false;
+    // one opened in an HTML island, where the stack is exact, is the fragment's own
+    const open = this.last(name);
+    if (open > 0 && this.stack[open].foreign) return false;
     const template = this.current.templateAt;
     return template === 0 || this.last(name) <= template;
   }
@@ -771,6 +794,7 @@ export class OpenElements {
       tableAt: tableElement ? index : below.tableAt,
       markerAt: tableElement ? -1 : html && MARKERS.has(name) && below.markerAt === -1 ? index : below.markerAt,
       inTable: html && name === 'table' ? true : html && name === 'template' ? false : below.inTable,
+      formattingMarkerAt: html && (name === 'template' || MARKER_ELEMENTS.has(name)) ? index : below.formattingMarkerAt,
     };
     this.stack.push(entry);
     const byName = html ? this.html : this.foreignByName;
