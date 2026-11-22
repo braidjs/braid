@@ -104,7 +104,13 @@ function check(element: Element, report: (problem: string) => void): void {
 
 function loadsByUrl(raw: string | null): boolean {
   if (raw === null) return true;
-  const url = raw.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '').toLowerCase();
+  // as the URL parser reads it: tabs and newlines removed, C0 controls and spaces trimmed
+  let url = raw.replace(/[\t\n\r]/g, '');
+  let start = 0;
+  let end = url.length;
+  while (start < end && url.charCodeAt(start) <= 0x20) start++;
+  while (end > start && url.charCodeAt(end - 1) <= 0x20) end--;
+  url = url.slice(start, end).toLowerCase();
   const scheme = /^([a-z][a-z0-9+.-]*):/.exec(url)?.[1];
   return scheme === undefined || scheme === 'http' || scheme === 'https' || url === 'about:blank';
 }

@@ -4,6 +4,7 @@ import type { Browser, Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hostileCases, random, REVIEW_CASES } from '../libs/braid-gateway/testing/hostile-markup.js';
 import { prepareFragmentHtml as legacyPrepareFragmentHtml } from '../libs/braid-gateway/testing/legacy-transforms.js';
+import { wellFormedPages } from '../libs/braid-gateway/testing/well-formed-markup.js';
 import { prepareFragmentHtml } from '../libs/braid-gateway/src/rewriter/transforms.js';
 import { endpoint, html, launch, readySlots, startHost, type Host } from './harness.js';
 
@@ -220,6 +221,30 @@ describe('prepared fragments in Chromium', () => {
     );
     expect((await failures(cases, outputs)).join('\n\n')).toBe('');
   }, 600_000);
+});
+
+describe('fidelity in Chromium', () => {
+  it('on well-formed markup, the DOM is the one the old rewriter produced', async () => {
+    const markup = wellFormedPages(600, 20261124);
+    const failures: string[] = [];
+    for (let start = 0; start < markup.length && failures.length < 3; start += PER_PAGE / 2) {
+      const batch = markup.slice(start, start + PER_PAGE / 2);
+      const outputs = (await Promise.all(batch.map(async (page) => [await prepare(page), await legacyPrepare(page)]))).flat();
+      const path = `/page/${pages.size}`;
+      pages.set(path, page(outputs));
+      const tab = await browser.newPage();
+      await tab.goto(`${origin}${path}`, { waitUntil: 'load' });
+      const doms = await tab.evaluate((count) =>
+        Array.from({ length: count }, (_, index) => document.getElementById(`s${index}`)?.shadowRoot?.querySelector('braid-document')?.innerHTML ?? null),
+      outputs.length);
+      await tab.close();
+      for (let index = 0; index < batch.length; index++) {
+        const [ours, theirs] = [doms[index * 2], doms[index * 2 + 1]];
+        if (ours === null || ours !== theirs) failures.push(`${JSON.stringify(batch[index])}\n  ours:   ${ours}\n  theirs: ${theirs}`);
+      }
+    }
+    expect(failures.join('\n\n')).toBe('');
+  }, 300_000);
 });
 
 describe('a fetched fragment parses where a pierced one does', () => {

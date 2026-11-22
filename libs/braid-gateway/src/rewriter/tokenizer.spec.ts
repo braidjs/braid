@@ -52,6 +52,9 @@ function tokenize(html: string, options: { splits?: number[]; foreign?: boolean 
   return tokens;
 }
 
+/** For the parse5 handlers this comparison has no use for. */
+const ignore = (): void => undefined;
+
 const normalize = (text: string) => text.replace(/\r\n?/g, '\n').replaceAll('\0', '�');
 
 function summarize(tokens: Token[]): Summary[] {
@@ -91,7 +94,6 @@ function commentData(raw: string): string {
 
 function parse5Summary(html: string, options: { foreign?: boolean } = {}): Summary[] {
   const summary: Summary[] = [];
-  let lastIsEofComment = false;
   const tokenizer: Parse5Tokenizer = new Parse5Tokenizer(
     {},
     {
@@ -109,20 +111,18 @@ function parse5Summary(html: string, options: { foreign?: boolean } = {}): Summa
       },
       onComment(token: Parse5Token.CommentToken) {
         summary.push(`comment ${JSON.stringify(token.data)}`);
-        lastIsEofComment = true;
       },
       onDoctype() {
         summary.push('doctype');
       },
-      onEof() {},
-      onCharacter() {},
-      onNullCharacter() {},
-      onWhitespaceCharacter() {},
+      onEof: ignore,
+      onCharacter: ignore,
+      onNullCharacter: ignore,
+      onWhitespaceCharacter: ignore,
     },
   );
   tokenizer.inForeignNode = options.foreign ?? false;
   tokenizer.write(html, true);
-  void lastIsEofComment;
   return summary;
 }
 
@@ -237,13 +237,13 @@ describe('character references in attribute values', () => {
       {},
       {
         onStartTag: (token: Parse5Token.TagToken) => void (value = token.attrs[0]?.value ?? ''),
-        onEndTag() {},
-        onComment() {},
-        onDoctype() {},
-        onEof() {},
-        onCharacter() {},
-        onNullCharacter() {},
-        onWhitespaceCharacter() {},
+        onEndTag: ignore,
+        onComment: ignore,
+        onDoctype: ignore,
+        onEof: ignore,
+        onCharacter: ignore,
+        onNullCharacter: ignore,
+        onWhitespaceCharacter: ignore,
       },
     );
     tokenizer.write(`<a x="${raw}">`, true);
