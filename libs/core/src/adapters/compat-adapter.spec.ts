@@ -43,6 +43,23 @@ describe('parseFragmentContent()', () => {
     expect(content.querySelector('braid-body p')!.textContent).toBe('fragment');
   });
 
+  // The gateway writes fragment markup to be read one way where a pierced fragment is parsed:
+  // inside a <braid-document> in a template, with scripting on. The fetched path parses it there too.
+  it('keeps a bare snippet’s leading <style>, which a document parse moves to a <head> and loses', () => {
+    const content = parseFragmentContent(`<style>p { color: red }</style><p>fragment</p>`, document);
+
+    expect(content.querySelector('braid-body > style')!.textContent).toBe('p { color: red }');
+    expect(content.querySelector('braid-body > p')!.textContent).toBe('fragment');
+  });
+
+  it('parses in the same context as a pierced fragment: table and form rules of a template', () => {
+    // in a template, a <form> inside a <form> is a second form, and table text stays in place
+    const content = parseFragmentContent(`<form id="a"><form id="b"></form></form><table>x</table>`, document);
+
+    expect([...content.querySelectorAll('form')].map((form) => form.id)).toEqual(['a', 'b']);
+    expect(content.querySelector('braid-body')!.firstChild).toBe(content.querySelector('form'));
+  });
+
   it('does not execute scripts while parsing', () => {
     (window as unknown as { __parsedScriptRan?: boolean }).__parsedScriptRan = false;
     const closingScriptTag = '</' + 'script>';
