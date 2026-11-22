@@ -1,0 +1,515 @@
+/**
+ * The HTML tokenizer, as the WHATWG spec defines it, for a rewriter.
+ *
+ * What a tag is, what is text and what is a comment has to be decided exactly as the browser will
+ * decide it for the rewriter's output — a `<` the rewriter took for text and the browser takes for
+ * a tag is markup that no transform ever saw. So this follows the spec's states rather than
+ * approximating them: every way a comment ends (`-->`, `--!>`, `<!-->`, `<!--->`), bogus comments
+ * (`<?…>`, `</1…>`, `<!x…>`), which end at the first `>` whatever the quotes, doctypes, which do
+ * too, CDATA (only in foreign content, which the caller says), tag and attribute names that run to
+ * whitespace, `/` or `>` whatever they contain, and the content states: RCDATA, RAWTEXT, PLAINTEXT
+ * and script data with its escape states, where `<!--` and `<script>` change where `</script>`
+ * ends the element.
+ *
+ * It does not decode or normalize: each token carries the source text it came from, so a token
+ * nothing changes is written back byte for byte. Input arrives in pieces; a token split across them
+ * is held until it is complete, and text — including raw text, which can be most of a document — is
+ * handed on as it arrives, held back only by as much as could be the start of what ends it.
+ *
+ * Which content state follows a start tag is the tree's decision, not the tokenizer's (`<style>` is
+ * raw text in HTML and markup in SVG), so the caller sets {@link Tokenizer.switchTo} and
+ * {@link Tokenizer.cdataAllowed} as it goes.
+ */
+
+export interface RawAttribute {
+  /** Lowercased, as the DOM sees it. */
+  name: string;
+  /** As authored. */
+  rawName: string;
+  /** The value as authored, quotes excluded and character references undecoded; null for none. */
+  raw: string | null;
+}
+
+export type Token =
+  /** Text, and the content state it was read in: data, RCDATA, RAWTEXT, script data or PLAINTEXT. */
+  | { type: 'text'; raw: string; state: ContentState }
+  | { type: 'start'; raw: string; name: string; attributes: RawAttribute[]; selfClosing: boolean }
+  | { type: 'end'; raw: string; name: string }
+  /** A comment; `complete` is false only for one the input ended inside. */
+  | { type: 'comment'; raw: string; complete: boolean }
+  /** A bogus comment: `<?…>`, `</` and a non-letter, or `<!` and anything not a comment or doctype. */
+  | { type: 'bogus'; raw: string; data: string }
+  | { type: 'doctype'; raw: string }
+  /** A piece of a CDATA section: `text` is its content, `raw` the same with any delimiters it includes. */
+  | { type: 'cdata'; raw: string; text: string }
+  /** `</>`, which the browser drops. */
+  | { type: 'nothing'; raw: string }
+  /** A tag the input ended inside, which the browser drops. */
+  | { type: 'unterminated'; raw: string };
+
+export type ContentState = 'data' | 'rcdata' | 'rawtext' | 'script' | 'plaintext';
+
+/** Where script data is: plain, after `<!--`, or after `<!--` and then `<script>`. */
+type ScriptState = 'data' | 'escaped' | 'double';
+
+export class Tokenizer {
+  /** Whether `<![CDATA[` opens a CDATA section: true when the adjusted current node is not HTML. */
+  cdataAllowed = false;
+
+  private buffer = '';
+  private index = 0;
+  private ended = false;
+
+  private state: ContentState = 'data';
+  /** The element whose end tag ends the current RCDATA, RAWTEXT or script data. */
+  private endTagName = '';
+  private scriptState: ScriptState = 'data';
+  /** Consecutive `-` just read in escaped script data: two and a `>` return to plain script data. */
+  private dashes = 0;
+  private inCdata = false;
+
+  /** For a comment, bogus comment or doctype still incomplete: where to resume looking for its end. */
+  private resumeAt = -1;
+  private resumeFrom = 0;
+
+  /** Appends input. */
+  feed(text: string): void {
+    if (this.index > 0) {
+      this.buffer = this.buffer.slice(this.index);
+      if (this.resumeAt !== -1) {
+        this.resumeAt -= this.index;
+        this.resumeFrom -= this.index;
+      }
+      this.index = 0;
+    }
+    this.buffer += text;
+  }
+
+  /** Marks the end of input: what is still incomplete is emitted as the browser would read it at EOF. */
+  end(): void {
+    this.ended = true;
+  }
+
+  /** Switches the content state, for the element whose start tag was just read. */
+  switchTo(state: Exclude<ContentState, 'data'>, tagName: string): void {
+    this.state = state;
+    this.endTagName = tagName;
+    this.scriptState = 'data';
+    this.dashes = 0;
+  }
+
+  /** The state the input is in, for closing what it left open. */
+  get contentState(): { state: ContentState; tagName: string; scriptState: ScriptState; inCdata: boolean } {
+    return { state: this.state, tagName: this.endTagName, scriptState: this.scriptState, inCdata: this.inCdata };
+  }
+
+  /** The next token, or null when more input is needed (or, once ended, when there is none). */
+  next(): Token | null {
+    if (this.index >= this.buffer.length) return null;
+    switch (this.state) {
+      case 'plaintext':
+        return this.take(this.buffer.length, 'text');
+      case 'rcdata':
+      case 'rawtext':
+        return this.rawText();
+      case 'script':
+        return this.scriptData();
+      case 'data':
+        return this.inCdata ? this.cdata() : this.data();
+    }
+  }
+
+  // --- content states ---
+
+  private data(): Token | null {
+    const lessThan = this.buffer.indexOf('<', this.index);
+    if (lessThan === -1) return this.take(this.buffer.length, 'text');
+    if (lessThan > this.index) return this.take(lessThan, 'text');
+    return this.markup();
+  }
+
+  private rawText(): Token | null {
+    const { buffer } = this;
+    const nameLength = this.endTagName.length;
+    let at = buffer.indexOf('</', this.index);
+    while (at !== -1) {
+      const delimiterAt = at + 2 + nameLength;
+      if (delimiterAt >= buffer.length) {
+        if (!this.ended) break;
+      } else if (isDelimiter(buffer[delimiterAt]) && this.isEndTagName(at + 2)) {
+        return this.endContent(at);
+      }
+      at = buffer.indexOf('</', at + 1);
+    }
+    if (this.ended) return this.take(buffer.length, 'text');
+    // hold back what could still become `</name` and its delimiter
+    const safe = Math.max(this.index, buffer.length - (nameLength + 2));
+    return safe > this.index ? this.take(safe, 'text') : null;
+  }
+
+  private scriptData(): Token | null {
+    const { buffer } = this;
+    let at = this.index;
+    while (at < buffer.length) {
+      const char = buffer[at];
+      if (char === '<') {
+        // `</script` and a delimiter ends the element outside a double escape, and moves from a
+        // double escape back to a single one inside one
+        const endTag = this.match(at, '</script', true);
+        if (endTag === undefined) return this.holdBack(at);
+        if (endTag) {
+          if (this.scriptState !== 'double') return this.endContent(at);
+          this.scriptState = 'escaped';
+          this.dashes = 0;
+          at += 9;
+          continue;
+        }
+        if (this.scriptState === 'data') {
+          const escape = this.match(at, '<!--', false);
+          if (escape === undefined) return this.holdBack(at);
+          if (escape) {
+            this.scriptState = 'escaped';
+            this.dashes = 2; // `<!-->` is an escape opened and closed
+            at += 4;
+            continue;
+          }
+        } else if (this.scriptState === 'escaped') {
+          const doubleEscape = this.match(at, '<script', true);
+          if (doubleEscape === undefined) return this.holdBack(at);
+          if (doubleEscape) {
+            this.scriptState = 'double';
+            this.dashes = 0;
+            at += 8;
+            continue;
+          }
+        }
+        this.dashes = 0;
+        at++;
+        continue;
+      }
+      if (this.scriptState !== 'data') {
+        if (char === '-') this.dashes++;
+        else if (char === '>' && this.dashes >= 2) {
+          this.scriptState = 'data';
+          this.dashes = 0;
+        } else this.dashes = 0;
+      }
+      at++;
+    }
+    return this.take(buffer.length, 'text');
+  }
+
+  private cdata(): Token | null {
+    const close = this.buffer.indexOf(']]>', this.index);
+    if (close !== -1) {
+      const text = this.buffer.slice(this.index, close);
+      const raw = this.buffer.slice(this.index, close + 3);
+      this.index = close + 3;
+      this.inCdata = false;
+      return { type: 'cdata', raw, text };
+    }
+    // hold back a `]` or `]]` that may be the start of `]]>`
+    const safe = this.ended ? this.buffer.length : Math.max(this.index, this.buffer.length - 2);
+    if (safe === this.index) return null;
+    const text = this.buffer.slice(this.index, safe);
+    this.index = safe;
+    return { type: 'cdata', raw: text, text };
+  }
+
+  // --- markup ---
+
+  /** At a `<` in the data state. */
+  private markup(): Token | null {
+    const { buffer } = this;
+    const at = this.index;
+    if (at + 1 >= buffer.length) return this.ended ? this.take(at + 1, 'text') : null;
+    const next = buffer[at + 1];
+
+    if (isAsciiAlpha(next)) return this.tag(at, false);
+
+    if (next === '/') {
+      if (at + 2 >= buffer.length) return this.ended ? this.take(at + 2, 'text') : null;
+      const after = buffer[at + 2];
+      if (isAsciiAlpha(after)) return this.tag(at, true);
+      if (after === '>') return this.take(at + 3, 'nothing');
+      return this.bogus(at, at + 2);
+    }
+
+    if (next === '?') return this.bogus(at, at + 1);
+
+    if (next === '!') {
+      const rest = buffer.slice(at + 2, at + 9);
+      if (rest.startsWith('--')) return this.comment(at);
+      if (!this.ended && rest.length < 2 && '--'.startsWith(rest)) return null;
+      if (rest.length === 7 ? rest.toLowerCase() === 'doctype' : !this.ended && 'doctype'.startsWith(rest.toLowerCase())) {
+        return rest.length === 7 ? this.doctype(at) : null;
+      }
+      if (this.cdataAllowed) {
+        if (rest === '[CDATA[') {
+          this.index = at + 9;
+          this.inCdata = true;
+          return { type: 'cdata', raw: '<![CDATA[', text: '' };
+        }
+        if (!this.ended && rest.length < 7 && '[CDATA['.startsWith(rest)) return null;
+      }
+      return this.bogus(at, at + 2);
+    }
+
+    // `<` not opening anything is text
+    return this.take(at + 1, 'text');
+  }
+
+  private comment(at: number): Token | null {
+    const { buffer } = this;
+    const start = at + 4;
+    // `<!-->` and `<!--->` are empty comments, ended by their own dashes
+    if (start >= buffer.length) return this.incompleteComment(at);
+    if (buffer[start] === '>') return this.take(start + 1, 'comment');
+    if (buffer[start] === '-') {
+      if (start + 1 >= buffer.length) return this.incompleteComment(at);
+      if (buffer[start + 1] === '>') return this.take(start + 2, 'comment');
+    }
+
+    let from = this.resumeAt === at ? this.resumeFrom : start;
+    for (;;) {
+      const dashes = buffer.indexOf('--', from);
+      if (dashes === -1) {
+        // a single `-` at the very end could be the first of the two
+        return this.incompleteComment(at, Math.max(start, buffer.length - 1));
+      }
+      let after = dashes + 2;
+      while (after < buffer.length && buffer[after] === '-') after++;
+      if (after >= buffer.length) return this.incompleteComment(at, dashes);
+      if (buffer[after] === '>') return this.take(after + 1, 'comment');
+      if (buffer[after] === '!') {
+        if (after + 1 >= buffer.length) return this.incompleteComment(at, dashes);
+        if (buffer[after + 1] === '>') return this.take(after + 2, 'comment');
+        from = after + 1;
+        continue;
+      }
+      from = after;
+    }
+  }
+
+  private incompleteComment(at: number, resumeFrom = at + 4): Token | null {
+    if (this.ended) {
+      const raw = this.buffer.slice(at);
+      this.index = this.buffer.length;
+      this.resumeAt = -1;
+      return { type: 'comment', raw, complete: false };
+    }
+    this.resumeAt = at;
+    this.resumeFrom = resumeFrom;
+    return null;
+  }
+
+  /** A bogus comment, whose data starts at `dataStart` and which ends at the first `>`. */
+  private bogus(at: number, dataStart: number): Token | null {
+    const close = this.buffer.indexOf('>', this.resumeAt === at ? this.resumeFrom : dataStart);
+    if (close === -1) {
+      if (!this.ended) return this.waitFrom(at, this.buffer.length);
+      const raw = this.buffer.slice(at);
+      this.index = this.buffer.length;
+      this.resumeAt = -1;
+      return { type: 'bogus', raw, data: raw.slice(dataStart - at) };
+    }
+    this.resumeAt = -1;
+    const raw = this.buffer.slice(at, close + 1);
+    this.index = close + 1;
+    return { type: 'bogus', raw, data: raw.slice(dataStart - at, -1) };
+  }
+
+  /** A doctype ends at the first `>`: quotes around its identifiers do not protect one. */
+  private doctype(at: number): Token | null {
+    const close = this.buffer.indexOf('>', this.resumeAt === at ? this.resumeFrom : at + 9);
+    if (close === -1) {
+      if (!this.ended) return this.waitFrom(at, this.buffer.length);
+      this.resumeAt = -1;
+      return this.take(this.buffer.length, 'doctype');
+    }
+    this.resumeAt = -1;
+    return this.take(close + 1, 'doctype');
+  }
+
+  private waitFrom(at: number, from: number): null {
+    this.resumeAt = at;
+    this.resumeFrom = from;
+    return null;
+  }
+
+  /** A start or end tag, starting at its `<`. */
+  private tag(at: number, isEnd: boolean): Token | null {
+    const { buffer } = this;
+    const length = buffer.length;
+    let index = at + (isEnd ? 2 : 1);
+
+    const nameStart = index;
+    while (index < length && !isWhitespace(buffer[index]) && buffer[index] !== '/' && buffer[index] !== '>') index++;
+    if (index >= length) return this.unterminated(at);
+    const name = normalizeName(buffer.slice(nameStart, index));
+
+    const attributes: RawAttribute[] = [];
+    let selfClosing = false;
+
+    for (;;) {
+      while (index < length && isWhitespace(buffer[index])) index++;
+      if (index >= length) return this.unterminated(at);
+      const char = buffer[index];
+
+      if (char === '>') break;
+      if (char === '/') {
+        if (index + 1 >= length) return this.unterminated(at);
+        if (buffer[index + 1] === '>') {
+          selfClosing = true;
+          index++;
+          break;
+        }
+        index++;
+        continue;
+      }
+
+      // An attribute name runs to whitespace, `/`, `>` or `=` — though a leading `=` is part of it.
+      // Quotes and `<` are part of it too: the browser reads `<a "onclick=…>` as an attribute named
+      // `"onclick`.
+      const attributeStart = index;
+      if (char === '=') index++;
+      while (
+        index < length &&
+        !isWhitespace(buffer[index]) &&
+        buffer[index] !== '/' &&
+        buffer[index] !== '>' &&
+        buffer[index] !== '='
+      ) {
+        index++;
+      }
+      if (index >= length) return this.unterminated(at);
+      const rawName = buffer.slice(attributeStart, index);
+
+      let cursor = index;
+      while (cursor < length && isWhitespace(buffer[cursor])) cursor++;
+      if (cursor >= length) return this.unterminated(at);
+
+      let raw: string | null = null;
+      if (buffer[cursor] === '=') {
+        cursor++;
+        while (cursor < length && isWhitespace(buffer[cursor])) cursor++;
+        if (cursor >= length) return this.unterminated(at);
+        const quote = buffer[cursor];
+        if (quote === '"' || quote === "'") {
+          const close = buffer.indexOf(quote, cursor + 1);
+          if (close === -1) return this.unterminated(at);
+          raw = buffer.slice(cursor + 1, close);
+          cursor = close + 1;
+        } else if (quote === '>') {
+          raw = ''; // `a=>`: an empty value, and the tag ends
+        } else {
+          const valueStart = cursor;
+          while (cursor < length && !isWhitespace(buffer[cursor]) && buffer[cursor] !== '>') cursor++;
+          if (cursor >= length) return this.unterminated(at);
+          raw = buffer.slice(valueStart, cursor);
+        }
+        index = cursor;
+      } else {
+        index = cursor;
+      }
+
+      // the first of a repeated attribute is the one the browser keeps
+      const lowered = normalizeName(rawName);
+      if (!attributes.some((attribute) => attribute.name === lowered)) {
+        attributes.push({ name: lowered, rawName, raw });
+      }
+    }
+
+    const raw = buffer.slice(at, index + 1);
+    this.index = index + 1;
+    return isEnd ? { type: 'end', raw, name } : { type: 'start', raw, name, attributes, selfClosing };
+  }
+
+  private unterminated(at: number): Token | null {
+    if (!this.ended) return null;
+    const raw = this.buffer.slice(at);
+    this.index = this.buffer.length;
+    return { type: 'unterminated', raw };
+  }
+
+  // --- helpers ---
+
+  /** Ends RCDATA, RAWTEXT or script data at an end tag starting at `at`, which is read next as markup. */
+  private endContent(at: number): Token | null {
+    const text = at > this.index ? this.take(at, 'text') : null;
+    this.state = 'data';
+    this.scriptState = 'data';
+    this.dashes = 0;
+    return text ?? this.next();
+  }
+
+  /** In script data: emit what precedes `at` and wait there for the input that decides it. */
+  private holdBack(at: number): Token | null {
+    return at > this.index ? this.take(at, 'text') : null;
+  }
+
+  /**
+   * Whether `sequence` (and, if `delimited`, a whitespace, `/` or `>` after it) starts at `at`,
+   * ASCII case-insensitively: true, false, or undefined when the input so far cannot say.
+   */
+  private match(at: number, sequence: string, delimited: boolean): boolean | undefined {
+    const { buffer } = this;
+    const needed = sequence.length + (delimited ? 1 : 0);
+    const available = buffer.length - at;
+    const compared = Math.min(available, sequence.length);
+    if (buffer.slice(at, at + compared).toLowerCase() !== sequence.slice(0, compared)) return false;
+    if (available < needed) return this.ended ? false : undefined;
+    return !delimited || isDelimiter(buffer[at + sequence.length]);
+  }
+
+  private isEndTagName(at: number): boolean {
+    const name = this.endTagName;
+    for (let offset = 0; offset < name.length; offset++) {
+      const code = this.buffer.charCodeAt(at + offset);
+      // ASCII lowercasing only, as the tokenizer does
+      if ((code >= 0x41 && code <= 0x5a ? code + 0x20 : code) !== name.charCodeAt(offset)) return false;
+    }
+    return true;
+  }
+
+  private take(end: number, type: 'text' | 'comment' | 'doctype' | 'nothing'): Token {
+    const raw = this.buffer.slice(this.index, end);
+    this.index = end;
+    this.resumeAt = -1;
+    if (type === 'text') return { type, raw, state: this.inCdata ? 'data' : this.state };
+    return type === 'comment' ? { type, raw, complete: true } : { type, raw };
+  }
+}
+
+export function isWhitespace(char: string): boolean {
+  // CR is normalized to LF before tokenizing, so it separates like any other whitespace
+  return char === ' ' || char === '\n' || char === '\t' || char === '\f' || char === '\r';
+}
+
+function isDelimiter(char: string): boolean {
+  return isWhitespace(char) || char === '/' || char === '>';
+}
+
+function isAsciiAlpha(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a);
+}
+
+/** ASCII-lowercased, with NUL read as U+FFFD, as the tokenizer names tags and attributes. */
+function normalizeName(name: string): string {
+  let lowered = '';
+  let changed = false;
+  for (let index = 0; index < name.length; index++) {
+    const code = name.charCodeAt(index);
+    if ((code >= 0x41 && code <= 0x5a) || code === 0) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return name;
+  for (let index = 0; index < name.length; index++) {
+    const code = name.charCodeAt(index);
+    lowered += code === 0 ? '�' : code >= 0x41 && code <= 0x5a ? String.fromCharCode(code + 0x20) : name[index];
+  }
+  return lowered;
+}

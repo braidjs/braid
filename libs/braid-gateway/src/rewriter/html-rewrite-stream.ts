@@ -8,21 +8,31 @@
  *
  * Properties this implementation guarantees:
  *
- * - **Streaming**: output is produced as input arrives. Only the current (partial) tag is
- *   buffered, so memory stays bounded regardless of document size.
- * - **Chunk-boundary safe**: a tag, comment, doctype, or raw-text end sequence split across
- *   network chunks is reassembled before it is interpreted.
+ * - **It reads markup as the browser will.** Tokenizing follows the WHATWG tokenizer
+ *   (`tokenizer.ts`), and the parts of tree construction that decide how the rest is tokenized —
+ *   whether an element is HTML or SVG/MathML, whether a start tag opens raw text, which templates
+ *   are open — are tracked (`open-elements.ts`). A transform that sees every tag the browser will
+ *   see is the only kind that can be a security boundary.
+ * - **Fragment markup is written so it can be read only one way** (`contain`): what browsers would
+ *   recover from differently is closed explicitly or dropped, and a fragment cannot close the
+ *   elements it is placed in or leave one of its own open to swallow what follows. See
+ *   `open-elements.ts`.
+ * - **Streaming**: output is produced as input arrives. A tag, comment or doctype is held until it is
+ *   complete; text, raw text included, is passed on as it arrives.
+ * - **Chunk-boundary safe**: the output is the same however the input is split.
  * - **Fidelity by default**: a tag no handler modifies is emitted byte-for-byte as it arrived.
- *   Only mutated tags are re-serialized.
+ *   Only mutated tags are re-serialized, and their untouched attributes keep their authored value.
  * - **Stream injection**: injected content may itself be a `ReadableStream`, which is what makes
  *   piercing a true interleave (shell up to the slot, then the fragment's stream, then the rest
  *   of the shell) rather than a buffer-everything-then-concatenate.
  *
- * Scope note: this is a rewriter, not a parser. It does not build a tree, resolve implied tags,
- * or handle malformed-markup recovery — it observes a linear token stream. That is sufficient
- * for every transform in the composition protocol, and the conformance vectors in
- * `html-rewrite-stream.spec.ts` are the oracle for it.
+ * The conformance vectors in `html-rewrite-stream.spec.ts` and the differential tests against
+ * parse5 and Chromium (`differential.spec.ts`, `e2e/rewriter-differential.e2e.ts`) are its oracle.
  */
+
+import { decodeAttributeValue } from './character-references.js';
+import { OpenElements } from './open-elements.js';
+import { type RawAttribute, type Token, Tokenizer } from './tokenizer.js';
 
 /** Content that can be injected: literal HTML, or a stream of it (interleaved as it arrives). */
 export type Injection = string | ReadableStream<Uint8Array>;
@@ -72,13 +82,15 @@ export interface RewriteOptions {
    * that never arrives — `</body>` is optional in HTML and frequently omitted.
    */
   onEnd?(): Injection | undefined | Promise<Injection | undefined>;
+  /**
+   * The input is a fragment, to be placed inside an element of another document (a pierced
+   * fragment's `<braid-document>`): write it so every browser reads it the same way, keep it inside
+   * that element, and remove — rather than guess at — any attribute a handler reads whose value the
+   * rewriter cannot decode for certain. See `open-elements.ts`. Off for a shell, which is the
+   * document itself and is trusted.
+   */
+  contain?: boolean;
 }
-
-/**
- * Elements whose content is not parsed as markup. Inside them, `<` starts a tag only in the
- * element's own end-tag sequence.
- */
-const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'title', 'textarea']);
 
 /** Elements that never have an end tag, so renaming one must not open a rename scope. */
 const VOID_ELEMENTS = new Set([
@@ -99,27 +111,6 @@ const VOID_ELEMENTS = new Set([
 
 const encoder = new TextEncoder();
 
-interface ParsedAttribute {
-  /** Lowercased name, for lookups. */
-  name: string;
-  /** The name exactly as authored, so untouched attributes re-serialize unchanged. */
-  rawName: string;
-  /** Decoded value, or null for a valueless attribute. */
-  value: string | null;
-}
-
-type TokenKind = 'start' | 'end' | 'comment' | 'doctype' | 'bogus';
-
-interface Token {
-  kind: TokenKind;
-  /** Index just past the token in the buffer. */
-  end: number;
-  /** Lowercased tag name; empty for non-element tokens. */
-  name: string;
-  selfClosing: boolean;
-  attributes: ParsedAttribute[];
-}
-
 export function rewriteHtmlStream(
   input: ReadableStream<Uint8Array>,
   options: RewriteOptions,
@@ -127,16 +118,35 @@ export function rewriteHtmlStream(
   return toReadableStream(rewrite(input, options));
 }
 
-async function* rewrite(
-  input: ReadableStream<Uint8Array>,
-  options: RewriteOptions,
-): AsyncGenerator<Uint8Array> {
+interface Attribute {
+  /** Lowercased name, for lookups. */
+  name: string;
+  /** The name exactly as authored, so untouched attributes re-serialize unchanged. */
+  rawName: string;
+  /** The authored value, character references undecoded; null for a valueless attribute. */
+  raw: string | null;
+  /** The decoded (or assigned) value; undefined until read. */
+  value?: string | null;
+  /** Assigned by a handler, so serialized from `value` rather than `raw`. */
+  modified: boolean;
+}
+
+/** One part of the output: markup, or a stream to splice in. */
+type Part = string | ReadableStream<Uint8Array>;
+
+async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptions): AsyncGenerator<Uint8Array> {
+  const contain = options.contain === true;
   const decoder = new TextDecoder();
   const reader = input.getReader();
+  const tokenizer = new Tokenizer();
+  const tree = new OpenElements(contain);
 
-  let buffer = '';
-  /** Non-null while inside a raw-text element, holding its lowercased tag name. */
-  let rawTextElement: string | null = null;
+  /** Output not yet yielded: written as one chunk per chunk of input, not one per token. */
+  let out = '';
+  /** Dropping a `<noscript>` with its content, which is read as raw text. */
+  let droppingRawText = false;
+  /** After a fragment's `<plaintext>`: everything is text, written as text. */
+  let escapingRest = false;
   /**
    * Open elements whose start tag a handler renamed. Renaming an element must rename its end
    * tag too — otherwise the renamed element is never closed, and everything that follows nests
@@ -147,195 +157,168 @@ async function* rewrite(
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      tokenizer.feed(done ? decoder.decode() : decoder.decode(value, { stream: true }));
+      if (done) tokenizer.end();
 
-      const result = yield* consume(buffer, done);
-      buffer = result.remainder;
-      rawTextElement = result.rawTextElement;
+      for (;;) {
+        tokenizer.cdataAllowed = tree.cdataAllowed();
+        const token = tokenizer.next();
+        if (!token) break;
 
+        if (token.type === 'start') {
+          const parts = startTag(token);
+          if (parts instanceof Promise) {
+            // everything before the tag goes out before the stream waits on it
+            yield* flush();
+            yield* emitParts(await parts);
+          } else {
+            yield* emitParts(parts);
+          }
+        } else if (token.type === 'end') {
+          const parts = endTag(token);
+          if (parts instanceof Promise) {
+            yield* flush();
+            yield* emitParts(await parts);
+          } else {
+            yield* emitParts(parts);
+          }
+        } else {
+          out += other(token);
+        }
+      }
+
+      yield* flush();
       if (done) break;
     }
   } finally {
     reader.releaseLock();
   }
 
+  if (contain) out += closeWhatIsOpen();
+  yield* flush();
+
   const trailing = await options.onEnd?.();
   if (trailing !== undefined) {
     yield* emit(trailing);
   }
 
-  /**
-   * Consumes as much of the buffer as can be interpreted unambiguously, yielding output.
-   * Returns whatever tail must wait for more input (a partial tag, or the start of what might
-   * be a raw-text end sequence).
-   */
-  async function* consume(
-    text: string,
-    isFinal: boolean,
-  ): AsyncGenerator<Uint8Array, { remainder: string; rawTextElement: string | null }> {
-    let index = 0;
+  function* flush(): Generator<Uint8Array> {
+    if (out) {
+      yield encoder.encode(out);
+      out = '';
+    }
+  }
 
-    for (;;) {
-      if (rawTextElement) {
-        const closeIndex = findRawTextEnd(text, index, rawTextElement);
-
-        if (closeIndex === -1) {
-          if (isFinal) {
-            yield* emitText(text.slice(index));
-            return { remainder: '', rawTextElement };
-          }
-          // hold back enough characters that a split end-tag sequence stays reassemblable
-          const safeEnd = text.length - (rawTextElement.length + 3);
-          if (safeEnd > index) {
-            yield* emitText(text.slice(index, safeEnd));
-            index = safeEnd;
-          }
-          return { remainder: text.slice(index), rawTextElement };
-        }
-
-        if (closeIndex > index) {
-          yield* emitText(text.slice(index, closeIndex));
-        }
-        index = closeIndex;
-        rawTextElement = null;
-      }
-
-      const tagStart = text.indexOf('<', index);
-
-      if (tagStart === -1) {
-        yield* emitText(text.slice(index));
-        return { remainder: '', rawTextElement };
-      }
-
-      if (tagStart > index) {
-        yield* emitText(text.slice(index, tagStart));
-        index = tagStart;
-      }
-
-      const token = scanToken(text, tagStart);
-
-      if (!token) {
-        if (isFinal) {
-          // an unterminated tag at end of input is emitted verbatim rather than swallowed
-          yield* emitText(text.slice(index));
-          return { remainder: '', rawTextElement };
-        }
-        return { remainder: text.slice(index), rawTextElement };
-      }
-
-      const raw = text.slice(tagStart, token.end);
-      index = token.end;
-
-      switch (token.kind) {
-        case 'doctype':
-          if (!options.stripDoctype) yield* emitText(raw);
-          break;
-
-        case 'comment':
-        case 'bogus':
-          yield* emitText(raw);
-          break;
-
-        case 'start': {
-          yield* emitStartTag(token, raw);
-          if (!token.selfClosing && RAW_TEXT_ELEMENTS.has(token.name)) {
-            rawTextElement = token.name;
-          }
-          break;
-        }
-
-        case 'end': {
-          yield* emitEndTag(token, raw);
-          break;
-        }
+  async function* emitParts(parts: Part[]): AsyncGenerator<Uint8Array> {
+    for (const part of parts) {
+      if (typeof part === 'string') {
+        out += part;
+      } else {
+        yield* flush();
+        yield* emit(part);
       }
     }
   }
 
-  async function* emitStartTag(token: Token, raw: string): AsyncGenerator<Uint8Array> {
-    // the wildcard handler runs first, so element-specific handlers see (and can override) its
-    // work rather than racing it
-    const elementHandlers = [options.handlers['*']?.element, options.handlers[token.name]?.element].filter(
-      (element) => element !== undefined,
-    );
+  function other(token: Exclude<Token, { type: 'start' | 'end' }>): string {
+    switch (token.type) {
+      case 'text':
+        if (droppingRawText) return '';
+        if (escapingRest) return escapeText(token.raw);
+        // A literal `<` in text is next to whatever is written after it — and what is written after it
+        // is not always what followed it, once something between was dropped: `<` and a dropped
+        // `</body>` and `x` would be `<x`, a tag. As `&lt;` it is the same text, and next to nothing.
+        if (contain && (token.state === 'data' || token.state === 'rcdata')) return token.raw.replaceAll('<', '&lt;');
+        return token.raw;
+      case 'cdata':
+        // as text, which reads the same whether or not the browser takes it for a CDATA section
+        return contain ? escapeText(token.text) : token.raw;
+      case 'comment':
+        // `-->` closes a comment from any state the input can end it in
+        return token.complete || !contain ? token.raw : `${token.raw}-->`;
+      case 'bogus':
+        return contain ? canonicalComment(token.data) : token.raw;
+      case 'doctype':
+        return options.stripDoctype ? '' : token.raw;
+      case 'nothing':
+        return contain ? '' : token.raw;
+      case 'unterminated':
+        // the browser drops a tag the input ended inside; written out, it would swallow
+        // whatever is appended after it
+        return '';
+    }
+  }
 
-    if (elementHandlers.length === 0) {
-      yield* emitText(raw);
-      return;
+  function startTag(token: Extract<Token, { type: 'start' }>): Part[] | Promise<Part[]> {
+    const plan = tree.planStart(token.name);
+    const parts: Part[] = [];
+    if (contain && plan.closers.length) parts.push(plan.closers.join(''));
+
+    if (contain && plan.drop) {
+      parts.push(plan.replacement ?? blockedMarker(plan.name));
+      return parts;
     }
 
-    const originalName = token.name;
-    const before: Injection[] = [];
-    const prepend: Injection[] = [];
-    let dirty = false;
-    let name = token.name;
-    const attributes = token.attributes;
+    const html = plan.foreign === null;
+    if (contain && html && plan.name === 'noscript') {
+      // Raw text with scripting on and markup with it off: either way it shows nothing with
+      // scripting on, which is how fragment markup is always parsed. Dropped whole.
+      parts.push(blockedMarker('noscript'));
+      tokenizer.switchTo('rawtext', 'noscript');
+      droppingRawText = true;
+      return parts;
+    }
 
-    const tag: StartTag = {
-      get tagName() {
-        return name;
-      },
-      set tagName(value: string) {
-        name = value.toLowerCase();
-        dirty = true;
-      },
-      selfClosing: token.selfClosing,
-      get attributeNames() {
-        return attributes.map((attribute) => attribute.name);
-      },
-      getAttribute(attributeName: string) {
-        return attributes.find((attribute) => attribute.name === attributeName.toLowerCase())?.value ?? null;
-      },
-      setAttribute(attributeName: string, value: string) {
-        const lowercased = attributeName.toLowerCase();
-        const existing = attributes.find((attribute) => attribute.name === lowercased);
-        if (existing) {
-          existing.value = value;
-        } else {
-          attributes.push({ name: lowercased, rawName: attributeName, value });
-        }
-        dirty = true;
-      },
-      removeAttribute(attributeName: string) {
-        const lowercased = attributeName.toLowerCase();
-        const at = attributes.findIndex((attribute) => attribute.name === lowercased);
-        if (at !== -1) {
-          attributes.splice(at, 1);
-          dirty = true;
-        }
-      },
-      before(content: Injection) {
-        before.push(content);
-      },
-      prepend(content: Injection) {
-        prepend.push(content);
-      },
-    };
+    const tag = new Tag(plan.name, token, contain);
+    const elementHandlers = [options.handlers['*']?.element, options.handlers[plan.name]?.element];
 
+    let pending: Promise<void> | undefined;
     for (const element of elementHandlers) {
+      if (!element) continue;
+      if (pending) {
+        pending = pending.then(() => element(tag));
+        continue;
+      }
       // awaited only when it is a promise: this runs for every element of every document, and an
       // unconditional await would be a microtask per tag
-      const pending = element(tag);
-      if (pending) await pending;
+      const result = element(tag);
+      if (result) pending = result;
     }
 
-    if (name !== originalName && !token.selfClosing && !VOID_ELEMENTS.has(originalName)) {
-      openRenames.push({ original: originalName, renamed: name });
-    }
+    const finish = (): Part[] => {
+      if (contain && html && plan.name === 'plaintext') {
+        // Everything after it is text: written as escaped text in a `<pre>`, which reads the same
+        // everywhere and leaves the document after the fragment as markup.
+        tag.tagName = 'pre';
+        tag.block('plaintext');
+      }
 
-    for (const content of before) {
-      yield* emit(content);
-    }
+      const name = tag.tagName;
+      if (name !== plan.name && !token.selfClosing && !VOID_ELEMENTS.has(plan.name)) {
+        openRenames.push({ original: plan.name, renamed: name });
+      }
 
-    yield* emitText(dirty ? serializeStartTag(name, attributes, token.selfClosing) : raw);
+      const content = tree.pushStart(plan, name, token.selfClosing, (attribute) => tag.getAttribute(attribute));
+      if (contain && html && plan.name === 'plaintext') {
+        tokenizer.switchTo('plaintext', 'plaintext');
+        escapingRest = true;
+      } else if (content) {
+        tokenizer.switchTo(content, name);
+      }
 
-    for (const content of prepend) {
-      yield* emit(content);
-    }
+      parts.push(...tag.beforeContent, tag.serialize(token.raw), ...tag.prependContent);
+      return parts;
+    };
+
+    return pending ? pending.then(finish) : finish();
   }
 
-  async function* emitEndTag(token: Token, raw: string): AsyncGenerator<Uint8Array> {
-    const handler = options.handlers[token.name];
+  function endTag(token: Extract<Token, { type: 'end' }>): Part[] | Promise<Part[]> {
+    if (droppingRawText) {
+      // the `</noscript>` that ended the dropped content
+      droppingRawText = false;
+      return [];
+    }
 
     // close the innermost open element that was renamed under this name, discarding any renames
     // nested inside it (their end tags were implied, or never arrived)
@@ -344,12 +327,18 @@ async function* rewrite(
     if (renameIndex !== -1) {
       openRenames.length = renameIndex;
     }
+    const name = renamedTo ?? token.name;
 
-    const text = renamedTo ? `</${renamedTo}>` : raw;
+    const plan = tree.planEnd(name);
+    const parts: Part[] = [];
+    if (contain && plan.closers.length) parts.push(plan.closers.join(''));
+    if (contain && plan.drop) return parts;
 
+    const text = renamedTo ? `</${renamedTo}>` : token.raw;
+    const handler = options.handlers[token.name];
     if (!handler?.endTag) {
-      yield* emitText(text);
-      return;
+      parts.push(text);
+      return parts;
     }
 
     const before: Injection[] = [];
@@ -359,18 +348,159 @@ async function* rewrite(
         before.push(content);
       },
     });
-    if (pending) await pending;
-
-    for (const content of before) {
-      yield* emit(content);
-    }
-    yield* emitText(text);
+    const finish = (): Part[] => {
+      parts.push(...before, text);
+      return parts;
+    };
+    return pending ? pending.then(finish) : finish();
   }
+
+  /** What a fragment the input ended inside of needs, so nothing after it is read as part of it. */
+  function closeWhatIsOpen(): string {
+    let closing = '';
+    const { state, tagName, scriptState } = tokenizer.contentState;
+    if (!droppingRawText && !escapingRest && (state === 'rcdata' || state === 'rawtext' || state === 'script')) {
+      // inside `<!--` in a script, `</script>` ends the element only once `-->` has ended the escape
+      if (state === 'script' && scriptState !== 'data') closing += '-->';
+      closing += `</${tagName}>`;
+      tree.popRawText();
+    }
+    return closing + tree.closeAll().join('');
+  }
+}
+
+class Tag implements StartTag {
+  readonly beforeContent: Injection[] = [];
+  readonly prependContent: Injection[] = [];
+  readonly selfClosing: boolean;
+  private name: string;
+  private dirty: boolean;
+  private readonly attributes: Attribute[];
+  /** Attributes removed because their value could not be read for certain. */
+  private readonly blocked: string[] = [];
+
+  constructor(
+    name: string,
+    token: { name: string; selfClosing: boolean; attributes: RawAttribute[] },
+    private readonly contain: boolean,
+  ) {
+    this.name = name;
+    // `<image>` is written as the `<img>` the browser makes of it, so the transforms see an img
+    this.dirty = name !== token.name;
+    this.selfClosing = token.selfClosing;
+    this.attributes = token.attributes.map((attribute) => ({ ...attribute, modified: false }));
+  }
+
+  get tagName(): string {
+    return this.name;
+  }
+
+  set tagName(value: string) {
+    this.name = value.toLowerCase();
+    this.dirty = true;
+  }
+
+  get attributeNames(): string[] {
+    return this.attributes.map((attribute) => attribute.name);
+  }
+
+  getAttribute(attributeName: string): string | null {
+    const lowercased = attributeName.toLowerCase();
+    const attribute = this.attributes.find((candidate) => candidate.name === lowercased);
+    if (!attribute) return null;
+    if (attribute.modified || attribute.value !== undefined) return attribute.value ?? null;
+    if (attribute.raw === null) return null;
+
+    const decoded = decodeAttributeValue(attribute.raw);
+    if (decoded.uncertain && this.contain) {
+      // a reference the rewriter cannot decode, in a value it is about to judge: the browser
+      // might read it otherwise, so it is removed rather than guessed at
+      this.removeAttribute(lowercased);
+      this.block(lowercased);
+      return null;
+    }
+    attribute.value = decoded.value;
+    return decoded.value;
+  }
+
+  setAttribute(attributeName: string, value: string): void {
+    const lowercased = attributeName.toLowerCase();
+    const existing = this.attributes.find((attribute) => attribute.name === lowercased);
+    if (existing) {
+      existing.value = value;
+      existing.modified = true;
+    } else {
+      this.attributes.push({ name: lowercased, rawName: attributeName, raw: null, value, modified: true });
+    }
+    this.dirty = true;
+  }
+
+  removeAttribute(attributeName: string): void {
+    const lowercased = attributeName.toLowerCase();
+    const at = this.attributes.findIndex((attribute) => attribute.name === lowercased);
+    if (at !== -1) {
+      this.attributes.splice(at, 1);
+      this.dirty = true;
+    }
+  }
+
+  before(content: Injection): void {
+    this.beforeContent.push(content);
+  }
+
+  prepend(content: Injection): void {
+    this.prependContent.push(content);
+  }
+
+  /** Names a removed attribute in `data-braid-blocked`, alongside whatever a handler puts there. */
+  block(reason: string): void {
+    this.blocked.push(reason);
+    this.dirty = true;
+  }
+
+  serialize(raw: string): string {
+    if (!this.dirty) return raw;
+    let blocked = this.blocked.join(' ');
+    let markup = `<${this.name}`;
+    for (const attribute of this.attributes) {
+      if (blocked && attribute.name === 'data-braid-blocked') {
+        const value = attribute.modified ? (attribute.value ?? '') : (attribute.raw ?? '');
+        markup += ` ${attribute.rawName}="${escapeAttributeValue(value ? `${value} ${blocked}` : blocked)}"`;
+        blocked = '';
+        continue;
+      }
+      if (attribute.modified) {
+        markup += ` ${attribute.rawName}="${escapeAttributeValue(attribute.value ?? '')}"`;
+      } else if (attribute.raw === null) {
+        markup += ` ${attribute.rawName}`;
+      } else {
+        // as authored, references and all: quoted, which reads the same as however it was quoted
+        markup += ` ${attribute.rawName}="${attribute.raw.replaceAll('"', '&quot;')}"`;
+      }
+    }
+    if (blocked) markup += ` data-braid-blocked="${escapeAttributeValue(blocked)}"`;
+    return `${markup}${this.selfClosing ? '/>' : '>'}`;
+  }
+}
+
+/** Marks where a fragment's element was dropped, in a comment: the one node every parser mode inserts. */
+function blockedMarker(name: string): string {
+  return `<!--braid-blocked ${name.replaceAll('-', '')}-->`;
+}
+
+/** A bogus comment, written as a real one with the same data. */
+function canonicalComment(data: string): string {
+  // `<!-->` and `<!--->` would end it at once
+  return `<!--${data.startsWith('>') || data.startsWith('-') ? ' ' : ''}${data}-->`;
+}
+
+function escapeText(text: string): string {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;');
 }
 
 async function* emit(content: Injection): AsyncGenerator<Uint8Array> {
   if (typeof content === 'string') {
-    yield* emitText(content);
+    if (content) yield encoder.encode(content);
     return;
   }
 
@@ -386,211 +516,8 @@ async function* emit(content: Injection): AsyncGenerator<Uint8Array> {
   }
 }
 
-function* emitText(text: string): Generator<Uint8Array> {
-  if (text) yield encoder.encode(text);
-}
-
-/**
- * Scans one token starting at `start` (which must point at `<`).
- *
- * @returns the token, or null when the buffer ends mid-token and more input is needed.
- */
-function scanToken(text: string, start: number): Token | null {
-  const length = text.length;
-  let index = start + 1;
-
-  if (index >= length) return null;
-
-  // markup declarations: comments, doctypes, CDATA
-  if (text[index] === '!') {
-    if (text.startsWith('<!--', start)) {
-      const close = text.indexOf('-->', start + 4);
-      return close === -1 ? null : { kind: 'comment', end: close + 3, name: '', selfClosing: false, attributes: [] };
-    }
-
-    const close = findDeclarationEnd(text, start + 2);
-    if (close === -1) return null;
-    const isDoctype = /^<!doctype/i.test(text.slice(start, start + 9));
-    return { kind: isDoctype ? 'doctype' : 'bogus', end: close, name: '', selfClosing: false, attributes: [] };
-  }
-
-  if (text[index] === '?') {
-    const close = text.indexOf('>', index);
-    return close === -1 ? null : { kind: 'bogus', end: close + 1, name: '', selfClosing: false, attributes: [] };
-  }
-
-  const isEndTag = text[index] === '/';
-  if (isEndTag) index++;
-
-  const nameStart = index;
-  while (index < length && isTagNameChar(text[index])) index++;
-
-  // Running out of buffer is "incomplete", never "not a tag" — the name may continue in the
-  // next chunk, and `</` at a chunk boundary must not be mistaken for literal text.
-  if (index >= length) return null;
-
-  // `<` not followed by a tag name is literal text (`a < b`), not a tag
-  if (index === nameStart) {
-    return { kind: 'bogus', end: start + 1, name: '', selfClosing: false, attributes: [] };
-  }
-
-  const name = text.slice(nameStart, index).toLowerCase();
-  const attributes: ParsedAttribute[] = [];
-  let selfClosing = false;
-
-  for (;;) {
-    while (index < length && isWhitespace(text[index])) index++;
-    if (index >= length) return null;
-
-    if (text[index] === '>') {
-      return { kind: isEndTag ? 'end' : 'start', end: index + 1, name, selfClosing, attributes };
-    }
-
-    if (text[index] === '/') {
-      if (index + 1 >= length) return null;
-      if (text[index + 1] === '>') {
-        selfClosing = true;
-        return { kind: isEndTag ? 'end' : 'start', end: index + 2, name, selfClosing, attributes };
-      }
-      index++;
-      continue;
-    }
-
-    // Attribute names end where the HTML tokenizer ends them — at `/` too, which separates
-    // attributes — and a leading `=` is the name's first character, not a separator. A name split
-    // differently here than in the browser is an attribute the transforms never see.
-    const attributeNameStart = index;
-    if (text[index] === '=') index++;
-    while (
-      index < length &&
-      !isWhitespace(text[index]) &&
-      text[index] !== '=' &&
-      text[index] !== '>' &&
-      text[index] !== '/'
-    ) {
-      index++;
-    }
-    if (index >= length) return null;
-
-    const rawName = text.slice(attributeNameStart, index);
-    if (!rawName) {
-      // defensive: no progress would loop forever
-      index++;
-      continue;
-    }
-
-    let cursor = index;
-    while (cursor < length && isWhitespace(text[cursor])) cursor++;
-    if (cursor >= length) return null;
-
-    let value: string | null = null;
-
-    if (text[cursor] === '=') {
-      cursor++;
-      while (cursor < length && isWhitespace(text[cursor])) cursor++;
-      if (cursor >= length) return null;
-
-      const quote = text[cursor];
-      if (quote === '"' || quote === "'") {
-        const close = text.indexOf(quote, cursor + 1);
-        if (close === -1) return null;
-        value = decodeAttributeValue(text.slice(cursor + 1, close));
-        cursor = close + 1;
-      } else {
-        const valueStart = cursor;
-        while (cursor < length && !isWhitespace(text[cursor]) && text[cursor] !== '>') cursor++;
-        if (cursor >= length) return null;
-        value = decodeAttributeValue(text.slice(valueStart, cursor));
-      }
-      index = cursor;
-    }
-
-    // The browser keeps the first of a repeated attribute and drops the rest, so the same goes
-    // here: otherwise removing the first would promote a second the transforms never looked at.
-    const attributeName = rawName.toLowerCase();
-    if (!attributes.some((attribute) => attribute.name === attributeName)) {
-      attributes.push({ name: attributeName, rawName, value });
-    }
-  }
-}
-
-/** Finds the end of a markup declaration, honoring quoted strings (doctypes may contain `>`). */
-function findDeclarationEnd(text: string, from: number): number {
-  let index = from;
-  let quote: string | null = null;
-
-  while (index < text.length) {
-    const char = text[index];
-    if (quote) {
-      if (char === quote) quote = null;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === '>') {
-      return index + 1;
-    }
-    index++;
-  }
-  return -1;
-}
-
-/**
- * Finds the start of a raw-text element's end tag (`</script`, `</style`, …), which is the only
- * markup recognized inside such an element.
- */
-function findRawTextEnd(text: string, from: number, tagName: string): number {
-  const needle = `</${tagName}`;
-  const haystack = text.toLowerCase();
-  let index = from;
-
-  for (;;) {
-    const found = haystack.indexOf(needle, index);
-    if (found === -1) return -1;
-
-    const after = text[found + needle.length];
-    // the end tag is only terminated by whitespace, `/`, `>` — `</scriptfoo` is raw text
-    if (after === undefined) return -1;
-    if (isWhitespace(after) || after === '/' || after === '>') return found;
-
-    index = found + needle.length;
-  }
-}
-
-function serializeStartTag(name: string, attributes: ParsedAttribute[], selfClosing: boolean): string {
-  const serializedAttributes = attributes
-    .map((attribute) =>
-      attribute.value === null ? ` ${attribute.rawName}` : ` ${attribute.rawName}="${escapeAttributeValue(attribute.value)}"`,
-    )
-    .join('');
-
-  return `<${name}${serializedAttributes}${selfClosing ? '/>' : '>'}`;
-}
-
-/**
- * Decodes the handful of entities that realistically appear in the attributes Braid reads
- * (`name`, `type`, `rel`). Full entity decoding is deliberately out of scope: this is a
- * rewriter, and every value it round-trips it also re-encodes.
- */
-function decodeAttributeValue(value: string): string {
-  if (!value.includes('&')) return value;
-  return value
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
-    .replaceAll('&apos;', "'")
-    .replaceAll('&amp;', '&');
-}
-
 function escapeAttributeValue(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
-}
-
-function isWhitespace(char: string): boolean {
-  return char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '\f';
-}
-
-function isTagNameChar(char: string): boolean {
-  return /[a-zA-Z0-9:_.-]/.test(char);
 }
 
 /** Adapts an async generator of chunks into a ReadableStream. */
@@ -625,3 +552,4 @@ export function concatStreams(parts: Injection[]): ReadableStream<Uint8Array> {
     })(),
   );
 }
+

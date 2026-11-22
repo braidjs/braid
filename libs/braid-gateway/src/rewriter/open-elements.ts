@@ -1,0 +1,687 @@
+/**
+ * The part of HTML tree construction a rewriter has to follow, and the canonical output that keeps
+ * it followable.
+ *
+ * The tokenizer's state after a start tag is the tree's decision: `<style>` opens raw text as an
+ * HTML element and nothing as an SVG one, `<![CDATA[` is a section in foreign content and a bogus
+ * comment outside it, and whether an element is HTML or foreign depends on everything open around
+ * it. A rewriter that gets any of that wrong reads markup the browser reads as text, or text the
+ * browser reads as markup — a tag no transform saw.
+ *
+ * This tracks the stack of open elements with each one's namespace, and for a fragment
+ * (`contain`) it does more than follow: it writes what it decided into the output, so the browser
+ * has nothing left to recover from and so reaches the same decision whatever its error recovery is.
+ *
+ * - **Foreign content is closed explicitly.** A tag that breaks out of SVG or MathML (`<div>`,
+ *   `<img>`, `<font>`…), an end tag for an element below foreign ones, the end of the fragment: each
+ *   first gets an end tag for every foreign element it would have popped, innermost first. Inside an
+ *   HTML island in foreign content (`<foreignObject>` and the like), the same goes for every
+ *   element an implied end tag or misnesting would close: closed by its own end tag, so the
+ *   adoption agency and formatting-element reconstruction — which could put an HTML element on top
+ *   of an integration point the rewriter thinks is current — never run there. Table structure there
+ *   is dropped, since a table mode can clear the stack through foreign content.
+ * - **Where browsers disagree, the construct is dropped.** Customizable `<select>` parses its content
+ *   as in body; older parsers ignore most of it, raw-text elements included. Inside one, raw-text
+ *   elements other than `<script>` and `<textarea>`, and SVG and MathML, are dropped, and what would
+ *   close it is written as `</select>`. A `<template>` whose first child is `<col>` ignores all but
+ *   `<col>` and `<template>`: everything else is dropped. `<noscript>` (raw text with scripting on,
+ *   markup without), `<frameset>` and `<frame>` are dropped; `<plaintext>` becomes a `<pre>`.
+ * - **A fragment cannot close what it did not open.** `</template>` and `</braid-document>`, and the
+ *   other elements the gateway wraps a fragment in, are dropped unless they match an element the
+ *   fragment opened; at its end, every template, select and foreign element it left open is closed.
+ *
+ * What this does not model — implied end tags outside foreign content, the adoption agency, foster
+ * parenting — can change which HTML element is current, but never whether it is HTML, whether a tag
+ * opens raw text, or which templates are open, which is all that decides how the rest is read.
+ */
+
+export type Namespace = 'html' | 'svg' | 'math';
+
+/** Whether an element is an integration point, where HTML rules apply again inside foreign content. */
+const enum Integration {
+  None = 0,
+  /** SVG `foreignObject`, `desc`, `title`; MathML `annotation-xml` with an HTML encoding. */
+  Html = 1,
+  /** MathML `mi`, `mo`, `mn`, `ms`, `mtext`: start tags but `mglyph`/`malignmark` are HTML. */
+  MathText = 2,
+}
+
+/** How a `<template>`'s content is parsed: decided by its first start tag. */
+type TemplateMode = 'undecided' | 'body' | 'table' | 'colgroup' | 'tablebody' | 'row';
+
+interface Entry {
+  name: string;
+  namespace: Namespace;
+  integration: Integration;
+  templateMode?: TemplateMode;
+}
+
+export type ContentState = 'rcdata' | 'rawtext' | 'script' | 'plaintext';
+
+export interface StartPlan {
+  /** End tags to write before this tag. */
+  closers: string[];
+  /** Drop the tag: the browser would not see it the same way everywhere. */
+  drop: boolean;
+  /** Written in place of the tag (`</select>` for a `<select>` inside one). */
+  replacement?: string;
+  /** Whether HTML rules or foreign-content rules process the tag. */
+  foreign: Namespace | null;
+  /** The name the browser gives the element (`image` becomes `img`). */
+  name: string;
+}
+
+export interface EndPlan {
+  closers: string[];
+  drop: boolean;
+}
+
+/** Elements the gateway wraps a fragment in: a fragment's end tag for one must match its own. */
+const HOST_ELEMENTS = new Set([
+  'template',
+  'braid-document',
+  'fragment-slot',
+  'braid-late',
+  'braid-late-end',
+  'slot',
+  'body',
+  'html',
+  'head',
+]);
+
+const VOID = new Set([
+  'area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta',
+  'param', 'source', 'track', 'wbr',
+]);
+
+const RAW_TEXT: Record<string, ContentState> = {
+  script: 'script',
+  style: 'rawtext',
+  xmp: 'rawtext',
+  iframe: 'rawtext',
+  noembed: 'rawtext',
+  noframes: 'rawtext',
+  noscript: 'rawtext', // with scripting on, which is every context fragment markup is parsed in
+  textarea: 'rcdata',
+  title: 'rcdata',
+  plaintext: 'plaintext',
+};
+
+/** Start tags that leave foreign content (`font` only with color/face/size; here, always). */
+const BREAKOUT = new Set([
+  'b', 'big', 'blockquote', 'body', 'br', 'center', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'embed', 'h1', 'h2', 'h3',
+  'h4', 'h5', 'h6', 'head', 'hr', 'i', 'img', 'li', 'listing', 'menu', 'meta', 'nobr', 'ol', 'p', 'pre', 'ruby', 's',
+  'small', 'span', 'strong', 'strike', 'sub', 'sup', 'table', 'tt', 'u', 'ul', 'var', 'font',
+]);
+
+const SPECIAL = new Set([
+  'address', 'applet', 'area', 'article', 'aside', 'base', 'basefont', 'bgsound', 'blockquote', 'body', 'br', 'button',
+  'caption', 'center', 'col', 'colgroup', 'dd', 'details', 'dir', 'div', 'dl', 'dt', 'embed', 'fieldset', 'figcaption',
+  'figure', 'footer', 'form', 'frame', 'frameset', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr',
+  'html', 'iframe', 'img', 'input', 'keygen', 'li', 'link', 'listing', 'main', 'marquee', 'menu', 'meta', 'nav',
+  'noembed', 'noframes', 'noscript', 'object', 'ol', 'p', 'param', 'plaintext', 'pre', 'script', 'search', 'section',
+  'select', 'source', 'style', 'summary', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'title',
+  'tr', 'track', 'ul', 'wbr', 'xmp',
+]);
+
+const SCOPE_BOUNDARIES = new Set(['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object', 'template']);
+
+const TABLE_STRUCTURE = new Set(['caption', 'col', 'colgroup', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'table']);
+
+const FORMATTING = new Set(['a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 's', 'small', 'strike', 'strong', 'tt', 'u']);
+
+/** Start tags that close an open `<p>` first. */
+const CLOSES_P = new Set([
+  'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset',
+  'figcaption', 'figure', 'footer', 'header', 'hgroup', 'main', 'menu', 'nav', 'ol', 'p', 'search', 'section', 'summary',
+  'ul', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'listing', 'form', 'hr', 'xmp', 'table',
+]);
+
+const HEADINGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
+/** End tags closed when in scope, as the in-body rules list them. */
+const SCOPED_END = new Set([
+  'address', 'article', 'aside', 'blockquote', 'button', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset',
+  'figcaption', 'figure', 'footer', 'header', 'hgroup', 'listing', 'main', 'menu', 'nav', 'ol', 'pre', 'search',
+  'section', 'summary', 'ul', 'dd', 'dt', 'applet', 'marquee', 'object', 'form',
+]);
+
+/** Elements that put a marker in the list of active formatting elements, besides cells, captions and templates. */
+const MARKERS = new Set(['applet', 'object', 'marquee']);
+
+/** Elements table structure clears the stack back to, or closes. */
+const TABLE_ELEMENTS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'caption']);
+
+/** Elements a fragment's end closes, with everything above them (see {@link OpenElements.closeAll}). */
+const CLOSED_AT_END = new Set(['template', 'select', 'applet', 'object', 'marquee', 'td', 'th', 'caption']);
+
+const IMPLIED_END = new Set(['dd', 'dt', 'li', 'optgroup', 'option', 'p', 'rb', 'rp', 'rt', 'rtc']);
+
+/** Start tags processed as in head inside a template, which leave its mode undecided. */
+const TEMPLATE_HEAD_TAGS = new Set([
+  'base', 'basefont', 'bgsound', 'link', 'meta', 'noframes', 'script', 'style', 'template', 'title',
+]);
+
+type Mode = 'body' | 'select' | 'select-in-table' | 'colgroup' | 'colgroup-template' | 'table' | 'tablebody' | 'row' | 'cell' | 'caption' | 'template';
+
+const ROOT: Entry = { name: '#root', namespace: 'html', integration: Integration.None };
+
+export class OpenElements {
+  private readonly stack: Entry[] = [ROOT];
+
+  /**
+   * @param contain Fragment markup: write the canonical output described above, and keep it inside
+   *   the element it is placed in. Off for a shell, which is trusted and whose markup is left as is.
+   */
+  constructor(private readonly contain: boolean) {}
+
+  private get current(): Entry {
+    return this.stack[this.stack.length - 1];
+  }
+
+  /** Whether `<![CDATA[` opens a CDATA section: the current node is not HTML. */
+  cdataAllowed(): boolean {
+    return this.current.namespace !== 'html';
+  }
+
+  /** Decides how a start tag is processed, popping what it implicitly closes. */
+  planStart(name: string): StartPlan {
+    const closers: string[] = [];
+    let tagName = name;
+
+    // foreign content: a breakout tag pops back to HTML (or an integration point) first
+    for (;;) {
+      const current = this.current;
+      if (this.htmlRulesFor(current, tagName)) break;
+      if (!BREAKOUT.has(tagName)) {
+        return { closers, drop: false, foreign: current.namespace, name: tagName };
+      }
+      while (this.isPlainForeign(this.current)) {
+        closers.push(this.popWithCloser());
+      }
+    }
+
+    if (tagName === 'image') tagName = 'img';
+    const plan = (drop: boolean, replacement?: string): StartPlan => ({
+      closers,
+      drop,
+      ...(replacement === undefined ? {} : { replacement }),
+      foreign: null,
+      name: tagName,
+    });
+
+    let mode = this.mode();
+    if (mode === 'colgroup' && tagName !== 'col' && tagName !== 'template') {
+      // a colgroup ends at anything but a col; the tag is reprocessed in table mode
+      this.stack.pop();
+      mode = this.mode();
+    }
+
+    if (!this.contain) return plan(false);
+
+    if (tagName === 'frameset' || tagName === 'frame') return plan(true);
+
+    if (mode === 'colgroup-template') {
+      return plan(tagName !== 'col' && tagName !== 'template');
+    }
+
+    if (mode === 'select' || mode === 'select-in-table') {
+      if (tagName === 'select') {
+        this.popUntil('select');
+        return plan(true, '</select>');
+      }
+      const closesSelect =
+        tagName === 'input' ||
+        tagName === 'keygen' ||
+        tagName === 'textarea' ||
+        (mode === 'select-in-table' && TABLE_STRUCTURE.has(tagName) && tagName !== 'col' && tagName !== 'colgroup');
+      if (closesSelect) {
+        closers.push('</select>');
+        this.popUntil('select');
+        return this.continueHtmlStart(tagName, closers);
+      }
+      if (tagName === 'svg' || tagName === 'math') return plan(true);
+      if (tagName in RAW_TEXT && tagName !== 'script') return plan(true);
+      if (TABLE_STRUCTURE.has(tagName) || MARKERS.has(tagName)) return plan(true);
+      return plan(false);
+    }
+
+    return this.continueHtmlStart(tagName, closers);
+  }
+
+  /** An HTML start tag outside select and column-group templates, in a fragment. */
+  private continueHtmlStart(tagName: string, closers: string[]): StartPlan {
+    const plan = (drop: boolean): StartPlan => ({ closers, drop, foreign: null, name: tagName });
+    if (!this.inForeignContent()) {
+      if (TABLE_STRUCTURE.has(tagName)) closers.push(...this.closeMarkersAboveTable());
+      return plan(false);
+    }
+
+    // An HTML island inside foreign content: close explicitly what the in-body rules would close
+    // implicitly, and drop what a table mode would clear the stack through.
+    if (TABLE_STRUCTURE.has(tagName) || tagName === 'select') return plan(true);
+
+    if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
+      if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
+        const names = tagName === 'li' ? ['li'] : ['dd', 'dt'];
+        for (let index = this.stack.length - 1; index > 0; index--) {
+          const entry = this.stack[index];
+          if (entry.namespace === 'html' && names.includes(entry.name)) {
+            closers.push(...this.closeThrough(index));
+            break;
+          }
+          if (this.isSpecial(entry) && !(entry.namespace === 'html' && ['address', 'div', 'p'].includes(entry.name))) break;
+        }
+      }
+      const p = this.inScope((entry) => entry.name === 'p', 'button');
+      if (p !== -1) closers.push(...this.closeThrough(p));
+      if (HEADINGS.has(tagName) && this.current.namespace === 'html' && HEADINGS.has(this.current.name)) {
+        closers.push(this.popWithCloser());
+      }
+      return plan(false);
+    }
+
+    if (tagName === 'button' || tagName === 'a' || tagName === 'nobr') {
+      const open = this.inScope((entry) => entry.name === tagName);
+      if (open !== -1) closers.push(...this.closeThrough(open));
+      return plan(false);
+    }
+
+    if (tagName === 'option' || tagName === 'optgroup') {
+      if (this.current.namespace === 'html' && this.current.name === 'option') closers.push(this.popWithCloser());
+      return plan(false);
+    }
+
+    if (tagName === 'rb' || tagName === 'rtc' || tagName === 'rp' || tagName === 'rt') {
+      if (this.inScope((entry) => entry.name === 'ruby') !== -1) {
+        const except = tagName === 'rp' || tagName === 'rt' ? 'rtc' : '';
+        while (
+          this.current.namespace === 'html' &&
+          IMPLIED_END.has(this.current.name) &&
+          this.current.name !== except
+        ) {
+          closers.push(this.popWithCloser());
+        }
+      }
+      return plan(false);
+    }
+
+    return plan(false);
+  }
+
+  /**
+   * Records a start tag the plan let through, under the name it was finally written with (a
+   * handler may have renamed it), and says which content state follows it.
+   */
+  pushStart(plan: StartPlan, name: string, selfClosing: boolean, attribute: (name: string) => string | null): ContentState | null {
+    if (plan.foreign) {
+      if (!selfClosing) this.stack.push(foreignEntry(plan.foreign, name, attribute));
+      return null;
+    }
+
+    if (name === 'svg' || name === 'math') {
+      if (!selfClosing) this.stack.push(foreignEntry(name, name, attribute));
+      this.decideTemplateMode(name);
+      return null;
+    }
+
+    this.decideTemplateMode(name);
+    if (VOID.has(name)) return null;
+
+    // (never inside a select: older parsers ignore most of what is in one, so nothing there closes it)
+    const mode = this.mode();
+    if (!this.inForeignContent() && mode !== 'select' && mode !== 'select-in-table') {
+      this.closeImpliedOutsideForeignContent(name);
+    }
+
+    const entry: Entry = { name, namespace: 'html', integration: Integration.None };
+    if (name === 'template') entry.templateMode = 'undecided';
+    this.stack.push(entry);
+    return RAW_TEXT[name] ?? null;
+  }
+
+  /** A raw-text element's end tag arrived, ending its content. */
+  isRawTextCurrent(name: string): boolean {
+    return this.current.namespace === 'html' && this.current.name === name && name in RAW_TEXT;
+  }
+
+  /** Decides how an end tag is processed, popping what it closes. */
+  planEnd(name: string): EndPlan {
+    const closers: string[] = [];
+    const plan = (drop: boolean): EndPlan => ({ closers, drop });
+
+    if (this.isRawTextCurrent(name)) {
+      this.stack.pop();
+      return plan(false);
+    }
+
+    if (this.current.namespace !== 'html') {
+      if (name === 'br' || name === 'p') {
+        // like a breakout start tag
+        while (this.isPlainForeign(this.current)) {
+          closers.push(this.popWithCloser());
+        }
+      } else {
+        // end tags in foreign content — at an integration point too — close the nearest foreign
+        // element of the name, or are handed to HTML rules at the first HTML element below
+        let index = this.stack.length - 1;
+        for (;;) {
+          if (this.stack[index].name === name) {
+            closers.push(...this.closeThrough(index, true));
+            return plan(false);
+          }
+          index--;
+          if (this.stack[index].namespace === 'html') break;
+        }
+        // One a fragment cannot have: of table structure dropped in foreign content, or of an element
+        // it was placed in. Dropped as it is, rather than after closing the foreign content to reach
+        // HTML rules that would drop it anyway.
+        if (this.contain && this.droppedInForeignContent(name)) return plan(true);
+        closers.push(...this.closeThrough(index + 1));
+      }
+    }
+
+    return this.planHtmlEnd(name, closers);
+  }
+
+  private planHtmlEnd(name: string, closers: string[]): EndPlan {
+    const plan = (drop: boolean): EndPlan => ({ closers, drop });
+
+    if (name === 'template') {
+      const template = this.stack.findLastIndex((entry) => entry.namespace === 'html' && entry.name === 'template');
+      if (template === -1) return plan(this.contain);
+      // each element in it closed by its own end tag, so each clears its own formatting marker
+      if (this.contain) closers.push(...this.closeThrough(template, true));
+      else this.stack.length = template;
+      return plan(false);
+    }
+
+    const mode = this.mode();
+
+    if (mode === 'colgroup-template' && this.contain) return plan(true);
+
+    if (mode === 'select' || mode === 'select-in-table') {
+      if (name === 'select') {
+        const select = this.findOpen('select');
+        if (select === -1) return plan(this.contain);
+        this.stack.length = select;
+        return plan(false);
+      }
+      if (name === 'option' || name === 'optgroup') {
+        if (this.current.namespace === 'html' && this.current.name === name) this.stack.pop();
+        return plan(false);
+      }
+      if (mode === 'select-in-table' && TABLE_STRUCTURE.has(name) && name !== 'col' && name !== 'colgroup') {
+        if (this.contain) closers.push('</select>');
+        this.popUntil('select');
+        return this.planHtmlEnd(name, closers);
+      }
+      // ignored by older parsers, and able to close the select in newer ones
+      if (this.contain) return plan(true);
+    }
+
+    if (this.contain && this.inForeignContent()) {
+      if (TABLE_STRUCTURE.has(name) || name === 'select' || name === 'body' || name === 'html') return plan(true);
+      if (name === 'br') return plan(false);
+
+      let target = -1;
+      if (name === 'p') {
+        target = this.inScope((entry) => entry.name === 'p', 'button');
+        if (target === -1) return plan(false); // an empty <p>, created and closed
+      } else if (name === 'li') {
+        target = this.inScope((entry) => entry.name === 'li', 'list');
+      } else if (HEADINGS.has(name)) {
+        target = this.inScope((entry) => HEADINGS.has(entry.name));
+      } else if (SCOPED_END.has(name) || FORMATTING.has(name)) {
+        target = this.inScope((entry) => entry.name === name);
+      } else {
+        for (let index = this.stack.length - 1; index > 0; index--) {
+          const entry = this.stack[index];
+          if (entry.namespace === 'html' && entry.name === name) {
+            target = index;
+            break;
+          }
+          if (this.isSpecial(entry)) break;
+        }
+      }
+      if (target === -1) return plan(true);
+      closers.push(...this.closeThrough(target, true));
+      return plan(false);
+    }
+
+    // outside foreign content: follow approximately, never past a template, table cell or select
+    if (this.contain && TABLE_STRUCTURE.has(name)) closers.push(...this.closeMarkersAboveTable());
+    const open = this.findOpen(name);
+    if (open === -1) return plan(this.contain && HOST_ELEMENTS.has(name));
+    this.stack.length = open;
+    return plan(false);
+  }
+
+  /**
+   * End tags that close what a fragment left open, at its end: every template, select and foreign
+   * element, every element that puts a marker in the list of active formatting elements, and
+   * whatever is open above the lowest of them.
+   *
+   * The markers matter because the template the fragment is placed in clears that list only back to
+   * the last marker when it closes: a formatting element opened before an `<object>`, `<td>` or
+   * `<caption>` left open would survive it, and be reconstructed around the host's markup after
+   * the fragment — an `<a href>` of the fragment's wrapped around the host's text.
+   */
+  closeAll(): string[] {
+    let lowest = -1;
+    for (let index = 1; index < this.stack.length; index++) {
+      const entry = this.stack[index];
+      if (entry.namespace !== 'html' || CLOSED_AT_END.has(entry.name)) {
+        lowest = index;
+        break;
+      }
+    }
+    if (lowest === -1) return [];
+    return this.closeThrough(lowest);
+  }
+
+  /** Pops the current element after a raw-text element the input ended inside was closed. */
+  popRawText(): void {
+    if (this.current.namespace === 'html' && this.current.name in RAW_TEXT) this.stack.pop();
+  }
+
+  // --- the stack ---
+
+  /** An end tag that, in foreign content, matches nothing a fragment could have opened. */
+  private droppedInForeignContent(name: string): boolean {
+    if (TABLE_STRUCTURE.has(name) || name === 'select') return true;
+    if (!HOST_ELEMENTS.has(name) || name === 'template') return false;
+    return this.findOpen(name) === -1 && !this.stack.some((entry) => entry.namespace === 'html' && entry.name === name);
+  }
+
+  /** A foreign element that is not an integration point: what a breakout pops. */
+  private isPlainForeign(entry: Entry): boolean {
+    return entry.namespace !== 'html' && entry.integration === Integration.None;
+  }
+
+  /** Whether HTML rules process this start tag at this element. */
+  private htmlRulesFor(entry: Entry, tagName: string): boolean {
+    if (entry.namespace === 'html') return true;
+    if (entry.integration === Integration.Html) return true;
+    if (entry.integration === Integration.MathText) return tagName !== 'mglyph' && tagName !== 'malignmark';
+    return entry.namespace === 'math' && entry.name === 'annotation-xml' && tagName === 'svg';
+  }
+
+  /** Whether a foreign element is open above the nearest template: HTML parsed here is an island. */
+  private inForeignContent(): boolean {
+    for (let index = this.stack.length - 1; index > 0; index--) {
+      const entry = this.stack[index];
+      if (entry.namespace !== 'html') return true;
+      if (entry.name === 'template') return false;
+    }
+    return false;
+  }
+
+  /** The insertion mode, as "reset the insertion mode appropriately" finds it. */
+  private mode(): Mode {
+    for (let index = this.stack.length - 1; index > 0; index--) {
+      const entry = this.stack[index];
+      if (entry.namespace !== 'html') continue;
+      switch (entry.name) {
+        case 'select':
+          for (let below = index - 1; below > 0; below--) {
+            const ancestor = this.stack[below];
+            if (ancestor.namespace !== 'html') continue;
+            if (ancestor.name === 'template') return 'select';
+            if (ancestor.name === 'table') return 'select-in-table';
+          }
+          return 'select';
+        case 'td':
+        case 'th':
+          return 'cell';
+        case 'tr':
+          return 'row';
+        case 'tbody':
+        case 'thead':
+        case 'tfoot':
+          return 'tablebody';
+        case 'caption':
+          return 'caption';
+        case 'colgroup':
+          return 'colgroup';
+        case 'table':
+          return 'table';
+        case 'template':
+          switch (entry.templateMode) {
+            case 'colgroup':
+              return 'colgroup-template';
+            case 'table':
+            case 'tablebody':
+            case 'row':
+              return entry.templateMode === 'tablebody' ? 'tablebody' : entry.templateMode;
+            case 'body':
+              return 'body';
+            default:
+              return 'template';
+          }
+      }
+    }
+    return 'body';
+  }
+
+  /** A template's first start tag decides how the rest of its content is parsed. */
+  private decideTemplateMode(name: string): void {
+    const current = this.current;
+    if (current.namespace !== 'html' || current.name !== 'template' || current.templateMode !== 'undecided') return;
+    if (TEMPLATE_HEAD_TAGS.has(name)) return;
+    current.templateMode =
+      name === 'caption' || name === 'colgroup' || name === 'tbody' || name === 'tfoot' || name === 'thead'
+        ? 'table'
+        : name === 'col'
+          ? 'colgroup'
+          : name === 'tr'
+            ? 'tablebody'
+            : name === 'td' || name === 'th'
+              ? 'row'
+              : 'body';
+  }
+
+  /** Implied end tags outside foreign content: followed, not written, to keep the stack close. */
+  private closeImpliedOutsideForeignContent(name: string): void {
+    if (CLOSES_P.has(name)) {
+      const p = this.inScope((entry) => entry.name === 'p', 'button');
+      if (p !== -1) this.stack.length = p;
+    }
+    if (name === 'li' || name === 'dd' || name === 'dt' || name === 'option') {
+      const names = name === 'li' ? ['li'] : name === 'option' ? ['option'] : ['dd', 'dt'];
+      if (this.current.namespace === 'html' && names.includes(this.current.name)) this.stack.pop();
+    }
+  }
+
+  private isSpecial(entry: Entry): boolean {
+    if (entry === ROOT) return true;
+    if (entry.namespace === 'html') return SPECIAL.has(entry.name);
+    return entry.integration !== Integration.None;
+  }
+
+  /** The index of the nearest HTML element matching, in scope, or -1. */
+  private inScope(matches: (entry: Entry) => boolean, extra?: 'button' | 'list'): number {
+    for (let index = this.stack.length - 1; index > 0; index--) {
+      const entry = this.stack[index];
+      if (entry.namespace === 'html' && matches(entry)) return index;
+      if (entry.namespace === 'html') {
+        if (SCOPE_BOUNDARIES.has(entry.name)) return -1;
+        if (extra === 'button' && entry.name === 'button') return -1;
+        if (extra === 'list' && (entry.name === 'ol' || entry.name === 'ul')) return -1;
+      } else if (entry.integration !== Integration.None) {
+        return -1;
+      }
+    }
+    return -1;
+  }
+
+  /** The nearest open HTML element of this name, not looking past a template, cell, table or select. */
+  private findOpen(name: string): number {
+    for (let index = this.stack.length - 1; index > 0; index--) {
+      const entry = this.stack[index];
+      if (entry.namespace === 'html' && entry.name === name) return index;
+      if (entry.namespace !== 'html') {
+        if (entry.integration !== Integration.None) return -1;
+        continue;
+      }
+      if (SCOPE_BOUNDARIES.has(entry.name) || entry.name === 'select') return -1;
+    }
+    return -1;
+  }
+
+  /**
+   * End tags for an `<object>`, `<applet>` or `<marquee>` open above the nearest table element, and
+   * for what is open above it. Table structure clears the stack back to the table, or closes the cell,
+   * without the end tags — and an element popped that way leaves its marker in the list of active
+   * formatting elements, which shields what was opened before it from ever being cleared: a fragment's
+   * `<a href>` would be reconstructed around the host's markup after the fragment.
+   */
+  private closeMarkersAboveTable(): string[] {
+    let marker = -1;
+    for (let index = this.stack.length - 1; index > 0; index--) {
+      const entry = this.stack[index];
+      if (entry.namespace !== 'html') continue;
+      if (MARKERS.has(entry.name)) marker = index;
+      else if (TABLE_ELEMENTS.has(entry.name)) return marker === -1 ? [] : this.closeThrough(marker);
+      else if (entry.name === 'template') return [];
+    }
+    return [];
+  }
+
+  private popUntil(name: string): void {
+    const index = this.findOpen(name);
+    if (index !== -1) this.stack.length = index;
+  }
+
+  private popWithCloser(): string {
+    return `</${this.stack.pop()!.name}>`;
+  }
+
+  /**
+   * End tags for every element from the current one down to `index`, popping them. With
+   * `excludeLast`, the element at `index` is popped but its end tag left to the caller, who is
+   * writing it already.
+   */
+  private closeThrough(index: number, excludeLast = false): string[] {
+    const closers: string[] = [];
+    while (this.stack.length > index + 1) closers.push(this.popWithCloser());
+    const last = this.stack.pop()!;
+    if (!excludeLast) closers.push(`</${last.name}>`);
+    return closers;
+  }
+}
+
+function foreignEntry(namespace: Namespace, name: string, attribute: (name: string) => string | null): Entry {
+  let integration = Integration.None;
+  if (namespace === 'svg') {
+    if (name === 'foreignobject' || name === 'desc' || name === 'title') integration = Integration.Html;
+  } else if (namespace === 'math') {
+    if (name === 'mi' || name === 'mo' || name === 'mn' || name === 'ms' || name === 'mtext') {
+      integration = Integration.MathText;
+    } else if (name === 'annotation-xml') {
+      const encoding = attribute('encoding')?.toLowerCase();
+      if (encoding === 'text/html' || encoding === 'application/xhtml+xml') integration = Integration.Html;
+    }
+  }
+  return { name, namespace, integration };
+}

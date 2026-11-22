@@ -252,11 +252,18 @@ describe('prepareFragmentHtml()', () => {
         expect(output).toContain('<iframe title="t" data-braid-blocked="src srcdoc">');
       });
 
-      it('defangs an entity-encoded scheme by namespacing it as a path', async () => {
-        const output = await prepare(`<iframe src="&#106;avascript:alert(1)"></iframe>`);
+      it('reads an entity-encoded scheme as the browser does, and removes it', async () => {
+        const output = await prepare(
+          `<iframe src="&#106;avascript:alert(1)"></iframe><iframe src="java&Tab;script&colon;alert(1)"></iframe>`,
+        );
 
-        // the browser would decode `&#106;` to `j`; namespaced, it is a harmless same-origin path
-        expect(output).toMatch(/<iframe src="\/__braid\/frag\/billing\/&amp;#106;avascript:alert\(1\)">/);
+        // the browser decodes `&#106;` to `j`, `&Tab;` to a tab it strips and `&colon;` to `:`
+        expect(output).toBe('<iframe data-braid-blocked="src"></iframe><iframe data-braid-blocked="src"></iframe>');
+      });
+
+      it('removes a frame source with a reference the rewriter cannot decode, rather than guess', async () => {
+        const output = await prepare(`<iframe src="java&NotAName;script:x"></iframe>`);
+        expect(output).toBe('<iframe data-braid-blocked="src"></iframe>');
       });
 
       it('removes upper-case tag and attribute names, which the parser treats as lower-case', async () => {

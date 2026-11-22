@@ -172,6 +172,8 @@ export function prepareFragmentHtml(
 
   return rewriteHtmlStream(body, {
     stripDoctype: true,
+    // fragment markup goes inside someone else's document: read one way only, and kept inside its element
+    contain: true,
     handlers: {
       '*': {
         element(tag) {
@@ -216,10 +218,10 @@ export function prepareFragmentHtml(
           const href = tag.getAttribute('href');
           const crossorigin = tag.getAttribute('crossorigin');
           // `inert-*` is Braid's own marker for a link it neutralized; markup that arrives with it
-          // already set would be revived by the client as though the gateway had written it
-          // A character reference the rewriter does not decode (`&#105;nert-…`) is read the same way
-          // by the browser, so any reference in a rel is treated as possibly the marker.
-          if (rel !== null && (/\binert-/i.test(rel) || rel.includes('&'))) {
+          // already set would be revived by the client as though the gateway had written it. The
+          // value is decoded as the browser decodes it (`&#105;nert-…` is the marker too), and one
+          // the rewriter cannot decode for certain was removed before this could read it.
+          if (rel !== null && /\binert-/i.test(rel)) {
             tag.setAttribute('rel', `blocked-${rel}`);
             tag.setAttribute('data-braid-blocked', 'rel');
             return;
@@ -303,10 +305,10 @@ function applyDeferredStylesheetMedia(tag: StartTag): void {
  * Removes a frame's document when the markup supplies it inline instead of naming one to load,
  * marking the tag with what was removed.
  *
- * An allowlist, not a `javascript:` check: the rewriter decodes only a handful of entities, and
- * a tag nothing rewrites passes through byte for byte for the browser to decode in full. A value
- * with no scheme is left to {@link namespaceUrl}, which re-roots it as a path — and re-escapes
- * it, so an entity-spelled scheme (`&#106;avascript:`) comes out as a harmless same-origin path.
+ * An allowlist, not a `javascript:` check: a scheme is refused unless it is known to load a
+ * document by URL. The value is decoded as the browser decodes it — an entity-spelled scheme
+ * (`&#106;avascript:`) is `javascript:` here too — and one with a reference the rewriter cannot
+ * decode for certain is removed before this reads it (see the rewriter's `contain`).
  */
 function blockInlineFrameDocuments(tag: StartTag): void {
   const sourceAttribute = FRAME_SOURCE_ATTRIBUTES[tag.tagName];
