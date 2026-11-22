@@ -1,4 +1,25 @@
-import { type DefaultTreeAdapterTypes, parse, parseFragment } from 'parse5';
+import { type DefaultTreeAdapterTypes, html as parse5Html, parse, Parser, parseFragment } from 'parse5';
+
+/**
+ * parse5 8 leaves `template` out of table scope (`hasInTableScope`), which the spec bounds at html,
+ * table and template: inside a template in a table mode, a table token that should be ignored finds
+ * a table outside the template and closes it. Browsers implement the spec. The oracle is patched to
+ * the spec, so what it checks is the markup and not parse5's bug.
+ */
+{
+  const { TAG_ID, NS } = parse5Html;
+  type Stack = { stackTop: number; tagIDs: number[]; items: unknown[]; treeAdapter: { getNamespaceURI(node: unknown): string } };
+  const stack = Object.getPrototypeOf((Parser.getFragmentParser() as unknown as { openElements: object }).openElements);
+  stack.hasInTableScope = function (this: Stack, tagName: number): boolean {
+    for (let index = this.stackTop; index >= 0; index--) {
+      if (this.treeAdapter.getNamespaceURI(this.items[index]) !== NS.HTML) continue;
+      const id = this.tagIDs[index];
+      if (id === tagName) return true;
+      if (id === TAG_ID.TABLE || id === TAG_ID.TEMPLATE || id === TAG_ID.HTML) return false;
+    }
+    return true;
+  };
+}
 
 /**
  * What must be true of a prepared fragment once a browser has parsed it — here, parse5, which

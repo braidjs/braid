@@ -76,7 +76,12 @@ const PIECES = [
   '<datalist>', '<title/>', '<textarea/>', '<xmp/>', '</p >', '<p/>', '<br/>', '</br >', '<svg><desc>', '<math><mi>',
   '<math><annotation-xml encoding="text/html">', '<svg><foreignObject>', '<table><tr><td>', '<select><option>',
   '<!--x--!>', '<!---x-->', '<!-- <!-- -->', '\r', '\r\n', '\t', '\f',
+  // and from the second: the other elements a fragment is placed in, opened by the fragment
+  '<slot>', '<braid-late>', '<braid-late-end>', '<form action=/x>',
 ];
+
+/** Endings that cut off a raw-text element's own end tag. */
+const CUT_OFF = ['</textarea ', '</style x', '</script/', '</title x="', '</xmp\t', '</iframe x=y', '</noembed ', '</noframes x='];
 
 /** A seeded generator, so a failing case can be found again by its seed. */
 export function random(seed: number): () => number {
@@ -101,6 +106,8 @@ export function hostileCases(count: number, seed = 1): string[] {
     for (let piece = 0; piece < length; piece++) markup += next() < 0.25 ? pick(PAYLOADS) : pick(PIECES);
     // always something to neutralize, last, after whatever the pieces opened
     markup += pick(PAYLOADS);
+    // and sometimes an end tag the end of the fragment cuts off
+    if (next() < 0.1) markup += pick(CUT_OFF);
     cases.push(markup.replaceAll('ID', String(index)));
   }
   return cases;
@@ -167,6 +174,12 @@ export const REBUILD_CASES: Record<string, string> = {
   'an <a> removing an <a> below a MathML text integration point': '<math><mi><a><svg><foreignObject><a></a></foreignObject></svg><mglyph><style><img src=x onerror=pwn(12)></style>',
   'an <a> removing an <a> below an SVG one': '<svg><a><foreignObject><a><svg><foreignObject><a></a></foreignObject></svg></a><style><img src=x onerror=pwn(13)></style>',
   'head in an island, which in-body rules ignore': '<math><mi><head><mglyph><style><img src=x onerror=pwn(14)></style>',
+  // from the second verification
+  'a host-named element left open in an HTML island': '<a href=#x><object><svg><foreignObject><braid-document>x',
+  'a textarea whose end tag the fragment’s end cuts off': '<textarea>a</textarea ',
+  'a style whose end tag the fragment’s end cuts off': '<style>a</style x="',
+  'a form in an island in a table, which table rules ignore': '<table><svg><form><foreignObject><form></form><style><img src=x onerror=pwn(15)></style>',
+  'a form in an island in a table row': '<table><tr><svg><form><desc><form></form><style><img src=x onerror=pwn(16)></style>',
   'a preload in another case': '<link rel=PRELOAD href=/p/9 as=script>',
   'a preload among other link types': '<link rel="preload nofollow" href=/p/10 as=script>',
 };

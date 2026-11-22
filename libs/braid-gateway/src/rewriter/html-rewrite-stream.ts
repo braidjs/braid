@@ -403,6 +403,14 @@ async function* rewrite(input: ReadableStream<Uint8Array>, options: RewriteOptio
       if (state === 'script' && scriptState !== 'data') closing += '-->';
       closing += `</${tagName}>`;
       tree.popRawText();
+    } else if (!droppingRawText && !escapingRest) {
+      // its own end tag was cut off by the end of the input (`<textarea>a</textarea `): the
+      // tokenizer left raw text for it, and it was dropped as a tag the input ended inside
+      const open = tree.openRawText();
+      if (open) {
+        closing += `</${open}>`;
+        tree.popRawText();
+      }
     }
     return closing + tree.closeAll().join('');
   }

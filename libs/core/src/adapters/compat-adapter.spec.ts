@@ -44,7 +44,7 @@ describe('parseFragmentContent()', () => {
   });
 
   // The gateway writes fragment markup to be read one way where a pierced fragment is parsed:
-  // inside a <braid-document> in a template, with scripting on. The fetched path parses it there too.
+  // inside a <braid-document> in a template. The fetched path parses it in that structure too.
   it('keeps a bare snippet’s leading <style>, which a document parse moves to a <head> and loses', () => {
     const content = parseFragmentContent(`<style>p { color: red }</style><p>fragment</p>`, document);
 

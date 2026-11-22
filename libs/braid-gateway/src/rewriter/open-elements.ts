@@ -186,6 +186,9 @@ const MARKERS = new Set(['applet', 'object', 'marquee']);
 /** Elements table structure clears the stack back to, or closes. */
 const TABLE_ELEMENTS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th', 'caption']);
 
+/** Elements that put a marker in the list of active formatting elements, templates aside. */
+const MARKER_ELEMENTS = new Set(['applet', 'object', 'marquee', 'td', 'th', 'caption']);
+
 /** Elements a fragment's end closes, with everything above them (see {@link OpenElements.closeAll}). */
 const CLOSED_AT_END = new Set(['template', 'select', 'applet', 'object', 'marquee', 'td', 'th', 'caption']);
 
@@ -195,6 +198,9 @@ const IMPLIED_END = new Set(['dd', 'dt', 'li', 'optgroup', 'option', 'p', 'rb', 
 const TEMPLATE_HEAD_TAGS = new Set([
   'base', 'basefont', 'bgsound', 'link', 'meta', 'noframes', 'script', 'style', 'template', 'title',
 ]);
+
+/** Names "reset the insertion mode appropriately" acts on, foreign elements of which a fragment may not write. */
+const MODE_NAMES = new Set(['select', 'td', 'th', 'tr', 'tbody', 'thead', 'tfoot', 'caption', 'colgroup', 'table', 'template', 'head', 'body', 'html', 'frameset']);
 
 /** HTML elements "reset the insertion mode appropriately" stops at. */
 const MODE_SETTING = new Set(['select', 'td', 'th', 'tr', 'tbody', 'thead', 'tfoot', 'caption', 'colgroup', 'table', 'template']);
@@ -263,7 +269,10 @@ export class OpenElements {
       const current = this.current;
       if (this.htmlRulesFor(current, tagName)) break;
       if (!BREAKOUT.has(tagName) && !(tagName === 'font' && fontBreaksOut)) {
-        return { closers, drop: false, foreign: current.namespace, name: tagName };
+        // No SVG or MathML element has the name of one that resets the insertion mode; a parser that
+        // checked names without namespaces (parse5 does, for frameset) would change mode at one.
+        const drop = this.contain && MODE_NAMES.has(tagName);
+        return { closers, drop, foreign: current.namespace, name: tagName };
       }
       while (this.isPlainForeign(this.current)) {
         closers.push(this.popWithCloser());
@@ -328,6 +337,7 @@ export class OpenElements {
     // one out of scope is not written.
     if (tagName === 'a' && this.last('a') > 0 && this.inScope('a') === -1) return plan(true);
     if (!this.inForeignContent()) {
+      if (tagName === 'table' && this.tableBelowTemplate('table')) return plan(true);
       if (TABLE_STRUCTURE.has(tagName)) closers.push(...this.closeMarkersAboveTable());
       return plan(false);
     }
@@ -338,6 +348,11 @@ export class OpenElements {
     if (TABLE_STRUCTURE.has(tagName) || tagName === 'select' || tagName === 'html' || tagName === 'head' || tagName === 'body') {
       return plan(true);
     }
+    // In a table mode — foreign content foster-parented into a table — a start tag at an
+    // integration point is processed by the table rules, which treat it as in body except for
+    // `<form>`: with a template open, ignored. Not written, so the stack agrees.
+    const mode = this.mode();
+    if (tagName === 'form' && (mode === 'table' || mode === 'tablebody' || mode === 'row')) return plan(true);
 
     if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
       if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
@@ -469,9 +484,21 @@ export class OpenElements {
     if (name === 'template') {
       const template = this.current.templateAt;
       if (template === 0) return plan(this.contain);
-      // each element in it closed by its own end tag, so each clears its own formatting marker
-      if (this.contain) closers.push(...this.closeThrough(template, true));
-      else this.truncate(template);
+      // Foreign content in it, and each element that put a marker in the list of active formatting
+      // elements, is closed by its own end tag (so each clears its own marker), with what is open
+      // above them; `</template>` pops the rest, as it would.
+      if (this.contain) {
+        let lowest = -1;
+        for (let index = template + 1; index < this.stack.length; index++) {
+          const entry = this.stack[index];
+          if (entry.namespace !== 'html' || MARKER_ELEMENTS.has(entry.name)) {
+            lowest = index;
+            break;
+          }
+        }
+        if (lowest !== -1) closers.push(...this.closeThrough(lowest));
+      }
+      this.truncate(template);
       return plan(false);
     }
 
@@ -525,6 +552,7 @@ export class OpenElements {
     }
 
     // outside foreign content: follow approximately, never past a template, table cell or select
+    if (this.contain && TABLE_STRUCTURE.has(name) && this.tableBelowTemplate(name)) return plan(true);
     if (this.contain && TABLE_STRUCTURE.has(name)) closers.push(...this.closeMarkersAboveTable());
     const open = this.findOpen(name);
     if (open === -1) return plan(this.contain && HOST_ELEMENTS.has(name));
@@ -555,6 +583,12 @@ export class OpenElements {
     return this.closeThrough(lowest);
   }
 
+  /** The raw-text element open at the current node, if any (`<plaintext>` excepted: it never ends). */
+  openRawText(): string | null {
+    const { name, namespace } = this.current;
+    return namespace === 'html' && RAW_TEXT.has(name) && name !== 'plaintext' ? name : null;
+  }
+
   /** Pops the current element after a raw-text element the input ended inside was closed. */
   popRawText(): void {
     if (this.current.namespace === 'html' && RAW_TEXT.has(this.current.name)) this.pop();
@@ -565,6 +599,18 @@ export class OpenElements {
   /** An end tag that, in foreign content, matches nothing a fragment could have opened. */
   private droppedInForeignContent(name: string): boolean {
     return TABLE_STRUCTURE.has(name) || name === 'select' || this.reachesHost(name);
+  }
+
+  /**
+   * Whether, in a table mode, the nearest open element of this name is only below the nearest
+   * template, or none is open. The spec ignores the token then — table scope stops at a template —
+   * but parse5 (and with it jsdom) looks past the template and closes the fragment's outer table, and
+   * its template with it. Not written, so no parser has the choice.
+   */
+  private tableBelowTemplate(name: string): boolean {
+    const mode = this.mode();
+    if (mode !== 'table' && mode !== 'tablebody' && mode !== 'row' && mode !== 'cell' && mode !== 'caption') return false;
+    return this.last(name) <= this.current.templateAt;
   }
 
   /** An end tag for an element the fragment is placed in, not safely inside a template of its own. */
@@ -752,7 +798,11 @@ export class OpenElements {
    * would close the host's instead.
    */
   private closerFor(entry: Entry): string {
-    if (HOST_ELEMENTS.has(entry.name) && entry.name !== 'template' && entry.namespace === 'html' && entry.templateAt === 0) return '';
+    // (Inside an HTML island in foreign content the stack is exact, and the end tag is written: the
+    // closers after it depend on it.)
+    if (HOST_ELEMENTS.has(entry.name) && entry.name !== 'template' && entry.namespace === 'html' && entry.templateAt === 0 && !entry.foreign) {
+      return '';
+    }
     return `</${entry.name}>`;
   }
 

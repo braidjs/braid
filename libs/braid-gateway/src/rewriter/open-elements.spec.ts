@@ -88,7 +88,7 @@ describe('a fragment stays inside its element', () => {
     ['a tag the input ends inside is dropped', '<b><a title="x', '<b>'],
     ['an object left open is closed, so no formatting element outlives it', '<a href=#><object>', '<a href=#><object></object>'],
     ['as is one table structure would clear', '<b><table><object><tr>', '<b><table><object></object><tr>'],
-    ['a template’s content is closed element by element', '<template><b><table><td>x</template>', '<template><b><table><td>x</td></table></b></template>'],
+    ['a cell in a template is closed before it, clearing its formatting marker', '<template><b><table><td>x</template>', '<template><b><table><td>x</td></template>'],
   ])('%s', async (_, markup, expected) => {
     expect(await canonical(markup)).toBe(expected);
   });
