@@ -616,7 +616,8 @@ splits and parses the output with parse5 (`differential.spec.ts`) and with Chrom
 (`e2e/rewriter-differential.e2e.ts`). Nothing may run, and nothing may leave its element.
 
 **The rewriter is owned, not forked.** `rewriteHtmlStream` is a streaming HTML rewriter with
-bounded memory and chunk-boundary safety; its conformance vectors (`html-rewrite-stream.spec.ts`,
+memory bounded by the depth of the open elements rather than the size of the input, and
+chunk-boundary safety; its conformance vectors (`html-rewrite-stream.spec.ts`,
 `tokenizer.spec.ts`, `open-elements.spec.ts`) and the differential suite are the oracle any second
 implementation — a native `HTMLRewriter` path on workerd, say — must pass before it is allowed to
 serve traffic. Only the

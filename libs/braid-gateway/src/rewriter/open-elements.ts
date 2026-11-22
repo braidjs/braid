@@ -348,11 +348,12 @@ export class OpenElements {
     if (TABLE_STRUCTURE.has(tagName) || tagName === 'select' || tagName === 'html' || tagName === 'head' || tagName === 'body') {
       return plan(true);
     }
-    // In a table mode — foreign content foster-parented into a table — a start tag at an
-    // integration point is processed by the table rules, which treat it as in body except for
-    // `<form>`: with a template open, ignored. Not written, so the stack agrees.
-    const mode = this.mode();
-    if (tagName === 'form' && (mode === 'table' || mode === 'tablebody' || mode === 'row')) return plan(true);
+    // In a table mode — foreign content foster-parented into a table, or in a cell the table rules
+    // have closed — a start tag at an integration point is processed by the table rules, which treat
+    // it as in body except for `<form>`: with a template open, ignored. The tracker follows the table
+    // modes only approximately, so a `<form>` in an island is never written: with it gone, nothing an
+    // island lets through is read differently in any mode.
+    if (tagName === 'form') return plan(true);
 
     if (CLOSES_P.has(tagName) || tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
       if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
@@ -613,9 +614,13 @@ export class OpenElements {
     return this.last(name) <= this.current.templateAt;
   }
 
-  /** An end tag for an element the fragment is placed in, not safely inside a template of its own. */
+  /**
+   * A `</braid-document>` not safely inside a template of the fragment's own. Of the elements a
+   * fragment is placed in, only the `<braid-document>` is inside the template it is parsed in — the
+   * slot, and a late-content wrapper, are outside it, where no end tag reaches past the template.
+   */
   private reachesHost(name: string): boolean {
-    if (!HOST_ELEMENTS.has(name) || name === 'template') return false;
+    if (name !== 'braid-document') return false;
     const template = this.current.templateAt;
     return template === 0 || this.last(name) <= template;
   }
@@ -800,7 +805,7 @@ export class OpenElements {
   private closerFor(entry: Entry): string {
     // (Inside an HTML island in foreign content the stack is exact, and the end tag is written: the
     // closers after it depend on it.)
-    if (HOST_ELEMENTS.has(entry.name) && entry.name !== 'template' && entry.namespace === 'html' && entry.templateAt === 0 && !entry.foreign) {
+    if (entry.name === 'braid-document' && entry.namespace === 'html' && entry.templateAt === 0 && !entry.foreign) {
       return '';
     }
     return `</${entry.name}>`;

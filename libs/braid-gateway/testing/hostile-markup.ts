@@ -78,7 +78,12 @@ const PIECES = [
   '<!--x--!>', '<!---x-->', '<!-- <!-- -->', '\r', '\r\n', '\t', '\f',
   // and from the second: the other elements a fragment is placed in, opened by the fragment
   '<slot>', '<braid-late>', '<braid-late-end>', '<form action=/x>',
+  // and from the third: table rules the tracker follows only roughly
+  '<col>', '<colgroup>', '</tr>', '<caption><col>', '<td><colgroup>', '<template><tr><caption>', '<template><td><caption>',
 ];
+
+/** Table contexts a case may start inside, since some divergences take several tokens to set up. */
+const CONTEXTS = ['', '', '<table><td><col>', '<table><caption><col>', '<table><tr><th><colgroup>', '<template><tr><caption>', '<table><td></tr>', '<svg><foreignObject><table><td>', '<math><mi><table><caption><col>'];
 
 /** Endings that cut off a raw-text element's own end tag. */
 const CUT_OFF = ['</textarea ', '</style x', '</script/', '</title x="', '</xmp\t', '</iframe x=y', '</noembed ', '</noframes x='];
@@ -102,7 +107,7 @@ export function hostileCases(count: number, seed = 1): string[] {
   const cases: string[] = [];
   for (let index = 0; index < count; index++) {
     const length = 3 + Math.floor(next() * 18);
-    let markup = '';
+    let markup = next() < 0.3 ? pick(CONTEXTS) : '';
     for (let piece = 0; piece < length; piece++) markup += next() < 0.25 ? pick(PAYLOADS) : pick(PIECES);
     // always something to neutralize, last, after whatever the pieces opened
     markup += pick(PAYLOADS);
@@ -180,6 +185,11 @@ export const REBUILD_CASES: Record<string, string> = {
   'a style whose end tag the fragment’s end cuts off': '<style>a</style x="',
   'a form in an island in a table, which table rules ignore': '<table><svg><form><foreignObject><form></form><style><img src=x onerror=pwn(15)></style>',
   'a form in an island in a table row': '<table><tr><svg><form><desc><form></form><style><img src=x onerror=pwn(16)></style>',
+  // from the third verification: the table rules close a cell the tracker keeps open
+  'a form in an island in a cell a col closed': '<table><td><col><svg><form><foreignObject><form></form><style><img src=x onerror=pwn(17)></style>',
+  'a form in an island in a caption a colgroup closed': '<table><caption><colgroup><svg><form><desc><form></form><style><img src=x onerror=pwn(18)></style>',
+  'a form in an island after </tr> in a cell': '<table><tr><td></tr><math><mi><form></form><mglyph><style><img src=x onerror=pwn(19)></style>',
+  'a form in a template a caption put in table mode': '<template><tr><caption><col><svg><form><foreignObject><form></form><style><img src=x onerror=pwn(20)></style>',
   'a preload in another case': '<link rel=PRELOAD href=/p/9 as=script>',
   'a preload among other link types': '<link rel="preload nofollow" href=/p/10 as=script>',
 };

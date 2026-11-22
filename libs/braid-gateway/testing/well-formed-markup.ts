@@ -88,6 +88,7 @@ export function wellFormedPages(count: number, seed = 1): string[] {
       else if (roll < 0.76) markup += `<iframe src="/embed" title="embed"></iframe>`;
       else if (roll < 0.78) markup += `<video src="v.mp4" poster="p.png" controls></video>`;
       else if (roll < 0.8) markup += `<pre><code>${phrasing(depth + 1)}</code></pre>`;
+      else if (roll < 0.82) markup += `<fragment-slot name="orders" src="/orders"></fragment-slot>`;
       else {
         const tag = pick(FLOW);
         markup += `<${tag}${attributes()}>${flow(depth + 1)}</${tag}>`;

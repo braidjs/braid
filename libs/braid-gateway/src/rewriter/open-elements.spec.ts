@@ -101,6 +101,7 @@ describe('what the code review found', () => {
     ['a reference split only by a chunk is kept', 'a &amp; b &copy c', 'a &amp; b &copy c'],
     ['a rename survives an end tag that closes nothing', '<head><template></head></template></head><body>x', '<braid-head><template></braid-head></template></braid-head><braid-body>x'],
     ['a self-closing head is opened, and closed under its new name', '<head/><title>t</title></head>', '<braid-head/><title>t</title></braid-head>'],
+    ['a nested fragment-slot keeps its end tag', '<main><fragment-slot name="o"></fragment-slot><p>Totals</p></main>', '<main><fragment-slot name="o"></fragment-slot><p>Totals</p></main>'],
     ['an authored data-braid-blocked keeps its references', '<img data-braid-blocked="a&amp;b" src="x&NotAName;">', '<img data-braid-blocked="a&amp;b src">'],
   ])('%s', async (_, markup, expected) => {
     expect(await canonical(markup)).toBe(expected);
