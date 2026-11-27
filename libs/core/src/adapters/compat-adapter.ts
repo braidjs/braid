@@ -105,24 +105,38 @@ export const compatAdapter: InstalledAdapter = {
  *
  * The markup arrives already transformed (`braid-html`/`braid-head`/`braid-body` stand-ins,
  * inert scripts, namespaced subresource URLs), so this only parses and adopts it — parsing
- * happens in a detached `DOMParser` document, where nothing executes.
+ * happens in a template's content, where nothing executes.
  *
- * The stand-ins are unknown elements, so the parser leaves them in `body`; the fragment's root
- * is `braid-html` when the gateway saw a full document, and a wrapper is synthesized when it
- * saw a bare markup snippet.
+ * It is parsed in the structure a pierced fragment's markup is: inside a `<braid-document>` in a
+ * template, in the host document. The gateway writes fragment markup to be read one way there (see
+ * the gateway's `open-elements.ts`), and a parse anywhere else could read it another — a `DOMParser`
+ * document starts at the top of a document, where a leading `<style>` goes to a `<head>` that is
+ * then lost, and nested forms and table text follow other rules. (A template's content is parsed with
+ * scripting off where a pierced fragment has it on; that changes only `<noscript>`, which the gateway
+ * removes.)
+ *
+ * The fragment's root is `braid-html` when the gateway saw a full document, and a wrapper is
+ * synthesized when it saw a bare markup snippet.
  */
 export function parseFragmentContent(html: string, mainDocument: Document): HTMLElement {
   // markup the gateway prepared, parsed where nothing runs: Braid's own write (see trusted-types.ts)
-  const parsed = new DOMParser().parseFromString(trustedHTML(html), 'text/html');
+  const outer = mainDocument.createElement('template');
+  outer.innerHTML = trustedHTML(`<template><braid-document>${html}</braid-document></template>`, mainDocument.defaultView ?? globalThis);
+  const inner = outer.content.firstElementChild as HTMLTemplateElement | null;
+  const braidDocument = inner?.content.firstElementChild ?? mainDocument.createElement('braid-document');
+  if (isDevMode() && (outer.content.childNodes.length !== 1 || inner?.content.childNodes.length !== 1)) {
+    // a gateway older than this runtime may not keep a fragment inside its element: what got out is lost
+    console.warn('[braid] fragment markup closed the element it was parsed in; what followed is dropped');
+  }
 
-  const braidHtml = parsed.body.querySelector('braid-html');
+  const braidHtml = braidDocument.querySelector('braid-html');
   if (braidHtml) {
     return readyScripts(mainDocument.importNode(braidHtml, true) as HTMLElement);
   }
 
   const wrapper = mainDocument.createElement('braid-html');
   const braidBody = mainDocument.createElement('braid-body');
-  braidBody.append(...[...parsed.body.childNodes].map((node) => mainDocument.importNode(node, true)));
+  braidBody.append(...[...braidDocument.childNodes].map((node) => mainDocument.importNode(node, true)));
   wrapper.append(braidBody);
   return readyScripts(wrapper);
 }

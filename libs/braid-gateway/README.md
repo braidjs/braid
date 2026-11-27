@@ -604,9 +604,22 @@ identity header an auth proxy in front of the shell injects (`x-auth-request-acc
 Not yet implemented from the architecture's security section: allow-listed manifest origins and
 signed manifests. Until those land, treat the registry as trusted configuration.
 
-**The rewriter is owned, not forked.** `rewriteHtmlStream` is a small streaming HTML
-rewriter with bounded memory and chunk-boundary safety; its conformance vectors
-(`html-rewrite-stream.spec.ts`) are the oracle any second implementation — a native
-`HTMLRewriter` path on workerd, say — must pass before it is allowed to serve traffic. Only the
+**The rewriter reads markup as the browser will.** Those guarantees hold only for tags the gateway
+sees, so the rewriter tokenizes as the WHATWG spec does. It also follows enough of tree construction
+to know how the rest is tokenized: SVG and MathML, integration points, `<select>`, templates.
+Fragment markup is written out so that every browser reads it one way. What browsers recover from
+differently is closed explicitly or removed. A fragment cannot write an end tag that closes the elements it is placed in,
+or leave one of its own open to swallow the host's markup after it. The details are in
+[how the gateway reads fragment markup](../../docs/braid-fragment-markup.md#how-the-gateway-reads-it).
+A differential suite checks this. It runs hostile fragments through the rewriter at random chunk
+splits and parses the output with parse5 (`differential.spec.ts`) and with Chromium
+(`e2e/rewriter-differential.e2e.ts`). Nothing may run, and nothing may leave its element.
+
+**The rewriter is owned, not forked.** `rewriteHtmlStream` is a streaming HTML rewriter with
+memory bounded by the depth of the open elements rather than the size of the input, and
+chunk-boundary safety; its conformance vectors (`html-rewrite-stream.spec.ts`,
+`tokenizer.spec.ts`, `open-elements.spec.ts`) and the differential suite are the oracle any second
+implementation — a native `HTMLRewriter` path on workerd, say — must pass before it is allowed to
+serve traffic. Only the
 owned path ships today, because `HTMLRewriter` does not exist in Node and an untested dual path
 is how the upstream project got wasm/native drift.

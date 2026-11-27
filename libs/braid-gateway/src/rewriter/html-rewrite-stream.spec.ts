@@ -205,8 +205,18 @@ describe('rewriteHtmlStream — raw text elements', () => {
     expect(await rewriteBothWays(html, () => ({ handlers: {} }))).toBe(html);
   });
 
-  it('does not enter raw text mode for a self-closing script', async () => {
-    const html = `<script src="/a.js"/><p>after</p>`;
+  // Corrected: this vector used to assert the opposite. The self-closing flag means nothing on an
+  // HTML element, so `<script/>` opens script data like `<script>` does, and what follows is the
+  // script's text until `</script>` — reading `<p>` as a tag there is a tag the browser never sees.
+  it('enters raw text for a self-closing script, as the browser does', async () => {
+    const html = `<script src="/a.js"/><p>inside</p></script><p>after</p>`;
+    let paragraphs = 0;
+    await rewriteBothWays(html, () => ({ handlers: { p: { element: () => void paragraphs++ } } }));
+    expect(paragraphs, 'one per run, whole and split').toBe(2);
+  });
+
+  it('does not enter raw text for a self-closing foreign element', async () => {
+    const html = `<svg><style/><p>breaks out</p></svg>`;
     let sawParagraph = false;
     await rewriteBothWays(html, () => ({ handlers: { p: { element: () => void (sawParagraph = true) } } }));
     expect(sawParagraph).toBe(true);
@@ -232,9 +242,11 @@ describe('rewriteHtmlStream — comments, doctypes, declarations', () => {
     expect(output).toBe(`<html><body>x</body></html>`);
   });
 
-  it('handles a doctype containing a quoted >', async () => {
+  // Corrected: this vector used to have the quotes protect the `>`. They do not — every doctype
+  // state ends the token at the first `>` — so the browser reads `compat">` as text after it.
+  it('ends a doctype at the first >, quoted or not, as the browser does', async () => {
     const html = `<!DOCTYPE html SYSTEM "about:legacy>compat"><p>x</p>`;
-    expect(await rewriteBothWays(html, () => ({ handlers: {}, stripDoctype: true }))).toBe(`<p>x</p>`);
+    expect(await rewriteBothWays(html, () => ({ handlers: {}, stripDoctype: true }))).toBe(`compat"><p>x</p>`);
   });
 });
 

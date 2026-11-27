@@ -49,6 +49,66 @@ what was removed:
 If something a fragment renders standalone is missing when composed, look for `data-braid-blocked`
 in the composed DOM first.
 
+## How the gateway reads it
+
+Every rule above is only as good as the gateway's reading of the markup. If it takes something for
+text, a comment or an attribute value that the browser takes for a tag, that tag reaches the page
+with nothing neutralized. So the gateway tokenizes as the HTML spec does. That covers every way a
+comment can end, bogus comments and doctypes that end at the first `>`, raw text in `<xmp>`,
+`<iframe>`, `<noembed>`, `<noframes>` and `<noscript>`, and the escapes inside `<script>`. It also
+follows the part of tree construction that decides how the rest is tokenized: which elements are SVG
+or MathML (where `<style>` is not raw text), where HTML starts again inside them, and which templates
+are open.
+
+Some markup is read differently by different browsers, or depends on recovery a browser makes from a
+mistake. A fragment's markup is written out so that it can only be read one way:
+
+| Markup                                                                                                              | What happens                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| SVG/MathML that HTML breaks out of (`<svg><p>`), or that an end tag below it closes                                 | closed explicitly, element by element                                                                                                  |
+| implied end tags and misnesting inside HTML in SVG/MathML (`<foreignObject>`, `<desc>`…)                            | closed explicitly                                                                                                                      |
+| table structure (`<table>`, `<tr>`, `<td>`…) inside HTML in SVG/MathML                                              | removed: a table can clear the stack through the SVG                                                                                   |
+| `<![CDATA[…]]>`                                                                                                     | written as the text it is                                                                                                              |
+| `<?…>`, `</1…>`, `<!…>`                                                                                             | written as the comment the browser makes of them                                                                                       |
+| a literal `<` in text                                                                                               | written as `&lt;`                                                                                                                      |
+| `<style>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<title>`, SVG/MathML, `<object>` inside `<select>`      | removed: customizable select keeps them, older parsers ignore them                                                                     |
+| a tag that closes a `<select>` (`<input>`, another `<select>`…)                                                     | `</select>` written first                                                                                                              |
+| a `<template>` whose first child is `<col>`                                                                         | everything but `<col>` and `<template>` removed: such a template ignores the rest                                                      |
+| `<noscript>`                                                                                                        | removed with its content: raw text with scripting on, markup with it off                                                               |
+| `<frameset>`, `<frame>`                                                                                             | removed                                                                                                                                |
+| `<plaintext>`                                                                                                       | becomes a `<pre data-braid-blocked="plaintext">` with the rest of the fragment as escaped text                                         |
+| `<image>`                                                                                                           | written as the `<img>` the browser makes of it                                                                                         |
+| an attribute the gateway reads (`rel`, `src`, `http-equiv`…) with a named reference it does not know (`&NotAName;`) | removed and named in `data-braid-blocked`: the gateway decodes numeric references and the common names, and does not guess at the rest |
+
+A removed element leaves a comment where it was, such as `<!--braid-blocked noscript-->`.
+
+The fragment is also kept inside the element it is placed in. A `</template>` or
+`</braid-document>` is removed unless it closes one the fragment opened itself. A `</braid-document>`
+is also removed when it is outside a template the fragment opened, so it cannot reach the host's.
+A `</fragment-slot>` without a match is removed too, but one that closes the fragment's own nested
+slot is kept. When
+the fragment ends, the gateway closes whatever could swallow or wrap the host's markup after it:
+templates, selects, SVG and MathML, raw text, a comment, and the elements that would let its
+formatting outlive it (`<object>`, `<applet>`, `<marquee>`, table cells, captions). Other elements
+it leaves open are closed by the template it is placed in. A tag cut off by the end of the fragment
+is dropped, as the browser drops it.
+
+A fetched fragment is parsed in the same structure as a pierced one: inside a `<braid-document>` in
+a template of the host page. A template's content is parsed with scripting off, while a pierced
+fragment is parsed with it on. The only thing that changes is how `<noscript>` reads, and the
+gateway removes `<noscript>`. So both paths read the markup the same way, and a bare snippet's
+leading `<style>` stays with it.
+
+On well-formed markup none of this changes the DOM, with these exceptions:
+
+- `<noscript>` is removed.
+- Inside HTML in SVG or MathML (`<foreignObject>`, `<desc>`, `<mi>`…), table structure and
+  `<select>` are removed, and so is a `<form>` when a table is open around the SVG.
+- Markup that customizable select allows inside a `<select>` is removed, such as an SVG icon in an
+  `<option>`. The rewriter's tests check this against the previous rewriter
+  in parse5 and in Chromium. They also run the holes the November review found, and thousands of
+  generated hostile fragments, through both parsers in both contexts.
+
 ## Deliberate trade-offs
 
 The frame rule is an allowlist and it is blunt on purpose. It looks at the markup, not at what the
